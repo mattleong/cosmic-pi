@@ -1,7 +1,8 @@
 import * as Schema from "effect/Schema";
+import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core";
 
 /** Longest collapsed message. Longer producer text is clipped at render time. */
-export const COMPACT_ISSUE_MESSAGE_LIMIT = 240;
+export const COMPACT_ISSUE_MESSAGE_LIMIT = MESSAGE_TEXT_LIMIT;
 
 export const CompactIssueSchema = Schema.Struct({
   severity: Schema.Literals(["error", "warning", "info"]),

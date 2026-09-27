@@ -3,7 +3,8 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { CodeModeDiagnostic, CodeModeDiagnosticFacts } from "../boundary/codemode-runtime.ts";
 import { codeModeDiagnosticMessage, codeModeMessageSpan, decodeOption } from "./format.ts";
-import { cleanDiagnosticText, clipText } from "./issue-evidence.ts";
+import { cleanDiagnosticText } from "./issue-evidence.ts";
+import { clipText } from "pi-cosmic-core";
 
 const Text = (maximum: number) => Schema.String.check(Schema.isMaxLength(maximum));
 const MAX_FIELD_SEGMENTS = 16;

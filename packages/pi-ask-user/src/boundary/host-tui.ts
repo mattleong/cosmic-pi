@@ -32,7 +32,7 @@ export const admitDialog =
 const renderFailed = () =>
   new AskUserHostError({
     operation: "render",
-    message: "Unable to render the user questionnaire.",
+    message: "Couldn't show the questionnaire.",
   });
 
 export const makeAskUserTuiHost =

@@ -6,12 +6,6 @@ import {
   mergeCompactIssues,
   type CompactIssue,
 } from "../../src/tools/compact-issues";
-import {
-  failureMessage,
-  firstLineMessage,
-  isAgentGuidance,
-  quoteText,
-} from "../../src/tools/issue-message";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 import { createBoundedCompactIssuesSchema } from "../../src/tools/compact-issues-schema";
 import {
@@ -60,77 +54,6 @@ test("severity ignores informational issues and prefers errors", () => {
   expect(compactIssueSeverity([info])).toBeUndefined();
   expect(compactIssueSeverity([info, warning])).toBe("warning");
   expect(compactIssueSeverity([warning, issue(), info])).toBe("error");
-});
-
-test("first-line messages are one bounded, inert, nonblank line", () => {
-  expect(firstLineMessage("\n  \r\n  first\t\tline  \nsecond", "fallback")).toBe("first line");
-  expect(firstLineMessage(" \n\t\n", "fallback")).toBe("fallback");
-  expect(firstLineMessage("", "fallback")).toBe("fallback");
-  const hostile = firstLineMessage("bad\u001b[2J escape", "fallback");
-  expect(hostile).not.toContain("\u001b");
-  expect(hostile).toMatch(/^bad.*escape$/u);
-  expect(firstLineMessage("x".repeat(1000), "fallback")).toHaveLength(COMPACT_ISSUE_MESSAGE_LIMIT);
-});
-
-test("first-line messages drop error-class wrappers and trailing agent advice", () => {
-  for (const [text, expected] of [
-    ["Error: 429 Too Many Requests", "429 Too Many Requests"],
-    ["Uncaught TypeError: value is undefined", "value is undefined"],
-    ["[ToolFailure] Nested tool 'bash' failed: gone", "Nested tool 'bash' failed: gone"],
-    ["SchemaError(Expected no excess property", "Expected no excess property"],
-    ["Found 2 matches in a.ts. Please provide more context.", "Found 2 matches in a.ts"],
-    ["Guidance was accepted. Do not resend it.", "Guidance was accepted"],
-    // Informative later sentences and one-hump bracketed content are kept.
-    [
-      "Protocol 21 is unsupported. Fell back to local/pi.",
-      "Protocol 21 is unsupported. Fell back to local/pi",
-    ],
-    ["[REDACTED] token was rejected", "[REDACTED] token was rejected"],
-  ] as const)
-    expect(firstLineMessage(text, "fallback")).toBe(expected);
-  expect(firstLineMessage("Error: ", "fallback")).toBe("fallback");
-  const clipped = firstLineMessage("word ".repeat(40), "fallback", 30);
-  expect(clipped.length).toBeLessThanOrEqual(30);
-  expect(clipped.endsWith("…")).toBe(true);
-});
-
-test("quoted text keeps its full form as detail only when the line leaves something out", () => {
-  expect(quoteText("Spawn failed.")).toEqual({ line: "Spawn failed" });
-  expect(quoteText("Spawn  failed")).toEqual({ line: "Spawn failed" });
-  expect(quoteText("Spawn failed\n  at spawn")).toEqual({
-    line: "Spawn failed",
-    detail: "Spawn failed\n  at spawn",
-  });
-  expect(quoteText("Review the server first.")).toEqual({ detail: "Review the server first." });
-  expect(quoteText("Error: 429 Too Many Requests", { failure: true }).line).toBe(
-    "Rate limited (429)",
-  );
-  expect(quoteText("  ")).toEqual({});
-});
-
-test("guidance is recognised by its opening instruction, not by later sentences", () => {
-  expect(isAgentGuidance("Review external ownership before retrying.")).toBe(true);
-  expect(isAgentGuidance("Error: Do not resend the guidance")).toBe(true);
-  expect(isAgentGuidance("Docker is unavailable. Retry later.")).toBe(false);
-  expect(isAgentGuidance("Reviewed 3 files")).toBe(false);
-});
-
-test("failure messages name common service and network failures from the first line only", () => {
-  for (const [text, pattern] of [
-    ["Error: 429 Too Many Requests: rate limit exceeded for model-x", /^Rate limited \(429\)$/u],
-    ["Request failed with status code 503", /^Server error \(503\)$/u],
-    ["HTTP 401 Unauthorized", /^Authentication failed \(401\)$/u],
-    ["overloaded_error: Overloaded", /^Service overloaded$/u],
-    ["connect ECONNREFUSED 127.0.0.1:443", /^Connection refused$/u],
-    ["prompt is too long: 210000 tokens > 200000 maximum", /context/u],
-  ] as const)
-    expect(failureMessage(text, "fallback")).toMatch(pattern);
-  // Numbers in prose and failures below the first line are not status codes.
-  expect(failureMessage("Offset 401 is beyond end of file", "fallback")).toBe(
-    "Offset 401 is beyond end of file",
-  );
-  expect(failureMessage("Build failed\nstatus 503", "fallback")).toBe("Build failed");
-  expect(failureMessage("", "fallback")).toBe("fallback");
 });
 
 test("the style guard flags machine text and accepts human messages", () => {

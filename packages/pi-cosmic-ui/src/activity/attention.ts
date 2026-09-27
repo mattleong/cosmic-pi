@@ -1,3 +1,4 @@
+import { managerActivityLabel } from "../manager/chrome.ts";
 import type { ActivityItem } from "./protocol.ts";
 
 /** Roles and reasons come from producers, never from provider identity or display text. */
@@ -7,19 +8,25 @@ export function activityAttention(item: ActivityItem): "user" | "parent" | "bloc
 }
 
 const blockedLabels = {
-  "parent-review": "Parent needs to review",
-  "file-access-review": "Parent needs to review file access",
-  "file-access": "Waiting for file access",
-  "write-containment": "Pausing writes for safety",
+  "parent-review": "parent needs to review",
+  "file-access-review": "parent needs to review file access",
+  "file-access": "waiting for file access",
+  "write-containment": "pausing writes for safety",
 } as const;
 
+/** The shared state word; questionnaires are queued and cancelled, work starts and is stopped. */
 export function activityStatus(item: ActivityItem): string {
   const attention = activityAttention(item);
-  if (attention === "user") return "Waiting for you";
-  if (attention === "parent") return "Waiting for parent";
+  if (attention === "user") return "waiting for you";
+  if (attention === "parent") return "waiting for parent";
   if (item.status === "blocked")
     return item.blockedReason ? blockedLabels[item.blockedReason] : "blocked";
-  return item.kind === "agent" && item.status === "pending" ? "starting" : item.status;
+  if (item.status === "needs-input") return managerActivityLabel("waiting");
+  if (item.status === "cancelled")
+    return item.kind === "question" ? "cancelled" : managerActivityLabel("stopped");
+  if (item.status === "pending")
+    return item.kind === "question" ? "queued" : managerActivityLabel("pending");
+  return managerActivityLabel(item.status);
 }
 
 export interface ActivityAttentionCounts {

@@ -27,7 +27,7 @@ describe("usage projection helpers", () => {
     const state = MutableRef.get(ref);
     expect(state.teamId).toBeUndefined();
     expect(state.eligible).toBe(false);
-    expect(state.statusText).toBe("Usage unavailable.");
+    expect(state.statusText).toBe("Usage unavailable");
     expect(Object.isFrozen(state)).toBe(true);
 
     // Freezing must survive a transition published through the shared helpers.
@@ -76,7 +76,7 @@ describe("usage projection helpers", () => {
 
     const published = MutableRef.get(ref);
     expect(published.accountId).toBeUndefined();
-    expect(published.statusText).toBe("Usage unavailable.");
+    expect(published.statusText).toBe("Usage unavailable");
     expect(Object.isFrozen(published)).toBe(true);
   });
 
@@ -86,7 +86,7 @@ describe("usage projection helpers", () => {
     // Eligible without overrides: unavailable status text falls back to the shared default
     // on a clearing transition.
     synchronizeUsageProjectionContext(ref, () => ({ eligible: true, clearUsage: true }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage unavailable.");
+    expect(MutableRef.get(ref).statusText).toBe("Usage unavailable");
     expect(MutableRef.get(ref).snapshot).toBeUndefined();
 
     // Hidden with explicit texts: both overrides are honored.
@@ -102,7 +102,7 @@ describe("usage projection helpers", () => {
 
     // Omitted hidden text falls back to the generic message instead of a type error path.
     synchronizeUsageProjectionContext(ref, () => ({ eligible: false, clearUsage: false }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage hidden.");
+    expect(MutableRef.get(ref).statusText).toBe("Usage hidden");
 
     // An eligible no-clear decision leaves visible fields and status untouched, and the
     // decision callback observes the pre-synchronization state.
@@ -110,6 +110,6 @@ describe("usage projection helpers", () => {
       eligible: state.statusLine === undefined,
       clearUsage: false,
     }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage hidden.");
+    expect(MutableRef.get(ref).statusText).toBe("Usage hidden");
   });
 });

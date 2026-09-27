@@ -407,13 +407,8 @@ describe("herdr-btw reuse workflow", () => {
   );
 
   for (const [recordResult, code, outcome, message] of [
-    ["refused", "herdr_btw_link_record_refused", "confirmed", "was not recorded"],
-    [
-      "uncertain",
-      "herdr_btw_link_record_outcome_uncertain",
-      "uncertain",
-      "Pane w1:p2 was retained",
-    ],
+    ["refused", "herdr_btw_link_record_refused", "confirmed", "wasn't saved"],
+    ["uncertain", "herdr_btw_link_record_outcome_uncertain", "uncertain", "left open"],
   ] as const) {
     it.effect(`does not reread, retry or hand off after a ${recordResult} link record`, () =>
       Effect.gen(function* () {

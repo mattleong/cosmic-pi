@@ -259,7 +259,7 @@ describe("registered status presentation and discovery", () => {
     ).toBeUndefined();
   });
 
-  it("keeps status issue evidence visible when the host theme fails", () => {
+  it("keeps the status page visible when the host theme fails", () => {
     const status = codeModeStatusResult(codeModeStateFixture({ maxOutputBytes: 512 }).config);
     const result = { ...status, details: { ...status.details, truncated: true } };
     const summary = codeModeStatusCompactSummary({
@@ -283,7 +283,8 @@ describe("registered status presentation and discovery", () => {
     )
       .render(160)
       .join("\n");
-    for (const issue of summary?.issues ?? []) expect(collapsed).toContain(issue.message);
+    // The shell draws the issues above this slot; the slot itself must still draw.
+    expect(collapsed).not.toContain("theme unavailable");
     for (const theme of [plainTheme, hostile]) {
       const expanded = renderCodeModeStatusResult(
         result,
@@ -294,8 +295,6 @@ describe("registered status presentation and discovery", () => {
       )
         .render(160)
         .join("\n");
-      for (const issue of summary?.issues ?? [])
-        expect(expanded.split(issue.message)).toHaveLength(2);
       expect(expanded).toContain(textOf(result));
     }
   });

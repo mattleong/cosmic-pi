@@ -3,7 +3,6 @@ import {
   Editor,
   SelectList,
   matchesKey,
-  truncateToWidth,
   wrapTextWithAnsi,
   type Focusable,
   type SelectItem,
@@ -27,6 +26,7 @@ import {
 } from "../questionnaire/form-validation.ts";
 import { displayFormValue, formIntroduction, formFieldInstructions } from "./form-render.ts";
 import { selectListTheme } from "./layout.ts";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 interface Options {
   readonly tui: TUI;
@@ -66,7 +66,7 @@ export class OwnedFormDialog implements Focusable {
       const field = this.field();
       if (!field || this.closed) return;
       const value = parseFormInput(field, text);
-      this.error = value === undefined ? "Enter a valid value." : validateFormValue(field, value);
+      this.error = value === undefined ? "Enter a valid value" : validateFormValue(field, value);
       if (!this.error && value !== undefined) {
         this.values.set(field.key, value);
         this.editing = false;
@@ -300,7 +300,7 @@ export class OwnedFormDialog implements Focusable {
     } else lines.push("Review answers. Select a field to edit it before accepting.");
     const errors =
       this.error && height - pinned.length > 1
-        ? [truncateToWidth(this.options.theme.fg("warning", this.error), w, "")]
+        ? [clipToWidth(this.options.theme.fg("warning", this.error), w, "")]
         : [];
     if (this.editing) {
       this.editor.focused = this._focused;
@@ -312,7 +312,7 @@ export class OwnedFormDialog implements Focusable {
         : "PgUp/PgDn scroll; Home/End first/last; Tab/Shift+Tab fields; b hides; Escape cancels",
     );
     return [
-      ...pinned.map((line) => truncateToWidth(line, w, "")),
+      ...pinned.map((line) => clipToWidth(line, w, "")),
       ...this.viewport.render(lines, w, height - pinned.length - errors.length),
       ...errors,
     ];

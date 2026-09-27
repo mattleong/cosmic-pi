@@ -3,6 +3,7 @@ import * as Predicate from "effect/Predicate";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   DEFAULT_FOOTER_ORDER,
@@ -10,10 +11,9 @@ import {
   FooterDensitySchema,
   type ResolvedCosmicUiConfig,
 } from "../config/schema.ts";
-import {
-  snapshotHostAbortSignal,
-  type HostCallbackBoundaryContract,
-} from "../boundary/host-callback.ts";
+import { type HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
+import { registerSettingsCommand as registerSharedSettingsCommand } from "../boundary/host-settings-command.ts";
+import { openOwnedSurfacePromise } from "../boundary/host-surface.ts";
 import { CosmicUiService } from "../protocol/service.ts";
 import {
   managerSettingsTheme,
@@ -81,16 +81,38 @@ function decodeCosmicUiSettingChange<IdInput, ValueInput>(
     : { _tag: "SetVisibility", id: visibilityId, visible: booleanValue === "true" };
 }
 
-const projectedSettingValue = (config: ResolvedCosmicUiConfig, id: string): string | undefined => {
-  if (id === "enabled") return String(config.footer.enabled);
-  if (id === "density") return config.footer.density;
-  if (!id.startsWith("visible:")) return undefined;
-  const visibilityId = decodeUnknownOrUndefined(VisibilityIdSchema, id.slice("visible:".length));
-  return visibilityId === undefined
-    ? undefined
-    : visibilityValue(id, !config.footer.hidden.includes(visibilityId));
-};
+const settingDescriptors = [
+  {
+    id: "enabled",
+    label: "Custom footer",
+    description:
+      "Disable to use Pi's default footer. Item visibility still applies to provider status.",
+    values: ["true", "false"],
+    currentValue: (config: ResolvedCosmicUiConfig) => String(config.footer.enabled),
+  },
+  {
+    id: "density",
+    label: "Footer density",
+    description: "How much the footer shows.",
+    values: [...FOOTER_DENSITIES],
+    currentValue: (config: ResolvedCosmicUiConfig) => config.footer.density,
+  },
+  ...DEFAULT_FOOTER_ORDER.map((item) => {
+    const id = `visible:${item}`;
+    return {
+      id,
+      label: footerLabels[item],
+      description: isUsageSetting(id)
+        ? "Automatic on eligible models. Hidden stops automatic requests; the usage command still works."
+        : "Show this item in the footer.",
+      values: isUsageSetting(id) ? ["automatic", "hidden"] : ["true", "false"],
+      currentValue: (config: ResolvedCosmicUiConfig) =>
+        visibilityValue(id, !config.footer.hidden.includes(item)),
+    };
+  }),
+];
 
+/** `/cosmic-ui-settings` through the shared settings shell; the picker stays here. */
 export function registerSettingsCommand(
   pi: ExtensionAPI,
   options: {
@@ -103,132 +125,82 @@ export function registerSettingsCommand(
 ): void {
   const hostQuery = <A>(callback: () => A, fallback: A) =>
     options.callbacks.invoke("host-query", callback, fallback);
-  pi.registerCommand("cosmic-ui", {
-    description: "Configure Cosmic UI elements",
-    handler: (_args, ctx) => {
-      options.updateContext(ctx);
-      const notify = (message: string, level: "warning" | "error") =>
-        options.callbacks.invoke("notify", () => ctx.ui.notify(message, level), undefined);
-      if (hostQuery(() => ctx.mode, "rpc") !== "tui") {
-        notify("Open Pi in an interactive terminal to change Cosmic UI settings.", "warning");
-        return Promise.resolve();
-      }
-      const abort = snapshotHostAbortSignal(options.callbacks, () => ctx.signal);
-      const signal = abort?.signal;
-      const cfg = options.config();
+  registerSharedSettingsCommand<ResolvedCosmicUiConfig>(pi, {
+    command: "cosmic-ui-settings",
+    description: "Configure the Cosmic UI footer",
+    title: "Cosmic UI",
+    descriptors: settingDescriptors,
+    examples: ["density compact", "visible:git false"],
+    config: () => options.config(),
+    status: () => {
+      const config = options.config();
+      return [
+        "Cosmic UI settings",
+        ...settingDescriptors.map(
+          (descriptor) => `  ${descriptor.id} = ${descriptor.currentValue(config)}`,
+        ),
+      ].join("\n");
+    },
+    onInvoke: (ctx) => options.updateContext(ctx),
+    apply: (_ctx, id, value, signal) => {
+      const change = decodeCosmicUiSettingChange(id, value);
+      if (!change) return Promise.resolve(Result.fail({ message: `Unknown setting: ${id}` }));
+      const update = CosmicUiService.use((service) =>
+        change._tag === "SetVisibility"
+          ? service.setFooterVisibility(change.id, change.visible)
+          : service.updateFooterConfig(change.patch),
+      );
+      // Any failed write, including an unavailable runtime, rolls the row back with one error.
+      return options.run(update, signal).then(
+        () => Result.succeed(undefined),
+        () => Result.fail({ message: "Couldn't save Cosmic UI settings" }),
+      );
+    },
+    afterApply: (ctx) => options.update(ctx),
+    open: (ctx, session) => {
       const generations = settingsRowGenerations();
-      const items: SettingItem[] = [
-        {
-          id: "enabled",
-          label: "Custom footer",
-          description:
-            "Disable to use Pi's default footer. Item visibility still applies to provider status.",
-          currentValue: String(cfg.footer.enabled),
-          values: ["true", "false"],
-        },
-        {
-          id: "density",
-          label: "Footer density",
-          currentValue: cfg.footer.density,
-          values: [...FOOTER_DENSITIES],
-        },
-        ...DEFAULT_FOOTER_ORDER.map((id) => ({
-          id: `visible:${id}`,
-          label: footerLabels[id],
-          currentValue: visibilityValue(`visible:${id}`, !cfg.footer.hidden.includes(id)),
-          values: isUsageSetting(`visible:${id}`) ? ["automatic", "hidden"] : ["true", "false"],
-          description: isUsageSetting(`visible:${id}`)
-            ? "Automatic on eligible models. Hidden stops automatic requests; the usage command still works."
-            : "Show this item in the footer.",
-        })),
-      ];
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      const inertComponent = () => ({
-        focused: false,
-        render: () => [] as string[],
-        invalidate: () => undefined,
-        handleInput: () => undefined,
+      const config = options.config();
+      const items: SettingItem[] = settingDescriptors.map((descriptor) => ({
+        id: descriptor.id,
+        label: descriptor.label,
+        description: descriptor.description,
+        currentValue: descriptor.currentValue(config),
+        values: [...descriptor.values],
+      }));
+      return openOwnedSurfacePromise<undefined>(ctx, {
+        placement: "inline",
+        closedValue: undefined,
+        create: ({ tui, theme, keybindings, finish }) =>
+          createSettingsListSurface({
+            header: new Text(theme.fg("accent", theme.bold("Cosmic UI settings")), 1, 1),
+            items,
+            height: Math.min(14, items.length + 2),
+            listTheme: managerSettingsTheme(theme),
+            // The list shows the chosen value at once; each apply shows the committed or
+            // restored value, and an older apply never overwrites a newer choice.
+            onChange: (id, value, list) => {
+              if (!decodeCosmicUiSettingChange(id, value)) return;
+              const generation = generations.begin(id);
+              void session.apply(id, value, (current) => {
+                if (!generations.isCurrent(id, generation)) return false;
+                hostQuery(() => {
+                  list.updateValue(id, current);
+                  tui.requestRender();
+                }, undefined);
+                return true;
+              });
+            },
+            onCancel: () => finish(undefined),
+            matchesKeybinding: Predicate.isFunction(keybindings?.matches)
+              ? (data, id) => hostQuery(() => keybindings.matches(data, id), false)
+              : undefined,
+            requestRender: () => hostQuery(() => tui.requestRender(), undefined),
+            dim: (text) => hostQuery(() => theme.fg("dim", text), text),
+            // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
+            // behind this package's host-callback boundary.
+            bridge: { invoke: (callback, fallback) => hostQuery(callback, fallback) },
+          }).surface,
       });
-      let opened: Promise<unknown> | undefined;
-      const invoked = hostQuery(() => {
-        opened = ctx.ui.custom((tui, theme, keybindings, done) =>
-          hostQuery(
-            () =>
-              createSettingsListSurface({
-                header: new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1),
-                items,
-                height: Math.min(14, items.length + 2),
-                listTheme: managerSettingsTheme(theme),
-                onChange: (id, value, list) => {
-                  const change = decodeCosmicUiSettingChange(id, value);
-                  if (!change) return;
-                  const generation = generations.begin(id);
-                  const settle = (failed: boolean) => {
-                    if (!generations.isCurrent(id, generation)) return;
-                    const authoritative = hostQuery<string | undefined>(
-                      () => projectedSettingValue(options.config(), id),
-                      undefined,
-                    );
-                    if (authoritative !== undefined && generations.isCurrent(id, generation))
-                      options.callbacks.invoke(
-                        "request-render",
-                        () => {
-                          if (!generations.isCurrent(id, generation)) return;
-                          list.updateValue(id, authoritative);
-                          options.update(ctx);
-                          tui.requestRender();
-                        },
-                        undefined,
-                      );
-                    if (failed && generations.isCurrent(id, generation))
-                      notify("Unable to update Cosmic UI configuration.", "error");
-                  };
-                  const update = CosmicUiService.use((service) =>
-                    change._tag === "SetVisibility"
-                      ? service.setFooterVisibility(change.id, change.visible)
-                      : service.updateFooterConfig(change.patch),
-                  );
-                  const pending = hostQuery<Promise<unknown> | undefined>(
-                    () => options.run(update, signal),
-                    undefined,
-                  );
-                  if (!pending) {
-                    settle(true);
-                    return;
-                  }
-                  void Promise.resolve(pending).then(
-                    () => settle(false),
-                    () => settle(true),
-                  );
-                },
-                onCancel: () => hostQuery(() => done(undefined), undefined),
-                matchesKeybinding: Predicate.isFunction(keybindings?.matches)
-                  ? (data, id) => hostQuery(() => keybindings.matches(data, id), false)
-                  : undefined,
-                requestRender: () => hostQuery(() => tui.requestRender(), undefined),
-                dim: (text) => hostQuery(() => theme.fg("dim", text), text),
-                // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
-                // behind this package's host-callback boundary.
-                bridge: { invoke: (callback, fallback) => hostQuery(callback, fallback) },
-              }).surface,
-            inertComponent(),
-          ),
-        );
-        return true;
-      }, false);
-      if (!invoked) {
-        abort?.release();
-        notify("Unable to open Cosmic UI settings.", "error");
-        return Promise.resolve();
-      }
-      return Promise.resolve(opened)
-        .then(
-          () => undefined,
-          () => {
-            notify("Unable to open Cosmic UI settings.", "error");
-          },
-        )
-        .finally(() => abort?.release());
     },
   });
 }

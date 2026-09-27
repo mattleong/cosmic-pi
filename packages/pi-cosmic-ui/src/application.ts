@@ -163,7 +163,7 @@ export function registerCosmicUiApplication(
   const notifyStartFailure = (ctx: ExtensionContext) =>
     callbacks.invoke(
       "notify",
-      () => ctx.ui.notify("Cosmic UI failed to start.", "warning"),
+      () => ctx.ui.notify("Cosmic UI couldn't start", "warning"),
       undefined,
     );
 

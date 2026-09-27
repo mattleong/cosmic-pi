@@ -1,5 +1,5 @@
 import type { ActivityItem } from "pi-cosmic-ui/activity";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine, countLabel } from "pi-cosmic-core";
 import { mcpDiagnostic } from "../client/diagnostics.ts";
 import type { McpBoundaryError } from "../client/errors.ts";
 
@@ -112,10 +112,10 @@ export const mcpFooterStatus = (
   const queued = safeCount(counts.queued);
   const failed = entries.filter((entry) => entry.status === "failed").length;
   const attention = Math.max(safeCount(counts.attention), failed);
-  if (connected) pieces.push(`${connected} connected`);
-  if (active) pieces.push(`${active} active`);
+  if (connected) pieces.push(`${countLabel(connected, "MCP server")} connected`);
+  if (active) pieces.push(`${countLabel(active, connected ? "call" : "MCP call")} running`);
   if (queued) pieces.push(`${queued} queued`);
-  if (attention) pieces.push(`${attention} need attention`);
+  if (attention) pieces.push(`${attention} ${attention === 1 ? "needs" : "need"} attention`);
   if (!activityAvailable) {
     const running = entries.find((entry) => !mcpActivityTerminal(entry));
     if (running)
@@ -123,5 +123,7 @@ export const mcpFooterStatus = (
         `${mcpActivityServerLabel(running.server)}: ${MCP_ACTIVITY_PHASES[running.phase]}`,
       );
   }
-  return pieces.length ? `MCP ${pieces.join(" · ")}` : undefined;
+  // Each status leads with its count and noun, like the other extensions' footer statuses.
+  if (pieces.length && !connected && !active) pieces[0] = `MCP ${pieces[0]}`;
+  return pieces.length ? pieces.join(" · ") : undefined;
 };

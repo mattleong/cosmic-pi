@@ -1,5 +1,5 @@
-import { failureMessage } from "./issue-message";
 import { resolveCompactSummary, type CompactPhase, type CompactSummary } from "./compact-summary";
+import { failureMessage } from "pi-cosmic-core";
 
 /**
  * Shared display policy only. Domain outcome classification stays with the producer.

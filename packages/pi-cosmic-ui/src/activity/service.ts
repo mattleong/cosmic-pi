@@ -17,6 +17,7 @@ import {
 } from "./protocol.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
 import { detachActivityItem } from "./detach.ts";
+import { SPINNER_FRAME_MS } from "../manager/chrome.ts";
 
 export class ActivityError extends Schema.TaggedError<ActivityError>()("ActivityError", {
   reason: Schema.Literals(["invalid", "stale", "failed"]),
@@ -318,7 +319,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
               return Effect.sleep(
                 starting > 0 ||
                   rows.some((row) => row.status === "running" || row.status === "pending")
-                  ? "100 millis"
+                  ? `${SPINNER_FRAME_MS} millis`
                   : "1 second",
               ).pipe(Effect.andThen(updateClock));
             }),

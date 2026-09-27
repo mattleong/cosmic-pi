@@ -10,7 +10,8 @@ import {
   type BuiltinCompactPolicy,
   type BuiltinBeforeWrite,
 } from "./builtin-projection";
-import type { BuiltinCompactTool } from "./builtin-subject";
+import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
+import { isTruncated } from "./data/results";
 
 /** Detached, no-I/O snapshot of the currently published preview policy. */
 export function captureBuiltinCompactPolicy(): BuiltinCompactPolicy {
@@ -44,7 +45,7 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
       counts: { detail: writeResultDetail(beforeWrite.value, content) },
     };
   }
-  return projectBuiltinCompactSummary(tool, {
+  const projected = projectBuiltinCompactSummary(tool, {
     ...captureBuiltinCompactPolicy(),
     phase,
     args,
@@ -53,4 +54,12 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
     isError: context.isError,
     beforeWrite,
   });
+  if (projected || phase !== "settled" || context.isError || !isTruncated(result?.details))
+    return projected;
+  // Output too large to classify still says that it was cut off.
+  return {
+    subject: describeBuiltinCompactSubject(tool, args, context.cwd),
+    outcome: "success",
+    issues: [{ severity: "warning", code: "output-truncated", message: "Output was cut off" }],
+  };
 }

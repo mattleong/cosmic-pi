@@ -10,6 +10,7 @@ import type { McpAuthAttempt } from "../auth/flow.ts";
 import { authPhaseTerminal } from "../auth/progress.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import { McpAuthPanel } from "../ui/auth-panel.ts";
+import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 
 const failed = () => boundaryError("unavailable", "not-sent", "The sign-in panel is unavailable.");
 
@@ -51,7 +52,7 @@ export const presentMcpAuthPanel = (
       };
       yield* attempt.subscribe(repaint);
       yield* Effect.acquireRelease(
-        Effect.sync(() => startHostUiTicker(250, repaint)),
+        Effect.sync(() => startHostUiTicker(SPINNER_FRAME_MS, repaint)),
         (stop) => Effect.sync(() => invokeHostCallback(stop, undefined)),
       );
       // Cancellation must never wait behind (or be dropped by) browser opening.

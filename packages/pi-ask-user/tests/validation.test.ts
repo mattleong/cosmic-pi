@@ -1,3 +1,4 @@
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import {
   normalizeAskUserRequest,
@@ -100,6 +101,18 @@ describe("ask-user validation", () => {
       expect(message).toContain(position);
       expect(message).toContain(reason);
       for (const text of privateText) expect(message).not.toContain(text);
+    }
+  });
+
+  it("words inline input errors in the shared message style", () => {
+    for (const [value, kind] of [
+      [" ", "text"],
+      ["x".repeat(4_001), "custom"],
+      ["x".repeat(2_001), "note"],
+    ] as const) {
+      const { error } = validateQuestionnaireInput(value, kind);
+      expect(error).toBeDefined();
+      expect(issueMessageStyleProblems(error ?? "")).toEqual([]);
     }
   });
 });

@@ -82,16 +82,23 @@ export interface LocalProcessContract {
   ) => Effect.Effect<LocalProcessHandle, LocalProcessError, Scope.Scope>;
 }
 
-const processError = (operation: string) =>
+/** Redacted boundary failures: never the command, its output, or the underlying error text. */
+const PROCESS_FAILURES = {
+  cwd: { operation: "inspect working directory", message: "Couldn't find the working directory" },
+  spawn: { operation: "spawn", message: "Couldn't start the process" },
+  terminate: { operation: "terminate", message: "Couldn't stop the process" },
+} as const satisfies Record<
+  LocalProcessError["reason"],
+  { readonly operation: string; readonly message: string }
+>;
+
+const processError = (reason: LocalProcessError["reason"], subject?: string) =>
   new LocalProcessError({
-    operation,
-    reason:
-      operation === "inspect working directory"
-        ? "cwd"
-        : operation === "spawn"
-          ? "spawn"
-          : "terminate",
-    message: `Unable to ${operation} local process.`,
+    reason,
+    operation: PROCESS_FAILURES[reason].operation,
+    message: subject
+      ? `${PROCESS_FAILURES[reason].message} ${subject}`
+      : PROCESS_FAILURES[reason].message,
   });
 
 export function makeBackgroundProcessEnvironment(
@@ -171,16 +178,16 @@ const verifyCwd = (
 ) =>
   Effect.tryPromise({
     try: () => inspect(cwd),
-    catch: () => processError("inspect working directory"),
+    catch: () => processError("cwd", cwd),
   }).pipe(
     Effect.flatMap((info) =>
       info.isDirectory()
         ? Effect.void
         : Effect.fail(
             new LocalProcessError({
-              operation: "inspect working directory",
+              operation: PROCESS_FAILURES.cwd.operation,
               reason: "cwd",
-              message: `Working directory is not a directory: ${cwd}`,
+              message: `The working directory is not a directory: ${cwd}`,
             }),
           ),
     ),

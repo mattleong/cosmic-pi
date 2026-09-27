@@ -282,7 +282,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("session_start");
       vi.mocked(h.ctx.ui.notify).mockClear();
 
-      yield* invoke(h.commands.get("fast")?.("", h.ctx));
+      yield* invoke(h.commands.get("openai-fast")?.("", h.ctx));
 
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");

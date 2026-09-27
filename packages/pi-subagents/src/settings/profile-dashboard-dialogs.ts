@@ -2,7 +2,6 @@ import {
   Input,
   Key,
   matchesKey,
-  truncateToWidth,
   wrapTextWithAnsi,
   type Component,
   type Focusable,
@@ -14,6 +13,7 @@ import { normalizeProfileSetName } from "../config/schema.ts";
 import type { ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 type DialogOptions = SearchableSelectHostOptions & {
   readonly theme: Theme;
@@ -139,7 +139,7 @@ export class ProfileDashboardDialog implements Component, Focusable {
       hint,
     ]
       .slice(0, height)
-      .map((line) => truncateToWidth(line, Math.max(0, width)));
+      .map((line) => clipToWidth(line, Math.max(0, width)));
   }
   invalidate(): void {
     this.input.invalidate();

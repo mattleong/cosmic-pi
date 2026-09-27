@@ -12,7 +12,6 @@ import { metadata } from "../../preview/format";
 import { countContentLines } from "../../preview/line-counts";
 import { hiddenPreviewExpandHintForShell } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
-import { countLabel, formatBytes } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";
 import { resolvePreviewLanguage } from "../../syntax/language";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
@@ -36,8 +35,9 @@ import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { diffPreviewCacheKey, writeCallPreviewCacheKey } from "./shared/preview-cache-key";
 import { renderContentPreview } from "./shared/content-preview";
 import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
-import { argumentIssues, previewCallIssues, withPreviewIssues } from "./shared/preview-issues";
 import { renderPreviewError } from "./shared/result-prelude";
+import { countLabel, formatBytes } from "pi-cosmic-core";
+import { previewIssuesSlot } from "../../preview/preview-issues";
 
 export function createWritePreviewTool(cwd: string) {
   const originalWrite = createWriteToolDefinition(cwd);
@@ -69,9 +69,7 @@ export function createWritePreviewTool(cwd: string) {
         content,
         piLanguage: getLanguageFromPath(path),
       });
-      const issues = previewCallIssues(renderContext.state, theme, () =>
-        argumentIssues("write", renderContext),
-      );
+      const issues = previewIssuesSlot(renderContext);
       if (!renderContext.expanded && !codePreviewSettings.writeContentPreview) {
         const hidden = new Container();
         hidden.addChild(
@@ -107,78 +105,74 @@ export function createWritePreviewTool(cwd: string) {
       return preview;
     },
 
-    renderResult: withPreviewIssues(
-      "write",
-      (result, { expanded }, theme, renderContext) => {
-        const firstText = getTextContent(result.content);
-        if (renderContext.isError) return renderPreviewError(theme, expanded, firstText);
+    renderResult: (result, { expanded }, theme, renderContext) => {
+      const firstText = getTextContent(result.content);
+      if (renderContext.isError) return renderPreviewError(theme, expanded, firstText);
 
-        const path = getPathArg(renderContext.args);
-        const content = Predicate.isString(renderContext.args?.content)
-          ? renderContext.args.content
-          : "";
-        const stateKey = "codePreviewWriteBeforeSnapshot";
-        const before = Object.hasOwn(renderContext.state, stateKey)
-          ? renderContext.state[stateKey]
-          : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
-        renderContext.state[stateKey] = before;
-        const beforeContent = getObjectValue(before, "content");
-        const applied = (note: string) =>
-          new Text(theme.fg("success", "✓ Write applied") + note, 0, 0);
-        const skipReason = getWriteDiffSkipReason(before, content);
-        if (skipReason) return applied(theme.fg("muted", ` · diff skipped: ${skipReason}`));
-        if (Predicate.isString(beforeContent) && beforeContent !== content) {
-          if (!expanded && !codePreviewSettings.writeContentPreview)
-            return applied(
-              formatOptionalHiddenHint(hiddenPreviewExpandHintForShell(renderContext.state, theme)),
-            );
-          const guard = getWriteDiffGuard(beforeContent, content);
-          if (guard) {
-            const skippedFor = guard === "size" ? "large content" : "complex rewrite";
-            return applied(theme.fg("muted", ` · diff skipped for ${skippedFor}`));
-          }
-          const render = () =>
-            renderWriteDiffPreview(
-              beforeContent,
-              content,
-              path,
-              expanded,
-              theme,
-              renderContext.invalidate,
-            );
-          const source = `${beforeContent}\0${content}`;
-          const previewKey = diffPreviewCacheKey(
-            "write-result",
-            source,
+      const path = getPathArg(renderContext.args);
+      const content = Predicate.isString(renderContext.args?.content)
+        ? renderContext.args.content
+        : "";
+      const stateKey = "codePreviewWriteBeforeSnapshot";
+      const before = Object.hasOwn(renderContext.state, stateKey)
+        ? renderContext.state[stateKey]
+        : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
+      renderContext.state[stateKey] = before;
+      const beforeContent = getObjectValue(before, "content");
+      const applied = (note: string) =>
+        new Text(theme.fg("success", "✓ Write applied") + note, 0, 0);
+      const skipReason = getWriteDiffSkipReason(before, content);
+      if (skipReason) return applied(theme.fg("muted", ` · diff skipped: ${skipReason}`));
+      if (Predicate.isString(beforeContent) && beforeContent !== content) {
+        if (!expanded && !codePreviewSettings.writeContentPreview)
+          return applied(
+            formatOptionalHiddenHint(hiddenPreviewExpandHintForShell(renderContext.state, theme)),
+          );
+        const guard = getWriteDiffGuard(beforeContent, content);
+        if (guard) {
+          const skippedFor = guard === "size" ? "large content" : "complex rewrite";
+          return applied(theme.fg("muted", ` · diff skipped for ${skippedFor}`));
+        }
+        const render = () =>
+          renderWriteDiffPreview(
+            beforeContent,
+            content,
             path,
             expanded,
             theme,
-            codePreviewSettings.writeCollapsedLines,
-          );
-          return cachedDeferredPreview(
-            renderContext.state,
-            "writeResultPreviewKey",
-            "writeResultPreviewComponent",
-            previewKey,
-            source,
-            "Rendering write diff…",
-            theme,
-            render,
             renderContext.invalidate,
           );
-        }
-        if (Predicate.isString(beforeContent))
-          return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
-        // Missing history is an issue above the body.
-        if (!isKnownNewWrite(before, result.details)) return applied("");
-        return new Text(
-          theme.fg("success", `✓ New file (${countLabel(countContentLines(content), "line")})`),
-          0,
-          0,
+        const source = `${beforeContent}\0${content}`;
+        const previewKey = diffPreviewCacheKey(
+          "write-result",
+          source,
+          path,
+          expanded,
+          theme,
+          codePreviewSettings.writeCollapsedLines,
         );
-      },
-      "call",
-    ),
+        return cachedDeferredPreview(
+          renderContext.state,
+          "writeResultPreviewKey",
+          "writeResultPreviewComponent",
+          previewKey,
+          source,
+          "Rendering write diff…",
+          theme,
+          render,
+          renderContext.invalidate,
+        );
+      }
+      if (Predicate.isString(beforeContent))
+        return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
+      // Missing history is an issue above the body.
+      if (!isKnownNewWrite(before, result.details)) return applied("");
+      return new Text(
+        theme.fg("success", `✓ New file (${countLabel(countContentLines(content), "line")})`),
+        0,
+        0,
+      );
+    },
   });
 }
 

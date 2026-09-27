@@ -6,16 +6,18 @@ import {
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { isActiveTaskState, type BackgroundTaskProjection } from "../task/model.ts";
 import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
+import { taskStateLabel } from "../ui/task-state.ts";
 
 export function backgroundTaskActivityItems(
   projection: BackgroundTaskProjection,
 ): readonly ActivityItem[] {
   return Object.freeze(
     projection.tasks.map((task) => {
+      const title = sanitizeDiagnosticContent(task.name ?? task.command, { maximumLength: 512 });
       const item: ActivityItem = {
         id: task.id,
         kind: "command" as const,
-        title: sanitizeDiagnosticContent(task.name ?? task.command, { maximumLength: 512 }),
+        title,
         status:
           task.state === "starting"
             ? ("pending" as const)
@@ -29,7 +31,7 @@ export function backgroundTaskActivityItems(
                     ? ("cancelled" as const)
                     : ("done" as const),
         revision: `${task.startedAt}:${task.state}:${task.logCursor}`,
-        summary: task.state,
+        summary: taskStateLabel(task.state),
         awaited: task.awaited === true,
         startedAt: task.startedAt,
         updatedAt: task.endedAt ?? task.logs.at(-1)?.timestamp ?? task.startedAt,
@@ -39,7 +41,7 @@ export function backgroundTaskActivityItems(
                 Object.freeze({
                   id: "stop",
                   label: "Stop",
-                  confirmation: `Stop ${task.id} and its process tree?`,
+                  confirmation: `Stop "${title}" and its process tree?`,
                 }),
               ]
             : [],

@@ -28,7 +28,7 @@ export const initialUsageProjection = <Resolved, Snapshot>(): UsageProjectionBas
   eligible: false,
   snapshot: undefined,
   statusLine: undefined,
-  statusText: "Usage unavailable.",
+  statusText: "Usage unavailable",
   error: undefined,
   lastFetchAt: undefined,
   updatedAt: undefined,
@@ -61,7 +61,7 @@ export function withUsageEligibility<T extends UsageVisibilityFields>(
   clearUsage: boolean,
   options: UsageEligibilityStatusTexts,
 ): T {
-  const unavailable = options.unavailableStatusText ?? "Usage unavailable.";
+  const unavailable = options.unavailableStatusText ?? "Usage unavailable";
   const statusText = eligible ? unavailable : options.hiddenStatusText;
   return {
     ...current,
@@ -121,7 +121,7 @@ export function synchronizeUsageProjectionContext<Projection extends UsageVisibi
 ): void {
   const current = MutableRef.get(projection);
   const decision = evaluateEligibility(current);
-  const texts = { hiddenStatusText: "Usage hidden.", ...decision.statusTexts };
+  const texts = { hiddenStatusText: "Usage hidden", ...decision.statusTexts };
   MutableRef.set(
     projection,
     freezeSnapshot(withUsageEligibility(current, decision.eligible, decision.clearUsage, texts)),

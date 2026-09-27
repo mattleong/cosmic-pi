@@ -1,18 +1,37 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import type {
+  MessageRenderOptions,
+  Theme,
+  ToolRenderResultOptions,
+} from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { planCompactPresentation, renderCompactIssues, renderCompactRow } from "pi-code-previews";
 import * as Schema from "effect/Schema";
-import { stripTerminalControls } from "pi-cosmic-core";
-import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
+import { countLabel } from "pi-cosmic-core";
+import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
-  answerLine,
-  asyncOutcome,
+  answersBody,
+  callBody,
+  cancelledLine,
+  emptyBody,
+  expandedResult,
+  mutedState,
+  stacked,
+  type RenderContext,
+} from "./tool-body.ts";
+import {
+  answerOutcome,
+  callTitles,
   decodeAsyncControl,
-  decodeCallTitles,
   decodeExpandedAsyncRows,
-  expandedAsyncSnapshot,
   fallbackText,
+  isStatusList,
   projection,
+  questionnaireState,
+  stateCounts,
+  stateWords,
+  type ReplayedAnswer,
+  type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
 
 const envelope = projection(
@@ -26,155 +45,125 @@ const notification = projection(
     requestId: Schema.String,
     deliveryId: Schema.String,
     generation: Schema.String,
-    outcome: asyncOutcome,
+    outcome: answerOutcome,
   }),
 );
-const fallback = <Content>(content: Content): string => fallbackText(content, true);
-const rawResult = <Content>(content: Content) =>
-  fallback(content) ? ["Raw result", fallback(content)] : [];
-const requestLine = (row: NonNullable<ReturnType<typeof decodeExpandedAsyncRows>>[number]) =>
-  `Request ${stripTerminalControls(row.requestId)} · delivery ${stripTerminalControls(row.deliveryId)} · ${row.status} · delivery status ${row.delivery}`;
-const notificationLine = (details: NonNullable<ReturnType<typeof notification>>) =>
-  `Request ${stripTerminalControls(details.requestId)} · delivery ${stripTerminalControls(details.deliveryId)} · generation ${stripTerminalControls(details.generation)}`;
-const repeatWarning = "Do not immediately ask the same questions again.";
+/** Async replay accepts string content as well as text parts. */
+const rawText = <Content>(content: Content): string => fallbackText(content, true);
+/** Async snapshots carry answer keys only; their questions stay with the opening call. */
+const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
-function outcomeLines(outcome: typeof asyncOutcome.Type | undefined, theme: Theme): string[] {
-  if (outcome?.outcome !== "submitted") return [];
-  return outcome.answers.flatMap((answer) => {
-    const lines = [answerLine(answer, theme)];
-    if (answer.note) lines.push(theme.fg("muted", `Note: ${stripTerminalControls(answer.note)}`));
-    return lines;
-  });
-}
+type ResultContext = Partial<Pick<RenderContext, "args" | "isError">>;
 
-function summary(
-  status: (typeof expandedAsyncSnapshot.Type)["status"],
-  outcome: typeof asyncOutcome.Type | undefined,
+/** "Ask user" with its question titles, or "Questionnaire" with the control action. */
+export function renderAsyncCall<Args>(
+  args: Args,
   theme: Theme,
-): string[] {
-  const label = {
-    pending: "Waiting for your answers",
-    submitted: "Answers submitted",
-    cancelled: "Questionnaire cancelled",
-    failed: "Questionnaire failed. No answer was recorded.",
-  }[status];
-  return [
-    toolStatusLine(
-      theme,
-      status === "submitted" ? "success" : status === "failed" ? "error" : "warning",
-      label,
-    ),
-    ...outcomeLines(status === "submitted" ? outcome : undefined, theme),
-  ];
-}
-
-export function renderAsyncCall<Input>(
-  input: Input,
-  theme: Theme,
-  expanded: boolean,
+  context: Pick<RenderContext, "expanded" | "state">,
   isControl = false,
-): Text {
-  const call = decodeAsyncControl(input);
-  const questions = decodeCallTitles(input)?.questions;
-  const title = isControl
-    ? {
-        status: "Questionnaire status",
-        await: "Waiting for answers",
-        cancel: "Cancel questionnaire",
-      }[call?.action ?? "status"]
-    : "Ask user";
-  const subtitle = isControl
-    ? expanded && call?.requestId
-      ? stripTerminalControls(call.requestId)
-      : undefined
-    : questions?.map((question) => stripTerminalControls(question.title)).join(", ");
-  return new Text(renderToolHeader({ title, subtitle }, theme), 0, 0);
+): Component {
+  const header = isControl
+    ? { title: "Questionnaire", subtitle: decodeAsyncControl(args)?.action }
+    : { title: "Ask user", subtitle: callTitles(args) };
+  return callBody(header, args, theme, context);
 }
 
-export function renderAsyncResult<Input>(
-  input: Input,
-  options: { expanded: boolean; isPartial: boolean },
-  theme: Theme,
-): Text {
-  if (options.isPartial)
-    return new Text(toolStatusLine(theme, "warning", "Waiting for questionnaire update"), 0, 0);
-  const result = envelope(input);
-  const rows = decodeExpandedAsyncRows(result?.details);
-  const lines = rows?.flatMap((row) => [
-    ...summary(row.status, row.outcome, theme),
-    ...(row.delivery === "failed"
-      ? [
-          toolStatusLine(
-            theme,
-            "warning",
-            "Automatic delivery failed. The agent can still retrieve this answer.",
-          ),
-        ]
-      : []),
-  ]);
-  if (rows?.length === 0) lines?.push("No questionnaires to show.");
-  if (options.expanded && rows) {
-    for (const row of rows) lines?.push(theme.fg("dim", requestLine(row)));
-    lines?.push(
-      fallback(result?.content),
-      theme.fg(
-        "dim",
-        "Delivery status sent means the host call returned, not that the model acknowledged the answers.",
-      ),
-    );
-  }
-  return new Text(lines?.join("\n") ?? fallback(result?.content), 0, 0);
+/** A consistent single snapshot's answers; stale or mismatched outcomes are never shown. */
+function submittedAnswers(
+  rows: readonly ReplayedSnapshot[] | undefined,
+): readonly ReplayedAnswer[] | undefined {
+  const [row] = rows ?? [];
+  return rows?.length === 1 &&
+    row &&
+    questionnaireState(row) === "answered" &&
+    row.outcome?.outcome === "submitted"
+    ? row.outcome.answers
+    : undefined;
 }
 
+/** The expanded body in both styles: the labeled agent-facing text. */
 export function renderAsyncContent<Input>(
   input: Input,
-  _options: { expanded: boolean; isPartial: boolean },
+  _options: ToolRenderResultOptions,
   theme: Theme,
-): Text {
+  context: ResultContext = {},
+): Component {
   const result = envelope(input);
-  const rows = decodeExpandedAsyncRows(result?.details);
-  if (
-    !rows ||
-    rows.some(
-      (row) => row.status === "failed" || (row.outcome && row.status !== row.outcome.outcome),
-    )
-  )
-    return new Text(fallback(result?.content), 0, 0);
-  return new Text(
-    rows
-      .flatMap((row) => [
-        ...outcomeLines(row.outcome, theme),
-        requestLine(row),
-        ...(row.independentWork
-          ? [`Independent work: ${stripTerminalControls(row.independentWork)}`]
-          : []),
-        ...(row.blockedWork
-          ? [`Wait for answers before: ${stripTerminalControls(row.blockedWork)}`]
-          : []),
-        ...(row.presentation
-          ? [`Presentation: ${row.presentation}. Queued admission is not a mount or an answer.`]
-          : []),
-        ...(row.outcome?.outcome === "cancelled" ? [repeatWarning] : []),
-        "Treat repeated delivery IDs as the same result. Sent means the host call returned, not model acknowledgement.",
-      ])
-      .concat(rawResult(result?.content))
-      .join("\n"),
-    0,
-    0,
+  return expandedResult(
+    rawText(result?.content),
+    context.isError ?? false,
+    submittedAnswers(decodeExpandedAsyncRows(result?.details)),
+    NO_TITLES,
+    theme,
   );
 }
 
+/**
+ * Collapsed, a questionnaire shows its answers or its routine state; a list shows its counts.
+ * Failures are the shell's issue lines; a returned cancellation is stated here, once.
+ */
+export function renderAsyncResult<Input>(
+  input: Input,
+  options: ToolRenderResultOptions,
+  theme: Theme,
+  context: ResultContext = {},
+): Component {
+  if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
+  const result = envelope(input);
+  const rows = decodeExpandedAsyncRows(result?.details);
+  const states = rows?.map(questionnaireState);
+  const list = !rows || rows.length !== 1 || isStatusList(context.args);
+  const [state] = states ?? [];
+  // The shell states failures and the cancellations Pi reports; the body states the rest.
+  const cancelled = !list && state === "cancelled" && !context.isError;
+  if (options.expanded) {
+    const content = renderAsyncContent(input, options, theme, context);
+    return cancelled ? stacked([cancelledLine(theme), content]) : content;
+  }
+  if (context.isError) return emptyBody();
+  if (!rows || !states || states.some((entry) => entry === undefined))
+    return new Text(rawText(result?.content), 0, 0);
+  const known = states.flatMap((entry) => (entry ? [entry] : []));
+  if (rows.length === 0) return mutedState(["No questionnaires retained", "None retained"], theme);
+  if (list) return mutedState(stateCounts(known), theme);
+  if (cancelled) return cancelledLine(theme);
+  const answers = submittedAnswers(rows);
+  if (answers) return answersBody(answers, NO_TITLES, theme, true);
+  return state === "waiting" || state === "queued"
+    ? mutedState(stateWords(state), theme)
+    : emptyBody();
+}
+
+/** Lines under the transcript's output padding. */
+function padded(parts: readonly Component[], pad: number): Component {
+  return {
+    render(width) {
+      const margin = " ".repeat(Math.max(0, pad));
+      const inner = Math.max(1, width - Math.max(0, pad) * 2);
+      return parts.flatMap((part) => part.render(inner)).map((line) => `${margin}${line}`);
+    },
+    invalidate() {
+      for (const part of parts) part.invalidate();
+    },
+  };
+}
+
+/**
+ * Automatic answer messages. Collapsed they show the answers (or only a compact row); expanded
+ * they show the message the agent received. Delivery and generation IDs never appear.
+ */
 export function renderAsyncMessage<Input>(
   input: Input,
-  options: { expanded: boolean; outputPad: number },
+  options: MessageRenderOptions,
   theme: Theme,
   compact = false,
 ): Component {
   const message = envelope(input);
-  const details = notification(message?.details);
+  const outcome = notification(message?.details)?.outcome;
+  const raw = rawText(message?.content);
+  const answers = outcome?.outcome === "submitted" ? outcome.answers : undefined;
+  const expanded = expandedResult(raw, false, answers, NO_TITLES, theme);
   if (compact) {
-    const outcome = details?.outcome;
-    const answers = outcome?.outcome === "submitted" ? outcome.answers.length : 0;
     const subject = !outcome
       ? "Questionnaire update"
       : outcome.outcome === "cancelled"
@@ -185,51 +174,45 @@ export function renderAsyncMessage<Input>(
       summary: outcome && {
         subject,
         outcome: outcome.outcome === "cancelled" ? "cancelled" : "success",
-        counters: answers ? [`${answers} ${answers === 1 ? "answer" : "answers"}`] : [],
+        counters: answers?.length ? [countLabel(answers.length, "answer")] : [],
       },
       phase: "settled",
       isError: false,
       expanded: options.expanded,
       heading: { subject },
     });
-    return {
-      invalidate() {},
-      render(width) {
-        const inner = Math.max(1, width - options.outputPad * 2);
-        const lines = [
-          renderCompactRow(
-            {
-              name: "ask_user_async",
-              phase: "settled",
-              summary: collapsedSummary,
-              expanded: options.expanded,
-            },
-            theme,
-            inner,
-          ),
-          ...renderCompactIssues(collapsedSummary.issues, theme, inner, options.expanded),
-        ];
-        if (options.expanded && !details) lines.push(fallback(message?.content));
-        if (options.expanded && details)
-          lines.push(
-            ...outcomeLines(outcome, theme),
-            notificationLine(details),
-            ...(outcome?.outcome === "cancelled" ? [repeatWarning] : []),
-            "This notification does not confirm model acknowledgement of the answers.",
-            ...rawResult(message?.content),
-          );
-        return new Text(lines.join("\n"), options.outputPad, 0).render(width);
-      },
+    const heading: Component = {
+      render: (width) => [
+        renderCompactRow(
+          {
+            name: "ask_user_async",
+            phase: "settled",
+            summary: collapsedSummary,
+            expanded: options.expanded,
+          },
+          theme,
+          width,
+        ),
+        ...renderCompactIssues(collapsedSummary.issues, theme, width, options.expanded),
+      ],
+      invalidate: () => undefined,
     };
+    return padded(options.expanded ? [heading, expanded] : [heading], options.outputPad);
   }
-  if (!details) return new Text(fallback(message?.content), options.outputPad, 0);
-  const lines = summary(details.outcome.outcome, details.outcome, theme);
-  if (options.expanded) {
-    lines.push(
-      theme.fg("dim", notificationLine(details)),
-      fallback(message?.content),
-      theme.fg("dim", "This notification does not confirm model acknowledgement of the answers."),
-    );
-  }
-  return new Text(lines.join("\n"), options.outputPad, 0);
+  if (!outcome) return new Text(raw, options.outputPad, 0);
+  const cancelled = outcome.outcome === "cancelled";
+  const parts: Component[] = [
+    new Text(
+      renderToolHeader(
+        { title: "Ask user", subtitle: cancelled ? "Questionnaire" : "Answers submitted" },
+        theme,
+      ),
+      0,
+      0,
+    ),
+  ];
+  if (cancelled) parts.push(cancelledLine(theme));
+  if (options.expanded) parts.push(expanded);
+  else if (answers) parts.push(answersBody(answers, NO_TITLES, theme, true));
+  return padded(parts, options.outputPad);
 }

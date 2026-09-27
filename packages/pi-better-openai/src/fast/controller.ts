@@ -20,18 +20,16 @@ export const isFastActive = (ctx: ExtensionContext, snapshot: FastSnapshot): boo
   snapshot.desiredActive && supportsFast(ctx);
 
 export function fastStateText(ctx: ExtensionContext, snapshot: FastSnapshot): string {
-  const model = currentModelKey(ctx);
-  if (isFastActive(ctx, snapshot)) return `Fast mode is on for ${model}.`;
-  if (snapshot.desiredActive)
-    return `Fast mode is requested, but inactive for ${model}. Select an openai or openai-codex model to activate it.`;
-  return `Fast mode is off. Current model: ${model}.`;
+  if (isFastActive(ctx, snapshot)) return `Fast mode is on for ${currentModelKey(ctx)}`;
+  if (snapshot.desiredActive) return unsupportedRequestMessage(ctx);
+  return "Fast mode is off";
 }
 
 export const unsupportedRequestMessage = (ctx: ExtensionContext): string =>
-  `Fast mode requested, but inactive for ${currentModelKey(ctx)}. It will activate automatically when you switch to any openai or openai-codex model.`;
+  `Fast mode turns on when you switch from ${currentModelKey(ctx)} to an OpenAI model`;
 
 export const inactiveForModelMessage = (ctx: ExtensionContext): string =>
-  `Fast mode inactive for unsupported model ${currentModelKey(ctx)}.`;
+  `Fast mode is paused: ${currentModelKey(ctx)} doesn't support it`;
 
 export function settingsSummary(ctx: ExtensionContext, snapshot: FastSnapshot): string {
   if (isFastActive(ctx, snapshot)) return "on";

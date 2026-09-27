@@ -32,7 +32,7 @@ export function registerSettingsController(
     descriptors: SETTINGS_OPTION_DESCRIPTORS,
     examples: ["usage.refreshIntervalMs 30000", "usage.showResetTimes true"],
     config: options.config,
-    diagnostics: options.formatDebugStatus,
+    status: options.formatDebugStatus,
     apply: (_ctx, id, value, signal) =>
       options.run(
         XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(Effect.result),
@@ -49,7 +49,7 @@ export function registerSettingsController(
         closedValue: undefined,
         create: ({ tui, theme, keybindings, finish }) =>
           createSettingsListSurface({
-            header: new Text(theme.fg("accent", theme.bold("Better xAI Settings")), 1, 1),
+            header: new Text(theme.fg("accent", theme.bold("Better xAI settings")), 1, 1),
             items,
             height: Math.min(12, items.length + 2),
             listTheme: managerSettingsTheme(theme),
@@ -59,9 +59,10 @@ export function registerSettingsController(
             onChange: (id, value, list) => {
               const generation = pickerGenerations.begin(id);
               void session.apply(id, value, (currentValue) => {
-                if (!pickerGenerations.isCurrent(id, generation)) return;
+                if (!pickerGenerations.isCurrent(id, generation)) return false;
                 list.updateValue(id, currentValue);
                 tui.requestRender();
+                return true;
               });
             },
             onCancel: () => finish(undefined),

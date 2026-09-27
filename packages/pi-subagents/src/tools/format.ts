@@ -3,6 +3,7 @@ import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
   synchronousNow,
+  countLabel,
 } from "pi-cosmic-core";
 import { normalizeWriteClaim, writeClaimContains } from "../domain/write-claims.ts";
 import type { SubagentSelectionProvenance } from "../profiles/model.ts";
@@ -16,7 +17,7 @@ import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentRunObservation } from "../run/service.ts";
 import { clipWithMarker } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
-import { formatRunRoute, formatSessionAge } from "../ui/run-presentation.ts";
+import { formatRunRoute, formatSessionActivity, formatSessionAge } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import type { SubagentToolAction } from "./schema.ts";
@@ -284,7 +285,7 @@ const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefin
     audit
       ? statusField(
           "Write audit",
-          `${audit.observedFileWrites.length} native file path${audit.observedFileWrites.length === 1 ? "" : "s"} observed · ${audit.violations.length} violation${audit.violations.length === 1 ? "" : "s"} · ${audit.bashWriteHints} Bash heuristic notice${audit.bashWriteHints === 1 ? "" : "s"}`,
+          `${countLabel(audit.observedFileWrites.length, "native file path")} observed · ${countLabel(audit.violations.length, "violation")} · ${countLabel(audit.bashWriteHints, "Bash heuristic notice")}`,
         )
       : undefined,
     statusField(
@@ -297,8 +298,7 @@ const writeStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefin
 const activityStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
   const now = synchronousNow();
   const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt) || undefined;
-  const activityAge = formatSessionAge(now, run.lastActivityAt);
-  const activity = activityAge ? `${activityAge} ago` : undefined;
+  const activity = formatSessionActivity(now, run.lastActivityAt) || undefined;
   const usage = aggregateUsage([run]);
   const native = run.nativeActivity;
   return [
@@ -392,7 +392,7 @@ type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
 
 export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string => {
   const remaining = recovery.hasRemainingCandidate
-    ? ` · ${recovery.remainingCandidateCount} candidate${recovery.remainingCandidateCount === 1 ? "" : "s"} remains`
+    ? ` · ${countLabel(recovery.remainingCandidateCount, "candidate")} remains`
     : " · no candidate remains";
   return `admitted ${sanitizeTerminalLine(recovery.runId)} · cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}${remaining}`;
 };

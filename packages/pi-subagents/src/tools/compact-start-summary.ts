@@ -1,9 +1,10 @@
-import { compactIssueSeverity, failureMessage } from "pi-code-previews";
+import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactPhase, CompactSummary } from "pi-code-previews";
 import { QUOTED_TEXT_LIMIT, quoted } from "./compact-run-issues.ts";
 import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { isUncertainToolFailure } from "./outcome.ts";
+import { failureMessage } from "pi-cosmic-core";
 
 /** Progress counter; a sole named target needs no count. */
 export function progressDetail(

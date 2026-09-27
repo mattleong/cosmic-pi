@@ -1,10 +1,11 @@
 import { diffLines } from "diff";
 import * as Predicate from "effect/Predicate";
-import { countLabel, getObjectValue } from "../shared/helpers";
+import { getObjectValue } from "../shared/helpers";
 import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { getEditPreviewOperations } from "./data/args";
 import { isTruncated } from "./data/results";
+import { countLabel } from "pi-cosmic-core";
 
 const writeCounts = new WeakMap<
   object,

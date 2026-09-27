@@ -1,7 +1,6 @@
 /** Program-level issues and outcome. Nested calls carry their own issues on their rows. */
 import {
   compactIssueSeverity,
-  firstLineMessage,
   selectCompactChildren,
   type CompactChild,
   type CompactIssue,
@@ -10,6 +9,7 @@ import {
 import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
 import { describeProgramFailure } from "../tools/diagnostic-messages.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
+import { firstLineMessage } from "pi-cosmic-core";
 
 export const TRUNCATED_OUTPUT_NOTICE =
   "Output exceeded the output limit; prior operations may already have taken effect.";
@@ -136,7 +136,7 @@ export const programIssues = (
       code: "output-truncated",
       message: "Output was cut off",
       detail: details.receiptsReadOnly
-        ? "Output exceeded the output limit."
+        ? "Output exceeded the output limit and the rest was not saved."
         : TRUNCATED_OUTPUT_NOTICE,
     });
   // Rows are bounded; problems on calls that are no longer listed still need a line.

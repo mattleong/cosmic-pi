@@ -8,7 +8,7 @@ const ReadDetails = Schema.Struct({ resultRead: ResultReadPresentationSchema });
 const READ_FAILURES = {
   "invalid-input": "The saved-output request is invalid",
   unavailable: "Saved output is not available",
-  "invalid-offset": "The requested position is outside the saved output or splits a character",
+  "invalid-offset": "The requested position isn't in the saved output",
   "page-budget": "The output limit is too small to load this page",
   revoked: "Saved output is no longer available in this session",
 } as const;
@@ -20,12 +20,7 @@ export function resultReadCompactSummary<Details>(
 ): CompactSummary | undefined {
   const read = decodeOption(ReadDetails, details)?.resultRead;
   if (!read) return undefined;
-  const heading = {
-    action: "result.read",
-    subject: id,
-    compactSubject: "Saved output",
-    showTiming: true as const,
-  };
+  const heading = { action: "result.read", subject: "saved output", showTiming: true as const };
   if (read.status === "error")
     return {
       ...heading,
@@ -68,8 +63,10 @@ export function resultReadCompactSummary<Details>(
     });
   return {
     ...heading,
+    // Alternatives in priority order: the range, then the shortest fact that still fits.
     counters: [
-      `page ${read.offset}..${read.end}/${read.total}${read.next === null ? " · EOF" : ""}`,
+      `${read.offset}–${read.end} of ${read.total}${read.next === null ? " · end" : ""}`,
+      read.next === null ? "end of output" : `${read.end}/${read.total}`,
     ],
     outcome: issues.some((issue) => issue.severity === "warning") ? "warning" : "success",
     issues,

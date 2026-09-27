@@ -57,7 +57,7 @@ describe("Code Mode program issues", () => {
           { maxToolCalls: 1 },
           [/\b1-call\b/u],
         ],
-        ["while (true) {}", { timeoutMs: 100 }, [/100 ms/u, /line 1\b/u]],
+        ["while (true) {}", { timeoutMs: 100 }, [/100ms/u, /line 1\b/u]],
         [
           "await Promise.allSettled([tools.pi.bash({command:'a'}), tools.pi.bash({command:'b'})]); await tools.pi.bash({command:'c'});",
           {},

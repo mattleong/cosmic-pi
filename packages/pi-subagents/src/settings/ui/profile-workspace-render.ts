@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { listWindowStart } from "pi-cosmic-ui/manager/list-detail";
 import {
   framedFill,
@@ -9,7 +9,11 @@ import {
   listDetailHeading,
   listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
-import { managerLayoutTier, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import {
+  managerLayoutTier,
+  renderResponsiveManagerFooter,
+  clipToWidth,
+} from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
 import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
@@ -91,8 +95,8 @@ export const workspaceCandidateSummary = (
   const metadata = `${theme.fg("muted", effort)}${theme.fg("warning", fast)}`;
   const modelWidth = Math.max(0, width - visibleWidth(metadata) - 3);
   return modelWidth > 0
-    ? `${theme.fg(profileTone.model, truncateToWidth(candidate.model, modelWidth))} · ${metadata}`
-    : truncateToWidth(metadata, width);
+    ? `${theme.fg(profileTone.model, clipToWidth(candidate.model, modelWidth))} · ${metadata}`
+    : clipToWidth(metadata, width);
 };
 
 const profileTableLines = (
@@ -156,10 +160,7 @@ const profileLines = (
   width: number,
   height: number,
 ): ReadonlyArray<string> => {
-  const save = truncateToWidth(
-    `${state.saveFocused ? ">" : " "} Save these profiles as a set…`,
-    width,
-  );
+  const save = clipToWidth(`${state.saveFocused ? ">" : " "} Save these profiles as a set…`, width);
   const lines = [
     ...profileTableLines(state, theme, width),
     ...(state.target.kind === "session"
@@ -246,7 +247,7 @@ const editorLines = (
     const value = row.value
       ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
       : "";
-    const text = truncateToWidth(
+    const text = clipToWidth(
       `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
       width,
     );
@@ -393,9 +394,9 @@ export const renderProfileWorkspace = (
     height,
     top: theme.fg(
       state.target.kind === "session" ? profileTone.session : profileTone.saved,
-      truncateToWidth(` ${targetHeading(state.target)} `, inner, ""),
+      clipToWidth(` ${targetHeading(state.target)} `, inner, ""),
     ),
-    bottom: truncateToWidth(bottom, inner, ""),
+    bottom: clipToWidth(bottom, inner, ""),
     body: (bodyHeight) => {
       if (state.helpOpen) {
         const content = profileWorkspaceHelpLines(options.keybindingLabel, inner);

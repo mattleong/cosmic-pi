@@ -2,20 +2,27 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
   Text,
-  truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
-import { managerNoticeGlyph, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
-import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
+import { expandedSection, previewIssuesSlot } from "pi-code-previews";
+import { sanitizeTerminalLine, synchronousNow, countLabel } from "pi-cosmic-core";
+import {
+  managerStateGlyph,
+  startingSpinnerFrame,
+  clipToWidth,
+  spinnerFrameAt,
+} from "pi-cosmic-ui/manager";
+import { clipWithMarker } from "../run/state.ts";
 import { formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
+  renderToolHeader,
+  toolStatusLine,
 } from "pi-cosmic-ui/tool";
 import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartFailure } from "./model.ts";
@@ -27,32 +34,40 @@ const requestedName = (agent: SubagentStartSpec, index: number): string =>
 const requestedProfile = (agent: SubagentStartSpec): string =>
   sanitizeTerminalLine(agent.profile?.trim() || "generalist");
 
-/** Static request projection: collapsed stays compact; expanded alone reveals bounded tasks. */
+/**
+ * Static request projection: collapsed stays compact; expanded alone reveals bounded tasks.
+ * Preview style's issue lines sit directly under the heading, above the tasks.
+ */
 export const renderSubagentStartCall = (
   agents: ReadonlyArray<SubagentStartSpec>,
   theme: Theme,
   expanded: boolean,
   contentOnly = false,
+  context?: { readonly state: object },
 ): Component => {
-  const count = agents.length;
-  const title = `Start ${count} subagent${count === 1 ? "" : "s"}`;
   const requested = agents
     .map((agent, index) => `${requestedName(agent, index)} [${requestedProfile(agent)}]`)
     .join(", ");
-  const summary = sanitizeTerminalLine(requested);
-  const clippedSummary =
-    summary.length <= 160 ? summary : `${safeTextPrefix(summary, 146)}… [truncated]`;
-  const taskAffordance = expanded
-    ? ""
-    : ` ${renderExpansionAffordance("tasks & launch details", false, theme)}`;
-  const header = new Text(
-    `${theme.fg("toolTitle", theme.bold(title))}${clippedSummary ? ` ${theme.fg("dim", clippedSummary)}` : ""}${taskAffordance}`,
-    0,
-    0,
-  );
-  if (!expanded) return header;
   const container = new Container();
-  if (!contentOnly) container.addChild(header);
+  if (!contentOnly) {
+    container.addChild(
+      new Text(
+        renderToolHeader(
+          { title: `Start ${countLabel(agents.length, "subagent")}`, subtitle: requested },
+          theme,
+        ),
+        0,
+        0,
+      ),
+    );
+    if (context) container.addChild(previewIssuesSlot(context));
+  }
+  if (!expanded) {
+    container.addChild(
+      new Text(renderExpansionAffordance("tasks & launch details", false, theme), 0, 0),
+    );
+    return container;
+  }
   for (const [index, agent] of agents.entries()) {
     container.addChild(
       new Text(
@@ -99,64 +114,55 @@ const receiptPresentation = (entry: SubagentStartEntry) => {
   }
 };
 
+interface ReceiptRowOptions {
+  /** Expanded rows show run IDs and cleanup state; collapsed rows only tell names apart. */
+  readonly expanded: boolean;
+  readonly sharedNames: ReadonlySet<string>;
+  readonly failure?: SubagentStartFailure | undefined;
+}
+
+const receiptRunId = (entry: SubagentStartEntry, options: ReceiptRowOptions): string => {
+  const runId =
+    entry.status === "started"
+      ? entry.runId
+      : entry.status === "failed"
+        ? options.failure?.admittedRun?.runId
+        : undefined;
+  if (runId === undefined) return "";
+  if (options.expanded) return sanitizeTerminalLine(runId);
+  return options.sharedNames.has(entry.name) ? sanitizeTerminalLine(shortRunId(runId)) : "";
+};
+
 const receiptRow = (
   entry: SubagentStartEntry,
   width: number,
   theme: Theme,
-  failure?: SubagentStartFailure,
-  contentOnly = false,
+  options: ReceiptRowOptions,
 ): string[] => {
   const safeWidth = Math.max(1, width);
   const { glyph, color } = receiptPresentation(entry);
   const name = sanitizeTerminalLine(entry.name);
   const profile = sanitizeTerminalLine(entry.profile || "generalist");
   const route = routeLabel(entry);
-  const recovery = entry.status === "failed" ? failure?.admittedRun : undefined;
-  const id =
-    entry.status === "started"
-      ? sanitizeTerminalLine(shortRunId(entry.runId))
-      : recovery
-        ? sanitizeTerminalLine(shortRunId(recovery.runId))
-        : "";
-  const recoveryStatus =
-    recovery && !contentOnly
-      ? ` · cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`
-      : "";
-  const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}${recoveryStatus}`;
-  const routeLines =
-    visibleWidth(raw) <= safeWidth
-      ? [
-          `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}${recoveryStatus ? theme.fg(recovery?.retryDisposition === "eligible" ? "accent" : "warning", recoveryStatus) : ""}`,
-        ]
-      : (() => {
-          const lines = [`${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`];
-          const routeValue = `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;
-          lines.push(
-            ...wrapTextWithAnsi(routeValue, Math.max(1, safeWidth - 5)).map(
-              (line, index) => `${theme.fg("dim", index === 0 ? "  ╰─ " : "     ")}${line}`,
-            ),
-          );
-          if (id) lines.push(`  ${theme.fg("muted", id)}`);
-          if (recovery && !contentOnly)
-            lines.push(
-              `  ${theme.fg("muted", `cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`)}`,
-            );
-          return lines.map((line) => truncateToWidth(line, safeWidth));
-        })();
-  const warningLines =
-    !contentOnly && selectedRoute(entry) && entry.warning
-      ? wrapTextWithAnsi(
-          theme.fg(
-            "warning",
-            `  ${managerNoticeGlyph("warning")} ${sanitizeTerminalLine(entry.warning)}`,
-          ),
-          safeWidth,
-        )
-      : [];
-  return [...routeLines, ...warningLines];
+  const id = receiptRunId(entry, options);
+  const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}`;
+  if (visibleWidth(raw) <= safeWidth)
+    return [
+      `${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)} · ${theme.fg("muted", profile)} · ${theme.fg("toolOutput", route)}${id ? ` · ${theme.fg("muted", id)}` : ""}`,
+    ];
+  const lines = [`${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`];
+  const routeValue = `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;
+  lines.push(
+    ...wrapTextWithAnsi(routeValue, Math.max(1, safeWidth - 5)).map(
+      (line, index) => `${theme.fg("dim", index === 0 ? "  ╰─ " : "     ")}${line}`,
+    ),
+  );
+  if (id) lines.push(`  ${theme.fg("muted", id)}`);
+  return lines.map((line) => clipToWidth(line, safeWidth));
 };
 
-const receiptHeader = (
+/** Routine launch counts as muted text; failures are the shell's issue lines. */
+const receiptCounters = (
   entries: ReadonlyArray<SubagentStartEntry>,
   partial: boolean,
   theme: Theme,
@@ -165,31 +171,66 @@ const receiptHeader = (
   const started = entries.filter((entry) => entry.status === "started").length;
   const failed = entries.filter((entry) => entry.status === "failed").length;
   const pending = total - started - failed;
-  const warnings = entries.filter(
-    (entry) => selectedRoute(entry) && entry.warning !== undefined,
-  ).length;
-  if (partial) {
-    const frame = Math.floor(synchronousNow() / 160);
-    const progress = `Launching ${started + failed} of ${total} · ${started} started · ${failed} failed · ${pending} pending`;
-    return theme.fg("warning", `${startingSpinnerFrame(frame)} ${progress}`);
-  }
-  if (total === 0)
-    return theme.fg("warning", `${managerNoticeGlyph("warning")} Launch receipt unavailable`);
-  if (failed === 0)
-    return theme.fg(
-      warnings > 0 ? "warning" : "success",
-      `${warnings > 0 ? managerNoticeGlyph("warning") : managerStateGlyph("done")} ${started} started${warnings > 0 ? ` · ${warnings} route warning${warnings === 1 ? "" : "s"}` : ""}`,
+  if (partial)
+    return toolStatusLine(
+      theme,
+      "running",
+      [
+        `Launching ${started + failed} of ${total}`,
+        `${started} started`,
+        ...(failed > 0 ? [`${failed} failed`] : []),
+        ...(pending > 0 ? [`${pending} pending`] : []),
+      ].join(" · "),
+      spinnerFrameAt(synchronousNow()),
     );
-  if (started > 0)
-    return theme.fg(
-      "warning",
-      `${managerNoticeGlyph("warning")} ${started}/${total} started · ${failed} failed`,
-    );
+  if (total === 0) return theme.fg("muted", "No launch receipt");
   return theme.fg(
-    "error",
-    `${managerStateGlyph("failed")} Failed to start ${failed} subagent${failed === 1 ? "" : "s"}`,
+    "muted",
+    [`${started}/${total} started`, ...(failed > 0 ? [`${failed} failed`] : [])].join(" · "),
   );
 };
+
+/** One failed launch's evidence and the agent's next step, under its own label. */
+const launchFailureSection = (
+  entry: SubagentStartEntry,
+  failure: SubagentStartFailure,
+  theme: Theme,
+): Component =>
+  expandedSection(
+    theme,
+    `${sanitizeTerminalLine(entry.name)} couldn't start`,
+    new Text(
+      [
+        theme.fg(
+          "toolOutput",
+          clipWithMarker(sanitizeTerminalLine(failure.message), 2_048, "… [truncated]"),
+        ),
+        ...(failure.admittedRun
+          ? [theme.fg("dim", formatFailedStartRecovery(failure.admittedRun))]
+          : []),
+        theme.fg(
+          "dim",
+          `Next: ${
+            failure.admittedRun
+              ? failedStartRecoveryAction(failure.admittedRun)
+              : failureRecovery(failure.code, failure.message, "start")
+          }`,
+        ),
+      ].join("\n"),
+      0,
+      0,
+    ),
+  );
+
+const sharedEntryNames = (entries: ReadonlyArray<SubagentStartEntry>): ReadonlySet<string> => {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const entry of entries) (seen.has(entry.name) ? shared : seen).add(entry.name);
+  return shared;
+};
+
+/** Collapsed receipts list this many launches; the call's affordance reveals the rest. */
+const COLLAPSED_ROWS = 6;
 
 export const renderStartReceiptComponent = (
   failures: ReadonlyArray<SubagentStartFailure>,
@@ -202,87 +243,40 @@ export const renderStartReceiptComponent = (
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const started = entries.filter((entry) => entry.status === "started").length;
+    const sharedNames = sharedEntryNames(entries);
     const failureOf = (entry: SubagentStartEntry) =>
       failures.find((failure) => failure.index === entry.index);
-    const failureDetails = expanded
-      ? entries.flatMap((entry) => {
-          const fallback =
-            selectedRoute(entry) && entry.candidateIndex !== undefined && entry.candidateIndex > 0
-              ? `${entry.status === "started" ? "Selected" : "Attempted"} candidate ${entry.candidateIndex + 1} after ${entry.candidateIndex} earlier candidate${entry.candidateIndex === 1 ? " was" : "s were"} unavailable.`
-              : undefined;
-          const failure = !contentOnly && entry.status === "failed" ? failureOf(entry) : undefined;
-          return [
-            ...(fallback ? wrapTextWithAnsi(theme.fg("dim", `  ${fallback}`), safeWidth) : []),
-            ...(failure
-              ? [
-                  ...wrapTextWithAnsi(
-                    theme.fg("error", `${sanitizeTerminalLine(entry.name)} couldn't start`),
-                    safeWidth,
-                  ),
-                  ...wrapTextWithAnsi(
-                    theme.fg(
-                      "dim",
-                      clipWithMarker(sanitizeTerminalLine(failure.message), 2_048, "… [truncated]"),
-                    ),
-                    safeWidth,
-                  ),
-                  ...(failure.admittedRun
-                    ? wrapTextWithAnsi(
-                        theme.fg("dim", formatFailedStartRecovery(failure.admittedRun)),
-                        safeWidth,
-                      )
-                    : []),
-                  ...wrapTextWithAnsi(
-                    theme.fg(
-                      "accent",
-                      `Next: ${
-                        failure.admittedRun
-                          ? failedStartRecoveryAction(failure.admittedRun)
-                          : failureRecovery(failure.code, failure.message, "start")
-                      }`,
-                    ),
-                    safeWidth,
-                  ),
-                ]
-              : []),
-          ];
-        })
-      : [];
-    const showAllEntries = partial || expanded;
-    const collapsedOutcomes = showAllEntries
-      ? []
-      : entries.flatMap((entry) => {
-          if (entry.status === "failed")
-            return receiptRow(entry, safeWidth, theme, failureOf(entry));
-          if (!selectedRoute(entry) || !entry.warning) return [];
-          return [
-            truncateToWidth(
-              theme.fg(
-                "warning",
-                `${managerNoticeGlyph("warning")} ${sanitizeTerminalLine(entry.name)} · ${sanitizeTerminalLine(entry.warning)}`,
-              ),
+    const shown = expanded ? entries : entries.slice(0, COLLAPSED_ROWS);
+    const rows = shown.flatMap((entry) => {
+      const failure = failureOf(entry);
+      const row = receiptRow(entry, safeWidth, theme, { expanded, sharedNames, failure });
+      if (!expanded) return row;
+      const fallback =
+        selectedRoute(entry) && entry.candidateIndex !== undefined && entry.candidateIndex > 0
+          ? `${entry.status === "started" ? "Selected" : "Attempted"} candidate ${entry.candidateIndex + 1} after ${countLabel(entry.candidateIndex, "earlier candidate")} ${entry.candidateIndex === 1 ? "was" : "were"} unavailable.`
+          : undefined;
+      return [
+        ...row,
+        ...(fallback ? wrapTextWithAnsi(theme.fg("dim", `  ${fallback}`), safeWidth) : []),
+        ...(!contentOnly && entry.status === "failed" && failure
+          ? launchFailureSection(entry, failure, theme).render(safeWidth)
+          : []),
+      ];
+    });
+    const hidden = entries.length - shown.length;
+    return [
+      ...(!contentOnly ? [clipToWidth(receiptCounters(entries, partial, theme), safeWidth)] : []),
+      ...rows,
+      ...(hidden > 0
+        ? [
+            clipToWidth(
+              theme.fg("dim", `… ${countLabel(hidden, "more launch", "more launches")}`),
               safeWidth,
             ),
-          ];
-        });
-    return [
-      ...(!contentOnly ? [truncateToWidth(receiptHeader(entries, partial, theme), safeWidth)] : []),
-      ...(showAllEntries
-        ? entries.flatMap((entry) =>
-            receiptRow(entry, safeWidth, theme, failureOf(entry), contentOnly),
-          )
-        : collapsedOutcomes),
-      ...failureDetails,
-      ...(!partial &&
-      !expanded &&
-      entries.some(
-        (entry) =>
-          entry.status === "failed" || (selectedRoute(entry) && entry.warning !== undefined),
-      )
-        ? [truncateToWidth(renderExpansionAffordance("launch details", false, theme), safeWidth)]
+          ]
         : []),
       ...(!partial && started > 0
-        ? [truncateToWidth(theme.fg("dim", "→ /subagents for live status"), safeWidth)]
+        ? [clipToWidth(theme.fg("dim", "→ /subagents for live status"), safeWidth)]
         : []),
     ];
   });

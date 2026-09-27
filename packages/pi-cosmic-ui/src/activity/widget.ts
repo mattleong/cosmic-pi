@@ -1,10 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { formatElapsed } from "pi-cosmic-core";
 import { managerTone } from "../manager/style.ts";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   managerActivityColor,
   managerActivityGlyph,
   managerNoticeGlyph,
+  clipToWidth,
+  spinnerFrameAt,
 } from "../manager/chrome.ts";
 import {
   activityAttention,
@@ -26,7 +29,7 @@ export const activityGlyph = (row: ActivityRow, now = 0): string =>
     ? managerNoticeGlyph("warning")
     : managerActivityGlyph(
         row.status === "cancelled" ? "stopped" : row.status,
-        Math.floor(now / 100),
+        spinnerFrameAt(now),
       );
 export const activityStartupGlyph = (
   rows: readonly ActivityRow[],
@@ -34,18 +37,17 @@ export const activityStartupGlyph = (
   now = 0,
 ): string =>
   starting > 0 && !rows.some((row) => !isFinished(row))
-    ? managerActivityGlyph("pending", Math.floor(now / 100))
+    ? managerActivityGlyph("pending", spinnerFrameAt(now))
     : "";
+/** Whole-second elapsed time; narrow rows keep only the largest unit ("2m"). */
 export const activityElapsed = (row: ActivityRow, now?: number, compact = false): string => {
   if (row.startedAt === undefined) return "";
-  const seconds = Math.floor(
-    Math.max(0, (row.endedAt ?? now ?? row.updatedAt ?? row.startedAt) - row.startedAt) / 1000,
+  const elapsed = Math.max(
+    0,
+    (row.endedAt ?? now ?? row.updatedAt ?? row.startedAt) - row.startedAt,
   );
-  return seconds < 60
-    ? `${seconds}s`
-    : compact || seconds % 60 === 0
-      ? `${Math.floor(seconds / 60)}m`
-      : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const text = formatElapsed(elapsed);
+  return compact ? (text.split(" ")[0] ?? text) : text;
 };
 export const activityType = (row: ActivityRow): string =>
   row.kind === "agent" ? "SUBAGENT" : row.kind === "command" ? "TASK" : "QUESTION";
@@ -62,7 +64,7 @@ export function activityOwnerLabel(
     const suffix = `… › ${parts.join(" › ")}`;
     if (visibleWidth(suffix) <= width) return suffix;
   }
-  return truncateToWidth(parts[0] ?? "", Math.max(0, width), "…");
+  return clipToWidth(parts[0] ?? "", Math.max(0, width), "…");
 }
 
 const treeGuide = (entry: ActivityTreeRow, levels: number): string => {
@@ -127,22 +129,19 @@ export function activityRowLine(
   const leftWidth = Math.max(0, width - (showStatus ? rightWidth + 2 : 0));
   const guideBudget = Math.max(0, leftWidth - identityWidth - markerWidth - 3);
   const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - visibleWidth(fold) - 2) / 3)));
-  const guide = paint(
-    "dim",
-    truncateToWidth(`${treeGuide(entry, levels)}${fold}`, guideBudget, ""),
-  );
+  const guide = paint("dim", clipToWidth(`${treeGuide(entry, levels)}${fold}`, guideBudget, ""));
   const glyph = paint(color, activityGlyph(row, now));
   const profile = profileName ? `${profileName} · ` : "";
   const omitted = interactive && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
   const route =
     !interactive && width >= 100 && row.route
-      ? paint("muted", truncateToWidth(row.route, Math.floor(leftWidth / 2), "…"))
+      ? paint("muted", clipToWidth(row.route, Math.floor(leftWidth / 2), "…"))
       : "";
   const routeWidth = route ? visibleWidth(route) + 2 : 0;
   const name = focusedStyle
     ? focusedStyle(`${kind} ${profile}${row.title}`)
     : `${paint(typeColor, kind)} ${paint(interactive ? managerTone.identity : "muted", profile)}${paint(interactive ? managerTone.identity : "text", row.title)}`;
-  const identity = truncateToWidth(
+  const identity = clipToWidth(
     `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`,
     Math.max(0, leftWidth - routeWidth),
     "…",
@@ -150,7 +149,7 @@ export function activityRowLine(
   const left = route ? `${identity}  ${route}` : identity;
   const statusColor = warnings ? "warning" : !interactive && !attention ? "muted" : color;
   return showStatus
-    ? `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(statusColor, truncateToWidth(status, rightWidth, "…"))}`
+    ? `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(statusColor, clipToWidth(status, rightWidth, "…"))}`
     : left;
 }
 interface WidgetOptions extends ActivityTreeOptions {
@@ -195,5 +194,5 @@ export function renderActivityWidget(
   );
   const hidden = Math.max(0, live.length - capacity);
   if (hidden) lines.push(style(`+${hidden} rows`));
-  return lines.slice(0, maxRows).map((line) => truncateToWidth(line, width, ""));
+  return lines.slice(0, maxRows).map((line) => clipToWidth(line, width, ""));
 }

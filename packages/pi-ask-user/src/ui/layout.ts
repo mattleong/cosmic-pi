@@ -1,18 +1,19 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { SelectListTheme } from "@earendil-works/pi-tui";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 export function appendWrapped(lines: string[], prefix: string, value: string, width: number): void {
   const safeWidth = Math.max(1, width);
-  const safePrefix = truncateToWidth(prefix, safeWidth, "");
+  const safePrefix = clipToWidth(prefix, safeWidth, "");
   const prefixWidth = visibleWidth(safePrefix);
   const available = Math.max(1, safeWidth - prefixWidth);
   const wrapped = wrapTextWithAnsi(value, available);
   const continuation = " ".repeat(prefixWidth);
   for (let index = 0; index < wrapped.length; index++) {
     lines.push(
-      truncateToWidth(`${index === 0 ? safePrefix : continuation}${wrapped[index]}`, safeWidth, ""),
+      clipToWidth(`${index === 0 ? safePrefix : continuation}${wrapped[index]}`, safeWidth, ""),
     );
   }
 }

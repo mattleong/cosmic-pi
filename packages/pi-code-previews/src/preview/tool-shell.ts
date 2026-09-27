@@ -1,6 +1,7 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { createCompactToolShell, type CompactShellOptions } from "./compact-shell";
+import { recordPreviewResult, renderWithPreviewIssues } from "./preview-issues";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import {
   BorderedToolCall,
@@ -45,12 +46,21 @@ export function createCodePreviewToolShell(
 ): CodePreviewToolShell {
   if (compact && codePreviewSettings.toolCallCollapsedStyle === "compact")
     return createCompactToolShell(mode, { ...compact, scheduleAnimation });
+  const summary = compact?.compactSummary;
   return {
     renderShell: mode === "on" ? "default" : "self",
     renderCall: (context, theme, render) =>
-      renderCodePreviewCall(mode, context, theme, render, scheduleAnimation),
-    renderResult: (context, theme, render) =>
-      renderCodePreviewResult(mode, context, theme, render, scheduleAnimation),
+      renderCodePreviewCall(
+        mode,
+        context,
+        theme,
+        summary ? (current) => renderWithPreviewIssues(render, summary, current, theme) : render,
+        scheduleAnimation,
+      ),
+    renderResult: (context, theme, render, result) => {
+      recordPreviewResult(context, result);
+      return renderCodePreviewResult(mode, context, theme, render, scheduleAnimation);
+    },
   };
 }
 

@@ -820,7 +820,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_start");
       yield* emit(h, "agent_start");
       yield* emit(h, "ui_prompt_start");
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
 
       yield* emit(h, "agent_start");
       yield* emit(h, "ui_prompt_end");
@@ -837,7 +837,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "agent_start");
       yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
       yield* emit(h, "ui_prompt_start");
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
 
       const replacement = withSession(h.ctx, {
         getCwd: () => "/tmp/replacement",
@@ -853,7 +853,7 @@ describe("Cosmic UI extension", () => {
       expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesBeforeStaleEnd);
 
       yield* emit(h, "ui_prompt_start", {}, replacement);
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
       yield* emit(h, "ui_prompt_end", {}, replacement);
       yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
       yield* emit(h, "session_shutdown");
@@ -867,7 +867,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "agent_start");
       yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
       yield* emit(h, "ui_prompt_start");
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for user");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
 
       yield* emit(h, "agent_end");
       yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === undefined);

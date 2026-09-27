@@ -25,7 +25,7 @@ describe("retained-read summaries", () => {
     for (const originalOutcome of ["succeeded", "failed", "cancelled"]) {
       const projected = summary({ ...page, originalOutcome });
       expect(projected?.outcome).toBe(originalOutcome === "succeeded" ? "success" : "warning");
-      expect(projected?.counters?.join(" ")).toContain("10..20/30");
+      expect(projected?.counters?.join(" ")).toMatch(/\b10\b.*\b20\b.*\b30\b/u);
       // Paging is informational: its continuation is expanded-only detail.
       expect(projected?.issues).toContainEqual(
         expect.objectContaining({ severity: "info", detail: expect.stringContaining("offset=20") }),

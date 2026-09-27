@@ -30,7 +30,6 @@ import {
   type BackgroundTaskApplicationBoundaries,
 } from "../src/application.ts";
 import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
-import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import {
   registerTaskManagerCommand,
   type TaskManagerCommandActions,
@@ -80,8 +79,8 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
   });
   const fixture = {
     events,
-    registerCommand: vi.fn((_name: string, definition: RegisteredCommand) => {
-      command = definition;
+    registerCommand: vi.fn((name: string, definition: RegisteredCommand) => {
+      if (name === "tasks-settings") command = definition;
     }),
     registerTool,
     getActiveTools: () => [...activeTools],
@@ -148,7 +147,6 @@ function tasksCommandHarness(
   registerTaskManagerCommand(pi, bridge, {
     stop: () => Promise.resolve(),
     clear: () => Promise.resolve(),
-    status: () => Promise.resolve(DEFAULT_BACKGROUND_TASK_CONFIG),
     ...actions,
   });
   if (!command) throw new Error("task command was not registered");
@@ -263,15 +261,15 @@ describe("background-task Pi lifecycle", () => {
 
         yield* Effect.promise(() => app.runCommand("status", ctx));
         const firstMessage = notify.mock.calls[0]?.[0];
-        expect(firstMessage).toEqual(expect.stringContaining("maxRunning: 64"));
-        expect(firstMessage).toEqual(expect.stringContaining("maxWaitSeconds: 120"));
+        expect(firstMessage).toEqual(expect.stringContaining("maxRunning = 64"));
+        expect(firstMessage).toEqual(expect.stringContaining("maxWaitSeconds = 120"));
 
         notify.mockClear();
         yield* Effect.promise(() => app.emit("session_start", ctx));
         yield* Effect.promise(() => app.runCommand("status", ctx));
         const replacementMessage = notify.mock.calls[0]?.[0];
-        expect(replacementMessage).toEqual(expect.stringContaining("maxRunning: 2"));
-        expect(replacementMessage).toEqual(expect.stringContaining("maxWaitSeconds: 4"));
+        expect(replacementMessage).toEqual(expect.stringContaining("maxRunning = 2"));
+        expect(replacementMessage).toEqual(expect.stringContaining("maxWaitSeconds = 4"));
       }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
     }).pipe(Effect.scoped),
   );
@@ -454,36 +452,16 @@ describe("background-task Pi lifecycle", () => {
 });
 
 describe("/tasks command", () => {
-  it.effect("reports the current effective settings without opening the TUI manager", () => {
-    const status = vi.fn(() =>
-      Promise.resolve({
-        ...DEFAULT_BACKGROUND_TASK_CONFIG,
-        maxRunning: 64,
-        maxWaitSeconds: 120,
-        shellPath: "/bin/\u001b[31mzsh\nspoof",
-      }),
-    );
-    const command = tasksCommandHarness("exited", { status });
+  it.effect("points arguments at /tasks-settings instead of opening the manager", () => {
+    const command = tasksCommandHarness();
     return Effect.gen(function* () {
-      yield* Effect.promise(() => command.run("  StAtUs  "));
-
-      expect(status).toHaveBeenCalledOnce();
+      yield* Effect.promise(() => command.run("status"));
       expect(command.custom).not.toHaveBeenCalled();
-      expect(command.notify).toHaveBeenCalledOnce();
-      const [message, level] = command.notify.mock.calls[0] ?? [];
-      expect(level).toBe("info");
-      expect(message).toEqual(expect.stringContaining("maxRunning: 64"));
-      expect(message).toEqual(expect.stringContaining("maxWaitSeconds: 120"));
-      expect(message).toEqual(expect.stringContaining("shellPath: /bin/zsh spoof"));
-      expect(message).not.toContain("\u001b");
+      expect(command.notify).toHaveBeenCalledWith(
+        expect.stringContaining("/tasks-settings"),
+        "warning",
+      );
     });
-  });
-
-  it.effect("preserves the manager fallback for non-status arguments", () => {
-    const manager = tasksCommandHarness().open("anything");
-    return Effect.sync(() => expect(manager.isOpen()).toBe(true)).pipe(
-      Effect.ensuring(manager.close),
-    );
   });
 
   it.effect("closing keeps a hidden questionnaire dock stacked above the manager", () => {
@@ -498,25 +476,12 @@ describe("/tasks command", () => {
       expect(command.host.overlays).toEqual([dock]);
     });
   });
-
-  it.effect("reports a status lookup failure without rejecting the command", () => {
-    const failure = "session settings unavailable";
-    const command = tasksCommandHarness("exited", {
-      status: () => Promise.reject(new Error(failure)),
-    });
-    return Effect.gen(function* () {
-      yield* Effect.promise(() => command.run("status"));
-
-      expect(command.custom).not.toHaveBeenCalled();
-      expect(command.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error");
-    });
-  });
 });
 
 describe("/tasks action feedback", () => {
   it.effect.each([
     { action: "stop", state: "running", keys: ["x", "x"] },
-    { action: "clear", state: "exited", keys: ["c"] },
+    { action: "clear", state: "exited", keys: ["c", "c"] },
   ] as const)(
     "shows a $action failure while leaving the manager available to close normally",
     ({ action, state, keys }) => {

@@ -1,177 +1,56 @@
-import { compactIssueSeverity, failureMessage } from "pi-code-previews";
+import { compactIssueSeverity, getTextContent } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
+import { countLabel } from "pi-cosmic-core";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
+import { runStateLabel } from "../ui/run-state.ts";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import {
-  type CompactToolActionFailure,
   type SubagentRunCard,
   type SubagentStartDetails,
   type SubagentAwaitDetails,
   type CompactSubagentToolDetails,
 } from "./details-schema.ts";
+import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "./outcome.ts";
+import { actionFailureIssues } from "./compact-action-failures.ts";
 import {
-  actionFailureDisposition,
-  countActionFailures,
-  decodeSubagentOutcomeDetails,
-  hasSubagentToolFailure,
-  pendingDeliveryEvidence,
-  unconfirmedActionRecovery,
-  type ActionFailureDisposition,
-} from "./outcome.ts";
+  applyArgumentLanes,
+  argumentSummary,
+  isTypedReceipt,
+  projectedSubject,
+  rejectedCall,
+  requestedRunIds,
+  type Phase,
+  type SummaryArguments,
+} from "./compact-heading.ts";
 import { cardLabel, compactRunIssues, hasChangesToReview } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
-import { progressDetail, summarizeStart } from "./compact-start-summary.ts";
+import { summarizeStart } from "./compact-start-summary.ts";
 
-function compactRunState(state: SubagentRunCard["state"], count = 1): string {
-  return state === "waiting_for_parent" ? `${count === 1 ? "needs" : "need"} reply` : state;
-}
-
+/** Run states in the words the run rows use: "2 running, 1 finished". */
 function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): string[] {
-  if (cards.length === 1 && singleTarget) return [compactRunState(cards[0]!.state)];
-  const counts = new Map<SubagentRunCard["state"], number>();
-  for (const card of cards) counts.set(card.state, (counts.get(card.state) ?? 0) + 1);
-  return [
-    [...counts].map(([state, count]) => `${count} ${compactRunState(state, count)}`).join(", "),
-  ].filter(Boolean);
+  if (cards.length === 1 && singleTarget) return [runStateLabel(cards[0]!.state)];
+  const counts = new Map<string, number>();
+  for (const card of cards) {
+    const label = runStateLabel(card.state);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [[...counts].map(([label, count]) => `${count} ${label}`).join(", ")].filter(Boolean);
 }
 
-interface SummaryArguments {
-  action?: unknown;
-  runId?: unknown;
-  runIds?: unknown;
-  workspaceId?: unknown;
-  agents?: unknown;
-  profile?: unknown;
-  paths?: unknown;
-}
-
-function requestedRunIds(input: SummaryArguments): string[] | undefined {
-  return Array.isArray(input.runIds) && input.runIds.every(Predicate.isString)
-    ? input.runIds
-    : undefined;
-}
-
-function startSubject(input: SummaryArguments): string {
-  if (!Array.isArray(input.agents) || input.agents.length !== 1) return "";
-  const agent: unknown = input.agents[0];
-  if (!Predicate.isObject(agent)) return "";
-  if ("name" in agent && Predicate.isString(agent.name)) return agent.name;
-  return "profile" in agent && Predicate.isString(agent.profile) ? agent.profile : "";
-}
-
-function claimCounters(
-  details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
-): string[] | undefined {
-  const counts = details.cards.map((card) => card.writeClaimCount ?? card.writeClaims?.length);
-  if (!counts.length || !counts.every((count) => count !== undefined)) return undefined;
-  const total = counts.reduce((sum, count) => sum + count, 0);
-  const count = `${total} file ${total === 1 ? "claim" : "claims"}`;
-  return [
-    details.runCount > details.cards.length
-      ? `${details.cards.length}/${details.runCount} shown, ${count}`
-      : count,
-  ];
-}
-
-function argumentSummary(
+/**
+ * A settled error without the action's receipt: a thrown rejection carries only text, while a
+ * receipt, even another action's, is never one and declines.
+ */
+const rejectionSummary = (
   input: SummaryArguments,
   action: string,
   operation: string,
-): CompactSummary {
-  const ids = requestedRunIds(input);
-  let subject =
-    action === "workspace" && Predicate.isString(input.workspaceId)
-      ? input.workspaceId
-      : Predicate.isString(input.runId)
-        ? input.runId
-        : ids?.length === 1
-          ? ids[0]!
-          : "";
-  if (action === "start") subject = startSubject(input);
-  if (action === "models" && Predicate.isString(input.profile)) subject = input.profile;
-  const counters =
-    action === "claims" && Array.isArray(input.paths)
-      ? [`${input.paths.length} file ${input.paths.length === 1 ? "claim" : "claims"} requested`]
-      : Array.isArray(input.agents)
-        ? [`${input.agents.length} requested`]
-        : ids && ids.length > 1
-          ? [`${ids.length} targets`]
-          : [];
-  const summary: CompactSummary = {
-    subject,
-    counters,
-    metadata: [],
-    compactSubject: compactArgumentSubject(input, action, subject),
-  };
-  if (operation !== action) summary.action = operation;
-  return summary;
-}
-
-function compactArgumentSubject(input: SummaryArguments, action: string, subject: string): string {
-  if (action === "workspace") return "Proposed changes";
-  return input.runId === subject || requestedRunIds(input)?.includes(subject) ? "Worker" : subject;
-}
-
-function compactProjectedSubject(
-  input: SummaryArguments,
-  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-  subject: string,
-): string {
-  if ("cards" in details && details.cards.some((card) => card.id === subject)) return "Worker";
-  return compactArgumentSubject(input, details.action, subject);
-}
-
-function projectedSubject(
-  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-  input: SummaryArguments,
-  phase: Phase,
-  subject: string,
-  targets?: readonly string[],
-): string {
-  if (details.action === "models" && Predicate.isString(input.profile)) return input.profile;
-  const requested =
-    targets ?? (Predicate.isString(input.runId) ? [input.runId] : requestedRunIds(input));
-  if (requested?.length === 1 && "cards" in details)
-    return details.cards.find((card) => card.id === requested[0])?.name ?? requested[0]!;
-  if (subject || phase !== "settled" || requestedRunIds(input)?.length) return subject;
-  if ((details.action === "list" || details.action === "status") && details.cards.length === 1)
-    return details.cards[0]!.name;
-  return subject;
-}
-
-function applyArgumentLanes(
-  summary: CompactSummary,
-  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-  phase: Phase,
   lanes: CompactSummary,
-): void {
-  if (details.action === "claims")
-    summary.counters = claimCounters(details) ?? summary.counters ?? [];
-  if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
-    // runCount counts confirmed operations, not failures or only the bounded visible cards.
-    const receipt = details.action === "send" ? "sent" : "replied";
-    const failures = countActionFailures(details.action, details.actionFailures);
-    const exceptional = [
-      failures.pending > 0 && `${failures.pending} awaiting confirmation`,
-      failures.unconfirmed > 0 && `${failures.unconfirmed} unconfirmed`,
-      failures.failed > 0 && `${failures.failed} failed`,
-    ].filter(Predicate.isString);
-    const count =
-      exceptional.length > 0
-        ? [`${details.runCount} confirmed ${receipt}`, ...exceptional].join(", ")
-        : details.runCount === 1
-          ? receipt
-          : `${details.runCount} ${receipt}`;
-    summary.counters = [
-      details.runCount > details.cards.length
-        ? `${count}, ${details.cards.length}/${details.runCount} shown`
-        : count,
-    ];
-  }
-  if (lanes.action) summary.action = lanes.action;
-  if (phase !== "settled" && details.action !== "start" && details.action !== "await")
-    summary.counters = lanes.counters ?? [];
-}
+  result: { readonly content: Parameters<typeof getTextContent>[0]; readonly details?: unknown },
+): CompactSummary | undefined =>
+  isTypedReceipt(result.details)
+    ? undefined
+    : rejectedCall(input, action, operation, lanes, getTextContent(result.content));
 
 /** Decoded domain summaries classify attention; original evidence stays on expansion. */
 export function createSubagentCompactSummary(
@@ -185,31 +64,62 @@ export function createSubagentCompactSummary(
     const operation = Predicate.isString(input.action) ? input.action : action;
     const lanes = argumentSummary(input, action, operation);
     if (!result) return context.isError || phase === "settled" ? undefined : lanes;
+    const settledError = context.isError && phase === "settled";
     if (action === "workspace")
-      return context.isError ? undefined : compactWorkspaceSummary(result.details, operation);
+      return context.isError
+        ? settledError
+          ? rejectionSummary(input, action, operation, lanes, result)
+          : undefined
+        : compactWorkspaceSummary(result.details, operation);
     const details = decodeSubagentOutcomeDetails(
       action === "claims" ? "claims" : operation,
       result.details,
     );
-    if (!details || (context.isError && !hasSubagentToolFailure(details))) return undefined;
-    const requestedTargets = requestedRunIds(input);
-    const targets =
-      details.action === "await" ? (requestedTargets ?? details.awaitedRunIds) : undefined;
-    if (details.action === "await" && !targets?.length) return undefined;
-    const summary = summarizeDetails(
-      details,
-      phase,
-      projectedSubject(details, input, phase, lanes.subject, targets),
-      targets,
-      Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
-    );
-    applyArgumentLanes(summary, details, phase, lanes);
-    summary.compactSubject = compactProjectedSubject(input, details, summary.subject);
-    return summary;
+    if (!details)
+      return settledError ? rejectionSummary(input, action, operation, lanes, result) : undefined;
+    if (context.isError && !hasSubagentToolFailure(details)) return undefined;
+    return summarizeReceipt(details, input, phase, lanes);
   };
 }
 
-type Phase = Parameters<CompactSummaryProvider>[0]["phase"];
+/** A decoded receipt's summary under the heading its arguments and cards give it. */
+function summarizeReceipt(
+  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
+  input: SummaryArguments,
+  phase: Phase,
+  lanes: CompactSummary,
+): CompactSummary | undefined {
+  const requestedTargets = requestedRunIds(input);
+  const targets =
+    details.action === "await" ? (requestedTargets ?? details.awaitedRunIds) : undefined;
+  if (details.action === "await" && !targets?.length) return undefined;
+  const summary = summarizeDetails(
+    details,
+    phase,
+    projectedSubject(details, input, phase, lanes.subject, targets),
+    targets,
+    Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
+  );
+  applyArgumentLanes(summary, details, phase, lanes);
+  return summary;
+}
+
+/**
+ * A sole named target shows its state; otherwise finished targets are counted apart from
+ * failed and stopped ones, in the run rows' words.
+ */
+function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject: string): string {
+  if (cards.length === 1 && total === 1 && subject.trim()) return runStateLabel(cards[0]!.state);
+  const count = (states: readonly SubagentRunCard["state"][]) =>
+    cards.filter((card) => states.includes(card.state)).length;
+  const failed = count(["failed"]);
+  const stopped = count(["stopped"]);
+  return [
+    `${count(["completed", "reported"])}/${total} finished`,
+    ...(failed ? [`${failed} failed`] : []),
+    ...(stopped ? [`${stopped} stopped`] : []),
+  ].join(", ");
+}
 
 function awaitIssues(
   details: SubagentAwaitDetails,
@@ -221,13 +131,12 @@ function awaitIssues(
   const unfinished = cards.filter(
     (card) => !["reported", "completed", "failed", "stopped"].includes(card.state),
   );
-  const finished = cards.length - unfinished.length;
-  summary.counters = [progressDetail(finished, targets.length, "finished", summary.subject)];
+  summary.counters = [awaitCounter(cards, targets.length, summary.subject)];
   if (cards.length < targets.length) {
     issues.push({
       severity: "warning",
       code: "targets-omitted",
-      message: "Some requested workers have no available status",
+      message: "Some requested subagents have no available status",
       detail:
         "Some requested targets have no projected state; inspect subagent_status before acting.",
     });
@@ -237,7 +146,7 @@ function awaitIssues(
     issues.push({
       severity: "info",
       code: "descendant-context",
-      message: "Descendant workers are shown for context only",
+      message: "Descendant subagents are shown for context only",
       detail:
         "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
     });
@@ -248,8 +157,8 @@ function awaitIssues(
       severity: "warning",
       code: "await-cancelled",
       message: unconfirmed
-        ? "Waiting was cancelled; workers were not stopped and wait cleanup is unconfirmed"
-        : "Waiting was cancelled; workers were not stopped",
+        ? "Waiting was cancelled; subagents were not stopped and wait cleanup is unconfirmed"
+        : "Waiting was cancelled; subagents were not stopped",
       detail: unconfirmed
         ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
         : "Await cancelled; child runs were NOT stopped. Wait cleanup is complete; await the requested targets again when needed.",
@@ -264,8 +173,8 @@ function awaitIssues(
         unfinished.length === 1
           ? `Timed out waiting; ${cardLabel(unfinished[0]!)} hasn't finished`
           : unfinished.length > 1
-            ? `Timed out waiting; ${unfinished.length} workers haven't finished`
-            : "Timed out waiting; unfinished workers continue running",
+            ? `Timed out waiting; ${unfinished.length} subagents haven't finished`
+            : "Timed out waiting; unfinished subagents continue running",
       detail: "Await timed out; unfinished children continue. Inspect status or await again.",
     });
   }
@@ -282,50 +191,12 @@ function awaitIssues(
     issues.push({
       severity: "warning",
       code: "parent-action",
-      message: "A worker needs attention before it can continue",
+      message: "A subagent needs attention before it can continue",
       detail:
         "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim containment before acting.",
     });
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }
-
-type ActionFailureIssue = (failure: CompactToolActionFailure) => {
-  readonly code: string;
-  readonly message: string;
-  readonly recovery: { readonly message: string; readonly detail: string };
-};
-
-/** Human messages stay short; codes, IDs, and recovery procedures stay expanded-only. */
-const ACTION_FAILURE_ISSUES = {
-  pending: () => ({
-    code: "delivery-pending",
-    message: pendingDeliveryEvidence.message,
-    recovery: {
-      message: "Delivery is still being tracked",
-      detail: pendingDeliveryEvidence.detail,
-    },
-  }),
-  unconfirmed: () => ({
-    code: "action-failed",
-    message: "The action could not be confirmed",
-    recovery: {
-      message: "The action may already have taken effect",
-      detail: unconfirmedActionRecovery,
-    },
-  }),
-  failed: (failure) => ({
-    code: "action-failed",
-    message:
-      failure.code === "SubagentNotFoundError"
-        ? "A requested worker was not found"
-        : failureMessage(failure.message, "The action failed"),
-    recovery: {
-      message: "Recovery details are available",
-      detail:
-        "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
-    },
-  }),
-} satisfies Record<ActionFailureDisposition, ActionFailureIssue>;
 
 function runIssues(
   details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
@@ -337,31 +208,17 @@ function runIssues(
     summary.counters = [
       `${details.cards.length}/${details.runCount} shown, ${cardCounters(cards).join(", ")}`,
     ];
+    // A bounded projection cannot confirm counts it does not show.
+    if (summary.outcome === "success") summary.outcome = "uncertain";
     issues.push({
       severity: "warning",
       code: "runs-omitted",
-      message: "Only some workers are shown",
+      message: "Only some subagents are shown",
       detail:
         "Bounded projection, not complete fleet counts. Use subagent_status for omitted runs and their recovery.",
     });
   }
-  for (const failure of details.actionFailures ?? []) {
-    // Failed targets are usually absent from the visible cards; raw text keeps their identity.
-    const name = details.cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
-    const disposition = actionFailureDisposition(details.action, failure);
-    // Pending delivery and unconfirmed outcomes are uncertainty warnings, never failures.
-    if (disposition !== "failed") summary.outcome = "uncertain";
-    const { code, message, recovery } = ACTION_FAILURE_ISSUES[disposition](failure);
-    issues.push(
-      {
-        severity: disposition === "failed" ? "error" : "warning",
-        code: `run:${failure.id}:${code}`,
-        message: name ? `${name}: ${message}` : message,
-        detail: `${failure.id}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-      },
-      { severity: "info", code: `run:${failure.id}:action-recovery`, ...recovery },
-    );
-  }
+  actionFailureIssues(details.action, details.actionFailures ?? [], details.cards, summary, issues);
 }
 
 function summarizeModels(
@@ -393,8 +250,8 @@ function summarizeModels(
   }
   const counters = [`${eligibleOptions} statically eligible`];
 
-  if (disabled) counters.push(`${disabled} disabled profiles`);
-  if (unavailable) counters.push(`${unavailable} unavailable profiles`);
+  if (disabled) counters.push(`${countLabel(disabled, "disabled profile")}`);
+  if (unavailable) counters.push(`${countLabel(unavailable, "unavailable profile")}`);
   summary.counters = [counters.join(", ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
@@ -408,7 +265,9 @@ function isSingleRequestedRun(
 ): boolean {
   if (details.action === "await" || details.runCount !== 1) return false;
   return requested?.length
-    ? requested.length === 1 && cards[0]?.id === requested[0]
+    ? requested.length === 1 &&
+        cards.length === 1 &&
+        (cards[0]?.id === requested[0] || details.action === "retry")
     : details.action === "list" || details.action === "status";
 }
 
@@ -426,6 +285,50 @@ function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentR
   else summary.counters = [`${counter} · ${label}`, counter, ...fallbacks];
 }
 
+/** What the observed runs make of a successful call: uncertain, needing attention, or ended. */
+function cardOutcome(
+  action: string,
+  cards: readonly SubagentRunCard[],
+): NonNullable<CompactSummary["outcome"]> {
+  if (cards.some((card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
+    return "uncertain";
+  if (
+    cards.some(
+      (card) =>
+        card.writeAdmissionPaused ||
+        card.question ||
+        (card.state === "paused" && action !== "interrupt") ||
+        card.state === "waiting_for_parent",
+    )
+  )
+    return "warning";
+  return action !== "stop" && cards.some((card) => card.state === "stopped")
+    ? "cancelled"
+    : "success";
+}
+
+/** Report text a view leaves out: one routine note for a list, uncertainty elsewhere. */
+function omissionIssue(
+  details: SubagentAwaitDetails | CompactSubagentToolDetails,
+  summary: CompactSummary,
+  issues: CompactIssue[],
+): void {
+  if (!details.contentOmitted || ("reportsOnlyOmitted" in details && details.reportsOnlyOmitted))
+    return;
+  // A list never carries report or error text, so leaving it out is one routine note.
+  const listed = details.action === "list";
+  issues.push({
+    severity: listed ? "info" : "warning",
+    code: "evidence-omitted",
+    message: listed
+      ? "Reports and some details are left out of this list"
+      : "Some subagent details are unavailable in this view",
+    detail:
+      "Bounded projection: details were omitted. Inspect expanded details and subagent_status for full target state, attention, and recovery before acting.",
+  });
+  if (!listed) summary.outcome = "uncertain";
+}
+
 function summarizeDetails(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
   phase: Phase,
@@ -437,38 +340,17 @@ function summarizeDetails(
   const summary: CompactSummary = { subject, metadata: [], issues };
   if (phase === "settled") summary.outcome = "success";
   if (details.action === "start") return summarizeStart(details, phase, summary, issues);
-  if (details.contentOmitted && !("reportsOnlyOmitted" in details && details.reportsOnlyOmitted)) {
-    issues.push({
-      severity: "warning",
-      code: "evidence-omitted",
-      message: "Some worker details are unavailable in this view",
-      detail:
-        "Bounded projection: details were omitted. Inspect expanded details and subagent_status for full target state, attention, and recovery before acting.",
-    });
-    summary.outcome = "uncertain";
-  }
+  omissionIssue(details, summary, issues);
   if (details.action === "models") return summarizeModels(details, summary, issues);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
-  if (summary.outcome === "success") {
-    if (cards.some((card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
-      summary.outcome = "uncertain";
-    else if (
-      cards.some(
-        (card) =>
-          card.writeAdmissionPaused ||
-          card.question ||
-          card.state === "paused" ||
-          card.state === "waiting_for_parent",
-      )
-    )
-      summary.outcome = "warning";
-    else if (cards.some((card) => card.state === "stopped")) summary.outcome = "cancelled";
-  }
+  // A pause or stop the call asked for is its result, not attention or a cancellation.
+  const requestedPause = details.action === "interrupt";
+  if (summary.outcome === "success") summary.outcome = cardOutcome(details.action, cards);
   if (details.action === "await") awaitIssues(details, summary, issues, cards, targets!);
   else runIssues(details, summary, issues, cards);
   const quietHistory = phase === "settled" && summary.outcome === "success" && issues.length === 0;
-  issues.push(...compactRunIssues(cards, details.reportsOnlyOmitted === true, quietHistory));
+  issues.push(...compactRunIssues(cards, { quietHistory, requestedPause }));
   labelChangesToReview(summary, cards);
   const severity = compactIssueSeverity(issues);
   if (severity === "error") summary.outcome = "error";

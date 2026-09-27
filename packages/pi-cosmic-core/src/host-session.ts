@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import { notificationText } from "./message-text.ts";
 /** Pure, best-effort reads of Pi session host fields shared by provider extensions. */
 
 export type HostUiContext = {
@@ -57,14 +58,18 @@ export function isProjectTrusted(ctx: HostTrustContext): boolean {
   }, false);
 }
 
-/** Best-effort Pi notification boundary; a hostile or stale host UI never throws into the caller. */
+/**
+ * Best-effort Pi notification boundary; a hostile or stale host UI never throws into the caller.
+ * One-line messages are tidied into the shared style; multi-line reports keep their layout.
+ */
 export function notifyAtHostBoundary(
   ctx: HostNotifierContext,
   message: string,
   level: HostNotificationLevel,
 ): void {
+  const text = notificationText(message);
   // Pi documents `notify` as synchronous void; a returned thenable is contained anyway.
-  invokeBestEffort(() => ctx.ui.notify(message, level));
+  invokeBestEffort(() => ctx.ui.notify(text, level));
 }
 
 /**

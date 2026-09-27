@@ -1,5 +1,6 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { padListDetailRow } from "./list-detail.ts";
+import { clipToWidth } from "./chrome.ts";
 
 export interface ManagerTableColumn {
   /** Minimum useful width. Lower-priority columns disappear first when it cannot fit. */
@@ -46,7 +47,7 @@ export const managerTable = (
     remaining -= extra;
   }
   const cell = (text: string, column: number): string =>
-    padListDetailRow(truncateToWidth(text, widths[column] ?? 0), widths[column] ?? 0);
+    padListDetailRow(clipToWidth(text, widths[column] ?? 0), widths[column] ?? 0);
   return {
     widths,
     cell,

@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Editor, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Editor } from "@earendil-works/pi-tui";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { isQuestionnaireComplete } from "../questionnaire/reducer.ts";
 import type { QuestionnaireState } from "../questionnaire/model.ts";
@@ -11,6 +11,7 @@ import {
 import type { PreviewPane } from "./preview-pane.ts";
 import { appendWrapped, borderLine, joinColumns } from "./layout.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
+import { clipToWidth, managerNoticeGlyph } from "pi-cosmic-ui/manager";
 
 export interface DialogInputMode {
   readonly kind: "custom" | "text" | "note";
@@ -89,7 +90,7 @@ function renderQuestion(
   const customFocused = draft.cursor === customIndex;
   const custom =
     draft.answer?.kind === "custom" || draft.answer?.kind === "text"
-      ? ` — ${truncateToWidth(stripTerminalControls(draft.answer.text), 48)}`
+      ? ` — ${clipToWidth(stripTerminalControls(draft.answer.text), 48)}`
       : "";
   append(
     customFocused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ",
@@ -114,7 +115,7 @@ function renderQuestion(
     );
   }
   const note = draft.note
-    ? `n Edit note — ${truncateToWidth(stripTerminalControls(draft.note), 48)}`
+    ? `n Edit note — ${clipToWidth(stripTerminalControls(draft.note), 48)}`
     : "n Add an optional note";
   append("  ", model.theme.fg(draft.note ? "muted" : "dim", note));
   return lines;
@@ -139,7 +140,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
           : "Unanswered";
     append(
       " ",
-      `${model.theme.fg(answer ? "success" : "warning", answer ? "✓ " : "! ")}${model.theme.fg(answer ? "muted" : "warning", `${stripTerminalControls(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", stripTerminalControls(value))}`,
+      `${model.theme.fg(answer ? "success" : "warning", answer ? `${managerNoticeGlyph("success")} ` : `${managerNoticeGlyph("warning")} `)}${model.theme.fg(answer ? "muted" : "warning", `${stripTerminalControls(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", stripTerminalControls(value))}`,
     );
     if (draft?.note)
       append("   ", model.theme.fg("dim", `Note: ${stripTerminalControls(draft.note)}`));

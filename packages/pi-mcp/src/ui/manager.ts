@@ -1,13 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
-import {
-  Input,
-  truncateToWidth,
-  wrapTextWithAnsi,
-  type Component,
-  type Focusable,
-} from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { Input, wrapTextWithAnsi, type Component, type Focusable } from "@earendil-works/pi-tui";
+import { renderResponsiveManagerFooter, clipToWidth } from "pi-cosmic-ui/manager";
 import {
   FULL_SCREEN_NAVIGATION_SHORTCUTS,
   type FullScreenSelectionKeybindingId,
@@ -28,7 +22,7 @@ import {
   listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine, countLabel } from "pi-cosmic-core";
 import type {
   McpCachedDetail,
   McpCachedEntry,
@@ -458,10 +452,10 @@ export class McpManagerComponent implements Component, Focusable {
     const inner = width - 2;
     const header =
       this.selection.screen === "dashboard"
-        ? ` MCP / ${snapshot.active} active / ${snapshot.queued} queued `
+        ? ` /mcp · ${snapshot.active} active · ${snapshot.queued} queued `
         : this.selection.screen === "browse"
-          ? ` MCP / ${this.selection.family} / ${sanitizeTerminalLine(this.selection.server ?? "all servers")} / ${this.page?.total ?? 0} matches `
-          : ` MCP retained result / ${sanitizeTerminalLine(this.selection.resultId ?? "")} `;
+          ? ` /mcp · ${this.selection.family} · ${sanitizeTerminalLine(this.selection.server ?? "all servers")} · ${countLabel(this.page?.total ?? 0, "match", "matches")} `
+          : " /mcp · saved output ";
     const label = (id: FullScreenSelectionKeybindingId, fallback: string) => {
       const configured = this.options.keybindingLabel(id, fallback);
       return this.searching
@@ -470,53 +464,55 @@ export class McpManagerComponent implements Component, Focusable {
     };
     const enter = label("tui.select.confirm", "Enter");
     const cancel = label("tui.select.cancel", "Esc");
+    // Esc leaves a detail pane; from a list or a saved result it closes the screen.
+    const escape = `${cancel} ${this.selection.screen !== "result" && this.shell.state.pane === "detail" ? "Back" : "Close"}`;
     const movement = `${label("tui.select.up", "↑")}/${label("tui.select.down", "↓")}/j/k Move`;
     const paging = `${label("tui.select.pageUp", "PgUp")}/${label("tui.select.pageDown", "PgDn")} Page`;
     const resultMode = this.result.hasReadable
-      ? `v ${this.result.mode === "readable" ? "Raw" : "Readable"} / `
+      ? `v ${this.result.mode === "readable" ? "Raw" : "Readable"} · `
       : "";
     const primary =
       this.selection.screen === "result"
-        ? `${resultMode}n p Pages / q Close`
+        ? `${resultMode}n/p Pages · q Close`
         : this.actionRow()
-          ? `${enter} Inspect / a Actions / / Search`
+          ? `${enter} Inspect · a Actions · / Search`
           : this.selection.screen === "browse"
-            ? "/ Search / s Server"
-            : "b Browse / / Search";
+            ? "/ Search · s Server"
+            : "b Browse · / Search";
     const footer = renderResponsiveManagerFooter(
       inner,
       this.moreHelp
         ? [
             [
-              `${movement} / C-u/d Half / ${paging} / gg/G Ends`,
-              `${this.selection.screen === "result" ? resultMode : ""}${cancel} Back / q Close`,
+              `${movement} · C-u/d Half · ${paging} · gg/G Ends`,
+              `${this.selection.screen === "result" ? resultMode : ""}${escape} · q Close`,
             ],
           ]
         : [
             [
               primary,
               this.selection.screen === "browse"
-                ? "[ ] Family / s Server / n p Pages"
+                ? "[ ] Family · s Server · n/p Pages"
                 : this.selection.screen === "result"
-                  ? `? Help / ${cancel} Back`
-                  : `b Browse / ? Help / ${cancel} Back`,
+                  ? `? More · ${escape}`
+                  : `b Browse · ? More · ${escape}`,
             ],
             [
               this.selection.screen === "result"
-                ? `${resultMode}n p Pages`
+                ? `${resultMode}n/p Pages`
                 : this.actionRow()
-                  ? `${enter} Inspect / a Actions`
+                  ? `${enter} Inspect · a Actions`
                   : this.selection.screen === "browse"
                     ? "s Server"
                     : "b Browse",
-              `${cancel} Back`,
+              escape,
             ],
           ],
     );
     return framedScreen(frame, {
       width,
       height: Math.max(3, this.options.height()),
-      top: truncateToWidth(header, inner, ""),
+      top: clipToWidth(header, inner, ""),
       bottom: footer,
       body: (height) => {
         const search = this.searching
@@ -532,7 +528,7 @@ export class McpManagerComponent implements Component, Focusable {
             : undefined;
         const prefix = [
           ...search,
-          ...(catalog ? [truncateToWidth(browserCatalogStatus(catalog), inner, "")] : []),
+          ...(catalog ? [clipToWidth(browserCatalogStatus(catalog), inner, "")] : []),
         ].slice(0, height);
         const bodyHeight = Math.max(0, height - prefix.length);
         const wide = layout === "wide" && this.selection.screen !== "result";
@@ -574,7 +570,7 @@ export class McpManagerComponent implements Component, Focusable {
           left.push(
             ...(this.selection.screen === "browse"
               ? browserEmpty(this.page, this.selection.server)
-              : "No configured servers."
+              : "No MCP servers configured"
             ).split("\n"),
           );
         const details =

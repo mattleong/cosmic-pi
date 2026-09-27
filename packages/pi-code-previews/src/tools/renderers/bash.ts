@@ -18,7 +18,7 @@ import { shouldHideShellResultByCommand } from "../shell-result-policy";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
-import { argumentIssues, previewCallIssues, withPreviewIssues } from "./shared/preview-issues";
+import { previewIssuesSlot } from "../../preview/preview-issues";
 
 function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
   const command = getObjectValue(args, "command");
@@ -40,7 +40,7 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
         ? theme.fg("muted", ` (timeout ${args.timeout}s)`)
         : "";
       const highlighted = renderHighlightedText(
-        command || "...",
+        command || "…",
         "bash",
         theme,
         renderContext.invalidate,
@@ -50,37 +50,31 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
       heading.addChild(
         new Text(`${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`, 0, 0),
       );
-      heading.addChild(
-        previewCallIssues(renderContext.state, theme, () => argumentIssues("bash", renderContext)),
-      );
+      heading.addChild(previewIssuesSlot(renderContext));
       return heading;
     },
 
-    renderResult: withPreviewIssues(
-      "bash",
-      (result, { expanded, isPartial }, theme, renderContext) => {
-        const prelude = renderResultPrelude({
-          isPartial,
-          theme,
-          loadingLabel: "Running…",
-        });
-        if (prelude) return prelude;
-        if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
-          return renderHiddenPreviewExpandHint(renderContext.state, theme);
-        const output = trimSingleTrailingNewline(getTextContent(result.content));
-        const rawLines = output ? output.split("\n") : [];
-        const limit = expanded ? rawLines.length : 8;
-        const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
-          chunk.map((line) =>
-            theme.fg(renderContext.isError ? "error" : "muted", escapeControlChars(line)),
-          ),
-        );
-        let text = preview.lines.length ? preview.lines.join("\n") : theme.fg("muted", "No output");
-        if (preview.hidden > 0)
-          text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
-        return new Text(text, 0, 0);
-      },
-      "call",
-    ),
+    renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
+      const prelude = renderResultPrelude({
+        isPartial,
+        theme,
+        loadingLabel: "Running…",
+      });
+      if (prelude) return prelude;
+      if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
+        return renderHiddenPreviewExpandHint(renderContext.state, theme);
+      const output = trimSingleTrailingNewline(getTextContent(result.content));
+      const rawLines = output ? output.split("\n") : [];
+      const limit = expanded ? rawLines.length : 8;
+      const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
+        chunk.map((line) =>
+          theme.fg(renderContext.isError ? "error" : "muted", escapeControlChars(line)),
+        ),
+      );
+      let text = preview.lines.length ? preview.lines.join("\n") : theme.fg("muted", "No output");
+      if (preview.hidden > 0)
+        text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
+      return new Text(text, 0, 0);
+    },
   });
 }

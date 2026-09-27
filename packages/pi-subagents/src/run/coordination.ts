@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import type { RunRecord } from "./internal.ts";
 import { hasSubagentCapability, isActiveRunState } from "./model.ts";
 import { safeTextPrefix } from "./state.ts";
+import { countLabel } from "pi-cosmic-core";
 
 const MAX_NOTICE_CLAIMS_PER_RUN = 8;
 const MAX_NOTICE_CLAIM_CHARS = 512;
@@ -39,7 +40,7 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
   return [
     selfLine,
     "",
-    `You share this working directory with ${peers.length} other active subagent${peers.length === 1 ? "" : "s"}:`,
+    `You share this working directory with ${countLabel(peers.length, "other active subagent")}:`,
     "",
     ...peers,
     "",

@@ -19,6 +19,38 @@ const service = {
 };
 
 describe("shared background task command", () => {
+  it.effect("tells the agent how a task ended, including a spawn error and signal", () =>
+    Effect.gen(function* () {
+      const base = { command: "run", cwd: "/", startedAt: 1, logCursor: 0, droppedLogBytes: 0 };
+      const tasks = {
+        "bg-1": {
+          ...base,
+          id: "bg-1",
+          state: "failed" as const,
+          error: "Couldn't start the process",
+        },
+        "bg-2": {
+          ...base,
+          id: "bg-2",
+          state: "failed" as const,
+          exitCode: null,
+          signal: "SIGKILL",
+        },
+      };
+      for (const [id, task] of Object.entries(tasks)) {
+        const result = yield* executeBackgroundTaskCommand({ action: "status", id }, "/").pipe(
+          Effect.provideService(BackgroundTaskService, {
+            ...service,
+            status: () => Effect.succeed(task),
+          }),
+          Effect.provide(Path.layer),
+        );
+        if ("error" in task) expect(result.text).toContain(task.error);
+        if ("signal" in task) expect(result.text).toContain(task.signal);
+      }
+    }),
+  );
+
   it.effect("rejects a wait without until before acquiring a task waiter", () =>
     Effect.gen(function* () {
       const error = yield* executeBackgroundTaskCommand(

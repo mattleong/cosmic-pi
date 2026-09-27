@@ -220,8 +220,9 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
     );
     harness.result(result, { expanded, isError: true });
     const text = harness.render(160).join("\n");
-    expect(text).toContain("0 confirmed sent");
-    expect(text).toContain("The action could not be confirmed");
+    // Uncertainty is never reported as a failure, and nothing was confirmed sent.
+    expect(text).toContain("unconfirmed");
+    expect(text).not.toMatch(/\bfail(?:ed|ure)?\b|\bsent\b/i);
     expect(text.includes("claude_steering_outcome_uncertain")).toBe(expanded);
     expect(text.includes("Do not resend")).toBe(expanded);
     expect(text.includes("exact unique guidance input")).toBe(expanded);
@@ -314,17 +315,65 @@ it("gives pending delivery only no-resend recovery in the default preview style"
     const pending = renderUnchanged(harness, pendingSend(), { expanded, isError: false });
     expect(pending).toContain("exact pending guidance");
     expect(pending).toContain("awaiting confirmation");
-    expect(pending).toContain("steer_outcome_uncertain");
-    expect(pending).toMatch(/do not resend/i);
+    // Codes, target IDs, and the agent's recovery are expanded-only evidence.
+    expect(pending.includes("steer_outcome_uncertain")).toBe(expanded);
+    expect(pending.includes("pending-target")).toBe(expanded);
+    expect(/do not resend/i.test(pending)).toBe(expanded);
     expect(pending).not.toMatch(reportsFailure);
     expect(pending).not.toMatch(/then retry|before retrying|resend it/i);
     const mixed = renderUnchanged(harness, pendingSend([definiteFailure]), {
       expanded,
       isError: true,
     });
-    expect(mixed).toMatch(/do not resend/i);
+    expect(/do not resend/i.test(mixed)).toBe(expanded);
     expect(mixed).toMatch(reportsFailure);
-    expect(mixed).toContain(definiteFailure.code);
+    expect(mixed.includes(definiteFailure.code)).toBe(expanded);
+  }
+});
+
+it("draws each issue once and keeps IDs and agent procedures out of collapsed previews", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+  const tools = registered();
+  const tool = (name: string) => tools.find((entry) => entry.name === name)!;
+  const paused = view({ id: "agent-paused-7", state: "paused" });
+  const failed = {
+    id: "agent-missing-9",
+    code: "run_waiting_for_parent",
+    message:
+      'Subagent agent-missing-9 is waiting; use subagent_reply({ runId: "agent-missing-9" }).',
+  };
+  for (const [name, args, details] of [
+    [
+      "subagent_await",
+      { runIds: [paused.id], until: "all_finished" },
+      makeAwaitDetails({ runs: [paused], awaitUntil: "all_finished", attentionRequired: true }),
+    ],
+    [
+      "subagent_lifecycle",
+      { action: "stop", runIds: [paused.id, failed.id] },
+      makeCompactToolDetails({ action: "stop", runs: [paused], actionFailures: [failed] }),
+    ],
+    [
+      "subagent_send",
+      { runIds: [failed.id], message: "guidance" },
+      makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failed] }),
+    ],
+  ] as const) {
+    const harness = createToolPresentationHarness(tool(name));
+    for (const expanded of [false, true]) {
+      const state = { expanded, isError: name !== "subagent_await" };
+      harness.call(args, state);
+      harness.result({ content: [{ type: "text", text: "Agent-facing text" }], details }, state);
+      const lines = harness.render(200);
+      const text = lines.join("\n");
+      if (!expanded) {
+        for (const id of [paused.id, failed.id]) expect(text).not.toContain(id);
+        expect(text).not.toMatch(/subagent_\w+\(|Next:/u);
+      }
+      // No issue line is drawn twice: the shell owns them.
+      const issueLines = lines.filter((line) => /^[⚠✗ℹ] /u.test(line));
+      expect(new Set(issueLines).size).toBe(issueLines.length);
+    }
   }
 });
 
@@ -396,7 +445,7 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
         expect(text).not.toContain("subagent_status");
         // An unrecognised worker error explains itself with its first line.
         if (scenario.error) expect(text).toContain(scenario.error);
-        if (scenario.cancelled) expect(text).toMatch(/workers were not stopped/i);
+        if (scenario.cancelled) expect(text).toMatch(/were not stopped/i);
         if (scenario.state === "stopping") expect(text).toMatch(/stopping.*cleanup/i);
       }
       if (expanded && scenario.error) expect(text.split(scenario.error)).toHaveLength(2);

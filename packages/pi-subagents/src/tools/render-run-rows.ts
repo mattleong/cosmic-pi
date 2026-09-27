@@ -1,8 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { aggregateUsage } from "../ui/metrics.ts";
-import { formatRunRouteLine, formatSessionAge, shortRunId } from "../ui/run-presentation.ts";
+import {
+  formatRunRouteLine,
+  formatSessionActivity,
+  formatSessionAge,
+  shortRunId,
+} from "../ui/run-presentation.ts";
 import {
   animatedRunStateGlyph,
   runStateColor,
@@ -11,6 +16,7 @@ import {
 } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 export const runTiming = (run: {
   readonly endedAt?: number | undefined;
@@ -19,8 +25,8 @@ export const runTiming = (run: {
 }): string => {
   const now = synchronousNow();
   const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt);
-  const activeAge = run.endedAt === undefined ? formatSessionAge(now, run.lastActivityAt) : "";
-  const active = activeAge ? `active ${activeAge} ago` : "";
+  const activeAge = run.endedAt === undefined ? formatSessionActivity(now, run.lastActivityAt) : "";
+  const active = activeAge ? `active ${activeAge}` : "";
   return [elapsed, active].filter(Boolean).join(" · ");
 };
 
@@ -31,7 +37,7 @@ const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): str
   const prefix = width > 5 ? "     " : "   ";
   const available = Math.max(1, width - visibleWidth(prefix));
   const routeLines = wrapTextWithAnsi(formatRunRouteLine(run, theme), available);
-  return routeLines.map((line) => truncateToWidth(`${prefix}${line}`, width));
+  return routeLines.map((line) => clipToWidth(`${prefix}${line}`, width));
 };
 
 const runUsage = (run: SubagentRunCard): string => aggregateUsage([run], "compact");
@@ -61,17 +67,17 @@ const renderHierarchyRow = (
     .join(theme.fg("dim", " · "));
   const combined = `${themedIdentity}${theme.fg("dim", " · ")}${metadata}`;
   if (visibleWidth(combined) <= width) return combined;
-  if (width < 12) return truncateToWidth(themedIdentity, width);
+  if (width < 12) return clipToWidth(themedIdentity, width);
   const identityWidth = Math.min(
     visibleWidth(identity.plain),
     Math.max(8, Math.floor(width * 0.42)),
   );
   const metadataWidth = width - identityWidth - 3;
-  if (metadataWidth < 8) return truncateToWidth(themedIdentity, width);
-  return `${truncateToWidth(themedIdentity, identityWidth)}${theme.fg(
+  if (metadataWidth < 8) return clipToWidth(themedIdentity, width);
+  return `${clipToWidth(themedIdentity, identityWidth)}${theme.fg(
     "dim",
     " · ",
-  )}${truncateToWidth(metadata, metadataWidth)}`;
+  )}${clipToWidth(metadata, metadataWidth)}`;
 };
 
 export interface RunHierarchy {
@@ -81,9 +87,25 @@ export interface RunHierarchy {
 
 export interface ResponsiveRunRowOptions {
   readonly frame?: number;
+  /** Expanded rows show every run ID; collapsed rows only tell same-named runs apart. */
   readonly fullId?: boolean;
   readonly hierarchy?: RunHierarchy | undefined;
 }
+
+/** The ID a row shows: all of it expanded, a short form for a shared name, else none. */
+const rowRunId = (
+  run: SubagentRunCard,
+  fullId: boolean,
+  sharedNames: ReadonlySet<string>,
+): string | undefined =>
+  fullId ? run.id : sharedNames.has(run.name) ? shortRunId(run.id) : undefined;
+
+const sharedRunNames = (runs: ReadonlyArray<SubagentRunCard>): ReadonlySet<string> => {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const run of runs) (seen.has(run.name) ? shared : seen).add(run.name);
+  return shared;
+};
 
 export const renderResponsiveRunRows = (
   runs: ReadonlyArray<SubagentRunCard>,
@@ -94,19 +116,23 @@ export const renderResponsiveRunRows = (
   const safeWidth = Math.max(1, width);
   const treeRows = options.hierarchy ? projectRunCardTree(runs) : undefined;
   const displayRuns = treeRows?.map((row) => row.run) ?? runs;
+  const sharedNames = sharedRunNames(displayRuns);
   const identities = displayRuns.map((run, index): RunIdentity => {
     const glyph =
       options.frame === undefined
         ? runStateGlyph(run.state)
         : animatedRunStateGlyph(run.state, options.frame);
-    const id = sanitizeTerminalLine(options.fullId ? run.id : shortRunId(run.id));
+    const shownId = rowRunId(run, options.fullId === true, sharedNames);
     const row = treeRows?.[index];
     const branch = row ? runTreeBranch(row) : "";
     const awaited = options.hierarchy?.awaitedRunIds?.has(run.id) ? "◎ " : "";
     const identity = `${branch}${awaited}${glyph} ${sanitizeTerminalLine(run.name)}`;
+    const themedIdentity = theme.fg(runStateColor(run.state), identity);
+    if (shownId === undefined) return { plain: identity, themed: themedIdentity };
+    const id = sanitizeTerminalLine(shownId);
     return {
       plain: `${identity} · ${id}`,
-      themed: `${theme.fg(runStateColor(run.state), identity)}${theme.fg("dim", " · ")}${theme.fg("muted", id)}`,
+      themed: `${themedIdentity}${theme.fg("dim", " · ")}${theme.fg("muted", id)}`,
     };
   });
   const intents = displayRuns.map((run) => sanitizeTerminalLine(run.writeIntent));
@@ -152,14 +178,14 @@ export const renderResponsiveRunRows = (
   )
     return displayRuns.map((run, index) => {
       const color = runStateColor(run.state);
-      const identity = truncateToWidth(identities[index]?.themed ?? "", identityWidth);
+      const identity = clipToWidth(identities[index]?.themed ?? "", identityWidth);
       const route = formatRunRouteLine(run, theme);
       const intent = theme.fg(
         run.writeIntent === "writer" ? "warning" : "muted",
         intents[index] ?? "",
       );
-      const usage = theme.fg("muted", truncateToWidth(usages[index] ?? "", usageWidth));
-      const state = theme.fg(color, truncateToWidth(states[index] ?? "", stateWidth));
+      const usage = theme.fg("muted", clipToWidth(usages[index] ?? "", usageWidth));
+      const state = theme.fg(color, clipToWidth(states[index] ?? "", stateWidth));
       const usageColumn = hasUsage ? ` · ${padVisible(usage, usageWidth)}` : "";
       return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)}${usageColumn} · ${padVisible(state, stateWidth)}`;
     });
@@ -177,17 +203,17 @@ export const renderResponsiveRunRows = (
     const compactMinimumIdentityWidth = Math.min(24, Math.max(8, Math.floor(safeWidth * 0.45)));
     const maximumStatusWidth = safeWidth - compactMinimumIdentityWidth - 3;
     const identityLine = (() => {
-      if (maximumStatusWidth < 7) return truncateToWidth(identity.themed, safeWidth);
+      if (maximumStatusWidth < 7) return clipToWidth(identity.themed, safeWidth);
       const compactStatusWidth = Math.min(
         visibleWidth(compactStatus),
         Math.max(7, Math.floor(safeWidth * 0.36)),
         maximumStatusWidth,
       );
       const compactIdentityWidth = safeWidth - compactStatusWidth - 3;
-      return `${truncateToWidth(
+      return `${clipToWidth(
         identity.themed,
         compactIdentityWidth,
-      )} · ${truncateToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
+      )} · ${clipToWidth(theme.fg(color, compactStatus), compactStatusWidth)}`;
     })();
     return [identityLine, ...renderRouteRail(run, safeWidth, theme)];
   });

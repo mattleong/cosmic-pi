@@ -162,7 +162,7 @@ it.each([
         for (const line of issue.detail.split("\n")) expect(text.includes(line)).toBe(expanded);
       }
       if (expanded) {
-        expect(text).toContain("Raw task result");
+        expect(text).toContain("Raw result");
         expect(text).toContain(marker);
       } else expect(text).not.toContain(marker);
     }
@@ -242,4 +242,91 @@ it("uses the registering owner's scheduler and releases it when the call settles
   expect(probe?.scheduled).toBeGreaterThan(0);
   expect(probe?.invalidated).toBe(true);
   expect(probe?.stops).toBeGreaterThan(0);
+});
+
+it("names the task, never its ID, in the collapsed preview heading and body", () => {
+  const named = { ...snapshot, name: "dev-server-name", state: "failed", exitCode: 1 };
+  const cases = [
+    { args: { action: "status", id: "task-1" }, details: { action: "status", snapshot: named } },
+    { args: { action: "stop", id: "task-1" }, details: { action: "stop", snapshot: named } },
+    {
+      args: { action: "wait", id: "task-1", until: "exit" },
+      details: {
+        action: "wait",
+        wait: { id: "task-1", outcome: "completed", snapshot: named, ...cursors },
+      },
+    },
+    { args: { action: "list" }, details: { action: "list", tasks: [named] } },
+    { args: { action: "stop_all" }, details: { action: "stop_all", tasks: [named] } },
+  ];
+  for (const { args, details } of cases) {
+    const harness = createToolPresentationHarness(registeredTool("on", "preview"));
+    const result = { content: [{ type: "text" as const, text: "task-1 raw agent text" }], details };
+    for (const expanded of [false, true]) {
+      harness.call(args, { expanded, executionStarted: true, isPartial: false });
+      harness.result(result, { expanded });
+      const text = harness.render(160).join("\n");
+      expect(text).toContain("dev-server-name");
+      expect(text.split("\n")[0]).not.toMatch(/task-1|stop_all/u);
+      // The agent's raw text, IDs included, is reachable only once expanded.
+      if (expanded) expect(text).toContain("task-1 raw agent text");
+      else expect(text).not.toContain("task-1");
+    }
+  }
+});
+
+it("shows a running call as running until its result arrives", () => {
+  const args = { action: "wait", id: "task-1", until: "exit" };
+  const render = (
+    live: { executionStarted: boolean; isPartial: boolean },
+    result?: Parameters<ReturnType<typeof createToolPresentationHarness>["result"]>[0],
+  ) => {
+    const harness = createToolPresentationHarness(registeredTool("on", "preview"));
+    harness.call(args, live);
+    if (result) harness.result(result, live);
+    return harness.render(120);
+  };
+  const pending = render({ executionStarted: false, isPartial: true });
+  const running = render({ executionStarted: true, isPartial: true });
+  // Running adds one line under the same heading; the settled result replaces it.
+  expect(running.slice(0, pending.length)).toEqual(pending);
+  expect(running).toHaveLength(pending.length + 1);
+  const details = {
+    action: "wait",
+    wait: { id: "task-1", outcome: "completed", snapshot, ...cursors },
+  };
+  const settled = render(
+    { executionStarted: true, isPartial: false },
+    { content: [{ type: "text" as const, text: "done" }], details },
+  );
+  expect(settled).not.toContain(running.at(-1));
+});
+
+it("bounds collapsed log previews and counts only log lines", () => {
+  const lines = Array.from({ length: 30 }, (_, index) => `log entry ${index}`);
+  const result = {
+    content: [
+      {
+        type: "text" as const,
+        text: `[task-1 state=running cursor=123 earliest=45]\n${lines.join("\n")}\n`,
+      },
+    ],
+    details: { action: "logs", logs: { id: "task-1", state: "running", ...cursors } },
+  };
+  const harness = createToolPresentationHarness(registeredTool("on", "preview"));
+  harness.call({ action: "logs", id: "task-1" }, { executionStarted: true, isPartial: false });
+  harness.result(result, { expanded: false });
+  const collapsed = harness.render(120).join("\n");
+  expect(collapsed).toContain(lines[0]);
+  expect(collapsed).toContain(lines.at(-1));
+  expect(collapsed).not.toContain(lines[15]);
+  expect(collapsed).not.toContain("cursor=123");
+  // The count of shown lines is out of the 30 log lines, not the 31 lines of text.
+  expect(collapsed).toMatch(/\b30\b/u);
+  expect(collapsed).not.toMatch(/\b31\b/u);
+  harness.call({ action: "logs", id: "task-1" }, { expanded: true, isPartial: false });
+  harness.result(result, { expanded: true });
+  const expanded = harness.render(120);
+  for (const line of lines) expect(expanded.join("\n")).toContain(line);
+  expect(expanded.at(-1)?.trim()).not.toBe("");
 });

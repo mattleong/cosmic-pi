@@ -1,3 +1,4 @@
+import { failureMessage } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -95,7 +96,7 @@ export function flushSettingsSaveQueue(): Promise<void> {
 export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
   const message =
     Predicate.hasProperty(error, "message") && Predicate.isString(error.message)
-      ? error.message
-      : "Unknown error.";
-  return `Failed to save code preview settings: ${message}`;
+      ? failureMessage(error.message, "unknown error")
+      : "unknown error";
+  return `Couldn't save code preview settings: ${message}`;
 }

@@ -452,7 +452,7 @@ effectTest(
 
     assert.deepEqual(h.startupEvents, ["settings", "renderers"]);
     assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, loads: 1 });
-    assert.deepEqual(h.notifications, ["Code previews failed to start."]);
+    assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
   },
 );
 
@@ -532,7 +532,7 @@ effectTest("getAllTools discovery failure reaches lifecycle startup handling", f
 
   assert.equal(hasCodePreviewSessionCapability(), false);
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, loads: 1 });
-  assert.deepEqual(h.notifications, ["Code previews failed to start."]);
+  assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
 });
 
 const captureFailures: ReadonlyArray<readonly [string, (context: HostContext) => void]> = [
@@ -551,7 +551,7 @@ for (const [name, sabotage] of captureFailures)
     yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
 
     assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
-    assert.deepEqual(h.notifications, ["Code previews failed to start."]);
+    assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
   });
 
 effectTest("project trust fails closed unless the callback returns literal true", function* () {

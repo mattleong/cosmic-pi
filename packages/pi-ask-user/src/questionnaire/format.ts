@@ -18,6 +18,20 @@ export function formatAskUserOutcome(outcome: AskUserOutcome): string {
   return lines.join("\n");
 }
 
+/** Where a pending questionnaire is: queued ones are not on screen and have no answer yet. */
+function pendingPresentation(presentation: AsyncQuestionnaireSnapshot["presentation"]): string {
+  switch (presentation) {
+    case "queued":
+      return "The questionnaire is queued; it opens automatically after earlier questionnaires and UI prompts close. Queued admission is not an answer.";
+    case "opening":
+      return "The questionnaire is opening.";
+    case "hidden":
+      return "The questionnaire is open but hidden; the user can resume it with /ask-user.";
+    default:
+      return "The questionnaire is open.";
+  }
+}
+
 export function formatAsyncSnapshot(snapshot: AsyncQuestionnaireSnapshot): string {
   const lines = [
     `Request ${snapshot.requestId} · delivery ${snapshot.deliveryId} · ${snapshot.status} · delivery status ${snapshot.delivery}`,
@@ -27,7 +41,7 @@ export function formatAsyncSnapshot(snapshot: AsyncQuestionnaireSnapshot): strin
     lines.push(
       `Continue only this independent work: ${stripTerminalControls(snapshot.independentWork)}`,
       `Wait for answers before: ${stripTerminalControls(snapshot.blockedWork)}`,
-      "The questionnaire is open. Answers arrive automatically unless ask_user_async_control await owns delivery. Do not poll; await only when independent work is exhausted.",
+      `${pendingPresentation(snapshot.presentation)} Answers arrive automatically unless ask_user_async_control await owns delivery. Do not poll; await only when independent work is exhausted.`,
     );
   else if (snapshot.status === "failed")
     lines.push("The questionnaire failed. No answer was recorded.");

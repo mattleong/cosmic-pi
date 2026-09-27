@@ -1,36 +1,38 @@
-import { brailleSpinnerFrame, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
+import {
+  managerActivityColor,
+  managerActivityGlyph,
+  managerActivityLabel,
+  type ManagerActivityKind,
+  type ManagerStatusColor,
+} from "pi-cosmic-ui/manager";
 import type { SubagentRunState } from "../run/model.ts";
 
-type RunStateColor = "accent" | "success" | "warning" | "error" | "muted";
-
-const RUN_STATE_PRESENTATION = {
-  starting: { glyph: "◌", label: "starting…", color: "accent" },
-  running: { glyph: brailleSpinnerFrame(0), label: "running", color: "success" },
-  waiting_for_parent: { glyph: "?", label: "waiting for reply", color: "warning" },
-  paused: { glyph: "‖", label: "paused", color: "warning" },
-  reported: { glyph: managerStateGlyph("done"), label: "reported · retained", color: "success" },
-  completed: { glyph: managerStateGlyph("done"), label: "finished", color: "success" },
-  failed: { glyph: managerStateGlyph("failed"), label: "failed", color: "error" },
-  stopping: { glyph: managerStateGlyph("stopping"), label: "stopping…", color: "warning" },
-  stopped: { glyph: managerStateGlyph("stopped"), label: "stopped", color: "muted" },
-} as const satisfies Readonly<
-  Record<
-    SubagentRunState,
-    { readonly glyph: string; readonly label: string; readonly color: RunStateColor }
-  >
->;
+/** Each run state in the shared activity vocabulary every extension draws from. */
+const RUN_STATE_KINDS = {
+  starting: "pending",
+  running: "running",
+  waiting_for_parent: "waiting",
+  paused: "paused",
+  reported: "done",
+  completed: "done",
+  failed: "failed",
+  stopping: "stopping",
+  stopped: "stopped",
+} as const satisfies Readonly<Record<SubagentRunState, ManagerActivityKind>>;
 
 export const runStateGlyph = (state: SubagentRunState): string =>
-  RUN_STATE_PRESENTATION[state].glyph;
+  managerActivityGlyph(RUN_STATE_KINDS[state]);
 
-export const animatedRunStateGlyph = (state: SubagentRunState, frame: number): string => {
-  if (state === "starting") return startingSpinnerFrame(frame);
-  if (state === "running") return brailleSpinnerFrame(frame);
-  return runStateGlyph(state);
-};
+export const animatedRunStateGlyph = (state: SubagentRunState, frame: number): string =>
+  managerActivityGlyph(RUN_STATE_KINDS[state], frame);
 
+/** The shared word, except where a run's own word is more precise. */
 export const runStateLabel = (state: SubagentRunState): string =>
-  RUN_STATE_PRESENTATION[state].label;
+  state === "waiting_for_parent"
+    ? "waiting for reply"
+    : state === "reported"
+      ? "reported"
+      : managerActivityLabel(RUN_STATE_KINDS[state]);
 
-export const runStateColor = (state: SubagentRunState): RunStateColor =>
-  RUN_STATE_PRESENTATION[state].color;
+export const runStateColor = (state: SubagentRunState): ManagerStatusColor =>
+  managerActivityColor(RUN_STATE_KINDS[state]);

@@ -302,6 +302,7 @@ describe("local process boundary", () => {
           spawnProcess('node -e ""', { cwd: "/definitely/missing/pi-bg-dir" }),
         );
         expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure.reason).toBe("cwd");
       }),
     ),
   );
@@ -316,7 +317,8 @@ describe("local process boundary", () => {
         );
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
-          expect(result.failure.message).toBe("Unable to spawn local process.");
+          expect(result.failure.reason).toBe("spawn");
+          expect(result.failure.message).not.toContain("FAKE_SECRET_123");
           expect(String(result.failure)).not.toContain("FAKE_SECRET_123");
         }
       }),

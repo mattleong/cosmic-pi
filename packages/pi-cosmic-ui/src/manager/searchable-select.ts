@@ -7,10 +7,9 @@ import {
   type Focusable,
   type SelectItem,
   SelectList,
-  truncateToWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter } from "./chrome.ts";
+import { renderResponsiveManagerFooter, clipToWidth } from "./chrome.ts";
 import { framedFill, framedScreen, listDetailFrame } from "./list-detail-shell.ts";
 import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
 import {
@@ -328,14 +327,14 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     if (safeWidth < 4) return Array.from({ length: height }, () => " ".repeat(safeWidth));
     const theme = this.options.theme;
     const inner = safeWidth - 2;
-    const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
+    const title = clipToWidth(` ${this.options.breadcrumb} `, inner, "");
     const frame = listDetailFrame(theme, "list");
     const activeNotice = this.feedback ?? this.options.notice;
     const body: string[] = [];
     if (height < 10) {
       const bodyHeight = Math.max(0, height - 2);
       const noticeLine = activeNotice
-        ? theme.fg("warning", truncateToWidth(activeNotice, inner, "…"))
+        ? theme.fg("warning", clipToWidth(activeNotice, inner, "…"))
         : undefined;
       const inputLine = this.searchMode
         ? this.input
@@ -365,7 +364,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         const lines = wrapTextWithAnsi(value, Math.max(1, inner));
         if (lines.length <= maximumLines) return lines;
         const shown = lines.slice(0, maximumLines);
-        shown[maximumLines - 1] = truncateToWidth(`${shown[maximumLines - 1] ?? ""}…`, inner, "");
+        shown[maximumLines - 1] = clipToWidth(`${shown[maximumLines - 1] ?? ""}…`, inner, "");
         return shown;
       };
       const bodyHeight = Math.max(0, height - 2);

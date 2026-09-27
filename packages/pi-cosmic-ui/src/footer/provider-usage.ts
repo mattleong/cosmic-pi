@@ -1,8 +1,9 @@
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { CosmicFooterTheme } from "../protocol/protocol.ts";
 import { alignSides } from "./contributions.ts";
 import { progressBar, remainingCapacityTone } from "./meter.ts";
+import { clipToWidth } from "../manager/chrome.ts";
 
 const WINDOW_PATTERN = /^([A-Za-z0-9][A-Za-z0-9_-]*):\s*(?:(\d+(?:\.\d+)?)%|--)$/u;
 const RESET_PATTERN = /^([A-Za-z0-9][A-Za-z0-9_-]*)\s+↺(?:\s+(.*))?$/u;
@@ -78,7 +79,7 @@ function simpleEntry(
   if (!right && visibleWidth(fullLeft) > width) return undefined;
   return right
     ? alignSides(fullLeft, theme.fg("mdLink", right), width)
-    : truncateToWidth(fullLeft, width, "");
+    : clipToWidth(fullLeft, width, "");
 }
 
 function wrappedEntry(
@@ -92,7 +93,7 @@ function wrappedEntry(
   const available = Math.max(1, width - visibleWidth(prefix));
   const wrappedLeft = wrapTextWithAnsi(entryText(entry, theme, compact, false), available);
   const lines = wrappedLeft.map((part, index) =>
-    truncateToWidth(`${index === 0 ? prefix : continuation}${part}`, width, ""),
+    clipToWidth(`${index === 0 ? prefix : continuation}${part}`, width, ""),
   );
   const right = entry.kind === "window" ? entry.resetText : undefined;
   if (right) {
@@ -119,7 +120,7 @@ export function renderProviderUsageLines(
   const provider = sanitizeTerminalLine(providerName);
   const fullPrefix = theme.fg("mdLink", `${provider} `);
   const prefixWidth = Math.min(visibleWidth(fullPrefix), Math.max(0, width - 1));
-  const firstPrefix = truncateToWidth(fullPrefix, prefixWidth, "");
+  const firstPrefix = clipToWidth(fullPrefix, prefixWidth, "");
   const continuation = " ".repeat(prefixWidth);
   const lines: string[] = [];
   let first = true;

@@ -10,7 +10,7 @@ Requires Node.js 22.22.2+, 24.15.0+, or 26+.
 pi install npm:pi-better-openai
 ```
 
-Install `pi-cosmic-ui` to compose OpenAI usage and the fast indicator into the shared footer. Configure footer visibility in `/cosmic-ui`. Without an active Cosmic footer, Better OpenAI automatically uses Pi's status line.
+Install `pi-cosmic-ui` to compose OpenAI usage and the fast indicator into the shared footer. Configure footer visibility in `/cosmic-ui-settings`. Without an active Cosmic footer, Better OpenAI automatically uses Pi's status line.
 
 ```bash
 pi install npm:pi-cosmic-ui
@@ -29,14 +29,14 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 ## Features
 
-- Fast mode for all `openai` and `openai-codex` models, toggled with `/fast` or in `/openai-settings`.
+- Fast mode for all `openai` and `openai-codex` models, toggled with `/openai-fast` or in `/openai-settings`.
 - Optional OpenAI-native context compaction for `openai-responses` models. Pi still decides when to compact; Better OpenAI replaces threshold and manual compaction with `POST /responses/compact`. Provider failures and overflow recovery fall back to Pi compaction.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive TUI settings picker via `/openai-settings`, plus scriptable updates via `/openai-settings <id> <value>`; run `/openai-settings help` for available keys.
 - Automatic contribution of fast-mode and usage footer primitives when `pi-cosmic-ui` is installed.
 - OpenAI image generation/editing through the `openai_image` tool and `/openai-image` command.
 - Commands:
-  - `/fast` toggles fast mode.
+  - `/openai-fast` toggles fast mode.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-usage` shows current OpenAI subscription usage.
   - `/openai-settings` opens the interactive picker, or shows help outside the TUI; `/openai-settings help` lists settings and `/openai-settings diagnostics` shows diagnostics.
@@ -45,7 +45,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 Better OpenAI publishes data-oriented fast-mode and usage primitives over the versioned Cosmic UI event protocol when a host is present. Better OpenAI depends on `pi-cosmic-ui` only for that narrow plain-data protocol client; provider behavior stays correct when no Cosmic UI host answers discovery.
 
-`/cosmic-ui` is the only footer settings panel. OpenAI usage has `automatic` and `hidden` choices; the fast indicator has its own visibility toggle. Hidden usage skips automatic requests, but `/openai-usage` still fetches once on an eligible model. Hiding the fast indicator does not change fast-mode requests.
+`/cosmic-ui-settings` is the only footer settings panel. OpenAI usage has `automatic` and `hidden` choices; the fast indicator has its own visibility toggle. Hidden usage skips automatic requests, but `/openai-usage` still fetches once on an eligible model. Hiding the fast indicator does not change fast-mode requests.
 
 Cosmic UI owns layout and rendering. Better OpenAI supplies data and never replaces the footer. When Cosmic UI's custom footer is disabled, its visibility preferences still apply to Pi's status-line fallback. Without Cosmic UI, usage is automatic on eligible models. Provider configuration has no footer mode or usage-display switch.
 

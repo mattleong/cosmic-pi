@@ -1,6 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { managerLayoutTier, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  managerLayoutTier,
+  renderResponsiveManagerFooter,
+  clipToWidth,
+} from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { listWindowStart, wideListDetailGeometry } from "pi-cosmic-ui/manager/list-detail";
@@ -169,7 +173,7 @@ const previewRows = (
     const visible = lines.slice(0, budget);
     if (lines.length > budget) {
       visible[budget - 1] =
-        truncateToWidth(visible[budget - 1] ?? "", Math.max(0, width - 1), "") + "…";
+        clipToWidth(visible[budget - 1] ?? "", Math.max(0, width - 1), "") + "…";
     }
     rows.push(...visible);
   }
@@ -193,8 +197,8 @@ export const renderProfileSetPicker = (
   const theme = options.theme;
   const frame = profileFrame(theme, true);
   const inner = width - 2;
-  const title = truncateToWidth(" /subagents profiles › Profile sets ", inner, "");
-  const bottom = truncateToWidth(footer(state, inner, options.keybindingLabel), inner, "");
+  const title = clipToWidth(" /subagents profiles › Profile sets ", inner, "");
+  const bottom = clipToWidth(footer(state, inner, options.keybindingLabel), inner, "");
   return framedScreen(frame, {
     width,
     height,

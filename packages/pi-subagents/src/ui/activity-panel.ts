@@ -1,7 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
-import { managerLayoutTier, type ManagerLayoutTier } from "pi-cosmic-ui/manager";
+import {
+  managerLayoutTier,
+  type ManagerLayoutTier,
+  clipToWidth,
+  spinnerFrameAt,
+} from "pi-cosmic-ui/manager";
 import {
   isAssignmentFinishedRunState,
   type SubagentProjection,
@@ -156,7 +161,7 @@ const fitPanelHeader = (
     remaining.splice(removeIndex, 1);
   }
   const commandOnly = theme.fg(command.color, command.text);
-  return visibleWidth(commandOnly) <= width ? commandOnly : truncateToWidth(commandOnly, width, "");
+  return visibleWidth(commandOnly) <= width ? commandOnly : clipToWidth(commandOnly, width, "");
 };
 
 const panelHeader = (
@@ -292,13 +297,13 @@ const renderActivityRow = (
     if (visibleWidth(combined) <= width) return combined;
   }
 
-  if (width < 12) return truncateToWidth(identity, width, "");
+  if (width < 12) return clipToWidth(identity, width, "");
   const minimumIdentityWidth = tier === "narrow" ? 6 : 8;
   const maximumRouteWidth = width - minimumIdentityWidth - visibleWidth(separator);
-  if (maximumRouteWidth < 8) return truncateToWidth(identity, width, "");
+  if (maximumRouteWidth < 8) return clipToWidth(identity, width, "");
   const routeWidth = Math.min(visibleWidth(compactRoute), maximumRouteWidth);
   const identityWidth = width - routeWidth - visibleWidth(separator);
-  return `${truncateToWidth(identity, identityWidth, "")}${separator}${truncateToWidth(compactRoute, routeWidth, "")}`;
+  return `${clipToWidth(identity, identityWidth, "")}${separator}${clipToWidth(compactRoute, routeWidth, "")}`;
 };
 
 export const renderProjectedSubagentActivityPanel = (
@@ -318,7 +323,7 @@ export const renderProjectedSubagentActivityPanel = (
   const inset = safeWidth > 1 ? " " : "";
   const contentWidth = safeWidth - visibleWidth(inset);
   const tier = managerLayoutTier(safeWidth);
-  const frame = Math.floor(now / 160);
+  const frame = spinnerFrameAt(now);
   const nameCounts = new Map<string, number>();
   for (const row of panel.rows)
     nameCounts.set(row.run.name, (nameCounts.get(row.run.name) ?? 0) + 1);

@@ -4,7 +4,6 @@ import {
   Markdown,
   Spacer,
   Text,
-  truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
@@ -12,6 +11,9 @@ import {
 import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
+  formatDuration,
+  formatElapsed,
+  formatRelativeAge,
 } from "pi-cosmic-core";
 import { listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import { managerTone } from "pi-cosmic-ui/manager/style";
@@ -23,8 +25,9 @@ import {
   type SubagentSessionEvent,
 } from "../run/model.ts";
 import { steeringDeliveryEvidence } from "../tools/outcome.ts";
-import { aggregateUsage, formatDuration, formatRelativeAge } from "./metrics.ts";
+import { aggregateUsage } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
+import { clipToWidth, spinnerFrameAt, managerNoticeGlyph } from "pi-cosmic-ui/manager";
 
 export interface SessionOutputRenderOptions {
   readonly now?: number;
@@ -58,7 +61,7 @@ class HangingText implements Component {
     const safeWidth = Math.max(1, width);
     const padding = Math.min(this.paddingX, Math.max(0, Math.floor((safeWidth - 1) / 2)));
     const contentWidth = Math.max(1, safeWidth - padding * 2);
-    const prefix = truncateToWidth(this.prefix, Math.max(0, contentWidth - 1), "");
+    const prefix = clipToWidth(this.prefix, Math.max(0, contentWidth - 1), "");
     const prefixWidth = visibleWidth(prefix);
     const bodyWidth = Math.max(1, contentWidth - prefixWidth);
     const rows = wrapTextWithAnsi(this.text, bodyWidth);
@@ -143,8 +146,8 @@ function addToolGroup(
 
 const NOTICE_STYLES = {
   parent: { glyph: "←", color: "muted" },
-  question: { glyph: "?", color: "warning" },
-  warning: { glyph: "!", color: "warning" },
+  question: { glyph: managerNoticeGlyph("warning"), color: "warning" },
+  warning: { glyph: managerNoticeGlyph("warning"), color: "warning" },
   progress: { glyph: "…", color: "muted" },
 } as const;
 
@@ -201,7 +204,7 @@ const addLiveActivity = (
   now: number,
 ): void => {
   const items = activityItems(run.sessionEvents);
-  const frame = Math.floor(now / 160);
+  const frame = spinnerFrameAt(now);
   for (const item of items) {
     if (item.type === "tools") addToolGroup(container, item.events, theme, frame);
     else addStyledRow(container, NOTICE_STYLES[item.event.kind], item.event.text, theme);
@@ -351,17 +354,15 @@ export function renderSubagentSessionOutput(
   const end =
     run.endedAt ??
     (run.state === "paused" ? run.lastActivityAt : active ? now : run.lastActivityAt);
-  const elapsed = formatDuration(end - run.startedAt);
+  const elapsed = formatElapsed(end - run.startedAt);
   const duration =
-    run.state === "paused"
-      ? `paused after ${elapsed}`
-      : run.state === "reported"
-        ? `idle after report ${run.reportGeneration}`
-        : run.state === "waiting_for_parent"
-          ? `waiting · ${elapsed}`
-          : active
-            ? `running for ${elapsed}`
-            : elapsed;
+    run.state === "paused" || run.state === "reported"
+      ? `${runStateLabel(run.state)} after ${elapsed}`
+      : run.state === "waiting_for_parent"
+        ? `waiting · ${elapsed}`
+        : active
+          ? `running for ${elapsed}`
+          : elapsed;
   const age =
     run.state === "completed" || run.state === "reported"
       ? ` ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`

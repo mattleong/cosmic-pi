@@ -4,6 +4,7 @@
  * caller-owned: every callback threaded through here (change/cancel/render/bridge guard)
  * must already be guarded by the calling package's own host-ui boundary.
  */
+import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 import {
   Container,
   SettingsList,
@@ -153,6 +154,10 @@ export interface SettingsListSurfaceOptions {
   readonly onChange: (id: string, value: string, list: SettingsList) => void;
   readonly onCancel: () => void;
   readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
+  /** Configured key labels for the hint line; Pi's defaults are shown without it. */
+  readonly keybindingLabel?:
+    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
+    | undefined;
   /** Caller-owned (host-guarded) render request used by the Vim adapter. */
   readonly requestRender?: (() => void) | undefined;
   /** Caller-owned dim styling for the shared modeless hint line. */
@@ -183,7 +188,9 @@ export const createSettingsListSurface = (
     matchesKeybinding: options.matchesKeybinding,
     requestRender: options.requestRender,
     renderHint: (mode, helpExpanded) =>
-      options.dim(` ${fullScreenSettingsHint({ searching: mode === "search", helpExpanded })} `),
+      options.dim(
+        ` ${fullScreenSettingsHint({ searching: mode === "search", helpExpanded, keybindingLabel: options.keybindingLabel })} `,
+      ),
   });
   container.addChild(adapter);
   return { list, surface: settingsSurfaceBridge(adapter, container, options.bridge ?? {}) };

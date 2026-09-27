@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { clipText } from "../src/display.ts";
 import { safeTextPrefix, utf8Prefix } from "../src/text.ts";
 
 it("never splits a surrogate pair in a UTF-16 prefix", () => {
@@ -15,4 +16,18 @@ it("takes the longest code-point prefix within a UTF-8 byte budget", () => {
   // A lone surrogate encodes as the three-byte replacement character.
   expect(utf8Prefix("\ud800x", 3)).toBe("\ud800");
   expect(utf8Prefix("\ud800x", 2)).toBe("");
+});
+
+it("clips display text within its budget without splitting a surrogate pair", () => {
+  for (const [text, limit] of [
+    ["a long sentence that needs clipping", 12],
+    ["a😀😀😀", 3],
+    ["short", 10],
+    ["abc", 0],
+  ] as const) {
+    const clipped = clipText(text, limit);
+    expect(clipped.length).toBeLessThanOrEqual(limit);
+    expect(clipped === text || clipped.endsWith("…") || clipped === "").toBe(true);
+    expect(/[\ud800-\udbff]$/u.test(clipped.replace(/…$/u, ""))).toBe(false);
+  }
 });

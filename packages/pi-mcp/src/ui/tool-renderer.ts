@@ -1,16 +1,16 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { renderCompactIssues } from "pi-code-previews";
 import { withSignInCommand } from "./boundary-failure.ts";
 import {
   composeToolComponent,
   renderExpansionAffordance,
   renderToolHeader,
-  toolStatusLine,
+  toolRunningLine,
 } from "pi-cosmic-ui/tool";
 import { renderMcpCallContent } from "./call-content.ts";
 import { progressLabel } from "./remote-events.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
+import { countLabel } from "pi-cosmic-core";
 
 type CardTheme = Pick<Theme, "fg" | "bold">;
 
@@ -35,7 +35,10 @@ export const renderMcpCall = <Args>(args: Args, theme: CardTheme, expanded = fal
     Number.isFinite(width) && width >= 1
       ? [
           ...new Text(
-            renderToolHeader({ title: `MCP ${call.action}`, subtitle: call.target }, theme),
+            renderToolHeader(
+              { title: "MCP", subtitle: [call.action, call.target].filter(Boolean).join(" ") },
+              theme,
+            ),
             0,
             0,
           ).render(Math.floor(width)),
@@ -45,7 +48,10 @@ export const renderMcpCall = <Args>(args: Args, theme: CardTheme, expanded = fal
   );
 };
 
-/** The detailed card renders its own issues: the shared shell shows none alongside it. */
+/**
+ * The preview body under the shell's heading and issues: remote progress while running,
+ * routine counts, and once expanded the recovery hint, origin, notices, and labeled raw result.
+ */
 export const renderMcpResult = <Result>(
   result: Result,
   options: {
@@ -59,74 +65,39 @@ export const renderMcpResult = <Result>(
   expandHint = "",
 ): Component => {
   const details = decodeMcpCardDetails(result);
-  const boundary = options.expanded && !options.isPartial ? details.boundary : undefined;
-  // Progress updates are not settled; their provisional uncertainty is not an issue yet.
+  // Issue details are already shown by the shell; expansion lists only what they leave out.
   const issues = options.isPartial
     ? []
     : withSignInCommand(details.presentation.issues, details.boundary, options.server);
-  const issueDetails = issues.flatMap((issue) => issue.detail?.split("\n") ?? []);
+  const issueDetails = issues.flatMap((issue) => [
+    issue.message,
+    ...(issue.detail?.split("\n") ?? []),
+  ]);
   const repeated = (text: string) => issueDetails.includes(text);
-  // A boundary issue carries the diagnostic title, explanation, and navigation in its detail.
-  const boundaryIssue = issues.some((issue) => issue.code === "boundary-failure");
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const lines: string[] = [];
-    const failed = details.presentation.isError || options.isError === true;
-    const status = options.isPartial
-      ? "running"
-      : details.outcome === "unknown" || details.outcome === "not-sent"
-        ? "warning"
-        : failed
-          ? "failed"
-          : details.known
-            ? "done"
-            : "info";
-    const label = options.isPartial
-      ? "In progress"
-      : !details.known
-        ? failed
-          ? "Failed; execution details unavailable"
-          : "Execution details unavailable"
-        : details.outcome === "unknown"
-          ? "Outcome unknown"
-          : details.outcome === "not-sent"
-            ? "Not sent"
-            : failed
-              ? "Completed with a problem"
-              : "Completed";
-    lines.push(toolStatusLine(theme, status, boundary?.status ?? label));
-    const progress = options.isPartial ? progressLabel(result) : undefined;
-    if (progress) lines.push(theme.fg("muted", progress));
-    if (details.diagnostic && !options.isPartial && !boundaryIssue)
-      lines.push(theme.fg("muted", details.diagnostic.title));
+    if (options.isPartial) {
+      const progress = progressLabel(result);
+      lines.push(progress ? theme.fg("muted", progress) : toolRunningLine(theme));
+    }
     const counts = [...details.counts];
     if (details.attachmentCount)
       counts.push(
-        `${details.attachmentsLimited ? "at least " : ""}${details.attachmentCount} attachments`,
+        `${details.attachmentsLimited ? "at least " : ""}${countLabel(details.attachmentCount, "attachment")}`,
       );
-    if (details.imageCount) counts.push(`${details.imageCount} native images`);
+    if (details.imageCount) counts.push(countLabel(details.imageCount, "image"));
     if (counts.length) lines.push(theme.fg("muted", counts.join(" · ")));
-    const rest: string[] = [];
-    // Failed calls use this renderer even in compact mode. Keep the bounded, sanitized error
-    // body visible rather than require expansion, unless a remote-failure issue states it.
-    if (
-      failed &&
-      !options.isPartial &&
-      !options.expanded &&
-      !issues.some((issue) => issue.code === "remote-failure")
-    )
-      rest.push(theme.fg("error", details.failurePreview));
-    if (details.recoveryHint && !details.resultId && !repeated(details.recoveryHint))
-      rest.push(theme.fg("accent", details.recoveryHint));
-    rest.push(renderExpansionAffordance("Existing details", options.expanded, theme, expandHint));
-    if (options.expanded) {
-      if (details.recoveryHint && details.resultId && !repeated(details.recoveryHint))
-        rest.push(theme.fg("accent", details.recoveryHint));
+    if (!options.isPartial)
+      lines.push(renderExpansionAffordance("details", options.expanded, theme, expandHint));
+    if (options.expanded && !options.isPartial) {
+      if (details.recoveryHint && !repeated(details.recoveryHint))
+        lines.push(theme.fg("muted", details.recoveryHint));
       if (details.diagnostic && !repeated(details.diagnostic.explanation))
-        rest.push(theme.fg("muted", details.diagnostic.explanation));
+        lines.push(theme.fg("muted", details.diagnostic.explanation));
       // Display cuts can hide an adapter message that fixed boundary issues never repeat.
       if (details.errorMessage && details.displayCuts.length && !repeated(details.errorMessage))
-        rest.push(theme.fg("muted", details.errorMessage));
+        lines.push(theme.fg("muted", details.errorMessage));
       if (details.origin) {
         const origin = details.origin;
         const outcome = origin.outcome ?? "outcome unavailable";
@@ -136,18 +107,13 @@ export const renderMcpResult = <Result>(
             : origin.outputValidationUnavailable
               ? "output validation unavailable"
               : "no failure reported";
-        rest.push(theme.fg("muted", `Origin: ${origin.action} · ${outcome} · ${failure}`));
+        lines.push(theme.fg("muted", `Origin: ${origin.action} · ${outcome} · ${failure}`));
       }
       // Notices beyond the issue budget remain listed here.
       for (const notice of details.notices)
-        if (!repeated(notice)) rest.push(theme.fg("muted", notice));
-      rest.push(theme.fg("toolOutput", details.preview));
+        if (!repeated(notice)) lines.push(theme.fg("muted", notice));
+      lines.push(theme.fg("toolOutput", details.preview));
     }
-    const text = (block: string[]) => new Text(block.join("\n"), 0, 0).render(Math.floor(width));
-    return [
-      ...text(lines),
-      ...renderCompactIssues(issues, theme, Math.floor(width), options.expanded, ""),
-      ...text(rest),
-    ];
+    return new Text(lines.join("\n"), 0, 0).render(Math.floor(width));
   });
 };

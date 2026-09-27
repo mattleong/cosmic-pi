@@ -27,6 +27,7 @@ import { makeActivityHost } from "../src/boundary/host-activity.ts";
 import { screenViewport } from "../src/manager/viewport.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 import { eventBus } from "./support/host.ts";
+import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
 
 type Widget = Parameters<ExtensionContext["ui"]["setWidget"]>[1];
 const item = (id = "a"): ActivityItem => ({
@@ -157,7 +158,7 @@ describe("activity host lifecycle", () => {
       yield* fixture.drain();
       expect(fixture.renderWidget()).toEqual(first);
       const beforeTick = fixture.redraws();
-      fixture.host.tick(service, 100);
+      fixture.host.tick(service, SPINNER_FRAME_MS);
       expect(fixture.redraws()).toBeGreaterThan(beforeTick);
       expect(fixture.renderWidget()).not.toEqual(first);
       fixture.host.tick(service, 0);
@@ -174,7 +175,7 @@ describe("activity host lifecycle", () => {
       yield* fixture.drain();
       expect(fixture.renderWidget()).toEqual([]);
       const afterRevoke = fixture.redraws();
-      fixture.host.tick(service, 100);
+      fixture.host.tick(service, SPINNER_FRAME_MS);
       expect(fixture.redraws()).toBe(afterRevoke);
       fixture.host.deactivate();
       const afterDeactivate = fixture.redraws();

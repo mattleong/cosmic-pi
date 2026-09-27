@@ -1,7 +1,8 @@
+import { formatRelativeAge, countLabel } from "pi-cosmic-core";
 import { focusedField, managerTone } from "../manager/style.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter } from "../manager/chrome.ts";
+import { Key, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { renderResponsiveManagerFooter, clipToWidth } from "../manager/chrome.ts";
 import { filterReservedKeyLabel } from "../manager/key-labels.ts";
 import type {
   FullScreenKeymapOptions,
@@ -36,7 +37,7 @@ import {
   activityType,
 } from "./widget.ts";
 
-const shortcuts = new Set(["a", "c", "f", "n", "r", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+const shortcuts = new Set(["a", "n", "r", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
 export interface ActivityPresentation {
   readonly shell: ListDetailShell;
   readonly collapsed: Set<string>;
@@ -198,18 +199,9 @@ export class ActivityComponent {
         this.actionPage =
           (this.actionPage + 1) % Math.max(1, Math.ceil((selected?.row.actions?.length ?? 0) / 9));
       else if (result.key === "r" && selected) this.loadDetails(selected.row, true);
-      else if (result.key === "f")
+      else if (result.key === "z")
         this.presentation.focus = this.presentation.focus ? undefined : selected?.row.key;
-      else if (result.key === "c" && selected?.children) {
-        const key = selected.row.key;
-        if (selected.expanded) {
-          this.presentation.collapsed.add(key);
-          this.presentation.expandedHistory.delete(key);
-        } else {
-          this.presentation.collapsed.delete(key);
-          if (selected.history && selected.depth === 0) this.presentation.expandedHistory.add(key);
-        }
-      } else if (selected && /^[1-9]$/.test(result.key)) {
+      else if (selected && /^[1-9]$/.test(result.key)) {
         const shown = this.displayed;
         const action =
           shown?.row.key === selected.row.key
@@ -301,23 +293,23 @@ export class ActivityComponent {
     const bottom = renderResponsiveManagerFooter(
       inner,
       this.confirmation
-        ? [[`${confirm} confirm`, `${cancel} cancel`]]
+        ? [[`${confirm} Confirm`, `${cancel} Cancel`]]
         : this.alternateHelp
           ? [
               [
                 "C-u/d Half-page · PgUp/PgDn Page · gg/G Ends",
-                "c Collapse · f Focus · n Needs you",
+                "z Zoom · n Next needing you",
                 actions,
                 `r Refresh · ? Back · ${cancel}/q Close`,
               ],
-              ["c Collapse · f Focus · n Needs you", "a More actions", `? Back · ${cancel}/q`],
-              ["c · f · n · a · r", `? Back · ${cancel}/q`],
+              ["z Zoom · n Next needing you", "a More actions", `? Back · ${cancel}/q`],
+              ["z · n · a · r", `? Back · ${cancel}/q`],
             ]
           : [
               [
                 navigation,
                 actions,
-                `f Focus · n Needs you · r Refresh · ? More · ${cancel}/q Close`,
+                `z Zoom · n Next needing you · r Refresh · ? More · ${cancel}/q Close`,
               ],
               [navigation, actions, `? More · ${cancel}/q`],
               [listFocused ? `j/k · ${confirm} Inspect` : `j/k · h Back`, `? More · ${cancel}/q`],
@@ -334,8 +326,8 @@ export class ActivityComponent {
       height,
       top: this.options.theme.fg(
         "accent",
-        truncateToWidth(
-          ` /activity · ${this.options.snapshot().length} items${breadcrumb ? ` › ${breadcrumb}` : ""}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
+        clipToWidth(
+          ` /activity · ${countLabel(this.options.snapshot().length, "item")}${breadcrumb ? ` › ${breadcrumb}` : ""}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
           inner,
           "",
         ),
@@ -369,7 +361,7 @@ export class ActivityComponent {
           const content = `${prefix}${activityRowLine(entry, Math.max(0, listWidth - prefix.length), this.options.now?.(), this.options.theme, "manager", isSelected && listFocused ? (text) => focusedField(this.options.theme, text) : undefined)}`;
           return padListDetailRow(content, listWidth);
         });
-        if (!list.length) list.push("No activity");
+        if (!list.length) list.push(this.options.theme.fg("dim", "No activity yet"));
         if (showNeedsYou)
           list.unshift(
             this.options.theme.fg(
@@ -399,7 +391,7 @@ export class ActivityComponent {
         const now = this.options.now?.();
         const stale =
           now !== undefined && row?.updatedAt !== undefined
-            ? `Updated ${Math.max(0, Math.floor((now - row.updatedAt) / 1000))}s ago`
+            ? `Updated ${formatRelativeAge(now - row.updatedAt)}`
             : "";
         const detailText = row
           ? [
@@ -415,12 +407,10 @@ export class ActivityComponent {
                   value: `${activityType(row)}${row.kind === "agent" && row.profile ? ` · ${row.profile}` : ""} · ${activityStatus(row)} · ${activityElapsed(row, now)}`,
                 },
               ]),
-              truncateToWidth(stale, detailWidth, "…"),
+              clipToWidth(stale, detailWidth, "…"),
               row.summary ?? "",
               loaded,
-              row.omittedChildren
-                ? `At least ${row.omittedChildren} earlier completed items omitted.`
-                : "",
+              row.omittedChildren ? `${row.omittedChildren}+ earlier finished items hidden` : "",
               ...(row.actions ?? [])
                 .slice(this.actionPage * 9, (this.actionPage + 1) * 9)
                 .map((action, index) => `${index + 1} ${action.label}`),
@@ -439,7 +429,7 @@ export class ActivityComponent {
         if (contentHeight > 0) this.preserveDetailPosition = false;
         const detailRows = showFreshness
           ? [
-              this.options.theme.fg("dim", truncateToWidth(freshness, detailWidth, "…")),
+              this.options.theme.fg("dim", clipToWidth(freshness, detailWidth, "…")),
               ...(details.overflow
                 ? [this.options.theme.fg("dim", detailWindowPositionLabel(details.overflow))]
                 : []),
@@ -469,6 +459,6 @@ export class ActivityComponent {
           this.shell.state.pane,
         );
       },
-    }).map((line) => truncateToWidth(line, width, ""));
+    }).map((line) => clipToWidth(line, width, ""));
   }
 }

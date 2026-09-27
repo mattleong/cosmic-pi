@@ -445,7 +445,7 @@ describe("local Pi child bridge", () => {
     current.onControl(reply);
     yield* step(() =>
       expect(result).resolves.toMatchObject({
-        content: [{ text: "Parent replied: approved" }],
+        content: [{ text: "Parent reply: approved" }],
       }),
     );
     yield* harness.awaitContact("parent_reply_ack", { requestId: "reply-ack", ok: true });

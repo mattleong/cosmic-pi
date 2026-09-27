@@ -36,7 +36,19 @@
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
-    "anti-slop/require-safety-comment-for-type-assertion": "error"
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "eslint/no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "@earendil-works/pi-tui",
+            "importNames": ["truncateToWidth"],
+            "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"\u2026\" everywhere."
+          }
+        ]
+      }
+    ]
   },
   "overrides": [
     {
@@ -55,6 +67,13 @@
                 "group": ["**/modern", "**/modern/**", "**/legacy", "**/legacy/**"],
                 "message": "Use the MCP protocol contract or selector; protocol-neutral modules must not import era implementations."
               }
+            ],
+            "paths": [
+              {
+                "name": "@earendil-works/pi-tui",
+                "importNames": ["truncateToWidth"],
+                "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"\u2026\" everywhere."
+              }
             ]
           }
         ]
@@ -70,6 +89,13 @@
               {
                 "group": ["**/legacy", "**/legacy/**"],
                 "message": "Modern MCP must not depend on the removable legacy adapter."
+              }
+            ],
+            "paths": [
+              {
+                "name": "@earendil-works/pi-tui",
+                "importNames": ["truncateToWidth"],
+                "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"\u2026\" everywhere."
               }
             ]
           }
@@ -87,6 +113,13 @@
                 "group": ["**/modern", "**/modern/**"],
                 "message": "Legacy MCP must not depend on the modern adapter."
               }
+            ],
+            "paths": [
+              {
+                "name": "@earendil-works/pi-tui",
+                "importNames": ["truncateToWidth"],
+                "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"\u2026\" everywhere."
+              }
             ]
           }
         ]
@@ -96,6 +129,12 @@
       "files": ["packages/pi-subagents/src/**/*.ts"],
       "rules": {
         "eslint/complexity": ["error", 20]
+      }
+    },
+    {
+      "files": ["**/packages/pi-cosmic-ui/src/manager/chrome.ts"],
+      "rules": {
+        "eslint/no-restricted-imports": "error"
       }
     }
   ]

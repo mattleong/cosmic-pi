@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, type Component } from "@earendil-works/pi-tui";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 /**
  * Expanded content nests under its heading: labels at two columns, bodies at four, or two
@@ -16,7 +17,7 @@ export function expandedSection(
     content,
     render(width) {
       if (width <= 0) return [];
-      const heading = label ? [truncateToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];
+      const heading = label ? [clipToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];
       const indent = Math.min(label ? 4 : 2, Math.max(0, width - 2));
       const pad = " ".repeat(indent);
       return heading.concat(content.render(width - indent).map((line) => `${pad}${line}`));

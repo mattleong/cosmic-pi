@@ -144,7 +144,7 @@ export function codePreviewsWithDependencies(
 
   pi.on("session_start", (_event, ctx) => {
     const notifyFailure = () =>
-      notifyAtHostBoundary(ctx, "Code previews failed to start.", "warning");
+      notifyAtHostBoundary(ctx, "Code Previews couldn't start", "warning");
     const capturedHost = captureSessionHost(ctx);
     if (capturedHost["_tag"] === "Unavailable") {
       notifyFailure();

@@ -39,7 +39,7 @@ export const ensureHerdrProtocol = (
       return yield* confirmedFailure(
         "inspect protocol",
         "herdr_upgrade_required",
-        `Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer is required; found ${protocol}.`,
+        `Herdr BTW needs Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer (found ${protocol})`,
       );
   });
 
@@ -51,7 +51,7 @@ export const ensurePiIntegration = (
       return yield* confirmedFailure(
         "inspect Pi integration",
         "herdr_pi_integration_unavailable",
-        "The current Herdr Pi integration is required. Run `herdr integration install pi`, then try again.",
+        "Herdr BTW needs Herdr's Pi integration; run herdr integration install pi, then try again",
       );
   });
 
@@ -59,7 +59,7 @@ const parentSessionUnavailable = () =>
   confirmedFailure(
     "validate parent session",
     "parent_session_unavailable",
-    "The current Pi session does not have a readable persisted session file to reference.",
+    "This Pi session has no saved session file to link to",
   );
 
 export const validateBtwInput = (
@@ -72,7 +72,7 @@ export const validateBtwInput = (
       return yield* confirmedFailure(
         "validate environment",
         "herdr_environment_unavailable",
-        "herdr-btw must run from a Pi session inside a Herdr-managed pane with caller identity.",
+        "Herdr BTW only works in a Pi session inside a Herdr pane",
       );
 
     if (!input.sessionFile) return yield* parentSessionUnavailable();
@@ -81,7 +81,7 @@ export const validateBtwInput = (
       return yield* confirmedFailure(
         "validate parent session",
         "parent_session_id_unavailable",
-        "The current Pi session ID is unavailable or invalid.",
+        "Couldn't read this Pi session's ID",
       );
     const parentProbe = probeSessionHeader(input.sessionFile);
     if (parentProbe._tag !== "valid") return yield* parentSessionUnavailable();
@@ -89,7 +89,7 @@ export const validateBtwInput = (
       return yield* confirmedFailure(
         "validate parent session",
         "parent_session_owner_mismatch",
-        "The parent session file header does not match the current Pi session identity.",
+        "This session's file belongs to a different Pi session",
       );
 
     if (
@@ -99,7 +99,7 @@ export const validateBtwInput = (
       return yield* confirmedFailure(
         "validate prompt",
         "btw_prompt_invalid",
-        `The optional initial prompt must be at most ${MAX_PROMPT_BYTES} UTF-8 bytes and contain no NUL byte.`,
+        `The prompt must be at most ${MAX_PROMPT_BYTES} bytes with no NUL characters`,
       );
 
     return { sessionFile: input.sessionFile, sessionId };
@@ -131,7 +131,7 @@ export const waitForAvailableShell = (
         return yield* confirmedFailure(
           "inspect BTW pane shell",
           "herdr_btw_pane_shell_mismatch",
-          "Herdr returned process information for a different pane. No Pi launch was attempted.",
+          "Herdr reported a different pane, so Pi wasn't started",
         );
       stableReadings = paneHasAvailableShell(processInfo) ? stableReadings + 1 : 0;
       if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
@@ -141,7 +141,7 @@ export const waitForAvailableShell = (
     return yield* confirmedFailure(
       "inspect BTW pane shell",
       "herdr_btw_pane_shell_not_ready",
-      "The new Herdr pane did not reach an available shell before the readiness deadline. No Pi launch was attempted.",
+      "The new pane's shell didn't become ready in time, so Pi wasn't started",
     );
   });
 
@@ -186,7 +186,7 @@ export const validateStartedAgent = (
       new HerdrBtwError({
         operation: "start side-session Pi",
         code: "herdr_agent_ownership_mismatch",
-        message: "Herdr returned side-session Pi startup evidence that did not match this launch.",
+        message: "Herdr reported a different Pi starting than the one launched",
         outcome: "uncertain",
       }),
     );

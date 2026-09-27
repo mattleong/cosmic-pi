@@ -2,13 +2,18 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback, makeSynchronousIngress, notifyAtHostBoundary } from "pi-cosmic-core";
+import {
+  invokeHostCallback,
+  makeSynchronousIngress,
+  notifyAtHostBoundary,
+  countLabel,
+} from "pi-cosmic-core";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { McpAuthFlow } from "../auth/flow.ts";
 import { makeMcpLoginUi } from "../boundary/host-auth.ts";
 import { presentMcpAuthPanel } from "../boundary/host-auth-panel.ts";
 import { confirmMcpAction, openMcpOverlay } from "../boundary/host-ui.ts";
-import { mcpDiagnostic } from "../client/diagnostics.ts";
+import { mcpDiagnostic, type McpDiagnostic } from "../client/diagnostics.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import { McpManagerComponent, type McpViewRequest } from "../ui/manager.ts";
 import {
@@ -30,23 +35,23 @@ const CommandFailure = Schema.Struct({
 export const successfulMcpOutcome = (action: string, metadata?: McpMetadataSummary): string => {
   switch (action) {
     case "connect":
-      return "Connected. Metadata was not discovered. This is not a health check.";
+      return "Connected";
     case "disconnect":
-      return "Disconnected. Completed results remain available until eviction or authority revocation.";
+      return "Disconnected";
     case "refresh": {
-      if (!metadata) return "Metadata refreshed. No tools were invoked.";
+      if (!metadata) return "Refreshed";
       const { tools, support, diagnostics } = metadata;
       const summary = support.tools
-        ? `${tools} ${tools === 1 ? "tool" : "tools"} loaded.`
-        : "Metadata refreshed. Tools catalog unavailable.";
-      return `${summary} No tools were invoked.${diagnostics.length ? " Some catalogs are unavailable." : ""}`;
+        ? `Refreshed: ${countLabel(tools, "tool")}`
+        : "Refreshed, but the tool list isn't available";
+      return `${summary}${diagnostics.length ? "; some catalogs aren't available" : ""}`;
     }
     case "auth":
-      return "Credentials verified locally. Connect separately when ready.";
+      return "Signed in; connect when you're ready";
     case "logout":
-      return "Local credentials removed. Connections and output access revoked. No provider-side revocation was requested.";
+      return "Signed out on this machine; the provider wasn't asked to revoke access";
     default:
-      return "MCP command completed.";
+      return "Done";
   }
 };
 export const readableMcpOutcome = (reply: McpGatewayReply): string => {
@@ -55,8 +60,12 @@ export const readableMcpOutcome = (reply: McpGatewayReply): string => {
     kind: "unavailable" as const,
   }));
   const diagnostic = mcpDiagnostic({ ...fields, outcome: reply.outcome }, { action: reply.action });
-  return `${diagnostic.title}. ${diagnostic.explanation}`;
+  return mcpDiagnosticNotice(diagnostic);
 };
+
+/** A diagnostic as a one-line notice; its explanation stays in the /mcp dashboard. */
+export const mcpDiagnosticNotice = (diagnostic: McpDiagnostic): string =>
+  `${diagnostic.title}; open /mcp for details`;
 
 /** One outer session Effect owns subscriptions, local read workers, overlays and confirmation. */
 export const runMcpManager = (
@@ -173,11 +182,7 @@ export const runMcpManager = (
           );
           if (result._tag === "Failure" && current()) {
             const diagnostic = mcpDiagnostic(result.failure, { action: chosen.action });
-            notifyAtHostBoundary(
-              ctx,
-              `${diagnostic.title}. ${diagnostic.explanation}`,
-              diagnostic.severity,
-            );
+            notifyAtHostBoundary(ctx, mcpDiagnosticNotice(diagnostic), diagnostic.severity);
           }
         }
       }),

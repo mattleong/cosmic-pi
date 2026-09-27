@@ -158,7 +158,7 @@ export const SETTING_ITEM_DEFINITIONS = {
   },
   resetToDefaults: {
     label: "Restore defaults",
-    description: "Restore the default code preview settings.",
-    values: ["keep current", "reset now"],
+    description: "Restore the default code preview settings. Press Enter twice to confirm.",
+    values: ["keep current", "press Enter to reset", "reset now"],
   },
 } as const satisfies Record<SettingsUiItemId, SettingItemDefinition>;

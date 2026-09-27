@@ -3,12 +3,12 @@ import {
   Container,
   Text,
   type TuiMouseEvent,
-  truncateToWidth,
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
 import { hiddenPreviewExpandHint, hiddenPreviewExpandLabel } from "./format";
 import type { RendererState } from "../tools/renderers/shared/types";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 export type BorderSlot = "call" | "result";
 
@@ -176,7 +176,7 @@ export class BorderedToolCall implements Component {
   }
 
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {
-    const truncated = truncateToWidth(line, innerWidth, "");
+    const truncated = clipToWidth(line, innerWidth, "");
     const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(truncated)));
     // FullWidthDiffText diff lines have an active diff background that extends
     // to the end (no trailing \x1b[49m). Let the diff bg cover padding and

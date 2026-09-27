@@ -34,14 +34,14 @@ export function registerDirectoryModelsApplication(
       ),
     startup: () => DirectoryModelPreferenceService.use((service) => service.initialize),
     onStartFailure: ({ ctx }) => {
-      warn(ctx, "Directory model preferences failed to start.");
+      warn(ctx, "Directory Models couldn't start");
     },
   });
 
   pi.on("session_start", (event, ctx) => {
     const captured = captureDirectorySession(event, ctx);
     if (!captured) {
-      warn(ctx, "Directory model preferences are unavailable for this session.");
+      warn(ctx, "Directory Models isn't available in this session");
       return slot.shutdown();
     }
     return slot
@@ -60,7 +60,7 @@ export function registerDirectoryModelsApplication(
   const persist = (ctx: ExtensionContext) =>
     slot
       .run(DirectoryModelPreferenceService.use((service) => service.remember))
-      .catch(() => warn(ctx, "Unable to save the directory preference."));
+      .catch(() => warn(ctx, "Couldn't save the model for this directory"));
 
   pi.on("model_select", (event, ctx) => {
     if (!slot.isActive()) return;

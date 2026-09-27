@@ -1,11 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { synchronousNow } from "pi-cosmic-core";
+import { type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { synchronousNow, formatDuration } from "pi-cosmic-core";
 import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { codePreviewSettings } from "../config/state";
 import type { RendererState } from "../tools/renderers/shared/types";
-import { formatToolCallDuration } from "./format";
+import { clipToWidth, SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 
 type ToolTimingUpdateContext = {
   state: unknown;
@@ -93,7 +93,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   const endTime = running ? synchronousNow() : (state.codePreviewTimingEndedAt ?? synchronousNow());
   const label = running ? "Elapsed" : "Took";
   const elapsedMs = Math.max(0, endTime - startedAt);
-  const duration = formatToolCallDuration(elapsedMs);
+  const duration = formatDuration(elapsedMs);
   return { label: `${label} ${duration}`, duration, elapsedMs };
 }
 
@@ -121,7 +121,7 @@ function ensureToolCallAnimation(
 ): void {
   const schedule = scheduleAnimation ?? captureCodePreviewSessionCapability()?.schedule;
   if (!schedule) return;
-  state.codePreviewTimingCancel ??= schedule(100, () => {
+  state.codePreviewTimingCancel ??= schedule(SPINNER_FRAME_MS, () => {
     state.codePreviewAnimationFrame = (state.codePreviewAnimationFrame ?? 0) + 1;
     invalidate();
   });
@@ -166,7 +166,7 @@ class ToolTimingFooter implements Component {
   render(width: number): string[] {
     const rows = this.component.render(width);
     this.bounds = { width, height: rows.length };
-    return [...rows, truncateToWidth(this.footer, width, "")];
+    return [...rows, clipToWidth(this.footer, width, "")];
   }
 
   handleMouse(event: TuiMouseEvent) {

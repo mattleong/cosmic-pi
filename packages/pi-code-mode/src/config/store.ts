@@ -123,7 +123,7 @@ const requireDescriptor = (id: string) => {
         new CodeModeConfigError({
           operation: "setting",
           path: id,
-          message: `Unknown Code Mode setting: ${id}.`,
+          message: `Unknown setting: ${id}`,
         }),
       )
     : Effect.succeed(descriptor);
@@ -163,8 +163,7 @@ export class CodeModeConfigStore extends Context.Service<
           scope === "project" && !options.projectTrusted
             ? Effect.fail(
                 new CodeModeUntrustedScopeError({
-                  message:
-                    "Project settings are unavailable until this project is trusted; Code Mode stays unavailable here.",
+                  message: "Trust this project before changing its Code Mode settings",
                 }),
               )
             : Effect.void;

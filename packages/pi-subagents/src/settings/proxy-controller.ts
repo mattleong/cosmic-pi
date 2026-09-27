@@ -1,5 +1,5 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { synchronousNow } from "pi-cosmic-core";
+import { synchronousNow, notifyAtHostBoundary } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
@@ -27,7 +27,7 @@ type ProxyFleetAction = "stop" | "interrupt" | "resume" | "send" | "reply" | "re
 type ProxyActionOutcome = "accepted" | "pending";
 
 const UNCONFIRMED_ACTION =
-  "The root coordinator did not confirm this action; it may already have taken effect. Do not resend or retry it; inspect the run's current status.";
+  "The root session didn't confirm this; it may already have happened, so check the run before trying again";
 
 const decodeRunActionDetails = <ValueInput>(action: ProxyFleetAction, value: ValueInput) => {
   const details = decodeSubagentOutcomeDetails(action, value);
@@ -73,7 +73,7 @@ const classifyProxyActionResult = (
 const cardView = (card: SubagentRunCard): SubagentRunView => ({
   id: card.id,
   name: card.name,
-  task: "Task details are available through subagent_status.",
+  task: "Task details are shown in the root session",
   selection: card.selection,
   cwd: "",
   state: card.state,
@@ -136,16 +136,18 @@ export const registerSubagentProxyManagerCommand = (
     handler: (args, ctx) => {
       if (args.trim()) {
         if (ctx.hasUI)
-          ctx.ui.notify(
-            "Nested Pi can inspect and control its subtree; root owns settings.",
+          notifyAtHostBoundary(
+            ctx,
+            "Subagent settings are managed in the root Pi session",
             "warning",
           );
         return Promise.resolve();
       }
       if (ctx.mode !== "tui") {
         if (ctx.hasUI)
-          ctx.ui.notify(
-            "Open Pi in an interactive terminal to view agents with /subagents.",
+          notifyAtHostBoundary(
+            ctx,
+            "Open Pi in an interactive terminal to use /subagents",
             "warning",
           );
         return Promise.resolve();

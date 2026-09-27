@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type * as Types from "effect/Types";
-import { managerLayoutTier, type ManagerLayoutTier } from "./chrome.ts";
+import { managerLayoutTier, type ManagerLayoutTier, clipToWidth } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps } from "./keymap.ts";
 import {
   clampListIndex,
@@ -257,14 +257,10 @@ export const framedScreen = (
   const top = `${frame.outer("╭")}${options.top}${frame.outer(
     `${"─".repeat(Math.max(0, width - visibleWidth(options.top) - 2))}╮`,
   )}`;
-  if (height === 1) return [truncateToWidth(top, width, "")];
+  if (height === 1) return [clipToWidth(top, width, "")];
   if (width === 1) return Array.from({ length: height }, () => " ");
   const bottom = `${frame.outer(
     `╰${"─".repeat(Math.max(0, width - visibleWidth(options.bottom) - 2))}`,
   )}${options.bottom}${frame.outer("╯")}`;
-  return [
-    truncateToWidth(top, width, ""),
-    ...options.body(height - 2),
-    truncateToWidth(bottom, width, ""),
-  ];
+  return [clipToWidth(top, width, ""), ...options.body(height - 2), clipToWidth(bottom, width, "")];
 };

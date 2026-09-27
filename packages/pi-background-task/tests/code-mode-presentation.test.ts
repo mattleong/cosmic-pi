@@ -76,7 +76,7 @@ it("preserves original truncation independently of unchanged guest data", () => 
   const receipt = projectBackgroundTaskPresentation(args, result);
   expect(receipt.version).toBe(BACKGROUND_TASK_PRESENTATION_VERSION);
   expect(receipt.incomplete).toBe(false);
-  expect(receipt.summary?.issues.map((issue) => issue.severity)).toEqual(["warning", "info"]);
+  expect(receipt.summary?.issues.map((issue) => issue.severity)).toEqual(["warning"]);
   expect(receipt.summary?.outcome).toBe("warning");
   expect(JSON.stringify(receipt)).not.toContain(result.text);
   const guest = projectBackgroundTaskCodeModeOutput(result, 4096);

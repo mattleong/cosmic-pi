@@ -44,7 +44,7 @@ const harness = (
     ],
     examples: ["mode on"],
     config: () => undefined,
-    diagnostics: () => "demo diagnostics",
+    status: () => "demo diagnostics",
     apply,
     afterApply: () => undefined,
     open,
@@ -69,28 +69,28 @@ const harness = (
 };
 
 describe("provider settings command shell", () => {
-  it.effect("answers help, diagnostics, and invalid input without config or apply", () =>
+  it.effect("answers help, status, and invalid input without config or apply", () =>
     Effect.gen(function* () {
-      let failDiagnostics = false;
+      let failStatus = false;
       const h = harness({
-        diagnostics: () => {
-          if (failDiagnostics) throw new Error("diagnostics-secret");
-          return "demo diagnostics";
+        status: () => {
+          if (failStatus) throw new Error("status-secret");
+          return "demo status";
         },
       });
       yield* h.invoke("help");
       expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "info");
-      yield* h.invoke("diagnostics");
-      expect(h.notify).toHaveBeenLastCalledWith("demo diagnostics", "info");
-      failDiagnostics = true;
-      yield* h.invoke("diagnostics");
+      yield* h.invoke("status");
+      expect(h.notify).toHaveBeenLastCalledWith("demo status", "info");
+      failStatus = true;
+      yield* h.invoke("status");
       expect(h.notify).toHaveBeenLastCalledWith(expect.not.stringContaining("secret"), "warning");
       yield* h.invoke("unknown on");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("unknown"), "error");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("unknown"), "warning");
       yield* h.invoke("mode");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "error");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Usage"), "warning");
       yield* h.invoke("mode maybe");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "error");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("mode"), "warning");
       h.open.mockResolvedValueOnce({ _tag: "Blocked" });
       yield* h.invoke("");
       expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
@@ -139,6 +139,64 @@ describe("provider settings command shell", () => {
         yield* h.invoke("");
         expect(h.apply.mock.calls[0]?.[3]).toBe(policy === "optional" ? later : opening);
       }
+    }),
+  );
+
+  it.effect("applies a named scope, the default scope, and open values the provider checks", () =>
+    Effect.gen(function* () {
+      const h = harness({
+        scopes: [
+          { name: "global", description: "Everywhere" },
+          { name: "project", description: "This project" },
+        ],
+        scopeBlocked: (_ctx, scope) =>
+          scope === "project" ? "Trust the project first" : undefined,
+        descriptors: [
+          {
+            id: "limit",
+            description: "A limit.",
+            values: ["10", "20"],
+            openValues: true,
+            currentValue: () => "10",
+          },
+        ],
+      });
+      yield* h.invoke("limit 15");
+      yield* h.invoke("global limit 20");
+      expect(h.apply.mock.calls.map(([, id, value, , scope]) => [id, value, scope])).toEqual([
+        ["limit", "15", "global"],
+        ["limit", "20", "global"],
+      ]);
+      yield* h.invoke("project limit 20");
+      expect(h.apply).toHaveBeenCalledTimes(2);
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Trust"), "warning");
+    }),
+  );
+
+  it.effect("refuses a blocked scope from a picker and restores its row", () =>
+    Effect.gen(function* () {
+      let trusted = true;
+      const shown: string[] = [];
+      const h = harness({
+        scopes: [
+          { name: "global", description: "Everywhere" },
+          { name: "project", description: "This project" },
+        ],
+        scopeBlocked: (_ctx, scope) =>
+          scope === "project" && !trusted ? "Trust the project first" : undefined,
+        config: () => ({ mode: "off" }),
+      });
+      h.open.mockImplementationOnce((_ctx, session) => {
+        // Trust is withdrawn while the picker is open.
+        trusted = false;
+        return session
+          .apply("mode", "on", (value) => void shown.push(value), "project")
+          .then(() => ({ _tag: "Settled" as const, value: undefined }));
+      });
+      yield* h.invoke("");
+      expect(h.apply).not.toHaveBeenCalled();
+      expect(shown).toEqual(["off"]);
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Trust"), "warning");
     }),
   );
 });

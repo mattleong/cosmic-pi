@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
+  managerActivityColor,
   managerActivityGlyph,
   managerNoticeGlyph,
   type ManagerActivityKind,
@@ -22,13 +23,6 @@ export function compactStatusIcon(status: CompactStatus, theme: Theme, animation
     status === "warning"
       ? managerNoticeGlyph("warning")
       : managerActivityGlyph(ACTIVITY_KINDS[status], animationFrame);
-  const color =
-    status === "success"
-      ? "success"
-      : status === "error"
-        ? "error"
-        : status === "cancelled"
-          ? "muted"
-          : "warning";
+  const color = status === "warning" ? "warning" : managerActivityColor(ACTIVITY_KINDS[status]);
   return theme.fg(color, glyph);
 }

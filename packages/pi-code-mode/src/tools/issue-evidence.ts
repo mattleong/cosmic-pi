@@ -1,6 +1,6 @@
 /** Bounded display evidence; never execution or retry authority. */
 import { createBoundedCompactIssuesSchema, type CompactIssue } from "pi-code-previews";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent, clipText } from "pi-cosmic-core";
 
 /** Unbounded-length diagnostic redaction; each schema applies its own length bound afterwards. */
 export const cleanDiagnosticText = (text: string): string =>
@@ -15,9 +15,6 @@ export const BoundedIssuesSchema = createBoundedCompactIssuesSchema({
   maxTextLength: MAX_TEXT,
   maxEntries: MAX_RECEIPT_ISSUES,
 });
-
-export const clipText = (text: string, limit: number) =>
-  text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
 
 /**
  * Redact and bound producer issues before they enter a retained receipt. Display text is

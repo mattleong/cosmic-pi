@@ -190,7 +190,7 @@ export function runProfileSetAction(
       .then((confirmed) => {
         guard(scope);
         if (!confirmed) {
-          host.notify("Delete canceled.");
+          host.notify("Delete cancelled");
           return;
         }
         return host.actions

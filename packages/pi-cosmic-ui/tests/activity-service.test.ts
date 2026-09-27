@@ -8,6 +8,7 @@ import { ActivityService, type ActivityActionRequest } from "../src/activity/ser
 import { activityKey, type ActivityEnvelope, type ActivityItem } from "../src/activity/protocol.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
+import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
 const item = (revision = "1"): ActivityItem => ({
   id: "one",
   title: "Work",
@@ -150,7 +151,7 @@ describe("activity service", () => {
         yield* TestClock.adjust("1 second");
         const first = rendered();
         expect(first).not.toEqual([]);
-        yield* TestClock.adjust("100 millis");
+        yield* TestClock.adjust(`${SPINNER_FRAME_MS} millis`);
         expect(rendered()).not.toEqual(first);
         yield* service.receive(cleared);
         yield* TestClock.adjust("1 second");

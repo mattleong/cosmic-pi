@@ -77,7 +77,14 @@ describe("MCP settings completion", () => {
     mcpSettingsCompletions(prefix)?.map((item) => item.value) ?? null;
 
   it("completes actions and filters partially entered names", () => {
-    expect(values("")).toEqual(["show", "reload", "set-server", "remove-server", "set-settings"]);
+    expect(values("")).toEqual([
+      "status",
+      "help",
+      "reload",
+      "set-server",
+      "remove-server",
+      "set-settings",
+    ]);
     expect(values("set-s")).toEqual(["set-server", "set-settings"]);
     expect(values("rel")).toEqual(["reload"]);
   });
@@ -94,7 +101,7 @@ describe("MCP settings completion", () => {
 
   it.each([
     "unknown",
-    "show ",
+    "status ",
     "reload p",
     "set-server unknown",
     "set-server global server ",
@@ -116,7 +123,7 @@ describe("MCP argument-first commands", () => {
         'set-settings global {"enabled":false}',
         "remove-server project fixture",
         "reload",
-        "show",
+        "status",
       ]) {
         const result = yield* runMcpSettingsCommand(command, ctx, () => true).pipe(
           Effect.provide(layer),

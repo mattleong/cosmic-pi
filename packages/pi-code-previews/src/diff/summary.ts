@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { countLabel } from "../shared/helpers";
 import { forEachRawTextLine } from "../shared/text-lines";
+import { countLabel } from "pi-cosmic-core";
 
 export type DiffSummary = {
   additions: number;

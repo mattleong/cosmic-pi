@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { SubagentUsage } from "../src/run/model.ts";
 import {
   addUsage,
-  clipText,
   clipUtf8Text,
   safeTextPrefix,
   sanitizeDiagnosticText,
 } from "../src/run/state.ts";
+import { clipText } from "pi-cosmic-core";
 
 const usage = (overrides: Partial<SubagentUsage> = {}): SubagentUsage => ({
   input: 1,

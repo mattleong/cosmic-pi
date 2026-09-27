@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { redactDiagnosticValue } from "pi-cosmic-core";
+import { redactDiagnosticValue, formatDuration } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -171,7 +171,7 @@ describe("Better OpenAI settings controller", () => {
       write.reject(new Error("runtime closed"));
       yield* waitUntil(() => h.requestRender.mock.calls.length > rendersBeforeSettlement);
       expect(() => component.render(100)).not.toThrow();
-      expect(renderedRow(component, "Usage")).toContain("60s");
+      expect(renderedRow(component, "Usage")).toContain(formatDuration(60_000));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );

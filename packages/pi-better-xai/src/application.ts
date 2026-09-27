@@ -111,7 +111,7 @@ export function registerBetterXaiApplication(
       resetProjection(projection);
     },
     onStartFailure: ({ ctx }) => {
-      notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
+      notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
     },
   });
 
@@ -120,7 +120,7 @@ export function registerBetterXaiApplication(
     handler: (_args, ctx) => {
       const capturedSignal = captureHostSignal(ctx);
       if (capturedSignal._tag === "Unavailable") {
-        notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning");
+        notifyAtHostBoundary(ctx, "Couldn't check xAI usage", "warning");
         return Promise.resolve();
       }
       return slot
@@ -128,7 +128,7 @@ export function registerBetterXaiApplication(
           XaiUsageService.use((service) => service.refresh({ notify: true, force: true })),
           capturedSignal.signal,
         )
-        .catch(() => notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning"));
+        .catch(() => notifyAtHostBoundary(ctx, "Couldn't check xAI usage", "warning"));
     },
   });
 
@@ -144,12 +144,12 @@ export function registerBetterXaiApplication(
     resetProjection(projection);
     const capturedHost = captureSessionHost(ctx);
     if (capturedHost._tag === "Unavailable") {
-      notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
+      notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
       return slot.shutdown().then(() => undefined);
     }
     const context = MutableRef.make(ctx);
     if (capturedHost.aborted) {
-      notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
+      notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
     }
     return slot
       .start(

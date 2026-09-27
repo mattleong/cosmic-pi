@@ -6,7 +6,10 @@ import { makeTuiHost } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
+import { failureMessage } from "pi-cosmic-core";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
+import type { AskUserHostError } from "../src/questionnaire/errors.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserAnswer, AskUserOutcome } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -230,8 +233,20 @@ describe("RPC questionnaire boundary", () => {
       });
       expect(input).toHaveBeenCalledTimes(4);
       expect(notify).toHaveBeenCalledTimes(3);
+      for (const call of notify.mock.calls)
+        expect(issueMessageStyleProblems(String(call.at(0)))).toEqual([]);
     });
   });
+
+  it("reports a failed native dialog in plain words without host details", () =>
+    rpc({ select: vi.fn(() => Promise.reject(new Error("secret host failure"))) }).then(
+      () => expect.unreachable(),
+      (error: AskUserHostError) => {
+        expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "open" });
+        expect(error.message).not.toContain("secret");
+        expect(issueMessageStyleProblems(failureMessage(error.message, ""))).toEqual([]);
+      },
+    ));
 
   it("preserves first-entered RPC choice order while deduplicating repeated values", () => {
     const input = vi.fn(() => Promise.resolve("2,1,2,1"));

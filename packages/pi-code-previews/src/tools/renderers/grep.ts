@@ -20,7 +20,6 @@ import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
-import { withPreviewIssues } from "./shared/preview-issues";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
 export function createGrepPreviewTool(cwd: string) {
@@ -42,50 +41,47 @@ export function createGrepPreviewTool(cwd: string) {
       return new Text(text, 0, 0);
     },
 
-    renderResult: withPreviewIssues(
-      "grep",
-      (result, { expanded, isPartial }, theme, renderContext) => {
-        const output = trimSingleTrailingNewline(getTextContent(result.content));
-        const prelude = renderResultPrelude({
-          isPartial,
-          theme,
-          loadingLabel: "Searching…",
-          isError: renderContext.isError,
-          expanded,
-          errorText: output,
-        });
-        if (prelude) return prelude;
-        if (!expanded && !codePreviewSettings.grepResultPreview)
-          return renderHiddenPreviewExpandHint(renderContext.state, theme);
-        if (!output || output === "No matches found")
-          return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
+    renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
+      const output = trimSingleTrailingNewline(getTextContent(result.content));
+      const prelude = renderResultPrelude({
+        isPartial,
+        theme,
+        loadingLabel: "Searching…",
+        isError: renderContext.isError,
+        expanded,
+        errorText: output,
+      });
+      if (prelude) return prelude;
+      if (!expanded && !codePreviewSettings.grepResultPreview)
+        return renderHiddenPreviewExpandHint(renderContext.state, theme);
+      if (!output || output === "No matches found")
+        return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 
-        const pattern = Predicate.isString(renderContext.args?.pattern)
-          ? renderContext.args.pattern
-          : "";
-        const rawLines = output.split("\n");
-        const limit = expanded ? rawLines.length : codePreviewSettings.grepCollapsedLines;
-        const skipHighlight = shouldSkipHighlight(output);
-        const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
-          renderGrepOutputLines(
-            chunk.join("\n"),
-            theme,
-            {
-              pattern,
-              literal: renderContext.args?.literal === true,
-              ignoreCase: renderContext.args?.ignoreCase === true,
-            },
-            renderContext.invalidate,
-            { syntaxHighlight: !skipHighlight },
-          ),
-        );
-        let text = preview.lines.join("\n");
-        if (preview.hidden > 0)
-          text += showingFooter(theme, preview.shown, rawLines.length, "grep output lines");
-        if (skipHighlight)
-          text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
-        return new Text(text, 0, 0);
-      },
-    ),
+      const pattern = Predicate.isString(renderContext.args?.pattern)
+        ? renderContext.args.pattern
+        : "";
+      const rawLines = output.split("\n");
+      const limit = expanded ? rawLines.length : codePreviewSettings.grepCollapsedLines;
+      const skipHighlight = shouldSkipHighlight(output);
+      const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
+        renderGrepOutputLines(
+          chunk.join("\n"),
+          theme,
+          {
+            pattern,
+            literal: renderContext.args?.literal === true,
+            ignoreCase: renderContext.args?.ignoreCase === true,
+          },
+          renderContext.invalidate,
+          { syntaxHighlight: !skipHighlight },
+        ),
+      );
+      let text = preview.lines.join("\n");
+      if (preview.hidden > 0)
+        text += showingFooter(theme, preview.shown, rawLines.length, "grep output lines");
+      if (skipHighlight)
+        text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
+      return new Text(text, 0, 0);
+    },
   });
 }

@@ -1,9 +1,45 @@
 import { compactIssueSeverity } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
+import { countLabel } from "pi-cosmic-core";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
 const decode = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);
+
+/** Where a diff page sits, in people's terms; never raw offsets or IDs. */
+function reviewPosition(details: WorkspaceToolDetails): string {
+  const first = (details.offset ?? 0) === 0;
+  if (details.nextOffset === undefined) return first ? "whole diff" : "last diff page";
+  return `${first ? "first" : "next"} diff page, more to read`;
+}
+
+/** A workspace receipt's result as one short line, or undefined when there is nothing to say. */
+export function workspaceReceiptLine(details: WorkspaceToolDetails): string | undefined {
+  switch (details.operation) {
+    case "list": {
+      if (details.workspaceCount === undefined || details.listedCount === undefined)
+        return undefined;
+      if (details.workspaceCount === 0) return "No workspaces";
+      const listed =
+        details.listedCount < details.workspaceCount
+          ? `${details.listedCount} of ${countLabel(details.workspaceCount, "workspace")}`
+          : countLabel(details.listedCount, "workspace");
+      return details.unavailableCount
+        ? `${listed}, ${details.unavailableCount} unreadable`
+        : listed;
+    }
+    case "review":
+      return reviewPosition(details);
+    case "prepare":
+      return "ready to test";
+    case "integrate":
+      return "integrated";
+    case "revise":
+      return "revision requested";
+    case "discard":
+      return "discarded";
+  }
+}
 
 function validPagination(details: WorkspaceToolDetails): boolean {
   if (
@@ -121,21 +157,18 @@ export function compactWorkspaceSummary<ValueInput>(
   // Receipt fields are optional in the transport union, but required by these operations.
   if (!hasOperationReceipt(details) || !validPagination(details)) return undefined;
   const metadata: string[] = [];
-  const counters: string[] = [];
+  const line = workspaceReceiptLine(details);
+  const counters = line === undefined ? [] : [line];
+  if (details.operation === "list" && line === undefined) metadata.push("workspace metadata");
   let issues: CompactIssue[] = [];
   switch (details.operation) {
     case "list":
-      if (details.workspaceCount !== undefined && details.listedCount !== undefined)
-        counters.push(`${details.listedCount}/${details.workspaceCount} workspace entries shown`);
-      else metadata.push("workspace metadata");
       issues = listIssues(details);
       break;
     case "review":
-      counters.push(`diff offset ${details.offset} of ${details.totalChars}`);
       issues = reviewIssues(details);
       break;
     case "prepare":
-      counters.push("prepared");
       issues = [
         step(
           "test-preparation",
@@ -160,15 +193,13 @@ export function compactWorkspaceSummary<ValueInput>(
       ];
       break;
     case "integrate":
-      counters.push("integrated");
-      break;
     case "discard":
       break;
   }
   return {
-    action: operation,
-    subject: details.workspaceId ?? "",
-    compactSubject: "Proposed changes",
+    action: operation === "list" ? "inspect" : operation,
+    // Workspace IDs stay in expanded evidence; the heading names what the workspace holds.
+    subject: "Proposed changes",
     counters,
     metadata,
     issues,

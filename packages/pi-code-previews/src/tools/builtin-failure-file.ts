@@ -1,6 +1,6 @@
 import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactIssue } from "./compact-issues";
-import { firstLineMessage } from "./issue-message";
+import { firstLineMessage } from "pi-cosmic-core";
 
 // The raw error line, with its code and path, stays in the expanded result.
 const filesystemFailures = [

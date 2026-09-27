@@ -38,7 +38,7 @@ const notFound = () =>
   new AskUserAsyncError({
     reason: "not-found",
     message:
-      "Request is not retained in this runtime. It may have expired or belonged to an earlier session or branch.",
+      "That questionnaire is no longer available. Use status without a requestId to list retained requests; it may have expired or belonged to an earlier session or branch.",
   });
 
 /** Private controller under AskUserService's Layer scope, sharing its dialog permit. */

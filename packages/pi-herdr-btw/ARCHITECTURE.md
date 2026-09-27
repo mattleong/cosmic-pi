@@ -1,6 +1,6 @@
 # Architecture
 
-`pi-herdr-btw` is an Effect-managed Pi extension for one reusable blank side session per parent Pi session. `/herdr-btw` focuses or resumes the linked child. `/herdr-btw:new` creates a fresh child and supersedes the link after confirmed startup and child-file validation. The extension never closes user-owned panes.
+`pi-herdr-btw` is an Effect-managed Pi extension for one reusable blank side session per parent Pi session. `/herdr-btw` focuses or resumes the linked child. `/herdr-btw-new` creates a fresh child and supersedes the link after confirmed startup and child-file validation. The extension never closes user-owned panes.
 
 ## Ownership and lifecycle
 
@@ -28,7 +28,7 @@ Reuse validates the linked child header and parent-child file distinction before
 
 The resume path takes another snapshot immediately before `agent start` and applies the same conflict rule. If a candidate appeared while the pane was prepared, startup is refused and the empty pane is retained for inspection. This narrows the duplicate-writer race but is not a cross-process session-file lease. A manually launched Pi under an unrelated name and path remains outside this coordination boundary. Child files share the normal project session directory, so Pi's recency-based `--continue` selection may choose a side session.
 
-`/herdr-btw:new` skips link reuse and creates a new blank child. It appends a replacement link only after startup and child validation. Failures before that commit leave the previous link authoritative.
+`/herdr-btw-new` skips link reuse and creates a new blank child. It appends a replacement link only after startup and child validation. Failures before that commit leave the previous link authoritative.
 
 ## Live parent reference
 

@@ -10,7 +10,6 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderPathListResult } from "./shared/path-list-result";
-import { withPreviewIssues } from "./shared/preview-issues";
 
 export function createLsPreviewTool(cwd: string) {
   const originalLs = createLsToolDefinition(cwd);
@@ -26,7 +25,7 @@ export function createLsPreviewTool(cwd: string) {
         0,
       );
     },
-    renderResult: withPreviewIssues("ls", (result, options, theme, renderContext) =>
+    renderResult: (result, options, theme, renderContext) =>
       renderPathListResult(result, options, theme, renderContext, {
         cwd,
         iconMode: codePreviewSettings.pathIcons,
@@ -37,6 +36,5 @@ export function createLsPreviewTool(cwd: string) {
         emptyLabel: () => "Empty directory",
         footerNoun: "entries",
       }),
-    ),
   });
 }

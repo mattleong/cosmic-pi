@@ -33,6 +33,8 @@ export const nodeLockHash = (value: string) =>
   nodeCryptoModule.createHash("sha256").update(value).digest("hex");
 /** OS account lookup, deliberately independent of HOME and Pi's agent directory. */
 export const nodeHomeDirectory = () => nodeOsModule.userInfo().homedir;
+/** The home directory users see in paths, which follows HOME. Display only, never ownership. */
+export const nodeDisplayHomeDirectory = () => nodeOsModule.homedir();
 /** Test kits only: the OS temporary-directory root. */
 export const nodeTemporaryRoot = () => nodeOsModule.tmpdir();
 

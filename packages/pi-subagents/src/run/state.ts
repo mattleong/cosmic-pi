@@ -4,6 +4,7 @@ import {
   sanitizeDiagnosticError,
   stripTerminalControls,
   utf8Prefix,
+  clipText,
 } from "pi-cosmic-core";
 import type { SubagentRunView, SubagentUsage } from "./model.ts";
 
@@ -50,13 +51,9 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView => {
   return snapshot;
 };
 
-export const clipText = (value: string, limit: number): string =>
-  value.length <= limit ? value : `${safeTextPrefix(value, limit)}…`;
-
 export const sanitizeDiagnosticText = (value: string, limit: number): string => {
   const sanitized = sanitizeDiagnosticError(value, { maximumLength: limit + 2 });
-  if (sanitized.length <= limit) return sanitized;
-  return `${safeTextPrefix(sanitized, Math.max(0, limit - 1)).trimEnd()}…`;
+  return clipText(sanitized, limit);
 };
 
 export const sanitizeOutputText = (value: string, limit: number): string =>

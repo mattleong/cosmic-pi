@@ -121,10 +121,10 @@ describe("subagent Pi registration", () => {
       const { handlers } = applicationFixture({
         registerCommand: vi.fn(
           (
-            _name: string,
+            name: string,
             definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
           ) => {
-            command = definition.handler;
+            if (name === "subagents") command = definition.handler;
           },
         ),
         getActiveTools: () => [],
@@ -386,12 +386,12 @@ describe("subagent Pi registration", () => {
           ...activeTools.overrides,
           registerCommand: vi.fn(
             (
-              _name: string,
+              name: string,
               definition: {
                 handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
               },
             ) => {
-              command = definition.handler;
+              if (name === "subagents") command = definition.handler;
             },
           ),
           getThinkingLevel: vi.fn(() => "high"),
@@ -566,6 +566,6 @@ describe("subagent Pi registration", () => {
 
     expect(pi.setActiveTools).toHaveBeenCalledWith(["read"]);
     expect(notify).toHaveBeenCalled();
-    expect(notify.mock.calls.some(([, level]) => level === "error")).toBe(true);
+    expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
   });
 });

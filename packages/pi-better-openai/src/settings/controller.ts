@@ -3,7 +3,7 @@ import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
-import { invokeHostCallback, redactDiagnosticValue } from "pi-cosmic-core";
+import { invokeHostCallback, redactDiagnosticValue, formatDuration } from "pi-cosmic-core";
 import { registerSettingsCommand } from "pi-cosmic-ui/boundary/host-settings-command";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
@@ -76,7 +76,7 @@ export function registerSettingsController(
     descriptors,
     examples: ["fast.enabled true", "usage.refreshIntervalMs 30000"],
     config,
-    diagnostics: formatDebugStatus,
+    status: formatDebugStatus,
     onInvoke: updateContext,
     signal: "optional",
     apply: (ctx, id, value, signal) =>
@@ -179,7 +179,7 @@ export function registerSettingsController(
                     "Configure usage refresh details. Footer visibility is in /cosmic-ui.",
                   submenuTitle: "Usage settings",
                   items: () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
-                  summary: () => `${Math.round(cfg.usage.refreshIntervalMs / 1000)}s refresh`,
+                  summary: () => `${formatDuration(cfg.usage.refreshIntervalMs)} refresh`,
                 },
                 {
                   id: "section.image",
@@ -243,7 +243,7 @@ export function registerSettingsController(
               const created = createSettingsListSurface({
                 header: {
                   render: () => [
-                    theme.fg("accent", theme.bold("Better OpenAI Settings")),
+                    theme.fg("accent", theme.bold("Better OpenAI settings")),
                     theme.fg("dim", cfg.configPath),
                     "",
                   ],

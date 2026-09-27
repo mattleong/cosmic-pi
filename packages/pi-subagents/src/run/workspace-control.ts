@@ -19,6 +19,25 @@ import {
 } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 
+/** Why the writer workspace mode cannot change right now. */
+export type WriterWorkspaceBlockCode =
+  | "writers-active"
+  | "records-unavailable"
+  | "unresolved-workspace";
+
+interface WorkspaceBlock {
+  readonly code: WriterWorkspaceBlockCode;
+  /** Agent-facing explanation, which may name workspaces and paths. */
+  readonly reason: string;
+}
+
+export interface WriterWorkspaceInspection {
+  readonly mode: WriterWorkspaceMode;
+  readonly canSwitch: boolean;
+  readonly blockedReason?: string;
+  readonly blockedCode?: WriterWorkspaceBlockCode;
+}
+
 export interface WorkspaceReview extends WorkspaceRevision {
   readonly workspaceId: string;
   readonly offset: number;
@@ -52,14 +71,7 @@ export interface WorkspaceCoordinatorContract {
     message: string,
     callerRunId?: string,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly inspectWriterWorkspace: Effect.Effect<
-    {
-      readonly mode: WriterWorkspaceMode;
-      readonly canSwitch: boolean;
-      readonly blockedReason?: string;
-    },
-    SubagentError
-  >;
+  readonly inspectWriterWorkspace: Effect.Effect<WriterWorkspaceInspection, SubagentError>;
   readonly setWriterWorkspaceMode: <A, E, R>(
     mode: WriterWorkspaceMode,
     persist: Effect.Effect<A, E, R>,
@@ -152,7 +164,7 @@ export function makeWorkspaceControl(
     engine
       ? engine.listAll().pipe(Effect.mapError(mapWorkspaceError))
       : Effect.succeed<WorkspaceListing>({ records: [], unavailable: [] });
-  const blockedReason = () =>
+  const workspaceBlock = (): Effect.Effect<WorkspaceBlock | undefined, SubagentError> =>
     Effect.gen(function* () {
       if (
         integrationQuarantined ||
@@ -167,22 +179,36 @@ export function makeWorkspaceControl(
         ) ||
         writerPools.size > 0
       )
-        return "Writers, admission reservations, or quarantined writer ownership remain.";
+        return {
+          code: "writers-active",
+          reason: "Writers, admission reservations, or quarantined writer ownership remain.",
+        };
       // Unknown previous-session artifacts are not evidence of process death. Never silently adopt them.
       const listing = yield* all();
       if (listing.unavailable.length > 0)
-        return "Workspace recovery metadata is unavailable. Ownership, source identity, and cleanup are unknown; preserve the artifacts and resolve them manually before changing workspace mode.";
+        return {
+          code: "records-unavailable",
+          reason:
+            "Workspace recovery metadata is unavailable. Ownership, source identity, and cleanup are unknown; preserve the artifacts and resolve them manually before changing workspace mode.",
+        };
       const pending = (yield* sourceRecords(listing)).records.find(
         (record) => record.status !== "integrated" && record.status !== "discarded",
       );
       if (pending)
-        return `Unresolved workspace ${pending.handle.workspaceId} remains at ${pending.handle.cwd}. Inspect subagent_workspace list. If its original coordinator is unavailable, preserve the directory, independently confirm every old writer process is stopped, and recover its diff manually; this session cannot attest cleanup or delete it.`;
+        return {
+          code: "unresolved-workspace",
+          reason: `Unresolved workspace ${pending.handle.workspaceId} remains at ${pending.handle.cwd}. Inspect subagent_workspace list. If its original coordinator is unavailable, preserve the directory, independently confirm every old writer process is stopped, and recover its diff manually; this session cannot attest cleanup or delete it.`,
+        };
       return undefined;
     });
   const inspectWriterWorkspace = withLock(
     Effect.gen(function* () {
-      const reason = yield* blockedReason();
-      return { mode, canSwitch: reason === undefined, ...(reason && { blockedReason: reason }) };
+      const block = yield* workspaceBlock();
+      return {
+        mode,
+        canSwitch: block === undefined,
+        ...(block && { blockedReason: block.reason, blockedCode: block.code }),
+      };
     }),
   );
   const setWriterWorkspaceMode: WorkspaceCoordinatorContract["setWriterWorkspaceMode"] = (
@@ -193,8 +219,8 @@ export function makeWorkspaceControl(
       Effect.gen(function* () {
         if (isClosed())
           return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
-        const reason = yield* blockedReason();
-        if (reason) return yield* invalid("workspace_mode_busy", reason);
+        const block = yield* workspaceBlock();
+        if (block) return yield* invalid("workspace_mode_busy", block.reason);
         // Admission stays locked through the durable preference commit and mode publication.
         // Cancellation cannot split persisted and current-session mode after the save commits.
         yield* Effect.uninterruptible(

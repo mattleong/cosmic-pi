@@ -9,7 +9,7 @@ import {
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine, countLabel } from "pi-cosmic-core";
 import { mcpDiagnostic, type McpDiagnostic } from "../client/diagnostics.ts";
 import { projectMcpEvidence, type McpPresentation } from "../code-mode/presentation.ts";
 
@@ -101,13 +101,25 @@ const legacyDetails = <Result>(result: Result): McpRenderField => {
 const counterLabel = (plural: string, count: number) =>
   count === 1 ? plural.replace(/s$/u, "") : plural;
 
+/**
+ * What a call is about, the same in both styles: the server and tool, prompt, or resource; a
+ * search adds its query; a saved-output read names no internal result ID.
+ */
 export const mcpCallSummary = <Args>(args: Args) => {
   const action = safeText(own(args, "action").value, 64) || "status";
   const server = safeText(own(args, "server").value, 128);
-  const target = ["tool", "prompt", "uri", "id"]
+  const target = ["tool", "prompt", "uri"]
     .map((key) => safeText(own(args, key).value, 160))
     .find(Boolean);
-  return { action, server, target: [server, target].filter(Boolean).join(" / ") };
+  const rawQuery = action === "tools.search" ? own(args, "query").value : undefined;
+  // An oversized query is left out rather than clipped into something it never said.
+  const query =
+    Predicate.isString(rawQuery) && rawQuery.length <= 1024 ? safeText(rawQuery, 160) : "";
+  const subject =
+    action === "result.read"
+      ? "saved output"
+      : [server, target, query && `"${query}"`].filter(Boolean).join(" / ");
+  return { action, server, target: subject };
 };
 
 const natural = <Value>(value: Value): number | undefined =>
@@ -204,13 +216,13 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   if (page) {
     counts.push(
       page.total === undefined
-        ? `${page.returned} entries returned`
-        : `${page.returned} of ${page.total} entries returned`,
+        ? `${countLabel(page.returned, "entry", "entries")} returned`
+        : `${page.returned} of ${countLabel(page.total, "entry", "entries")} returned`,
     );
     if (page.hasMore) counts.push("more metadata available");
   }
   const undiscoveredCount = arrayLength(undiscovered) ?? 0;
-  if (undiscoveredCount) counts.push(`${undiscoveredCount} undiscovered servers`);
+  if (undiscoveredCount) counts.push(countLabel(undiscoveredCount, "unchecked server"));
   const descriptors = attachments(payload);
   const attachmentCount = Math.max(
     descriptors.count,

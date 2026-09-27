@@ -2,7 +2,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { captureHostSignal, invokeHostCallback, sanitizeDiagnosticError } from "pi-cosmic-core";
+import {
+  captureHostSignal,
+  invokeHostCallback,
+  sanitizeDiagnosticError,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core";
 
 /** Best-effort Effect adapter for synchronous Pi UI callbacks. */
 export const ignoreHostUi = <Result>(callback: () => Result) =>
@@ -34,15 +39,21 @@ export const containCommandFailure = <A, E extends { readonly message: string },
   effect.pipe(
     Effect.asSome,
     Effect.catch((error) =>
-      ignoreHostUi(() =>
-        ctx.ui.notify(messages.failed(sanitizeDiagnosticError(error.message)), "warning"),
+      Effect.sync(() =>
+        notifyAtHostBoundary(
+          ctx,
+          messages.failed(sanitizeDiagnosticError(error.message)),
+          "warning",
+        ),
       ).pipe(Effect.as(Option.none())),
     ),
     Effect.catchCause((cause) =>
       Cause.hasInterruptsOnly(cause)
         ? Effect.succeedNone
         : Effect.logError(messages.defect).pipe(
-            Effect.andThen(ignoreHostUi(() => ctx.ui.notify(messages.unexpected, "warning"))),
+            Effect.andThen(
+              Effect.sync(() => notifyAtHostBoundary(ctx, messages.unexpected, "warning")),
+            ),
             Effect.as(Option.none()),
           ),
     ),

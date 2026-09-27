@@ -47,6 +47,7 @@ export {
 } from "./src/platform/json-document.ts";
 export {
   abbreviateHomePath,
+  formatDisplayPath,
   isStrictlyInsidePathWith,
   type PathContainmentAdapter,
 } from "./src/platform/paths.ts";
@@ -113,6 +114,25 @@ export {
   type SessionCapabilityQuery,
 } from "./src/session-capability.ts";
 export { safeTextPrefix, utf8Prefix } from "./src/text.ts";
+export {
+  clipText,
+  countLabel,
+  formatBytes,
+  formatCost,
+  formatDuration,
+  formatElapsed,
+  formatRelativeAge,
+} from "./src/display.ts";
+export {
+  failureMessage,
+  firstLineMessage,
+  isAgentGuidance,
+  MESSAGE_TEXT_LIMIT,
+  notificationText,
+  quoteText,
+  restatesText,
+  type QuotedText,
+} from "./src/message-text.ts";
 export {
   initialUsageProjection,
   withUsageEligibility,
@@ -249,6 +269,7 @@ export {
   formatCompactReset,
   formatShortReset,
   formatPercent,
+  formatTimestamp,
   formatTokens,
   formatWindowedUsageLine,
   remainingResetSeconds,

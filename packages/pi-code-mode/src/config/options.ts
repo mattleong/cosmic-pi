@@ -81,7 +81,7 @@ const decodeBoolean = (id: CodeModeFieldId) => (rawValue: string) => {
   return Result.fail(
     new InvalidCodeModeSettingError({
       id,
-      message: `Invalid value for ${id}. Expected true or false.`,
+      message: `${id} must be true or false`,
     }),
   );
 };
@@ -97,7 +97,7 @@ const decodeBoundedInteger = (id: CodeModeIntegerFieldId) => (rawValue: string) 
   return Result.fail(
     new InvalidCodeModeSettingError({
       id,
-      message: `Invalid value for ${id}. Expected an integer between ${bounds.minimum} and ${bounds.maximum}.`,
+      message: `${id} must be a whole number from ${bounds.minimum} to ${bounds.maximum}`,
     }),
   );
 };

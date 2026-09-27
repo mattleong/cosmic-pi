@@ -11,6 +11,8 @@ import * as Scope from "effect/Scope";
 import * as Scheduler from "effect/Scheduler";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
+import { failureMessage } from "pi-cosmic-core";
 import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
@@ -325,9 +327,12 @@ it.effect("retention rejects capacity rather than discarding undelivered answers
       });
       yield* control(service, "await", oldest);
       yield* service.startAsync(request);
-      expect(yield* Effect.flip(control(service, "status", oldest))).toMatchObject({
-        reason: "not-found",
-      });
+      const missing = yield* Effect.flip(control(service, "status", oldest));
+      expect(missing).toMatchObject({ reason: "not-found" });
+      // The transcript's issue line is the error's first sentence, in plain words.
+      expect(
+        issueMessageStyleProblems(failureMessage(missing.message, ""), { forbidden: [oldest] }),
+      ).toEqual([]);
     }).pipe(Effect.provide(AskUserService.layer(immediateHost, failingDelivery(attempts))));
   }),
 );

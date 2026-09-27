@@ -19,7 +19,10 @@ export {
   GALLERY_VIEWS,
   galleryDirectory,
   galleryFrames,
+  galleryMessageFrames,
   writeGallerySection,
+  type GalleryMessageScenario,
+  type GalleryPhase,
   type GalleryScenario,
   type GalleryView,
 } from "./src/testing/gallery";

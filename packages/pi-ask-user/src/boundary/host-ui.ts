@@ -25,7 +25,10 @@ export function makeAskUserDialogBridge() {
     if (active?.id) listener?.({ id: active.id, token: active.token, phase });
   };
   const status = () =>
-    setStatus(context, !managed && hidden ? "questions hidden · /ask-user to resume" : undefined);
+    setStatus(
+      context,
+      !managed && hidden ? "Questionnaire hidden · /ask-user to show it" : undefined,
+    );
   return {
     setActivity: (next: ((event: DialogActivity) => void) | undefined) => {
       listener = next;

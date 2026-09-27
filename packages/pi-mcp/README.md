@@ -105,14 +105,15 @@ Changes require `/mcp-settings reload` or a settings command. There is no watche
 /mcp auth ID
 /mcp auth ID --manual
 /mcp logout ID
-/mcp-settings show
+/mcp-settings
+/mcp-settings status
 /mcp-settings reload
 /mcp-settings set-server global|project ID JSON
 /mcp-settings remove-server global|project ID
 /mcp-settings set-settings global|project JSON
 ```
 
-Bare `/mcp` opens the server dashboard in TUI. In RPC and noninteractive modes it still means status. Explicit `/mcp status` keeps its structured reply. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project override reveals the `.mcp.json` entry, or the global entry if none exists there; use `{ "enabled": false }` to keep it disabled.
+Bare `/mcp` and `/mcp status` open the server dashboard in TUI. In RPC and noninteractive modes they return the structured status reply. Bare `/mcp-settings` and `/mcp-settings help` list the settings commands; `/mcp-settings status` shows the configuration. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project override reveals the `.mcp.json` entry, or the global entry if none exists there; use `{ "enabled": false }` to keep it disabled.
 
 ### Dashboard and cached metadata
 

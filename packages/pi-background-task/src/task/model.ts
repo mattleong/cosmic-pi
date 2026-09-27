@@ -4,6 +4,7 @@ import type {
   BackgroundTaskStateSchema,
   BackgroundTaskWaitResultSchema,
 } from "./schema.ts";
+import { countLabel, formatBytes } from "pi-cosmic-core";
 
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
@@ -106,5 +107,9 @@ export function sortTasksByActivity<A extends Pick<BackgroundTaskSnapshot, "stat
 export function footerStatus(projection: BackgroundTaskProjection): string | undefined {
   const { active } = countTaskStates(projection.tasks);
   if (active === 0) return undefined;
-  return `${active} background task${active === 1 ? "" : "s"} active`;
+  return `${countLabel(active, "background task")} running`;
 }
+
+/** The one phrasing for output a task's log buffer no longer holds, for agents and people alike. */
+export const discardedOutputText = (bytes: number): string =>
+  `${formatBytes(bytes)} of earlier output was discarded`;

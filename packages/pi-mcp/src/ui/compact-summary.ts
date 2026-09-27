@@ -3,19 +3,9 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import * as Predicate from "effect/Predicate";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { withSignInCommand } from "./boundary-failure.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
-import { ownPresentationField } from "../code-mode/presentation-evidence.ts";
-
-const searchQuery = <Args>(args: Args): string | undefined => {
-  const query = ownPresentationField(args, "query").value;
-  return Predicate.isString(query) && query.length <= 1024
-    ? sanitizeDiagnosticContent(sanitizeTerminalLine(query), { maximumLength: 160 }).trim() ||
-        undefined
-    : undefined;
-};
+import { countLabel } from "pi-cosmic-core";
 
 /** Issues come from the shared presentation projection; expansion shows the labeled raw result. */
 export const projectMcpCompactSummary = ({
@@ -31,14 +21,7 @@ export const projectMcpCompactSummary = ({
 }): CompactSummary | undefined => {
   const call = mcpCallSummary(args);
   const action = call.action;
-  const heading = {
-    action,
-    subject:
-      action === "tools.search"
-        ? [call.target, searchQuery(args)].filter(Boolean).join(" / ")
-        : call.target,
-    ...(action === "result.read" && { compactSubject: "Saved output" }),
-  };
+  const heading = { action, subject: call.target };
   if (phase !== "settled") return isError ? undefined : heading;
 
   const card = decodeMcpCardDetails(result);
@@ -72,13 +55,23 @@ export const projectMcpCompactSummary = ({
     retainedRead && card.retainedPage
       ? `page ${card.retainedPage.offset}..${card.retainedPage.end}/${card.retainedPage.total}${card.retainedPage.next === null ? " · EOF" : ""}`
       : card.page
-        ? `${card.page.returned}${card.page.total === undefined ? "" : ` of ${card.page.total}`} entries${card.page.hasMore ? ", more available" : ""}`
+        ? `${card.page.total === undefined ? countLabel(card.page.returned, "entry", "entries") : `${card.page.returned} of ${countLabel(card.page.total, "entry", "entries")}`}${card.page.hasMore ? ", more available" : ""}`
         : (card.counts[0] ??
           (card.attachmentCount
-            ? `${card.attachmentsLimited ? "at least " : ""}${card.attachmentCount} attachments`
+            ? `${card.attachmentsLimited ? "at least " : ""}${countLabel(card.attachmentCount, "attachment")}`
             : card.imageCount
-              ? `${card.imageCount} native images`
+              ? countLabel(card.imageCount, "image")
               : undefined));
+  // A reply marked as an error for a reason stated only as a warning, such as unsaved or
+  // unchecked output, explains itself with that reason rather than a generic line.
+  const failed = isError || (card.presentation.isError && !retainedRead);
+  const firstWarning = issues.findIndex((issue) => issue.severity === "warning");
+  const explained =
+    failed && compactIssueSeverity(issues) === "warning"
+      ? issues.map((issue, index) =>
+          index === firstWarning ? { ...issue, severity: "error" as const } : issue,
+        )
+      : issues;
   return {
     ...heading,
     counters: count ? [count] : [],
@@ -90,7 +83,7 @@ export const projectMcpCompactSummary = ({
           : compactIssueSeverity(issues)
             ? "warning"
             : "success",
-    issues,
+    issues: explained,
   };
 };
 

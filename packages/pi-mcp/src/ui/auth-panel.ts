@@ -1,7 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
-import { managerActivityGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { sanitizeTerminalLine, formatElapsed } from "pi-cosmic-core";
+import {
+  managerActivityGlyph,
+  renderResponsiveManagerFooter,
+  spinnerFrameAt,
+} from "pi-cosmic-ui/manager";
 import { framedFill, framedScreen, listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   FullScreenKeymap,
@@ -23,11 +27,6 @@ export interface McpAuthPanelOptions {
   readonly matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) => boolean;
   readonly keyLabel: (id: FullScreenSelectionKeybindingId, fallback: string) => string;
 }
-const duration = (ms: number): string => {
-  const seconds = Math.max(0, Math.floor(ms / 1_000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-};
-
 /** Synchronous, display-only projection. Auth values and services never reach this component. */
 export class McpAuthPanel implements Component {
   private readonly keys = new FullScreenKeymap();
@@ -82,12 +81,12 @@ export class McpAuthPanel implements Component {
     const lines = [
       theme.fg(
         color,
-        `${managerActivityGlyph(state, Math.floor(now / 200))} ${authPhaseLabel(value.phase)}`,
+        `${managerActivityGlyph(state, spinnerFrameAt(now))} ${authPhaseLabel(value.phase)}`,
       ),
-      `Elapsed ${duration(now - value.startedAt)}`,
+      `Elapsed ${formatElapsed(now - value.startedAt)}`,
     ];
     if (value.deadline !== undefined && !terminal)
-      lines.push(`Current deadline in ${duration(value.deadline - now)}`);
+      lines.push(`Times out in ${formatElapsed(value.deadline - now)}`);
     if (value.phase === "awaiting-callback")
       lines.push(
         value.mode === "manual"
@@ -112,8 +111,8 @@ export class McpAuthPanel implements Component {
     if (canReopen) lines.push(`${this.selected === 1 ? "> " : "  "}Reopen browser`);
     const footer = renderResponsiveManagerFooter(Math.max(0, inner - 2), [
       [
-        `${this.options.keyLabel("tui.select.confirm", "Enter")} choose`,
-        `${this.options.keyLabel("tui.select.cancel", "Esc")} ${terminal ? "close" : "cancel"}`,
+        `${this.options.keyLabel("tui.select.confirm", "Enter")} Choose`,
+        `${this.options.keyLabel("tui.select.cancel", "Esc")} ${terminal ? "Close" : "Cancel"}`,
       ],
     ]);
     // Docked sign-in panels keep their existing chrome, outside the manager color rules.

@@ -104,7 +104,7 @@ export const makeBackgroundTaskCodeModeHost = (
             return Promise.reject(
               new PiSessionRuntimeError({
                 operation: "background-task-code-mode",
-                message: "Background Tasks is not active for this session.",
+                message: "Background Tasks isn't available in this session.",
               }),
             );
           }

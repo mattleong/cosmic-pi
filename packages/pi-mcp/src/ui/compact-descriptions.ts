@@ -1,6 +1,7 @@
-import { quoteText, type CompactIssue } from "pi-code-previews";
+import { type CompactIssue } from "pi-code-previews";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpDiscoveryNoticePolicy } from "../discovery/diagnostics.ts";
+import { quoteText } from "pi-cosmic-core";
 
 /** Human issue messages for typed producer facts. Remote diagnostics never become wording here;
  * agent recovery belongs in the issue detail. */

@@ -21,6 +21,8 @@ import {
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
+  failureMessage,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
@@ -67,6 +69,8 @@ import {
 } from "./usage/projection.ts";
 
 const FAST_ID = "fast";
+/** The slash command; the startup flag keeps its short `--fast` name. */
+const FAST_COMMAND = "openai-fast";
 
 export interface BetterOpenAIExtensionDependencies {
   readonly loadPreviewSettings?: (
@@ -202,9 +206,8 @@ export function betterOpenAIWithDependencies(
       updateFooter(ctx);
       const fast = MutableRef.get(fastProjection);
       if (fast.desiredActive && !isFastActive(ctx, fast))
-        safeHostUi(() => ctx.ui.notify(unsupportedRequestMessage(ctx), "warning"));
-      if (isFastActive(ctx, fast))
-        safeHostUi(() => ctx.ui.notify(fastStateText(ctx, fast), "info"));
+        notifyAtHostBoundary(ctx, unsupportedRequestMessage(ctx), "warning");
+      if (isFastActive(ctx, fast)) notifyAtHostBoundary(ctx, fastStateText(ctx, fast), "info");
     },
     onDeactivated: ({ context }) => {
       if (currentContext === context) {
@@ -218,7 +221,7 @@ export function betterOpenAIWithDependencies(
       MutableRef.set(fastProjection, initialFastSnapshot());
     },
     onStartFailure: ({ ctx }) => {
-      safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
+      notifyAtHostBoundary(ctx, "Better OpenAI couldn't start", "warning");
     },
   });
   const run = <A, E>(effect: Effect.Effect<A, E, OpenAIApplication>, signal?: AbortSignal) =>
@@ -236,6 +239,7 @@ export function betterOpenAIWithDependencies(
     type: "boolean",
     default: false,
   });
+  const COMMAND_VERBS = { "fast mode": "change fast mode", usage: "check OpenAI usage" } as const;
   const runHostCommand = <A>(
     effect: Effect.Effect<A, { readonly message: string }, OpenAIApplication>,
     operation: "fast mode" | "usage",
@@ -244,22 +248,23 @@ export function betterOpenAIWithDependencies(
   ) =>
     run(
       containCommandFailure(effect, ctx, {
-        failed: (message) => `OpenAI ${operation} is unavailable: ${message}.`,
-        unexpected: `OpenAI ${operation} failed unexpectedly.`,
+        failed: (message) =>
+          `Couldn't ${COMMAND_VERBS[operation]}: ${failureMessage(message, "unknown error")}`,
+        unexpected: `Couldn't ${COMMAND_VERBS[operation]}`,
         defect: `Better OpenAI ${operation} raised an unexpected defect.`,
       }).pipe(Effect.asVoid),
       signal,
     ).catch(() => {
       if (!signal?.aborted)
-        safeHostUi(() => ctx.ui.notify(`OpenAI ${operation} is unavailable.`, "warning"));
+        notifyAtHostBoundary(ctx, `Couldn't ${COMMAND_VERBS[operation]}`, "warning");
     });
 
-  pi.registerCommand(FAST_ID, {
+  pi.registerCommand(FAST_COMMAND, {
     description: "Toggle OpenAI fast mode",
     handler: (args, ctx) => {
       updateContext(ctx);
       if (args.trim()) {
-        safeHostUi(() => ctx.ui.notify("Usage: /fast", "error"));
+        notifyAtHostBoundary(ctx, "Usage: /openai-fast", "warning");
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
@@ -271,8 +276,9 @@ export function betterOpenAIWithDependencies(
             yield* ignoreHostUi(() => updateFooter(ctx));
             const fast = MutableRef.get(fastProjection);
             const active = isFastActive(ctx, fast);
-            yield* ignoreHostUi(() =>
-              ctx.ui.notify(
+            yield* Effect.sync(() =>
+              notifyAtHostBoundary(
+                ctx,
                 fast.desiredActive && !active
                   ? unsupportedRequestMessage(ctx)
                   : fastStateText(ctx, fast),
@@ -323,7 +329,7 @@ export function betterOpenAIWithDependencies(
   pi.on("session_start", (_event, ctx) => {
     const captured = captureSessionHost(ctx);
     if (captured._tag !== "Captured" || captured.aborted) {
-      safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
+      notifyAtHostBoundary(ctx, "Better OpenAI couldn't start", "warning");
       return slot.shutdown();
     }
     const { cwd, signal } = captured;
@@ -358,8 +364,10 @@ export function betterOpenAIWithDependencies(
   const abortIncompleteContext = (ctx: ExtensionContext) => {
     // Pi contains extension exceptions. Aborting the run is required to fail closed.
     safeHostUi(() => ctx.abort());
-    safeHostUi(() =>
-      ctx.ui.notify("Unable to restore the complete conversation; request cancelled.", "warning"),
+    notifyAtHostBoundary(
+      ctx,
+      "Couldn't restore the full conversation, so the request was cancelled",
+      "warning",
     );
   };
   pi.on("session_before_compact", (event, ctx) => {
@@ -376,13 +384,12 @@ export function betterOpenAIWithDependencies(
       .catch(() => {
         const cancel = event.signal.aborted || needsContextRepair(ctx);
         if (!event.signal.aborted)
-          safeHostUi(() =>
-            ctx.ui.notify(
-              cancel
-                ? "Compaction cancelled to preserve the complete conversation."
-                : "OpenAI compaction failed; using Pi compaction.",
-              "warning",
-            ),
+          notifyAtHostBoundary(
+            ctx,
+            cancel
+              ? "Compaction cancelled to keep the full conversation"
+              : "OpenAI compaction failed, so Pi compacted the context instead",
+            "warning",
           );
         return cancel ? { cancel: true } : undefined;
       });
@@ -390,7 +397,7 @@ export function betterOpenAIWithDependencies(
   pi.on("session_compact", (event, ctx) => {
     refreshFooter(ctx);
     if (event.fromExtension && decodeOpenAICompactionDetails(event.compactionEntry.details))
-      safeHostUi(() => ctx.ui.notify("Context compacted using OpenAI.", "info"));
+      notifyAtHostBoundary(ctx, "Context compacted with OpenAI", "info");
   });
   pi.on("session_tree", (_event, ctx) => {
     refreshFooter(ctx);
@@ -414,11 +421,10 @@ export function betterOpenAIWithDependencies(
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
     if (active !== before)
-      safeHostUi(() =>
-        ctx.ui.notify(
-          active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
-          active ? "info" : "warning",
-        ),
+      notifyAtHostBoundary(
+        ctx,
+        active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
+        active ? "info" : "warning",
       );
     slot.fork(
       FastModeService.use((service) => service.modelChanged(ctx)),

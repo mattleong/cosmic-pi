@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CompactSummaryProvider } from "pi-code-previews";
+import { compactStatus, type CompactSummaryProvider } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { askUserCompactSummary, asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
 
@@ -61,17 +61,14 @@ describe("questionnaire compact outcome projection", () => {
       });
       for (const details of [pending, { requests: [pending] }]) {
         const summary = summarize(asyncAskUserCompactSummary, details);
-        // Waiting is a questionnaire's normal state: success, with guidance kept for expansion.
+        // Waiting is a questionnaire's normal state: the call succeeded, and the counter and one
+        // informational issue say what it waits for, with guidance kept for expansion.
         expect(summary?.outcome).toBe("success");
-        expect(summary?.subject).toBe(pending.requestId);
-        expect(summary?.counters).toHaveLength(1);
-        expect(summary?.counters?.join(" ")).toContain(
-          presentation === "queued" ? "queued" : "awaiting answers",
-        );
+        expect(JSON.stringify([summary?.subject, summary?.counters])).not.toContain("request-1");
+        expect(summary?.counters?.[0]).toMatch(presentation === "queued" ? /queued/ : /waiting/);
         expect(summary?.issues).toEqual([
           expect.objectContaining({
             severity: "info",
-            code: "answers-pending",
             detail: expect.stringContaining("ask_user_async_control await"),
           }),
         ]);
@@ -79,23 +76,38 @@ describe("questionnaire compact outcome projection", () => {
       }
     },
   );
-  it("preserves queued and awaiting counts for mixed pending requests", () => {
+
+  it("does not say a queued questionnaire is waiting for answers", () => {
     const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
-    const summary = summarize(asyncAskUserCompactSummary, {
-      requests: [
-        { ...pending, requestId: "queued-1", presentation: "queued" },
-        { ...pending, requestId: "queued-2", presentation: "queued" },
-        { ...pending, requestId: "open-1", presentation: "open" },
-      ],
-    });
+    const [queued, open] = (["queued", "open"] as const).map(
+      (presentation) =>
+        summarize(asyncAskUserCompactSummary, { ...pending, presentation })?.issues?.[0]?.message,
+    );
+    expect(queued).toBeDefined();
+    expect(queued).not.toBe(open);
+  });
+
+  it("counts queued and waiting requests, with shorter alternatives for narrow rows", () => {
+    const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const summary = summarize(
+      asyncAskUserCompactSummary,
+      {
+        requests: [
+          { ...pending, requestId: "queued-1", presentation: "queued" },
+          { ...pending, requestId: "queued-2", presentation: "queued" },
+          { ...pending, requestId: "open-1", presentation: "open" },
+        ],
+      },
+      { args: { action: "status" } },
+    );
     expect(summary?.outcome).toBe("success");
-    expect(summary?.counters).toHaveLength(1);
-    expect(summary?.counters?.join(" ")).toContain("2 queued");
-    expect(summary?.counters?.join(" ")).toContain("1 awaiting answers");
+    expect(summary?.counters?.[0]).toMatch(/2 queued/);
+    expect(summary?.counters?.[0]).toMatch(/1 waiting/);
+    const lengths = summary?.counters?.map((counter) => counter.length) ?? [];
+    expect(lengths.length).toBeGreaterThan(1);
+    expect(lengths).toEqual([...lengths].sort((a, b) => b - a));
     // Every pending request shares one wait fact.
-    expect(summary?.issues).toEqual([
-      expect.objectContaining({ severity: "info", code: "answers-pending" }),
-    ]);
+    expect(summary?.issues).toEqual([expect.objectContaining({ severity: "info" })]);
   });
 
   it.each(["custom", "text"])(
@@ -126,13 +138,15 @@ describe("questionnaire compact outcome projection", () => {
         args: { questions: [{ key: "library", title: "Library" }] },
       });
       expect(summary?.subject).toBe("Library");
-      expect(summary?.counters).toHaveLength(1);
-      expect(JSON.stringify(summary)).not.toMatch(/Keep the current library|No upgrade|delivery-1/);
+      expect(summary?.counters?.length).toBeGreaterThan(0);
+      expect(JSON.stringify(summary)).not.toMatch(
+        /Keep the current library|No upgrade|request-1|delivery-1/,
+      );
       expect(details).toEqual(before);
     }
   });
 
-  it("shows only one short selected label verified against the matching question", () => {
+  it("shows only short selected labels verified against the matching question", () => {
     const question = {
       key: "style",
       title: "Preview style",
@@ -142,10 +156,15 @@ describe("questionnaire compact outcome projection", () => {
     for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
       for (const sample of [
         { questions: [question], answers: [answer], selected: true },
+        {
+          questions: [question],
+          answers: [{ ...answer, labels: ["Compact", "Full"] }],
+          selected: true,
+        },
         { questions: [{ title: question.title }], answers: [answer] },
         { questions: [question], answers: [{ ...answer, key: "other" }] },
         { questions: [question], answers: [{ ...answer, labels: ["Unverified"] }] },
-        { questions: [question], answers: [{ ...answer, labels: ["Compact", "Full"] }] },
+        { questions: [question], answers: [{ ...answer, labels: ["Compact", "Unverified"] }] },
         { questions: [question, { ...question, key: "other" }], answers: [answer] },
         {
           questions: [question],
@@ -162,13 +181,10 @@ describe("questionnaire compact outcome projection", () => {
         const summary = summarize(provider, details, { args: { questions: sample.questions } });
         expect(summary?.outcome).toBe("success");
         expect(summary?.subject).toContain(question.title);
-        if (sample.selected) {
-          expect(summary?.subject).toContain("Compact");
-          expect(summary?.counters ?? []).toHaveLength(0);
-        } else {
-          expect(summary?.counters).toHaveLength(1);
-          expect(summary?.subject).not.toMatch(/Compact|Unverified|LLLL/);
-        }
+        expect(summary?.subject).not.toMatch(/Compact|Unverified|LLLL/);
+        // Selected labels sit in the counter slot, where other answers show a count or kind.
+        if (sample.selected) expect(summary?.counters?.[0]).toContain("Compact");
+        else expect(summary?.counters?.join(" ")).not.toMatch(/Compact|Unverified|LLLL/);
         expect(JSON.stringify(summary)).not.toMatch(/PRIVATE/);
         expect(details).toEqual(before);
       }
@@ -197,7 +213,7 @@ describe("questionnaire compact outcome projection", () => {
       detail: expect.stringContaining("status or await"),
     });
     const summary = summarize(asyncAskUserCompactSummary, row({ delivery: "failed" }));
-    expect(summary?.outcome).toBe("warning");
+    expect(summary && compactStatus("settled", summary)).toBe("warning");
     expect(summary?.issues).toEqual([failedDelivery]);
     expect(summary?.issues?.[0]?.message).not.toMatch(/ask_user_async_control|delivery-1/);
     const cancelledDelivery = summarize(
@@ -216,14 +232,49 @@ describe("questionnaire compact outcome projection", () => {
     expect(several?.issues).toEqual([failedDelivery]);
   });
 
-  it("preserves inconsistent pending replies, failed openings, and metadata-only terminal lists", () => {
+  it("preserves inconsistent pending replies behind the generic row", () => {
     for (const details of [
       row({ status: "pending", outcome: undefined, presentation: "queued" }),
-      row({ status: "failed", outcome: undefined, delivery: "none" }),
-      { requests: [row({ outcome: undefined })] },
+      row({ status: "failed", outcome: submitted }),
       { requests: [row(), row({ status: "pending", outcome: undefined })] },
     ])
       expect(summarize(asyncAskUserCompactSummary, details)).toBeUndefined();
+  });
+
+  it("classifies failed questionnaires as errors that say no answer was recorded", () => {
+    for (const [details, args] of [
+      [row({ status: "failed", outcome: undefined, delivery: "none" }), {}],
+      [
+        { requests: [row(), row({ status: "failed", outcome: undefined, delivery: "none" })] },
+        { action: "status" },
+      ],
+    ] as const) {
+      const summary = summarize(asyncAskUserCompactSummary, details, { args });
+      expect(summary?.outcome).toBe("error");
+      expect(summary?.issues).toEqual([expect.objectContaining({ severity: "error" })]);
+    }
+  });
+
+  it("counts metadata-only and empty status lists instead of leaving them unconfirmed", () => {
+    const args = { action: "status" };
+    const listed = summarize(
+      asyncAskUserCompactSummary,
+      {
+        requests: [
+          row({ outcome: undefined, delivery: "sent" }),
+          row({ status: "cancelled", outcome: undefined, delivery: "sent" }),
+          row({ status: "pending", outcome: undefined, delivery: "pending", presentation: "open" }),
+        ],
+      },
+      { args },
+    );
+    expect(listed?.outcome).toBe("success");
+    expect(listed?.counters?.[0]).toMatch(/1 answered/);
+    expect(listed?.counters?.[0]).toMatch(/1 cancelled/);
+    expect(JSON.stringify(listed)).not.toContain("request-1");
+    const empty = summarize(asyncAskUserCompactSummary, { requests: [] }, { args });
+    expect(empty?.outcome).toBe("success");
+    expect(empty?.counters?.length).toBeGreaterThan(0);
   });
 
   it("bounds compact replay IDs for both single and list snapshots", () => {
@@ -263,8 +314,15 @@ describe("questionnaire compact outcome projection", () => {
       { requests: Array.from({ length: 17 }, () => row()) },
     ])
       expect(summarize(asyncAskUserCompactSummary, details)).toBeUndefined();
-    expect(summarize(askUserCompactSummary, submitted, { isError: true })).toBeUndefined();
-    expect(summarize(asyncAskUserCompactSummary, row(), { isError: true })).toBeUndefined();
+    // Pi's error flag wins over submitted answers; the shell explains it from the error text.
+    for (const summary of [
+      summarize(askUserCompactSummary, submitted, { isError: true }),
+      summarize(asyncAskUserCompactSummary, row(), { isError: true }),
+      summarize(asyncAskUserCompactSummary, {}, { isError: true }),
+    ]) {
+      expect(summary?.outcome).toBe("error");
+      expect(summary?.issues ?? []).toEqual([]);
+    }
     const hostile = Object.defineProperty({}, "outcome", {
       get() {
         throw new Error("untrusted replay getter");
@@ -282,9 +340,15 @@ describe("questionnaire compact outcome projection", () => {
 
   it("writes every questionnaire issue message in the shared style", () => {
     const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const queued = { ...pending, presentation: "queued" };
     const failed = row({ delivery: "failed" });
+    const broken = row({ status: "failed", outcome: undefined, delivery: "none" });
+    const list = { args: { action: "status" } };
     const summaries = [
       summarize(asyncAskUserCompactSummary, pending),
+      summarize(asyncAskUserCompactSummary, queued),
+      summarize(asyncAskUserCompactSummary, { requests: [pending] }, list),
+      summarize(asyncAskUserCompactSummary, { requests: [queued, { ...queued }] }, list),
       summarize(asyncAskUserCompactSummary, {
         requests: [pending, { ...pending, requestId: "request-2" }],
       }),
@@ -292,6 +356,8 @@ describe("questionnaire compact outcome projection", () => {
       summarize(asyncAskUserCompactSummary, {
         requests: [failed, { ...failed, requestId: "request-2" }],
       }),
+      summarize(asyncAskUserCompactSummary, broken),
+      summarize(asyncAskUserCompactSummary, { requests: [broken, broken] }, list),
     ];
     const messages = summaries
       .flatMap((summary) => summary?.issues ?? [])

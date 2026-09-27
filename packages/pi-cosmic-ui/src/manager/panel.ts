@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import { framedFill, framedScreen, type ListDetailFrame } from "./list-detail-shell.ts";
+import { clipToWidth } from "./chrome.ts";
 
 export type TextPanelDismissMode = "any-key" | "back-keys";
 
@@ -27,14 +28,14 @@ export class TextPanelComponent implements Component {
     if (safeWidth === 0) return [];
     const footer =
       this.options.footer ??
-      (this.options.dismiss === "any-key" ? " any key to close " : " Esc/q to go back ");
+      (this.options.dismiss === "any-key" ? " Press any key to close " : " Esc/q Back ");
     const inner = Math.max(0, safeWidth - 2);
-    const body = this.options.lines.map((line) => truncateToWidth(line, inner, "…"));
+    const body = this.options.lines.map((line) => clipToWidth(line, inner, "…"));
     return framedScreen(this.options.frame, {
       width: safeWidth,
       height: body.length + 2,
       top: ` ${this.options.theme?.bold(this.options.title) ?? this.options.title} `,
-      bottom: truncateToWidth(this.options.theme?.fg("dim", footer) ?? footer, inner, ""),
+      bottom: clipToWidth(this.options.theme?.fg("dim", footer) ?? footer, inner, ""),
       body: (height) => framedFill(this.options.frame, body, height, inner),
     });
   }

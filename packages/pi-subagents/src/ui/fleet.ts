@@ -1,16 +1,20 @@
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import {
+  managerNoticeGlyph,
+  renderResponsiveManagerFooter,
+  clipToWidth,
+  spinnerFrameAt,
+} from "pi-cosmic-ui/manager";
 import {
   Input,
   Key,
   matchesKey,
-  truncateToWidth,
   wrapTextWithAnsi,
   type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine, formatRelativeAge, countLabel } from "pi-cosmic-core";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import {
   decodeFullScreenPrintable,
@@ -46,10 +50,10 @@ import {
   type SubagentProjection,
   type SubagentRunView,
 } from "../run/model.ts";
-import { formatRelativeAge } from "./metrics.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
 import { renderSubagentSessionOutput } from "./session-output.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
+import { shortRunId } from "./run-presentation.ts";
 
 export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
 
@@ -129,7 +133,13 @@ const canStop = (run: SubagentRunView | undefined): boolean =>
 
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
 
-const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
+const FLEET_SHORTCUTS = new Set(["e", "i", "m", "t", "u", "x"]);
+
+/** Actions that change a run's lifecycle wait for their own key again, or Enter. */
+type PendingConfirmation = { readonly action: "stop" | "interrupt"; readonly id: string };
+const CONFIRMATION_KEYS = { stop: "x", interrupt: "i" } as const;
+const canConfirm = (pending: PendingConfirmation, run: SubagentRunView | undefined) =>
+  pending.action === "stop" ? canStop(run) : canInterrupt(run);
 
 const UNRESOLVED_GUIDANCE_REASON =
   "Guidance delivery to this run is still unresolved; wait for it to settle or stop the run.";
@@ -141,9 +151,9 @@ const shortcutUnavailableReason = (key: string, run: SubagentRunView): string =>
       ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
       : key === "i"
         ? "This run cannot be interrupted in its current state or backend."
-        : key === "r"
+        : key === "u"
           ? "This run cannot be resumed in its current state or backend."
-          : key === "n"
+          : key === "e"
             ? "This run cannot be renamed in its current state or backend."
             : "This run is not currently stoppable.";
 
@@ -163,8 +173,8 @@ interface FleetActionLabel {
 
 const FLEET_ACTION_LABELS = [
   [canInterrupt, "i Interrupt", "i Int"],
-  [canResume, "r Resume", "r Resume"],
-  [canRename, "n Rename", "n Name"],
+  [canResume, "u Resume", "u Resume"],
+  [canRename, "e Rename", "e Name"],
   [canStop, "x Stop subtree", "x Stop tree"],
 ] as const;
 
@@ -235,7 +245,7 @@ type FleetPrompt = {
 export class SubagentFleetComponent implements Component, Focusable {
   private showTechnicalDetails = false;
   private alternateHelp = false;
-  private pendingStop: string | undefined;
+  private pending: PendingConfirmation | undefined;
   private prompt: FleetPrompt | undefined;
   private notice: FleetNotice | undefined;
   private busyAction: string | undefined;
@@ -275,7 +285,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private applySelection(next: ListSelectionChange): void {
-    if (next.changed) this.pendingStop = undefined;
+    if (next.changed) this.pending = undefined;
   }
 
   /** Shared keymap resolution bound to this overlay's configurable keybindings. */
@@ -299,8 +309,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   private reconcile(rows: ReadonlyArray<FleetTreeRow>): void {
     this.applySelection(this.shell.reconcile(rows.map((row) => row.run.id)));
     const selected = rows[this.shell.state.selected]?.run;
-    if (this.pendingStop && (this.pendingStop !== selected?.id || !canStop(selected)))
-      this.pendingStop = undefined;
+    if (this.pending && (this.pending.id !== selected?.id || !canConfirm(this.pending, selected)))
+      this.pending = undefined;
     if (this.prompt && this.prompt.runId !== selected?.id) this.prompt = undefined;
   }
 
@@ -406,11 +416,11 @@ export class SubagentFleetComponent implements Component, Focusable {
           : delivery === "pending"
             ? {
                 kind: "warning",
-                text: `${MESSAGE_LABELS[mode]} for ${name} is awaiting delivery confirmation; do not resend.`,
+                text: `${MESSAGE_LABELS[mode]} for ${name} is waiting for delivery confirmation`,
               }
             : {
                 kind: "error",
-                text: `${MESSAGE_LABELS[mode]} for ${name} was not confirmed and may already have arrived. Do not resend; inspect the run's status.`,
+                text: `${MESSAGE_LABELS[mode]} for ${name} wasn't confirmed and may have arrived; check the run before sending again`,
               },
     );
   }
@@ -423,7 +433,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const selected = selectedRow?.run;
 
     if (this.prompt) return this.handlePromptInput(data, this.prompt);
-    if (this.pendingStop) return this.handlePendingStopInput(data, selected);
+    if (this.pending) return this.handlePendingInput(data, this.pending, selected);
     if (this.busyAction) return this.handleBusyInput(data);
 
     // Every notice, including errors, dismisses on the next navigation key.
@@ -439,7 +449,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const resolution = this.resolveInput(data, "text-input");
     if (resolution?._tag === "Action" && resolution.action === "cancel") {
       this.prompt = undefined;
-      this.notice = { kind: "info", text: "Input canceled." };
+      this.notice = { kind: "info", text: "Input cancelled" };
       this.options.requestRender();
     } else if (resolution?._tag === "Action" && resolution.action === "confirm")
       this.submitPrompt();
@@ -450,25 +460,39 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
   }
 
-  private handlePendingStopInput(data: string, selected: SubagentRunView | undefined): void {
-    const resolution = this.resolveInput(data, "confirmation", new Set(["x"]));
-    const run = selected && this.pendingStop === selected.id ? selected : undefined;
+  private handlePendingInput(
+    data: string,
+    pending: PendingConfirmation,
+    selected: SubagentRunView | undefined,
+  ): void {
+    const key = CONFIRMATION_KEYS[pending.action];
+    const resolution = this.resolveInput(data, "confirmation", new Set([key]));
+    const run = selected && pending.id === selected.id ? selected : undefined;
     const confirmed =
       resolution?._tag === "Action" && resolution.action === "confirm"
         ? true
-        : confirmedReservedShortcut(resolution, data, "x");
-    if (confirmed && run && canStop(run)) {
-      this.pendingStop = undefined;
-      this.performAction(
-        `Stopping ${sanitizeTerminalLine(run.name)} and its child agents…`,
-        `Stopped ${sanitizeTerminalLine(run.name)} and its child agents.`,
-        () => this.options.actions.stop(run.id),
-      );
+        : confirmedReservedShortcut(resolution, data, key);
+    if (confirmed && run && canConfirm(pending, run)) {
+      this.pending = undefined;
+      const name = sanitizeTerminalLine(run.name);
+      if (pending.action === "stop")
+        this.performAction(
+          `Stopping ${name} and its subagents…`,
+          `Stopped ${name} and its subagents`,
+          () => this.options.actions.stop(run.id),
+        );
+      else
+        this.performAction(`Interrupting ${name}…`, `Interrupted ${name}; it is paused`, () =>
+          this.options.actions.interrupt(run.id),
+        );
       return;
     }
     if (!run || (resolution?._tag === "Action" && resolution.action === "cancel")) {
-      this.pendingStop = undefined;
-      this.notice = { kind: "info", text: "Stop canceled." };
+      this.pending = undefined;
+      this.notice = {
+        kind: "info",
+        text: pending.action === "stop" ? "Stop cancelled" : "Interrupt cancelled",
+      };
     }
     this.options.requestRender();
   }
@@ -509,7 +533,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (key === "t") {
       this.showTechnicalDetails = !this.showTechnicalDetails;
       this.shell.resetDetailScroll();
-    } else if (!selected) this.notice = { kind: "info", text: "No subagent run is selected." };
+    } else if (!selected) this.notice = { kind: "info", text: "Select a subagent first" };
     else if (!this.applyRunShortcut(key, selected))
       this.notice = { kind: "info", text: shortcutUnavailableReason(key, selected) };
     this.options.requestRender();
@@ -518,16 +542,12 @@ export class SubagentFleetComponent implements Component, Focusable {
   /** Applies one run shortcut; returns false when it does not apply to the run's state or backend. */
   private applyRunShortcut(key: string, selected: SubagentRunView): boolean {
     const mode = messageMode(selected);
-    if (key === "x" && canStop(selected)) this.pendingStop = selected.id;
+    if (key === "x" && canStop(selected)) this.pending = { action: "stop", id: selected.id };
     else if (key === "i" && canInterrupt(selected))
-      this.performAction(
-        `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
-        `Interrupted ${sanitizeTerminalLine(selected.name)}; state is paused.`,
-        () => this.options.actions.interrupt(selected.id),
-      );
-    else if (key === "r" && canResume(selected)) this.openPrompt(selected, "resume");
+      this.pending = { action: "interrupt", id: selected.id };
+    else if (key === "u" && canResume(selected)) this.openPrompt(selected, "resume");
     else if (key === "m" && mode) this.openPrompt(selected, mode);
-    else if (key === "n" && canRename(selected)) this.openPrompt(selected, "rename");
+    else if (key === "e" && canRename(selected)) this.openPrompt(selected, "rename");
     else return false;
     return true;
   }
@@ -577,10 +597,10 @@ export class SubagentFleetComponent implements Component, Focusable {
     const paused = tree.runs.filter((run) => run.state === "paused").length;
     const retained = tree.runs.filter((run) => run.state === "reported").length;
     const hidden = tree.runs.length - rows.length;
-    const titleRaw = ` /subagents · ${tree.runs.length} run${tree.runs.length === 1 ? "" : "s"}${hidden ? ` · ${rows.length} visible` : ""}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
-    const title = truncateToWidth(titleRaw, Math.max(0, safeWidth - 2), "");
+    const titleRaw = ` /subagents · ${countLabel(tree.runs.length, "run")}${hidden ? ` · ${rows.length} visible` : ""}${working ? ` · ${working} running` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} reported` : ""} `;
+    const title = clipToWidth(titleRaw, Math.max(0, safeWidth - 2), "");
     const help = this.helpText(safeWidth, selected);
-    const safeHelp = truncateToWidth(help, Math.max(0, safeWidth - 2), "");
+    const safeHelp = clipToWidth(help, Math.max(0, safeWidth - 2), "");
     return framedScreen(this.frame, {
       width: safeWidth,
       height,
@@ -663,21 +683,19 @@ export class SubagentFleetComponent implements Component, Focusable {
     const disclosure = row.hasChildren
       ? this.options.theme.fg("muted", row.expanded ? "▾" : "▸")
       : " ";
-    const frame = Math.floor(this.options.getNow() / 160);
+    const frame = spinnerFrameAt(this.options.getNow());
     const glyph = this.options.theme.fg(
       runStateColor(run.state),
       animatedRunStateGlyph(run.state, frame),
     );
     const state =
-      run.state === "completed"
-        ? `finished ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
-        : run.state === "reported"
-          ? `report ${run.reportGeneration} · retained`
-          : runStateLabel(run.state);
+      run.state === "completed" || run.state === "reported"
+        ? `${runStateLabel(run.state)} ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
+        : runStateLabel(run.state);
     const duplicateName = scopeRuns.some(
       (candidate) => candidate.id !== run.id && candidate.name === run.name,
     );
-    const shortId = run.id.length <= 14 ? run.id : `…${run.id.slice(-13)}`;
+    const shortId = shortRunId(run.id);
     const identity = duplicateName ? `[${shortId}] ${run.name}` : run.name;
     const label = sanitizeTerminalLine(
       `${identity} · ${state} · ${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`,
@@ -717,7 +735,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     rows: ReadonlyArray<FleetTreeRow>,
     visible: ReadonlyArray<{ readonly index: number }>,
   ): string {
-    if (rows.length === 0) return "Subagents · none";
+    if (rows.length === 0) return "Subagents";
     const start = (visible[0]?.index ?? 0) + 1;
     const end = (visible.at(-1)?.index ?? 0) + 1;
     return `Subagents · ${start}–${end} of ${rows.length}${start > 1 ? " · ↑ more" : ""}${end < rows.length ? " · ↓ more" : ""}`;
@@ -745,19 +763,16 @@ export class SubagentFleetComponent implements Component, Focusable {
       ? [[`${enter} Submit`, `${escape} Cancel`]]
       : this.busyAction
         ? [[this.busyAction, `${escape}/q Close`]]
-        : this.pendingStop
+        : this.pending
           ? [
               [
-                `x Confirm stop ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
+                `${CONFIRMATION_KEYS[this.pending.action]} Confirm ${this.pending.action} ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
                 `${escape}/q Cancel`,
               ],
             ]
           : undefined;
     if (modal) return renderResponsiveManagerFooter(contentWidth, modal);
-    if (!selected)
-      return renderResponsiveManagerFooter(contentWidth, [
-        ["No visible subagents", `${escape}/q Close`],
-      ]);
+    if (!selected) return renderResponsiveManagerFooter(contentWidth, [[`${escape}/q Close`]]);
     const available = fleetActionLabels(selected);
     const actions =
       available.length > 0 ? available.map((item) => item.full).join(" · ") : undefined;
@@ -804,7 +819,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private detailLines(run: SubagentRunView | undefined, width: number): string[] {
-    if (!run) return [this.options.theme.fg("dim", "No subagents in this parent session.")];
+    if (!run) return [this.options.theme.fg("dim", "No subagents yet")];
     return renderSubagentSessionOutput(run, this.options.theme, {
       now: this.options.getNow(),
       showTechnicalDetails: this.showTechnicalDetails,
@@ -862,12 +877,7 @@ export class SubagentFleetComponent implements Component, Focusable {
           ? this.listPane(rows, Math.max(1, height - 1), inner, scopeRuns).slice(
               height <= 1 ? 1 : 0,
             )
-          : [
-              this.options.theme.fg(
-                "dim",
-                "No subagents. Ask the agent to start one with subagent_start.",
-              ),
-            ];
+          : [this.options.theme.fg("dim", "No subagents yet")];
     if (!this.shell.state.details) this.shell.resetDetailWindow();
     return framedFill(this.frame, lines, height, inner, this.shell.state.pane);
   }

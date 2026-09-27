@@ -138,7 +138,9 @@ export function runCodeModeExecution(
     // Give the host one leading-edge snapshot before interpreter work begins. Row admission
     // and enriched running labels publish synchronously into Pi's next frame; status-only
     // snapshots are frame-coalesced, with the newest state flushed on settlement.
-    publisher.publish(progressResult([], counts));
+    // The leading snapshot carries the (empty) attention ledger, so the compact row keeps its
+    // heading from the first frame.
+    publisher.publish(progress());
     const budget = makeCumulativeOutputBudget(config.maxCumulativeChildOutputBytes);
     const execution = Effect.flatMap(Clock.currentTimeMillis, (startedAt) => {
       const dispatch = makeNestedPiToolDispatch({

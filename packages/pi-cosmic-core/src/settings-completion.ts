@@ -18,15 +18,30 @@ export interface SettingsCompletionChoice {
 
 /**
  * Completes `/…-settings` arguments against option descriptors plus caller-supplied extra
- * verbs (help/diagnostics), preserving descriptor order, case-insensitive prefix matching,
- * and the host contract of `null` (never an empty array) when nothing matches.
+ * verbs (help/status), preserving descriptor order, case-insensitive prefix matching, and the
+ * host contract of `null` (never an empty array) when nothing matches. An optional leading
+ * scope token (one of `scopes`) completes like the rest, prefixed with that scope.
  */
 export const completeSettingsArguments = (
   prefix: string,
   descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
   extras: ReadonlyArray<SettingsCompletionChoice> = [],
+  scopes: ReadonlyArray<SettingsCompletionChoice> = [],
 ): SettingsCompletionChoice[] | null => {
   const normalized = prefix.replace(/^\s+/, "");
+  const scoped = /^(\S+)\s+([\s\S]*)$/u.exec(normalized);
+  const scope = scoped && scopes.find((choice) => choice.value === scoped[1]);
+  if (scoped && scope) {
+    const inner = completeSettingsArguments(scoped[2] ?? "", descriptors);
+    return (
+      inner?.map((choice) => ({
+        ...choice,
+        value: `${scope.value} ${choice.value}`,
+        label: `${scope.value} ${choice.label}`,
+      })) ?? null
+    );
+  }
+  if (scopes.length > 0) extras = [...scopes, ...extras];
   const [head = "", ...rest] = normalized.split(/\s+/);
   if (rest.length === 0 && !/\s$/.test(normalized)) {
     const query = head.toLowerCase();

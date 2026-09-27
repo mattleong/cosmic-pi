@@ -30,16 +30,17 @@ import {
   waitForAvailableShell,
 } from "./validation.ts";
 
-const NEW_COMMAND_GUIDANCE = "Run /herdr-btw:new to create a fresh BTW session.";
+export const HERDR_BTW_NEW_COMMAND = "herdr-btw-new";
+const NEW_COMMAND_GUIDANCE = `Run /${HERDR_BTW_NEW_COMMAND} to start a fresh side session`;
 
 const retainPaneFailure = (
   failure: HerdrBtwError,
   paneId: string,
-  guidance: string = `Pane ${paneId} was retained for manual inspection.`,
+  guidance = "the pane was left open for you to inspect",
 ): HerdrBtwError =>
   failure.paneId === paneId
     ? failure
-    : new HerdrBtwError({ ...failure, paneId, message: `${failure.message} ${guidance}` });
+    : new HerdrBtwError({ ...failure, paneId, message: `${failure.message}; ${guidance}` });
 
 export interface HerdrBtwResult {
   readonly agentName: string;
@@ -56,20 +57,20 @@ const sessionFileBoundary = {
 };
 
 const failClosedLink = (operation: string, code: string, message: string): HerdrBtwError =>
-  confirmedFailure(operation, code, `${message} ${NEW_COMMAND_GUIDANCE}`);
+  confirmedFailure(operation, code, `${message}; ${NEW_COMMAND_GUIDANCE.toLowerCase()}`);
 
 const linkRecordFailure = (result: Exclude<HerdrBtwLinkRecordResult, "recorded">): HerdrBtwError =>
   result === "refused"
     ? confirmedFailure(
         "record BTW link",
         "herdr_btw_link_record_refused",
-        "The side session started, but its reusable link was not recorded because the parent session changed or became unavailable before the append. Any prior reusable link remains authoritative.",
+        "The side session started, but its link wasn't saved because this session changed; your previous side session stays linked",
       )
     : new HerdrBtwError({
         operation: "record BTW link",
         code: "herdr_btw_link_record_outcome_uncertain",
         message:
-          "The side session started, but Pi couldn't confirm whether its link was saved. Inspect the open pane and parent conversation before retrying the command.",
+          "The side session started, but Pi couldn't confirm its link was saved; check the open pane before trying again",
         outcome: "uncertain",
       });
 
@@ -103,7 +104,7 @@ export const makeHerdrBtwService = (
           return yield* confirmedFailure(
             "create blank child session",
             "herdr_btw_session_directory_unavailable",
-            "The parent Pi session directory is unavailable.",
+            "Couldn't find this session's folder",
           );
         const created = yield* createBlankChildSessionFile({
           sessionDir,
@@ -114,14 +115,14 @@ export const makeHerdrBtwService = (
           return yield* confirmedFailure(
             "create blank child session",
             "herdr_btw_child_create_failed",
-            "Unable to create the blank child Pi session file.",
+            "Couldn't create the side session's file",
           );
         const probe = probeSessionHeader(created.path);
         if (!isValidBlankChildProbe(probe, childSessionId))
           return yield* confirmedFailure(
             "create blank child session",
             "herdr_btw_child_create_invalid",
-            "The created blank child Pi session file failed validation.",
+            "The side session's new file didn't pass its checks",
           );
         return { childSessionId, childSessionPath: created.path };
       });
@@ -143,13 +144,13 @@ export const makeHerdrBtwService = (
           return yield* retainPaneFailure(
             promptResult.failure,
             paneId,
-            `The side session is running in pane ${paneId}; enter the prompt there manually.`,
+            "The side session is running; type your prompt there",
           );
         if (focusResult._tag === "Failure")
           return yield* retainPaneFailure(
             focusResult.failure,
             paneId,
-            `The side session is running in pane ${paneId}; focus it manually.`,
+            "The side session is running; switch to its pane to use it",
           );
       });
 
@@ -168,7 +169,7 @@ export const makeHerdrBtwService = (
           return yield* confirmedFailure(
             "inspect calling pane layout",
             "herdr_parent_topology_mismatch",
-            "The calling pane changed workspace or tab while its layout was inspected.",
+            "Your pane moved to another workspace or tab while it was being checked",
           );
 
         const direction = selectSplitDirection(layout.area.width);
@@ -187,7 +188,7 @@ export const makeHerdrBtwService = (
               operation: "split BTW pane",
               code: "herdr_split_topology_mismatch",
               message:
-                "Herdr returned a pane outside the calling pane's current workspace/tab; no further action was taken.",
+                "Herdr opened the pane in a different workspace or tab, so nothing else was done",
               outcome: "uncertain",
             });
 
@@ -204,7 +205,7 @@ export const makeHerdrBtwService = (
             return yield* confirmedFailure(
               "validate child session identity",
               "herdr_btw_child_identity_invalid",
-              "The child session file was unavailable or resolved to the parent session file. No Pi launch was attempted.",
+              "Couldn't prepare a separate session file, so Pi wasn't started",
             );
           if (target.mode === "resume") {
             const newlyLive = (yield* herdr.inspectLiveAgents()).filter((agent) =>
@@ -214,7 +215,7 @@ export const makeHerdrBtwService = (
               return yield* failClosedLink(
                 "revalidate linked child session",
                 "herdr_btw_live_agent_race",
-                "The linked child session became live while its new pane was being prepared; no second Pi was started.",
+                "The side session started elsewhere while its pane was being prepared, so a second one wasn't started",
               );
           }
           const startedAgent = yield* herdr.startSideSessionPi({
@@ -239,7 +240,7 @@ export const makeHerdrBtwService = (
             return yield* confirmedFailure(
               "validate started child session",
               "herdr_btw_child_invalid",
-              "The Herdr side session started, but its blank child session file no longer matched the launch.",
+              "The side session started, but its file changed unexpectedly",
             );
 
           // The link is superseded only after confirmed startup and child-file
@@ -285,7 +286,7 @@ export const makeHerdrBtwService = (
           return yield* failClosedLink(
             "validate live BTW agent",
             "herdr_btw_live_agent_ambiguous",
-            "A live Herdr agent on the linked child session did not match the recorded BTW identity.",
+            "Another Pi is already using the linked side session",
           );
         yield* deliverAndFocus(link.agentName, live.pane_id, prompt);
         return { agentName: link.agentName, paneId: live.pane_id, mode: "focused" };
@@ -298,7 +299,7 @@ export const makeHerdrBtwService = (
         return yield* failClosedLink(
           "restore BTW link",
           "herdr_btw_link_malformed",
-          "The recorded BTW link in this session is unreadable.",
+          "This session's side-session link is unreadable",
         );
       if (restoration._tag === "none")
         return yield* openFreshCreate(prompt, sessionFile, sessionId);
@@ -314,7 +315,7 @@ export const makeHerdrBtwService = (
         return yield* failClosedLink(
           "validate linked child session",
           "herdr_btw_link_child_invalid",
-          "The linked child session file is missing, replaced, or no longer matches the recorded blank side session.",
+          "The linked side session's file is missing or was replaced",
         );
 
       yield* ensureHerdrProtocol(herdr);

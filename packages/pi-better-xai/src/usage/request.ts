@@ -52,11 +52,11 @@ const fetchUsageResponses = (accessToken: Redacted.Redacted<string>) =>
           error.operation === "decode"
             ? new XaiUsageError({
                 operation: "monthly-decode",
-                message: "xAI monthly billing response was malformed.",
+                message: "xAI returned an unreadable billing response",
               })
             : new XaiUsageError({
                 operation: "request",
-                message: "xAI billing request failed.",
+                message: "Billing request failed",
               }),
         ),
       ),
@@ -84,7 +84,7 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
   if (monthly._tag === "Rejected") {
     return yield* new XaiUsageError({
       operation: "monthly",
-      message: `xAI monthly billing request failed (HTTP ${monthly.status}).`,
+      message: `Billing request failed with status ${monthly.status}`,
     });
   }
   const decodedWeekly = weekly?._tag === "Accepted" ? weekly.body : undefined;

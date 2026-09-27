@@ -39,7 +39,7 @@ export function captureContextModel(ctx: ExtensionContext): SelectedModel | unde
   return invokeHostCallback(() => captureSelectedModel(ctx.model), undefined);
 }
 
-const thinkingReadError = hostError("thinking", "Unable to read Pi's thinking level.");
+const thinkingReadError = hostError("thinking", "Couldn't read Pi's thinking level");
 
 /** Read and decode Pi's current thinking level; hostile getters and absent levels become typed errors. */
 const readThinkingLevel = (
@@ -66,33 +66,30 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
 ) {
   const current = yield* Effect.try({
     try: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
-    catch: hostError("read", "Unable to inspect Pi's current model."),
+    catch: hostError("read", "Couldn't read Pi's current model"),
   });
   if (current?.provider !== preference.provider || current.id !== preference.model) {
     const model = yield* Effect.try({
       try: () => ctx.modelRegistry.find(preference.provider, preference.model),
-      catch: hostError("find", "Unable to inspect Pi's model registry."),
+      catch: hostError("find", "Couldn't read Pi's model list"),
     });
     if (!model)
-      return yield* hostError("find", "The remembered directory model is not available.")();
+      return yield* hostError("find", "The model saved for this directory isn't available")();
     // Pi's Promise-shaped setModel cannot be cancelled. Keep only its settlement in this narrow
     // uninterruptible ordering region so runtime replacement/disposal waits before a successor
     // can start; registry lookup and every surrounding read remain interruptible.
     const applied = yield* Effect.uninterruptible(
       Effect.tryPromise({
         try: () => pi.setModel(model),
-        catch: hostError("set", "Unable to select the remembered directory model."),
+        catch: hostError("set", "Couldn't switch to the model saved for this directory"),
       }),
     );
     if (!applied)
-      return yield* hostError(
-        "auth",
-        "The remembered directory model has no configured authentication.",
-      )();
+      return yield* hostError("auth", "The model saved for this directory isn't signed in")();
   }
   yield* Effect.try({
     try: () => pi.setThinkingLevel(preference.thinkingLevel),
-    catch: hostError("thinking", "Unable to restore the remembered thinking level."),
+    catch: hostError("thinking", "Couldn't restore the thinking level saved for this directory"),
   });
   return { ...preference, thinkingLevel: yield* readThinkingLevel(pi) };
 });

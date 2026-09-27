@@ -17,7 +17,7 @@ pi -e ./packages/pi-cosmic-ui -e ./packages/pi-better-openai
 
 ## Configure
 
-Run `/cosmic-ui` for all footer settings, including OpenAI usage, xAI usage, and the fast indicator. Provider settings no longer have footer modes or usage-display switches.
+Run `/cosmic-ui-settings` for all footer settings, including OpenAI usage, xAI usage, and the fast indicator. Provider settings no longer have footer modes or usage-display switches.
 
 - Usage is `automatic` on eligible models or `hidden`. Hidden usage stops automatic requests, but `/openai-usage` and `/xai-usage` still fetch on demand.
 - Hiding the fast indicator does not disable fast mode.

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
-import type { HerdrBtwResult } from "./service.ts";
+import { HERDR_BTW_NEW_COMMAND, type HerdrBtwResult } from "./service.ts";
 
 export interface HerdrBtwCommandHandlers {
   readonly open: (prompt?: string | undefined) => Promise<HerdrBtwResult>;
@@ -10,11 +10,11 @@ export interface HerdrBtwCommandHandlers {
 const successMessage = (result: HerdrBtwResult): string => {
   switch (result.mode) {
     case "focused":
-      return `Focused ${result.agentName} in ${result.paneId}.`;
+      return "Switched to your BTW side session";
     case "resumed":
-      return `Reopened the BTW session as ${result.agentName} in ${result.paneId}. The pane is now user-owned.`;
+      return "Reopened your BTW side session";
     case "created":
-      return `Opened ${result.agentName} in ${result.paneId}. The pane is now user-owned.`;
+      return "Opened a new BTW side session";
   }
 };
 
@@ -28,7 +28,7 @@ const registerCommand = (
     description,
     handler: (args, ctx) => {
       if (ctx.mode !== "tui") {
-        notifyHerdrBtw(ctx, `Open Pi in an interactive terminal to use /${name}.`, "error");
+        notifyHerdrBtw(ctx, `Open Pi in an interactive terminal to use /${name}`, "warning");
         return Promise.resolve();
       }
 
@@ -37,8 +37,8 @@ const registerCommand = (
         (result) => notifyHerdrBtw(ctx, successMessage(result), "info"),
         (failure) => {
           const message =
-            failure instanceof Error ? failure.message : "Unable to open a Herdr BTW session.";
-          notifyHerdrBtw(ctx, message.slice(0, 2_000), "error");
+            failure instanceof Error ? failure.message : "Couldn't open a BTW side session";
+          notifyHerdrBtw(ctx, message, "error");
         },
       );
     },
@@ -52,13 +52,13 @@ export const registerHerdrBtwCommands = (
   registerCommand(
     pi,
     "herdr-btw",
-    "Open or return to a side conversation in the current tab.",
+    "Open or return to a side conversation in the current tab",
     handlers.open,
   );
   registerCommand(
     pi,
-    "herdr-btw:new",
-    "Create a fresh Herdr BTW pane and make it this session's reusable side session.",
+    HERDR_BTW_NEW_COMMAND,
+    "Start a fresh side conversation and keep it as this session's side session",
     handlers.openNew,
   );
 };

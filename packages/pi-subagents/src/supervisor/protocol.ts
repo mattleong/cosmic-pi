@@ -65,6 +65,9 @@ export const SupervisorMessageSchema = Schema.String.check(
   Schema.isMaxLength(MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
   Schema.isPattern(NONBLANK_PATTERN),
 );
+/** How a child tool returns its parent's reply, for every child transport. */
+export const PARENT_REPLY_PREFIX = "Parent reply: ";
+
 export const SupervisorReplySchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),

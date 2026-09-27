@@ -89,13 +89,13 @@ export function makeAwaitExecution(
     const unfinished = latestRuns.filter((run) => !isAssignmentFinishedRunState(run.state)).length;
     const summary =
       latestRuns.length === 0
-        ? "Await canceled before progress was observed; selected run states are unobserved."
-        : `Await canceled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
+        ? "Await cancelled before progress was observed; selected run states are unobserved."
+        : `Await cancelled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
     const text = boundToolOutput(
       [
         summary,
         `Requested runs: ${requestedIds.join(", ")}.`,
-        "Only this local wait was canceled. Children continue; this cancellation did not stop or retry any run.",
+        "Only this local wait was cancelled. Children continue; this cancellation did not stop or retry any run.",
         proxyCleanupUnconfirmed
           ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
           : "Wait cleanup is complete. Await these IDs again when their results are needed.",

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { updateSetting } from "../../src/config/values";
-import { persistSettingsChange } from "../../src/settings/panel";
+import { SettingsList } from "@earendil-works/pi-tui";
+import { createCodePreviewSettingsModel, persistSettingsChange } from "../../src/settings/panel";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
 
 effectTest("collapsed style edits persist without reinitializing syntax", function* () {
@@ -76,3 +77,38 @@ effectTest(
     }
   },
 );
+
+effectTest("restoring defaults waits for a second press", function* () {
+  const saved: CodePreviewSettings[] = [];
+  const model = createCodePreviewSettingsModel({
+    notify: () => undefined,
+    done: () => undefined,
+    loadOptions: {},
+    effects: {
+      queueSave: (next) => {
+        saved.push(next);
+        return Promise.resolve();
+      },
+      initializeSyntax: () => Promise.resolve(),
+    },
+  });
+  const list = new SettingsList(
+    model.items,
+    10,
+    {
+      label: (text) => text,
+      value: (text) => text,
+      description: (text) => text,
+      cursor: ">",
+      hint: (text) => text,
+    },
+    () => undefined,
+    () => undefined,
+  );
+  model.onChange("resetToDefaults", "press Enter to reset", list);
+  yield* step(eventLoopTurn);
+  assert.equal(saved.length, 0);
+  model.onChange("resetToDefaults", "reset now", list);
+  yield* step(eventLoopTurn);
+  assert.equal(saved.length, 1);
+});

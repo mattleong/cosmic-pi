@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { CompactIssue } from "pi-code-previews";
+import { resolveCompactSummary, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
+import { taskStateLabel } from "../src/ui/task-state.ts";
 import type { BackgroundTaskSnapshot } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
@@ -22,7 +23,14 @@ const project = <Details>(
   action: BackgroundTaskToolInput["action"] = "status",
   phase: Input["phase"] = "settled",
   isError = false,
-) => projectBackgroundTaskCompactSummary({ phase, args: { action }, result: { details }, isError });
+  args: Partial<BackgroundTaskToolInput> = {},
+) =>
+  projectBackgroundTaskCompactSummary({
+    phase,
+    args: { ...args, action },
+    result: { details },
+    isError,
+  });
 const logs = (state = "running", fields: Partial<typeof cursors> = {}, truncated?: boolean) => ({
   action: "logs",
   logs: { id: snapshot.id, state, ...cursors, ...fields },
@@ -56,18 +64,21 @@ describe("background task compact semantics", () => {
       {
         action: "list",
         tasks: [
-          { ...snapshot, id: "one", state: "exited", exitCode: 2 },
-          { ...snapshot, id: "two", state: "exited", exitCode: 2 },
           { ...snapshot, id: "three", state: "stopping", droppedLogBytes: 8 },
+          { ...snapshot, id: "one", state: "failed", exitCode: 2 },
+          { ...snapshot, id: "two", state: "failed", exitCode: 2 },
         ],
       },
       "list",
     );
     expect(summary?.outcome).toBe("error");
-    expect(summary?.counters).toHaveLength(1);
-    for (const count of ["2 exited", "1 stopping"]) expect(summary?.counters?.[0]).toContain(count);
+    // The first counter counts every state; later ones are shorter fallbacks for narrow rows.
+    for (const count of ["2 failed", "1 stopping"]) expect(summary?.counters?.[0]).toContain(count);
+    expect(summary?.counters?.at(-1)).toMatch(/^3 tasks$/u);
     expect(severities(summary, "error")).toEqual(["one:exit-code", "two:exit-code"]);
-    expect(severities(summary, "warning")).toEqual(["three:log-loss", "three:cleanup-unconfirmed"]);
+    expect(severities(summary, "warning")).toEqual(["three:cleanup-unconfirmed", "three:log-loss"]);
+    // Failures lead, whatever the tasks' order.
+    expect(summary?.issues?.[0]?.severity).toBe("error");
   });
 
   it("names each task in aggregate messages without IDs, numbering shared names", () => {
@@ -86,17 +97,19 @@ describe("background task compact semantics", () => {
     );
     const messages = summary?.issues?.map((issue) => issue.message) ?? [];
     expect(messages).toHaveLength(5);
-    expect(messages[4]).toMatch(/^Task 5: /);
-    expect(messages[0]).toMatch(/^worker \(1\): /);
-    expect(messages[1]).toMatch(/^worker \(2\): /);
-    expect(messages[2]).toMatch(/^builder: /);
+    const labelled = (pattern: RegExp) => messages.filter((message) => pattern.test(message));
+    // An unnamed task goes by its command.
+    expect(labelled(/^test: /u)).toHaveLength(1);
+    expect(labelled(/^worker \(1\): /u)).toHaveLength(1);
+    expect(labelled(/^worker \(2\): /u)).toHaveLength(1);
+    expect(labelled(/^builder: /u)).toHaveLength(1);
     expect(messages.join("\n")).not.toMatch(/task-[a-e]/u);
-    expect(messages[3]!.length).toBeLessThan(120);
-    // The unprefixed message and agent detail are unchanged by aggregation.
+    for (const message of messages) expect(message.length).toBeLessThan(120);
+    // The unprefixed message and agent detail are unchanged by aggregation, with no task ID.
     const single = project({ action: "status", snapshot: { ...snapshot, state: "stopping" } });
-    expect(messages[0]).toContain(single?.issues?.[0]?.message);
-    // The agent-facing detail names the exact task, then keeps the original detail.
-    expect(summary?.issues?.[0]?.detail).toBe(`Task task-a\n${single?.issues?.[0]?.detail}`);
+    const worker = summary?.issues?.find((issue) => issue.message.startsWith("worker (1)"));
+    expect(worker?.message).toContain(single?.issues?.[0]?.message);
+    expect(worker?.detail).toBe(single?.issues?.[0]?.detail);
   });
 
   it("keeps unclassified task errors visible, with full text as expanded detail", () => {
@@ -135,7 +148,7 @@ describe("background task compact semantics", () => {
     expect(long?.issues?.[0]?.detail).toBe("x".repeat(2048));
   });
 
-  it("retains supplied task identity before a status result arrives", () => {
+  it("never makes a task ID the subject, and names the task once its result arrives", () => {
     for (const phase of ["pending", "running"] as const) {
       const summary = projectBackgroundTaskCompactSummary({
         phase,
@@ -144,14 +157,25 @@ describe("background task compact semantics", () => {
         isError: false,
       });
       expect(summary?.action).toBe("status");
-      expect(summary?.subject).toBe("task-1");
+      expect(summary?.subject).not.toContain("task-1");
       expect(summary?.outcome).toBeUndefined();
+      // A wait says what it awaits, which the arguments do name.
+      const waiting = projectBackgroundTaskCompactSummary({
+        phase,
+        args: { action: "wait", id: "task-1", until: "output", contains: "ready in" },
+        result: undefined,
+        isError: false,
+      });
+      expect(waiting?.subject).toContain("ready in");
+      expect(waiting?.subject).not.toContain("task-1");
     }
     const final = project({ action: "status", snapshot });
     expect(final?.action).toBe("status");
-    expect(final?.subject).toBe("task-1");
+    // An unnamed task goes by its command, the same collapsed and expanded.
+    expect(final?.subject).toBe(snapshot.command);
+    expect(final?.compactSubject).toBeUndefined();
     expect(final?.outcome).toBe("success");
-    expect(final?.metadata).toEqual(["running"]);
+    expect(final?.metadata).toEqual([taskStateLabel("running")]);
     expect(final?.issues).toEqual([]);
   });
 
@@ -183,7 +207,20 @@ describe("background task compact semantics", () => {
     ])
       expect(project(details)).toBeUndefined();
     expect(project({ action: "clear", removed: 1 })).toBeUndefined();
-    expect(project({ action: "status", snapshot }, "status", "settled", true)).toBeUndefined();
+  });
+
+  it("classifies a rejected call as an error the shell explains from its text", () => {
+    const summary = projectBackgroundTaskCompactSummary({
+      phase: "settled",
+      args: { action: "start", command: "pnpm dev", cwd: "missing" },
+      result: { details: {} },
+      isError: true,
+    });
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.subject).toBe("pnpm dev");
+    const error = "Couldn't find the working directory /project/missing";
+    const resolved = resolveCompactSummary(summary, "settled", true, error);
+    expect(resolved?.issues?.map((issue) => issue.message)).toEqual([error]);
   });
 
   it("keeps aggregate stopped summaries bounded without repeating every task ID", () => {
@@ -199,7 +236,7 @@ describe("background task compact semantics", () => {
       "list",
     );
     expect(result?.outcome).toBe("cancelled");
-    expect(result?.counters).toEqual(["20 stopped"]);
+    expect(result?.counters?.[0]).toBe("20 stopped");
     expect(result?.subject).not.toContain("cancelled-");
     expect(result?.issues).toEqual([]);
   });
@@ -218,17 +255,52 @@ describe("background task compact semantics", () => {
     expect(find(result, `task-1:${code}`)?.severity).toBe(severity);
   });
 
-  it("keeps a confirmed stop signal neutral and visible in the subject", () => {
+  it("keeps a confirmed stop neutral, with one subject collapsed and expanded", () => {
     const result = project(
       {
         action: "stop",
-        snapshot: { ...snapshot, state: "stopped", signal: "SIGTERM", exitCode: null },
+        snapshot: {
+          ...snapshot,
+          name: "server",
+          state: "stopped",
+          signal: "SIGTERM",
+          exitCode: null,
+        },
       },
       "stop",
     );
     expect(result?.outcome).toBe("cancelled");
-    expect(result?.subject).toContain("SIGTERM");
+    expect(result?.subject).toBe("server");
+    expect(result?.compactSubject).toBeUndefined();
+    expect(result?.metadata).toEqual([taskStateLabel("stopped")]);
+    // The stop's own signal is routine, not a cause.
     expect(result?.issues).toEqual([]);
+  });
+
+  it("explains a timed-out task by its time limit alone", () => {
+    const result = project({
+      action: "status",
+      snapshot: {
+        ...snapshot,
+        state: "timed_out",
+        startedAt: 1_000,
+        endedAt: 31_000,
+        exitCode: 143,
+        signal: "SIGTERM",
+      },
+    });
+    expect(result?.outcome).toBe("error");
+    expect(result?.issues?.map((issue) => issue.code)).toEqual(["task-1:runtime-timeout"]);
+    expect(result?.issues?.[0]?.message).toContain("30s");
+  });
+
+  it("reports a spawn failure's own message", () => {
+    const result = project({
+      action: "status",
+      snapshot: { ...snapshot, state: "failed", error: "Couldn't start the process" },
+    });
+    expect(result?.outcome).toBe("error");
+    expect(result?.issues?.map((issue) => issue.message)).toEqual(["Couldn't start the process"]);
   });
 
   it("keeps unconfirmed cleanup attention beside a reported failure", () => {
@@ -249,26 +321,40 @@ describe("background task compact semantics", () => {
 
   it("reports wait timeout without claiming task timeout or completion", () => {
     const result = project(
-      wait("timeout", snapshot, { earliestAvailableCursor: 4, droppedBytes: 3 }),
+      wait(
+        "timeout",
+        { ...snapshot, droppedLogBytes: 3 },
+        {
+          earliestAvailableCursor: 4,
+          droppedBytes: 3,
+        },
+      ),
       "wait",
+      "settled",
+      false,
+      { until: "exit", waitSeconds: 30 },
     );
     expect(result?.outcome).toBe("warning");
     expect(result?.metadata).toHaveLength(1);
-    expect(result?.metadata?.join(" ")).toMatch(/timeout.*running/);
-    expect(find(result, "task-1:log-loss")?.detail).toContain("3 log bytes");
-    expect(find(result, "task-1:wait-timeout")?.severity).toBe("warning");
-    expect(find(result, "task-1:retained-cursors")?.severity).toBe("info");
+    expect(result?.metadata?.[0]).toContain(taskStateLabel("running"));
+    // One loss line, with where retained output resumes for the agent.
+    expect(result?.issues?.filter((issue) => issue.code === "task-1:log-loss")).toHaveLength(1);
+    expect(find(result, "task-1:log-loss")?.message).toContain("3 bytes");
+    expect(find(result, "task-1:log-loss")?.detail).toContain("cursor 4");
+    const timeout = find(result, "task-1:wait-timeout");
+    expect(timeout?.severity).toBe("warning");
+    expect(timeout?.message).toContain("30s");
     expect(find(result, "task-1:runtime-timeout")).toBeUndefined();
   });
 
-  it("keeps completed waits distinct from process exit state", () => {
-    const result = project(
-      wait("completed", { ...snapshot, state: "exited", exitCode: 0 }),
-      "wait",
-    );
-    expect(result?.metadata).toHaveLength(1);
-    expect(result?.outcome).toBe("success");
-    expect(result?.metadata?.join(" ")).toContain("exit 0");
+  it.each([
+    { ...snapshot, state: "exited", exitCode: 0 },
+    { ...snapshot, state: "failed", exitCode: 1 },
+  ])("describes a completed wait by the task's state, as status does: %j", (ended) => {
+    const result = project(wait("completed", ended), "wait");
+    const status = project({ action: "status", snapshot: ended });
+    expect(result?.metadata).toEqual(status?.metadata);
+    expect(result?.outcome).toBe(status?.outcome);
     expect(project({ action: "list", tasks: [] }, "list")?.counters).toEqual(["0 tasks"]);
   });
 
@@ -276,12 +362,12 @@ describe("background task compact semantics", () => {
     "keeps output-match evidence even when the process exits: %j",
     (matchedSnapshot) => {
       const summary = project(wait("matched", matchedSnapshot), "wait");
+      const status = project({ action: "status", snapshot: matchedSnapshot });
       expect(summary?.outcome).toBe("success");
       expect(summary?.metadata).toHaveLength(1);
-      expect(summary?.metadata?.join(" ")).toContain("matched");
-      if (matchedSnapshot.state === "running")
-        expect(summary?.metadata?.join(" ")).not.toContain("exit");
-      else expect(summary?.metadata?.join(" ")).toContain("exit 0");
+      // The match is reported beside the task's state, not in place of it.
+      expect(summary?.metadata?.[0]).not.toBe(status?.metadata?.[0]);
+      expect(summary?.metadata?.[0]).toContain(status?.metadata?.[0]);
       expect(project(wait("matched", matchedSnapshot, { id: "other" }), "wait")).toBeUndefined();
     },
   );
@@ -293,23 +379,26 @@ describe("background task compact semantics", () => {
     );
     expect(result?.outcome).toBe("warning");
     expect(severities(result, "warning")).toEqual(["task-1:log-loss", "task-1:slice-truncated"]);
-    expect(severities(result, "info")).toEqual([
-      "task-1:retained-cursors",
-      "task-1:request-log-slice",
-    ]);
-    const cursorsDetail = find(result, "task-1:retained-cursors")?.detail;
-    expect(cursorsDetail).toContain("earliest cursor 4");
-    expect(cursorsDetail).toContain("next cursor 10");
-    expect(find(result, "task-1:log-loss")?.detail).toContain("3 log bytes");
-    expect(find(result, "task-1:slice-truncated")?.detail).toContain("20/50");
-    for (const issue of result?.issues ?? []) expect(issue.message).not.toMatch(/cursor|\d/);
+    // Recovery rides on the warnings' details rather than repeating them as info lines.
+    expect(severities(result, "info")).toEqual([]);
+    const lossDetail = find(result, "task-1:log-loss")?.detail;
+    expect(lossDetail).toContain("cursor 4");
+    expect(lossDetail).toContain("cursor 10");
+    expect(find(result, "task-1:log-loss")?.message).toContain("3 bytes");
+    expect(find(result, "task-1:slice-truncated")?.message).toMatch(/2 of 5/u);
+    expect(find(result, "task-1:slice-truncated")?.detail).toContain("20 bytes of 50 bytes");
+    expect(find(result, "task-1:slice-truncated")?.detail).toMatch(/afterCursor/u);
+    for (const issue of result?.issues ?? []) {
+      expect(issue.message).not.toMatch(/cursor|tailLines/iu);
+      expect(issue.detail).not.toContain(issue.message);
+    }
   });
 
   it("treats exited log retrieval as successful without inventing process exit evidence", () => {
     const result = project(logs("exited"), "logs");
     expect(result?.outcome).toBe("success");
     expect(result?.action).toBe("logs");
-    expect(result?.metadata).toEqual(["exited"]);
+    expect(result?.metadata).toEqual([taskStateLabel("exited")]);
     expect(result?.issues).toEqual([]);
   });
 
@@ -323,7 +412,8 @@ describe("background task compact semantics", () => {
     expect(result?.outcome).toBe(outcome);
     if (outcome === "error") {
       expect(severities(result, "error")).toHaveLength(1);
-      expect(find(result, "task-1:read-task-status")?.severity).toBe("info");
+      // Where the failure details are is agent recovery on the error itself.
+      expect(result?.issues?.[0]?.detail).toMatch(/status/u);
     }
     if (state === "stopping")
       expect(find(result, "task-1:cleanup-unconfirmed")?.severity).toBe("warning");
@@ -412,6 +502,13 @@ describe("background task compact semantics", () => {
       ),
       project(logs("failed", {}, true), "logs"),
       project(logs("timed_out"), "logs"),
+      project(logs("running", { droppedBytes: 18_432 }), "logs"),
+      project(wait("timeout", snapshot), "wait", "settled", false, {
+        until: "output",
+        contains: "ready in",
+        waitSeconds: 30,
+      }),
+      project(wait("timeout", snapshot), "wait"),
     ];
     const issues = summaries.flatMap((summary) => summary?.issues ?? []);
     expect(issues.length).toBeGreaterThan(snapshots.length);

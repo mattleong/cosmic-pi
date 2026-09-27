@@ -11,7 +11,6 @@ import { renderDisplayPath } from "../../paths/display";
 import { showingFooter } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
-import { countLabel } from "../../shared/helpers";
 import { resolvePreviewLanguage } from "../../syntax/language";
 import { getEditPreviewOperations, getPathArg } from "../data/args";
 import { getEditDiff, getTextContent } from "../data/results";
@@ -22,8 +21,9 @@ import { cachedDeferredPreview } from "./shared/cache";
 import type { RendererArguments, RendererState } from "./shared/types";
 import { diffPreviewCacheKey } from "./shared/preview-cache-key";
 import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
-import { argumentIssues, previewCallIssues, withPreviewIssues } from "./shared/preview-issues";
 import { renderPreviewError } from "./shared/result-prelude";
+import { countLabel } from "pi-cosmic-core";
+import { previewIssuesSlot } from "../../preview/preview-issues";
 
 export function createEditPreviewTool(cwd: string) {
   const originalEdit = createEditToolDefinition(cwd);
@@ -53,9 +53,7 @@ export function createEditPreviewTool(cwd: string) {
       renderContext.state.editHeaderText = text;
       text.setText(formatEditHeader(path, cwd, theme, renderContext.state.editSummaryText));
 
-      const issues = previewCallIssues(renderContext.state, theme, () =>
-        argumentIssues("edit", renderContext),
-      );
+      const issues = previewIssuesSlot(renderContext);
       if (
         !renderContext.argsComplete ||
         operations.length === 0 ||
@@ -110,74 +108,70 @@ export function createEditPreviewTool(cwd: string) {
       return preview;
     },
 
-    renderResult: withPreviewIssues(
-      "edit",
-      (result, { expanded, isPartial }, theme, renderContext) => {
-        if (isPartial) return new Text(theme.fg("warning", "Editing…"), 0, 0);
+    renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
+      if (isPartial) return new Text(theme.fg("warning", "Editing…"), 0, 0);
 
-        const firstText = getTextContent(result.content);
-        if (renderContext.isError) {
-          renderContext.state.editSummaryText = undefined;
-          updateEditHeader(renderContext, cwd, theme);
-          return renderPreviewError(theme, expanded, firstText);
-        }
-
-        const diff = getEditDiff(result.details);
-        if (!diff) {
-          renderContext.state.editSummaryText = `${theme.fg("success", "✓ Edit applied")}${theme.fg("muted", " · no diff")}`;
-          updateEditHeader(renderContext, cwd, theme);
-          return new Container();
-        }
-
-        const filePath = getPathArg(renderContext.args);
-        const lang = resolvePreviewLanguage({
-          path: filePath,
-          piLanguage: getLanguageFromPath(filePath),
-        });
-        const summary = summarizeDiff(diff);
-        const hidePreview = !expanded && !codePreviewSettings.editDiffPreview;
-        const limit = hidePreview
-          ? summary.totalLines
-          : diffPreviewLineLimit(
-              summary.totalLines,
-              expanded,
-              codePreviewSettings.editCollapsedLines,
-            );
-        renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
+      const firstText = getTextContent(result.content);
+      if (renderContext.isError) {
+        renderContext.state.editSummaryText = undefined;
         updateEditHeader(renderContext, cwd, theme);
-        if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
-        const render = () =>
-          new FullWidthDiffText(
-            formatDiffPreview(diff, lang, theme, limit, {
-              totalLines: summary.totalLines,
-              hiddenLineNoun: "diff lines",
-              skipHighlightLabel: "Syntax highlighting skipped for large diff",
-              invalidate: renderContext.invalidate,
-            }),
-            theme,
+        return renderPreviewError(theme, expanded, firstText);
+      }
+
+      const diff = getEditDiff(result.details);
+      if (!diff) {
+        renderContext.state.editSummaryText = `${theme.fg("success", "✓ Edit applied")}${theme.fg("muted", " · no diff")}`;
+        updateEditHeader(renderContext, cwd, theme);
+        return new Container();
+      }
+
+      const filePath = getPathArg(renderContext.args);
+      const lang = resolvePreviewLanguage({
+        path: filePath,
+        piLanguage: getLanguageFromPath(filePath),
+      });
+      const summary = summarizeDiff(diff);
+      const hidePreview = !expanded && !codePreviewSettings.editDiffPreview;
+      const limit = hidePreview
+        ? summary.totalLines
+        : diffPreviewLineLimit(
+            summary.totalLines,
+            expanded,
+            codePreviewSettings.editCollapsedLines,
           );
-        const previewKey = diffPreviewCacheKey(
-          "edit-result",
-          diff,
-          filePath,
-          expanded,
+      renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
+      updateEditHeader(renderContext, cwd, theme);
+      if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
+      const render = () =>
+        new FullWidthDiffText(
+          formatDiffPreview(diff, lang, theme, limit, {
+            totalLines: summary.totalLines,
+            hiddenLineNoun: "diff lines",
+            skipHighlightLabel: "Syntax highlighting skipped for large diff",
+            invalidate: renderContext.invalidate,
+          }),
           theme,
-          codePreviewSettings.editCollapsedLines,
         );
-        return cachedDeferredPreview(
-          renderContext.state,
-          "editResultPreviewKey",
-          "editResultPreviewComponent",
-          previewKey,
-          diff,
-          "Rendering edit diff…",
-          theme,
-          render,
-          renderContext.invalidate,
-        );
-      },
-      "call",
-    ),
+      const previewKey = diffPreviewCacheKey(
+        "edit-result",
+        diff,
+        filePath,
+        expanded,
+        theme,
+        codePreviewSettings.editCollapsedLines,
+      );
+      return cachedDeferredPreview(
+        renderContext.state,
+        "editResultPreviewKey",
+        "editResultPreviewComponent",
+        previewKey,
+        diff,
+        "Rendering edit diff…",
+        theme,
+        render,
+        renderContext.invalidate,
+      );
+    },
   });
 }
 

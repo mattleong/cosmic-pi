@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import { managerTable } from "pi-cosmic-ui/manager/table";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine, countLabel } from "pi-cosmic-core";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { detailFieldRows, listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import type { McpManagerServer, McpManagerSnapshot } from "../manager/model.ts";
@@ -77,7 +77,7 @@ export const dashboardTable = (
 };
 const metadataExplanation = (row: McpManagerServer): string => {
   const summary = row.metadata
-    ? `${row.metadata.support.tools ? `${row.metadata.tools} tools` : "Tools unavailable"} · ${row.metadata.resources} resources · ${row.metadata.templates} templates · ${row.metadata.prompts} prompts`
+    ? `${row.metadata.support.tools ? countLabel(row.metadata.tools, "tool") : "Tools unavailable"} · ${countLabel(row.metadata.resources, "resource")} · ${countLabel(row.metadata.templates, "template")} · ${countLabel(row.metadata.prompts, "prompt")}`
     : undefined;
   switch (row.metadataState) {
     case "unavailable":
@@ -109,7 +109,7 @@ export const dashboardDetail = (
   theme: Theme,
   focused: boolean,
 ): ReadonlyArray<string> => {
-  if (!row) return [theme.fg("muted", "No server selected.")];
+  if (!row) return [theme.fg("muted", "Select a server")];
   const status = dashboardStatus(row);
   const notices = [
     ...(row.diagnostic ? [theme.fg("error", sanitizeTerminalLine(row.diagnostic))] : []),

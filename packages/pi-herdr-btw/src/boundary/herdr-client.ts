@@ -8,6 +8,7 @@ import {
   runBoundedProcessNode,
   sanitizeDiagnosticContent,
   type BoundedProcessError,
+  firstLineMessage,
 } from "pi-cosmic-core";
 import { HerdrBtwError } from "../btw/errors.ts";
 import { herdrBtwParentMarkerArguments } from "../btw/marker.ts";
@@ -145,7 +146,8 @@ const herdrCommandExitFailure = (
   diagnosticSource: string,
 ): HerdrBtwError => {
   const sanitized = sanitizeDiagnosticContent(diagnosticSource, { maximumLength: 2_000 }).trim();
-  const detail = sanitized ? ` ${sanitized}` : "";
+  const reason = sanitized ? firstLineMessage(sanitized, "") : "";
+  const detail = reason ? `: ${reason}` : "";
   const herdrCode = decodeUnknownOrUndefined(
     Schema.fromJsonString(HerdrCliErrorEnvelopeSchema),
     diagnosticSource,
@@ -162,10 +164,10 @@ const herdrCommandExitFailure = (
       rejected ? "rejected" : uncertain ? "outcome_uncertain" : "failed",
     ),
     message: rejected
-      ? `Herdr ${request.operation} was rejected before it was applied.${detail}`
+      ? `Herdr refused to ${request.operation}${detail}`
       : uncertain
-        ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.${detail}`
-        : `Herdr ${request.operation} failed.${detail}`,
+        ? `Herdr may have finished trying to ${request.operation}, but couldn't confirm it${detail}`
+        : `Herdr couldn't ${request.operation}${detail}`,
     outcome: uncertain ? "uncertain" : "confirmed",
     herdrCode,
   });
@@ -207,8 +209,8 @@ const herdrTransportFailure = (
     operation: request.operation,
     code: operationCode(request.operation, uncertain ? "outcome_uncertain" : "failed"),
     message: uncertain
-      ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.`
-      : `Unable to run Herdr ${request.operation}.`,
+      ? `Herdr may have finished trying to ${request.operation}, but couldn't confirm it`
+      : `Couldn't run Herdr to ${request.operation}`,
     outcome: uncertain ? "uncertain" : "confirmed",
   });
 };
@@ -225,8 +227,8 @@ const herdrDecodeFailure = (
       request.mutation ? "outcome_uncertain" : `${kind}_invalid`,
     ),
     message: request.mutation
-      ? `Herdr ${request.operation} returned ${description} data after the request was dispatched; its outcome is unconfirmed.`
-      : `Herdr returned ${description} data while attempting to ${request.operation}.`,
+      ? `Herdr sent ${description} data after trying to ${request.operation}, so the outcome is unknown`
+      : `Herdr sent ${description} data while trying to ${request.operation}`,
     outcome: request.mutation ? "uncertain" : "confirmed",
   });
 };

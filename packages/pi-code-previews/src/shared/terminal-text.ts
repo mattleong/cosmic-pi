@@ -1,4 +1,5 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const ESCAPE_CODE = 0x1b;
 const CARRIAGE_RETURN_CODE = 0x0d;
@@ -170,7 +171,7 @@ export function wrapAnsiToWidth(
           rowWidth = 0;
         }
         if (segmentWidth > width && rowWidth === 0) {
-          const clipped = truncateToWidth(segment, width, "");
+          const clipped = clipToWidth(segment, width, "");
           if (clipped) {
             row += clipped;
             rowWidth += visibleWidth(clipped);
@@ -192,13 +193,13 @@ export function wrapAnsiToWidth(
 
 function truncateWrappedRow(row: string, rowWidth: number, width: number): string {
   if (rowWidth <= width && isTruncationSafe(row)) return row;
-  return truncateToWidth(row, width, "");
+  return clipToWidth(row, width, "");
 }
 
 function truncateLastRow(rows: string[], width: number): string[] {
   const last = rows.at(-1) ?? "";
   if (visibleWidth(last) >= width && width > 1)
-    rows[rows.length - 1] = truncateToWidth(last, width - 1, "") + "›";
+    rows[rows.length - 1] = clipToWidth(last, width - 1, "") + "›";
   return rows;
 }
 

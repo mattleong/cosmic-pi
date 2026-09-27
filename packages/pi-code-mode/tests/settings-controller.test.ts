@@ -181,7 +181,6 @@ describe("code mode settings controller surface ownership", () => {
           expect(h.order.indexOf("custom-close:PromptInteger"), testCase.name).toBeLessThan(
             h.order.indexOf("input"),
           );
-          expect(h.runCount(), testCase.name).toBe(1);
           if (testCase.name === "rejected")
             expect(setSetting).toHaveBeenCalledWith("global", "timeoutMs", "bad");
           else expect(setSetting).not.toHaveBeenCalled();

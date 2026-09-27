@@ -6,6 +6,12 @@ const STARTING_SPINNER_FRAMES = ["◌", "◔", "◑", "◕"] as const;
 const frameAt = (frames: ReadonlyArray<string>, frame: number, fallback: string): string =>
   frames[Math.abs(Math.floor(frame)) % frames.length] ?? fallback;
 
+/** One spinner speed for every extension; tickers that animate a spinner repaint at this rate. */
+export const SPINNER_FRAME_MS = 160;
+
+/** The spinner frame shown at a clock reading. */
+export const spinnerFrameAt = (now: number): number => Math.floor(now / SPINNER_FRAME_MS);
+
 export const brailleSpinnerFrame = (frame: number): string =>
   frameAt(BRAILLE_SPINNER_FRAMES, frame, "⠋");
 
@@ -31,7 +37,13 @@ const MANAGER_NOTICE_GLYPHS = {
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
 export type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
-export type ManagerActivityKind = "pending" | "running" | ManagerStateGlyphKind;
+/** Live states that need someone else before they can continue. */
+export type ManagerAttentionKind = "waiting" | "paused";
+export type ManagerActivityKind =
+  | "pending"
+  | "running"
+  | ManagerAttentionKind
+  | ManagerStateGlyphKind;
 export type ManagerStatusColor = "accent" | "success" | "warning" | "error" | "muted" | "dim";
 
 const MANAGER_STATE_GLYPHS = {
@@ -51,16 +63,43 @@ export const managerActivityGlyph = (kind: ManagerActivityKind, frame = 0): stri
     ? startingSpinnerFrame(frame)
     : kind === "running"
       ? brailleSpinnerFrame(frame)
-      : managerStateGlyph(kind);
+      : kind === "waiting" || kind === "paused"
+        ? managerNoticeGlyph("warning")
+        : managerStateGlyph(kind);
 
-/** Theme-token policy for the shared activity vocabulary. */
+/**
+ * Theme-token policy for the shared activity vocabulary. Live work is accent so that green only
+ * ever means success; anything waiting on someone is a warning.
+ */
 export const managerActivityColor = (kind: ManagerActivityKind): ManagerStatusColor => {
-  if (kind === "pending") return "accent";
-  if (kind === "running" || kind === "done") return "success";
+  if (kind === "pending" || kind === "running") return "accent";
+  if (kind === "done") return "success";
   if (kind === "failed") return "error";
-  if (kind === "stopping") return "warning";
-  return "muted";
+  if (kind === "stopped") return "muted";
+  return "warning";
 };
+
+const MANAGER_ACTIVITY_LABELS = {
+  pending: "starting",
+  running: "running",
+  waiting: "waiting",
+  paused: "paused",
+  stopping: "stopping",
+  done: "finished",
+  failed: "failed",
+  stopped: "stopped",
+} satisfies Readonly<Record<ManagerActivityKind, string>>;
+
+/**
+ * The one word every extension uses for a state. Requests and questionnaires that end early are
+ * "cancelled"; running work that someone ends is "stopped".
+ */
+export const managerActivityLabel = (kind: ManagerActivityKind): string =>
+  MANAGER_ACTIVITY_LABELS[kind];
+
+/** Clips to `width` terminal columns, keeping styling, and marks the cut with "…". */
+export const clipToWidth = (text: string, width: number, marker = "…", pad = false): string =>
+  truncateToWidth(text, width, marker, pad);
 
 /** Keep the active tab visible when the complete strip cannot fit. Labels may contain ANSI. */
 export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {

@@ -3,15 +3,17 @@ import * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import { boundaryError } from "../../src/client/errors.ts";
 import { mcpDiagnostic } from "../../src/client/diagnostics.ts";
-import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
+import { makeMcpErrorReceipts, mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
 import { prefixBytes } from "../../src/results/normalize.ts";
 import { MCP_VALIDATION_NOTICES } from "../../src/results/validation-notices.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { MCP_DISPLAY_LIMITS } from "../../src/ui/content-preview.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "../../src/ui/tool-render-details.ts";
 import { renderMcpCall, renderMcpResult } from "../../src/ui/tool-renderer.ts";
-import { plainTheme as theme } from "pi-cosmic-core/testing";
+import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { projectReply } from "../fixtures/results.ts";
+import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
+import { buildMcpTool, wrapMcpTool } from "../../src/tools/controller.ts";
 
 const reply = (data = {}) => ({
   details: { action: "tools.call", outcome: "completed", isError: false, notices: [], data },
@@ -49,10 +51,36 @@ const retainedRead = (
   details: withOrigin(origin, data, { action: "result.read", resultId: "retained-1", ...details }),
   content: [],
 });
-const display = <Result>(result: Result, expanded = false, isPartial = false) =>
-  renderMcpResult(result, { expanded, isPartial }, theme, "configured-key to expand")
-    .render(80)
-    .join("\n");
+/** A result as the registered tool shows it in preview style: the shell's issues, then the card. */
+const display = <Result>(result: Result, expanded = false, isPartial = false) => {
+  const restore = applyPresentationSettings({
+    toolCallCollapsedStyle: "preview",
+    toolCallTiming: false,
+  });
+  try {
+    const details = decodeMcpCardDetails(result);
+    const harness = createToolPresentationHarness(
+      wrapMcpTool(
+        buildMcpTool({
+          owner: Symbol("test"),
+          receipts: makeMcpErrorReceipts(),
+          execute: () => Promise.reject(new Error("Rendering must not execute")),
+        }),
+      ),
+      { width: 80 },
+    );
+    const view = { expanded, isPartial, executionStarted: true };
+    harness.call(/^[a-z][a-z.]*$/u.test(details.action) ? { action: details.action } : {}, view);
+    // Malformed results must render too, so they reach the shell as Pi would pass them.
+    harness.result(opaqueFixture(result), {
+      ...view,
+      isError: details.presentation.isError,
+    });
+    return harness.render(80).join("\n");
+  } finally {
+    restore();
+  }
+};
 const codes = <Result>(result: Result) =>
   decodeMcpCardDetails(result).presentation.issues.map((issue) => issue.code);
 /** Collapsed cards show every attention issue's message; details wait for expansion. */
@@ -95,7 +123,7 @@ describe("MCP card projections", () => {
     const card = decodeMcpCardDetails(result);
     expect(card.isError).toBe(false);
     expect(card.presentation.isError).toBe(true);
-    expect(display(result).replace(/\s+/g, " ")).toContain(text);
+    expect(display(result).replace(/\s+/g, " ")).toContain(text.slice(0, -1));
     expect(result.details.isError).toBe(false);
   });
 
@@ -349,8 +377,9 @@ describe("MCP card projections", () => {
       ),
     });
     expect(card.notices).toEqual(notices);
+    // A call's own failure is the server's error; "earlier call" wording is for saved-output reads.
     if ("isError" in override && override.isError === true)
-      expect(card.presentation.issues.map((issue) => issue.code)).toContain("origin-failed");
+      expect(card.presentation.issues.map((issue) => issue.code)).toContain("failure");
   });
 
   it("reports counts and images without copying or touching image bytes", () => {
@@ -390,9 +419,9 @@ describe("MCP card projections", () => {
       expect(decodeMcpCardDetails(value).outcome).toBeUndefined();
       expect(() => display(value, true)).not.toThrow();
     }
-    expect(display(reply(), false, true)).toMatch(/progress/i);
+    expect(display(reply(), false, true)).toMatch(/running/i);
     expect(display(reply(), false, true)).not.toMatch(/completed|not sent/i);
-    expect(display({ details: { isError: true } })).toMatch(/failed/i);
+    expect(display({ details: { isError: true } })).toMatch(/error|failed/i);
   });
 
   it("contains getters, cycles, revoked proxies and hostile terminal controls with bounded output", () => {
@@ -416,7 +445,9 @@ describe("MCP card projections", () => {
     expect(text).toContain("visible");
     const revoked = Proxy.revocable({}, {});
     revoked.revoke();
-    expect(() => display(revoked.proxy, true)).not.toThrow();
+    const card = <Result>(value: Result) =>
+      renderMcpResult(value, { expanded: true, isPartial: false }, theme).render(80);
+    expect(() => card(revoked.proxy)).not.toThrow();
     expect(() => display(reply(revoked.proxy), true)).not.toThrow();
     const huge = reply({ rows: Array.from({ length: 1000 }, () => "x".repeat(100_000)) });
     const projection = decodeMcpCardDetails(huge);

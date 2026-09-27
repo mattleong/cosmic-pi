@@ -11,6 +11,7 @@ import {
   type ProfileSettingsInspection,
   type PersistentProfileSetRef,
 } from "../profile-route-editor.ts";
+import { countLabel } from "pi-cosmic-core";
 
 export interface ProfileSetPreviewProfile {
   readonly id: ProfileId;
@@ -78,9 +79,9 @@ const scopeEntries = (
         scopeDefault ? "default for new sessions" : undefined,
         invalid
           ? repairable
-            ? `${invalidProfileCount} invalid profile${invalidProfileCount === 1 ? "" : "s"}, fix before use`
+            ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
             : "invalid structure, delete and create a new set"
-          : `${profileCount} saved profile${profileCount === 1 ? "" : "s"}`,
+          : `${countLabel(profileCount, "saved profile")}`,
       ].filter((value): value is string => value !== undefined);
       return {
         kind: "set",

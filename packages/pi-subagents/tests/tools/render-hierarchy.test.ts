@@ -6,6 +6,8 @@ import {
   makeStartDetails,
 } from "../../src/tools/details.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
+import { renderContextFixture } from "pi-code-previews/testing";
+import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { renderSubagentResult } from "../../src/tools/render.ts";
 import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
 import {
@@ -164,12 +166,25 @@ describe("hierarchical tool result rendering", () => {
       awaitedRunIds: [active.id, failure.id],
       awaitUntil: "all_finished" as const,
     };
-    const ordinary = text(makeAwaitDetails(input), { expanded: true });
+    const summarize = (details: ReturnType<typeof makeAwaitDetails>) =>
+      createSubagentCompactSummary("subagent_await")({
+        phase: "settled",
+        args: { runIds: input.awaitedRunIds, until: input.awaitUntil },
+        result: { content: [], details },
+        context: renderContextFixture(),
+      });
+    const signature = (details: ReturnType<typeof makeAwaitDetails>) => {
+      const summary = summarize(details);
+      return [summary?.outcome, ...(summary?.issues ?? []).map((issue) => issue.code)];
+    };
+    const ordinary = signature(makeAwaitDetails(input));
 
     for (const outcome of ["timedOut", "cancelled", "attentionRequired"] as const) {
-      const expanded = text(makeAwaitDetails({ ...input, [outcome]: true }), { expanded: true });
+      const details = makeAwaitDetails({ ...input, [outcome]: true });
+      const expanded = text(details, { expanded: true });
 
-      expect(expanded).not.toEqual(ordinary);
+      // The summary's issue lines tell the outcomes apart; the body keeps the run data.
+      expect(signature(details)).not.toEqual(ordinary);
       expect(expanded).toContain(active.progress);
       expect(expanded).toContain(failure.error);
     }

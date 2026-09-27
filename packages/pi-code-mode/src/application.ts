@@ -197,12 +197,12 @@ export function registerCodeModeApplication(
         );
       } catch {
         tearDownTool();
-        notifyAtHostBoundary(input.ctx, "Code Mode failed to register its tool.", "warning");
+        notifyAtHostBoundary(input.ctx, "Code Mode couldn't register its tool", "warning");
         return;
       }
       if (!isCurrent()) return;
       if (!registerCodeModeTool(pi, wrapped)) {
-        notifyAtHostBoundary(input.ctx, "Code Mode failed to register its tool.", "warning");
+        notifyAtHostBoundary(input.ctx, "Code Mode couldn't register its tool", "warning");
         return;
       }
       hasRegisteredTool = true;
@@ -219,7 +219,7 @@ export function registerCodeModeApplication(
       tearDownTool();
     },
     onStartFailure: ({ ctx }) => {
-      notifyAtHostBoundary(ctx, "Code Mode failed to start.", "warning");
+      notifyAtHostBoundary(ctx, "Code Mode couldn't start", "warning");
     },
   });
 
@@ -245,7 +245,7 @@ export function registerCodeModeApplication(
 
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") {
-      notifyAtHostBoundary(ctx, "Code Mode is unavailable for this session.", "warning");
+      notifyAtHostBoundary(ctx, "Code Mode isn't available in this session", "warning");
       return slot.shutdown().then(() => undefined);
     }
     const projectTrusted = isProjectTrusted(ctx);

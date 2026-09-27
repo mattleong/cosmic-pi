@@ -69,7 +69,7 @@ describe("requestXaiUsage", () => {
     return Effect.gen(function* () {
       const error = yield* Effect.flip(requestXaiUsage());
       expect(error.operation).toBe("monthly");
-      expect(error.message).toContain("(HTTP 401)");
+      expect(error.message).toContain("status 401");
       expect(usage.counts).toEqual({ registry: 2, monthly: 1 });
       expect(serializedSnapshot(error)).not.toMatch(/rejected-before-refresh|error_description/);
     }).pipe(provideBuiltLayer(usage.layer));

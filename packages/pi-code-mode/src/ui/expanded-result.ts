@@ -1,13 +1,7 @@
 /** Expanded presentation consumes only retained receipts and host timing snapshots. */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import {
-  expandedSection,
-  renderCompactChildren,
-  renderCompactIssues,
-  type CompactChild,
-  type CompactIssue,
-} from "pi-code-previews";
+import { expandedSection, renderCompactChildren, type CompactChild } from "pi-code-previews";
 import { formatCodeModeProgram } from "./program-source.ts";
 import { codeModeOutputText, formatStructuredCodeModeOutput } from "./result-output.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
@@ -47,13 +41,13 @@ const splitAgentNotes = (raw: string, offset: number | undefined) => {
 };
 
 /**
- * Fixed order: the run's issues, Program, Calls with each call's issues beneath it, the labeled
- * output or error, then agent notes. Content-only slots omit what the shell already shows.
+ * Fixed order after the shell's heading and issues: Program, Calls with each call's issues
+ * beneath it, the labeled output or error, then agent notes. Content-only slots omit the
+ * program, which the shell's content call slot already shows.
  */
 export const renderExpandedCodeModeResult = (input: {
   readonly details: CodeModeRenderDetails;
   readonly rows: readonly CompactChild[];
-  readonly issues: readonly CompactIssue[];
   readonly raw: string;
   readonly isPartial: boolean;
   readonly isError: boolean;
@@ -66,10 +60,7 @@ export const renderExpandedCodeModeResult = (input: {
 }): Component => {
   const { details, theme, raw, isPartial, isError } = input;
   const sections: Component[] = [];
-  if (!input.contentOnly) {
-    sections.push(lines((width) => renderCompactIssues(input.issues, theme, width, true, "")));
-    sections.push(renderProgramSection(input.program, theme));
-  }
+  if (!input.contentOnly) sections.push(renderProgramSection(input.program, theme));
   if (details.counts.total > 0 || input.rows.length > 0)
     sections.push(
       expandedSection(

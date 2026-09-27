@@ -26,9 +26,11 @@ import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import type { CosmicUiService } from "../src/protocol/service.ts";
 import { registerSettingsCommand } from "../src/settings/controller.ts";
 
-const flushSettlements = Effect.promise(() => Promise.resolve()).pipe(
-  Effect.andThen(Effect.promise(() => Promise.resolve())),
-);
+/** Waits for every queued promise settlement, however many hops the apply chain takes. */
+const flushSettlements = Effect.callback<void>((resume) => {
+  const handle = setImmediate(() => resume(Effect.void));
+  return Effect.sync(() => clearImmediate(handle));
+});
 
 function settingsHarness() {
   initTheme();

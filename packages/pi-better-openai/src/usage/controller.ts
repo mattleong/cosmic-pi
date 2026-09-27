@@ -75,8 +75,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         projectTrusted: options.projectTrusted,
         initialProjection,
         hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
-        missingCredentialsMessage: (authPath) =>
-          `Missing openai-codex OAuth credentials in ${authPath}. Run /login openai-codex.`,
+        missingCredentialsMessage: () => "Sign in with /login openai-codex",
         clearAuthPatch: { authFound: false, accountId: undefined },
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate: prepareSettingUpdate,

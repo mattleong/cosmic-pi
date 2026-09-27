@@ -1,12 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { managerNoticeGlyph, clipToWidth } from "pi-cosmic-ui/manager";
 import type { CompactIssue } from "../tools/compact-issues";
 import { compactPlainText, compactSingleLine } from "./compact-row";
 
 const COLORS = { error: "error", warning: "warning", info: "muted" } as const;
-const glyph = (severity: CompactIssue["severity"]) =>
-  severity === "info" ? "·" : managerNoticeGlyph(severity);
+const glyph = (severity: CompactIssue["severity"]) => managerNoticeGlyph(severity);
 
 /** The issue shown on a collapsed one-line row: the first error, else the first warning. */
 export function primaryCompactIssue(
@@ -53,7 +52,7 @@ export function renderCompactIssues(
     const pad = " ".repeat(hang);
     wrapTextWithAnsi(theme.fg(color, message), width - hang).forEach((line, index) =>
       rows.push(
-        truncateToWidth(
+        clipToWidth(
           `${hang ? (index === 0 ? theme.fg(color, prefix) : pad) : ""}${line}`,
           width,
           "",
@@ -63,7 +62,7 @@ export function renderCompactIssues(
     if (!expanded || !issue.detail) continue;
     for (const line of compactPlainText(issue.detail).split("\n"))
       for (const part of wrapTextWithAnsi(theme.fg("dim", line), width - hang))
-        rows.push(truncateToWidth(`${pad}${part}`, width, ""));
+        rows.push(clipToWidth(`${pad}${part}`, width, ""));
   }
   return rows;
 }

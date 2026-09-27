@@ -1,12 +1,4 @@
-import { formatTokens } from "pi-cosmic-core";
-
-export const formatCost = (cost: number): string => {
-  const value = Number.isFinite(cost) ? Math.max(0, cost) : 0;
-  if (value === 0) return "$0";
-  if (value < 0.0001) return "$<0.0001";
-  if (value < 0.01) return `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
-  return `$${value.toFixed(2)}`;
-};
+import { formatTokens, formatCost } from "pi-cosmic-core";
 
 export interface FormatUsageInput {
   readonly totalTokens: number;
@@ -26,26 +18,4 @@ export const aggregateUsage = (
   const lowerBound = partial ? (style === "compact" ? "≥" : "≥ ") : "";
   const costPart = costKnown ? ` · ${lowerBound}${formatCost(cost)}` : "";
   return `${formatTokens(tokens)} ${style === "compact" ? "tok" : "tokens"}${costPart}`;
-};
-
-export const formatRelativeAge = (milliseconds: number): string => {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  if (seconds < 1) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-};
-
-export const formatDuration = (milliseconds: number): string => {
-  const safe = Math.max(0, Math.floor(milliseconds));
-  if (safe < 1_000) return `${safe}ms`;
-  const seconds = Math.floor(safe / 1_000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
 };

@@ -1,4 +1,4 @@
-import { truncateToWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
+import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
@@ -6,6 +6,7 @@ import {
   type FullScreenKeymapOptions,
   type FullScreenSelectionKeybindingId,
 } from "./keymap.ts";
+import { clipToWidth } from "./chrome.ts";
 
 /**
  * Shared modeless hint copy for settings-style lists driven by the full-screen keymap.
@@ -15,11 +16,19 @@ import {
 export const fullScreenSettingsHint = (context: {
   readonly searching: boolean;
   readonly helpExpanded?: boolean | undefined;
+  /** Configured key labels; Pi's defaults are shown without it. */
+  readonly keybindingLabel?:
+    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
+    | undefined;
 }): string => {
-  if (context.searching) return "Type to filter · Enter select · Esc done";
+  const key = (id: FullScreenSelectionKeybindingId, fallback: string) =>
+    context.keybindingLabel?.(id, fallback) || fallback;
+  const enter = key("tui.select.confirm", "Enter");
+  const escape = key("tui.select.cancel", "Esc");
+  if (context.searching) return `Type to filter · ${enter} Select · ${escape} Done`;
   return context.helpExpanded
-    ? "j/k or ↑/↓ move · gg/G ends · C-u/d/PgUp/PgDn page · / filter · Enter/l select · h/q/Esc back · ? less"
-    : "j/k move · Enter/l select · h/q back · / filter · ? help";
+    ? `j/k or ${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")} Move · gg/G Ends · C-u/d/PgUp/PgDn Page · / Filter · ${enter}/l Select · h/q/${escape} Back · ? Less`
+    : `j/k Move · ${enter}/l Select · h/q Back · / Filter · ? More`;
 };
 
 export interface VimSettingsAdapterOptions {
@@ -167,12 +176,10 @@ export class VimSettingsAdapter implements Component, Focusable {
     const safeWidth = Math.max(0, Math.floor(width));
     if (safeWidth === 0) return [];
     this.syncChildFocus();
-    const lines = [...this.child.render(safeWidth)].map((line) =>
-      truncateToWidth(line, safeWidth, ""),
-    );
+    const lines = [...this.child.render(safeWidth)].map((line) => clipToWidth(line, safeWidth, ""));
     const hint = this.options.renderHint?.(this.mode, this.helpExpanded);
     if (hint && this.child.submenuComponent === null && lines.at(-2) === "") lines.pop();
-    return hint ? [...lines, truncateToWidth(hint, safeWidth, "")] : lines;
+    return hint ? [...lines, clipToWidth(hint, safeWidth, "")] : lines;
   }
 
   invalidate(): void {
@@ -212,7 +219,7 @@ export const settingsSurfaceBridge = (
       const safeWidth = Math.max(0, Math.floor(width));
       if (safeWidth === 0) return [];
       return invoke(
-        () => container.render(safeWidth).map((line) => truncateToWidth(line, safeWidth, "")),
+        () => container.render(safeWidth).map((line) => clipToWidth(line, safeWidth, "")),
         [],
       );
     },

@@ -11,8 +11,8 @@ import { hasObjectRuntimeType, invokeHostCallback, synchronousNow } from "pi-cos
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { codeModeCompactSummary } from "../ui/compact-summary.ts";
 import { liveChildElapsed } from "./host-child-timing.ts";
+import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 
-const SPINNER_INTERVAL_MS = 160;
 type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
 type RendererState = {
   piCodeModeProgressTicker?: (() => void) | undefined;
@@ -69,7 +69,7 @@ export const syncProgressTicker = (
       }
     };
     try {
-      const stop = startTicker(SPINNER_INTERVAL_MS, tick);
+      const stop = startTicker(SPINNER_FRAME_MS, tick);
       if (!Predicate.isFunction(stop)) return cleanup();
       stopTimer = stop;
       if (stopped) return invokeHostCallback(stop, undefined);
@@ -96,4 +96,4 @@ export const codeModeCompactSummaryAtHost: typeof codeModeCompactSummary = (inpu
 };
 
 export const animationFrame = (): number =>
-  Math.floor(Math.max(0, synchronousNow()) / SPINNER_INTERVAL_MS);
+  Math.floor(Math.max(0, synchronousNow()) / SPINNER_FRAME_MS);

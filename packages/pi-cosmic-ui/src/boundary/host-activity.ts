@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
 import {
   ActivityComponent,
   makeActivityPresentation,
@@ -313,7 +313,9 @@ export function makeActivityHost(
             .pipe(
               Effect.tapError(() =>
                 Effect.sync(() =>
-                  safe(() => ctx.ui.notify("Activity action is no longer available.", "warning")),
+                  safe(() =>
+                    notifyAtHostBoundary(ctx, "That action is no longer available", "warning"),
+                  ),
                 ),
               ),
             );
@@ -328,6 +330,6 @@ const serviceDetail = (
   service.detail(request).pipe(
     Effect.match({
       onSuccess: (text) => safe(() => deliver(text)),
-      onFailure: () => safe(() => deliver("Details unavailable. The item may have changed.")),
+      onFailure: () => safe(() => deliver("Details aren't available; the item may have changed")),
     }),
   );

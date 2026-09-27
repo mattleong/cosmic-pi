@@ -1,22 +1,28 @@
 // Pi tool execution is a Promise-shaped host boundary.
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, getKeybindings, Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import {
+  expandedSection,
   getTextContent,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import {
-  sanitizeTerminalLine,
-  stripTerminalControls as sanitizeTerminalText,
-} from "pi-cosmic-core";
-import { expandKeyHint, renderToolHeader } from "pi-cosmic-ui/tool";
+import { stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core";
+import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { BackgroundTaskService } from "../task/service.ts";
+import {
+  backgroundTaskActionLabel,
+  backgroundTaskCallSubject,
+  backgroundTaskCompactSummary,
+  backgroundTaskResultSubject,
+  decodeBackgroundTaskDetails,
+} from "../ui/compact-summary.ts";
 import { executeBackgroundTaskCommand, type BackgroundTaskToolDetails } from "./command.ts";
-import { BackgroundTaskParameters } from "./schema.ts";
-import { backgroundTaskCompactSummary } from "../ui/compact-summary.ts";
+import { resultSnapshot, renderBackgroundTaskPreview, taskProcessLine } from "./preview.ts";
+import { BackgroundTaskParameters, type BackgroundTaskToolInput } from "./schema.ts";
 
 export interface BackgroundTaskToolRunner {
   readonly scheduleAnimation?: CompactAnimationScheduler;
@@ -26,12 +32,38 @@ export interface BackgroundTaskToolRunner {
   ) => Promise<A>;
 }
 
+/**
+ * Row state shared by the call and result renderers. The result names the task, so the call's
+ * heading, drawn after both render, can say which task an ID-only call was about.
+ */
+interface BackgroundTaskRenderState {
+  backgroundTaskSubject?: string;
+}
+
+const TITLE = "Background task";
+
+/** The heading's subtitle: the action as people read it, then its human subject. */
+const headingSubtitle = (
+  args: Partial<BackgroundTaskToolInput>,
+  resultSubject: string | undefined,
+): string => {
+  if (!args.action) return "";
+  const subject = resultSubject || backgroundTaskCallSubject(args);
+  return [backgroundTaskActionLabel(args.action), subject].filter(Boolean).join(" ");
+};
+
+const resultText = (content: Parameters<typeof getTextContent>[0]): string =>
+  sanitizeTerminalText(getTextContent(content));
+
 export function registerBackgroundTaskTool(
   pi: ExtensionAPI,
   runner: BackgroundTaskToolRunner,
 ): void {
-  const expandKeys = getKeybindings().getKeys("app.tools.expand");
-  const tool = defineTool({
+  const tool = defineTool<
+    typeof BackgroundTaskParameters,
+    BackgroundTaskToolDetails,
+    BackgroundTaskRenderState
+  >({
     name: "background_task",
     label: "Background Task",
     description:
@@ -50,58 +82,41 @@ export function registerBackgroundTaskTool(
         details: result.details,
       }));
     },
-    renderCall(args, theme) {
-      const action = args.action ?? "...";
-      const target = sanitizeTerminalLine(args.id ?? args.name ?? args.command ?? "");
-      return new Text(
-        renderToolHeader(
-          { title: "background_task", subtitle: `${action}${target ? ` ${target}` : ""}` },
-          theme,
-        ),
-        0,
-        0,
-      );
+    renderCall(args, theme, context) {
+      // Drawn lazily: the result, rendered after the call, supplies the task's name.
+      return composeToolComponent((width) => {
+        if (!Number.isFinite(width) || width < 1) return [];
+        const subtitle = headingSubtitle(args, context.state.backgroundTaskSubject);
+        const lines = new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(
+          width,
+        );
+        const running =
+          context.executionStarted &&
+          context.isPartial &&
+          context.state.backgroundTaskSubject === undefined;
+        return running ? [...lines, toolRunningLine(theme)] : lines;
+      });
     },
-    renderResult(result, { isPartial, expanded }, theme) {
-      let text = sanitizeTerminalText(getTextContent(result.content));
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      const details = result.details as BackgroundTaskToolDetails | undefined;
-      let collapsedLogFooter: string | undefined;
-      if (details?.action === "logs") {
-        const normalized = text.endsWith("\r\n")
-          ? text.slice(0, -2)
-          : text.endsWith("\n")
-            ? text.slice(0, -1)
-            : text;
-        const lines = normalized.split("\n");
-        if (!expanded && lines.length > 12) {
-          const hidden = lines.length - 12;
-          text = [
-            ...lines.slice(0, 8),
-            `      --- ${hidden} lines hidden ---`,
-            ...lines.slice(-4),
-          ].join("\n");
-          collapsedLogFooter = `Showing 12 of ${lines.length} log lines · ${expandKeyHint(expandKeys, "expand")}`;
-        } else text = normalized;
-      }
-      if (
-        expanded &&
-        details !== undefined &&
-        (details.action === "start" || details.action === "status" || details.action === "stop")
-      ) {
-        const snapshot = details.snapshot;
-        text += `\n${sanitizeTerminalLine(snapshot.cwd)}${snapshot.pid ? ` · pid ${snapshot.pid}` : ""}`;
-        if (snapshot.droppedLogBytes > 0) {
-          text += `\n${snapshot.droppedLogBytes} log bytes discarded`;
-        }
-      }
-      // The owned logs producer already includes complete cursor metadata before the logs.
-      let rendered = theme.fg(
-        isPartial ? "warning" : "toolOutput",
-        text || (isPartial ? "Working…" : "Done"),
+    renderResult(result, { isPartial, expanded }, theme, context) {
+      // The call body says it is running; a partial result has nothing else to show.
+      if (isPartial) return new Container();
+      const details = decodeBackgroundTaskDetails(result.details).pipe(
+        Option.filter((decoded) => decoded.action === context.args.action),
       );
-      if (collapsedLogFooter) rendered += `\n${theme.fg("muted", `╰─ ${collapsedLogFooter}`)}`;
-      return new Text(rendered, 0, 0);
+      context.state.backgroundTaskSubject = Option.match(details, {
+        onNone: () => "",
+        onSome: (decoded) => backgroundTaskResultSubject(decoded, context.args),
+      });
+      return renderBackgroundTaskPreview(
+        {
+          details,
+          text: resultText(result.content),
+          args: context.args,
+          expanded,
+          isError: context.isError,
+        },
+        theme,
+      );
     },
   });
   pi.registerTool(
@@ -112,20 +127,23 @@ export function registerBackgroundTaskTool(
         renderResult(result, _options, theme) {
           // Preserve fetched output and cursor text verbatim apart from terminal controls.
           // Task attention is projected from typed details, never parsed from this body.
-          let text = sanitizeTerminalText(getTextContent(result.content));
-          // SAFETY: The owned executor constructs this union; compact projection validates its snapshot.
-          const details = result.details as BackgroundTaskToolDetails | undefined;
-          if (
-            details &&
-            (details.action === "start" || details.action === "status" || details.action === "stop")
-          ) {
-            text += `\n${sanitizeTerminalLine(details.snapshot.cwd)}${details.snapshot.pid ? ` · pid ${details.snapshot.pid}` : ""}`;
-          }
-          return new Text(
-            theme.fg("toolOutput", text ? `Raw task result\n${text}` : "Raw task result (empty)"),
-            0,
-            0,
+          const text = resultText(result.content).replace(/\n+$/u, "");
+          const snapshot = Option.getOrUndefined(
+            Option.map(decodeBackgroundTaskDetails(result.details), resultSnapshot),
           );
+          const container = new Container();
+          if (snapshot)
+            container.addChild(
+              expandedSection(theme, undefined, new Text(taskProcessLine(snapshot, theme), 0, 0)),
+            );
+          container.addChild(
+            expandedSection(
+              theme,
+              "Raw result",
+              new Text(theme.fg("toolOutput", text || "(empty)"), 0, 0),
+            ),
+          );
+          return container;
         },
       },
       scheduleAnimation: runner.scheduleAnimation,

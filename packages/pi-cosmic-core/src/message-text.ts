@@ -1,6 +1,12 @@
-/** Human one-line messages from producer text that has no domain classification. */
-import { escapeControlChars } from "../shared/terminal-text";
-import { COMPACT_ISSUE_MESSAGE_LIMIT } from "./compact-issues";
+/**
+ * Human one-line messages from producer text that has no domain classification, shared by tool
+ * issues and user notifications.
+ */
+import { clipText } from "./display.ts";
+import { stripTerminalControls } from "./security.ts";
+
+/** Longest message one of these helpers returns by default. */
+export const MESSAGE_TEXT_LIMIT = 240;
 
 // Error-class wrappers add nothing beside an error glyph: `Error: `, `Uncaught TypeError: `,
 // `[ToolFailure] `. One-hump brackets such as `[REDACTED]` are content and stay.
@@ -10,10 +16,9 @@ const ERROR_WRAPPER = /^[A-Z][A-Za-z]*Error\((.*?)\)?$/u;
 const SENTENCE_BREAK = /(?<=[.!?])\s+(?=[A-Z])/u;
 // A later sentence that tells the reader what to do is agent guidance, not the failure.
 const ADVICE =
-  /^(?:Do|Don't|Please|Inspect|Use|Retry|Try|Call|Run|Check|Await|Reply|Wait|Consider|See|Read|Review|Confirm|Continue|Resume|Stop|Provide|Make|Ensure|Omit|Merge|Add|Match|Launch|Grant|Pass|Set|Serialize|Convert|Encode|Return|Avoid|Split|Remove|Replace)\b/u;
+  /^(?:Do|Don't|Please|Inspect|Use|Retry|Try|Call|Run|Check|Await|Reply|Wait|Consider|See|Read|Review|Confirm|Continue|Resume|Stop|Provide|Make|Ensure|Omit|Merge|Add|Match|Launch|Grant|Pass|Set|Serialize|Convert|Encode|Return|Avoid|Split|Remove|Replace|Start|Restart|Reload|Open|Switch)\b/u;
 
-const clip = (text: string, limit: number) =>
-  text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+const STRUCTURED = /^[[{]\s*(?:"|\{|\[|$)/u;
 
 function tidy(line: string): string {
   let text = line;
@@ -36,14 +41,15 @@ function tidy(line: string): string {
 export function firstLineMessage(
   text: string,
   fallback: string,
-  limit = COMPACT_ISSUE_MESSAGE_LIMIT,
+  limit = MESSAGE_TEXT_LIMIT,
 ): string {
   const line = text
     .split(/\r?\n/u)
-    .map((value) => escapeControlChars(value).replace(/\s+/gu, " ").trim())
+    .map((value) => stripTerminalControls(value).replace(/\s+/gu, " ").trim())
     .find(Boolean);
-  const message = line === undefined ? "" : tidy(line);
-  return clip(message || fallback, Math.min(limit, COMPACT_ISSUE_MESSAGE_LIMIT));
+  // Structured data, such as a JSON reply, is not a message; the raw text stays with the caller.
+  const message = line === undefined || STRUCTURED.test(line) ? "" : tidy(line);
+  return clipText(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
 }
 
 /** Whether `message` already says all of `text`: one line, bar spacing and its final period. */
@@ -121,11 +127,7 @@ const PHRASE_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
  * limits, authentication, server errors, connection loss, context overflow), otherwise its
  * first line. Classification reads only the first line, so bodies and stacks cannot match.
  */
-export function failureMessage(
-  text: string,
-  fallback: string,
-  limit = COMPACT_ISSUE_MESSAGE_LIMIT,
-): string {
+export function failureMessage(text: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string {
   const line = firstLineMessage(text, "", Number.MAX_SAFE_INTEGER);
   const status = STATUS.exec(line)?.[1];
   const code = status === undefined ? undefined : Number(status);
@@ -134,5 +136,16 @@ export function failureMessage(
     (code === undefined ? undefined : STATUS_FAILURES.find(([matches]) => matches(code))?.[1]);
   if (phrase === undefined) return firstLineMessage(text, fallback, limit);
   const shownCode = code !== undefined && phrase !== "Too long for the model's context";
-  return clip(`${phrase}${shownCode ? ` (${code})` : ""}`, limit);
+  return clipText(`${phrase}${shownCode ? ` (${code})` : ""}`, limit);
+}
+
+/**
+ * A notification as people read it: one tidy line without a final period. Multi-line text is a
+ * requested report, such as help or status, and keeps its layout. Nothing is cut: a reply that
+ * carries data, such as JSON for a non-interactive client, must arrive whole.
+ */
+export function notificationText(message: string): string {
+  if (/\n/u.test(message.trim())) return message;
+  const line = stripTerminalControls(message).replace(/\s+/gu, " ").trim();
+  return line.replace(/(?<!\.)\.$/u, "");
 }

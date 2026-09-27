@@ -1,9 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
 import { layoutCompactRow } from "./compact-row";
 import { compactIssueLabel, renderCompactIssues } from "./compact-issues";
-import { formatToolCallDuration } from "./format";
+import { formatDuration } from "pi-cosmic-core";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const MAX_CHILDREN = 5;
 const priority = (child: CompactChild): number =>
@@ -56,15 +57,13 @@ export function renderCompactChildren(
   const rows: string[] = [];
   // Omitted calls may be older rows that were evicted or calls never tracked, so say neither.
   if (flat && omitted > 0)
-    rows.push(
-      truncateToWidth(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, ""),
-    );
+    rows.push(clipToWidth(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, ""));
   entries.forEach((entry, index) => {
     const branch = index === entries.length - 1 && (flat || omitted === 0) ? "╰─" : "├─";
     const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
     const duration =
       entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0
-        ? formatToolCallDuration(entry.durationMs)
+        ? formatDuration(entry.durationMs)
         : undefined;
     const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
     const { row, issueShown } = layoutCompactRow(
@@ -87,19 +86,19 @@ export function renderCompactChildren(
       theme,
       Math.max(0, width - visibleWidth(prefix)),
     );
-    rows.push(truncateToWidth(`${prefix}${row}`, width, ""));
+    rows.push(clipToWidth(`${prefix}${row}`, width, ""));
     if (flat) rows.push(...renderCompactIssues(entry.issues, theme, width, true));
     // A reason that does not fit on its row moves beneath it rather than disappearing.
     else if (issueLabel && !issueShown) {
       const rail = theme.fg("dim", branch === "├─" ? "  │    " : "       ");
       const indent = width - visibleWidth(rail) >= 8 ? visibleWidth(rail) : 0;
       for (const line of wrapTextWithAnsi(issueLabel, width - indent))
-        rows.push(truncateToWidth(`${indent ? rail : ""}${line}`, width, ""));
+        rows.push(clipToWidth(`${indent ? rail : ""}${line}`, width, ""));
     }
   });
   if (!flat && omitted > 0)
     rows.push(
-      truncateToWidth(
+      clipToWidth(
         theme.fg("dim", `  ╰─ … ${omitted} more ${calls(omitted)}`) +
           (hiddenFailed > 0 ? theme.fg("error", ` (${hiddenFailed} failed)`) : ""),
         width,

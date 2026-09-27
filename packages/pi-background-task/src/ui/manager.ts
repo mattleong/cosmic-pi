@@ -1,12 +1,7 @@
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import {
-  brailleSpinnerFrame,
-  managerStateGlyph,
-  renderResponsiveManagerFooter,
-  startingSpinnerFrame,
-} from "pi-cosmic-ui/manager";
+import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { renderResponsiveManagerFooter, clipToWidth, spinnerFrameAt } from "pi-cosmic-ui/manager";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
@@ -35,8 +30,9 @@ import type {
   BackgroundTaskProjection,
 } from "../task/model.ts";
 import { countTaskStates, isActiveTaskState } from "../task/model.ts";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine, formatElapsed, formatBytes, countLabel } from "pi-cosmic-core";
 import { styledBackgroundLogLines } from "./styled-log.ts";
+import { taskStatePresentation, taskDisplayName } from "./task-state.ts";
 
 export interface TaskManagerOptions {
   readonly theme: Theme;
@@ -57,39 +53,21 @@ export interface TaskManagerOptions {
 
 const TASK_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
-const STATE_PRESENTATION = {
-  starting: { glyph: startingSpinnerFrame, color: "accent", label: "starting…" },
-  running: { glyph: brailleSpinnerFrame, color: "success", label: "running" },
-  stopping: { glyph: () => managerStateGlyph("stopping"), color: "warning", label: "stopping…" },
-  exited: { glyph: () => managerStateGlyph("done"), color: "success", label: "finished" },
-  failed: { glyph: () => managerStateGlyph("failed"), color: "error", label: "failed" },
-  stopped: { glyph: () => managerStateGlyph("stopped"), color: "muted", label: "stopped" },
-  timed_out: { glyph: () => managerStateGlyph("failed"), color: "error", label: "timed out" },
-} as const;
-
-const statePresentation = (task: BackgroundTaskView, frame: number) => {
-  const presentation = STATE_PRESENTATION[task.state];
-  return { ...presentation, glyph: presentation.glyph(frame) };
-};
-
-const formatDuration = (milliseconds: number): string => {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m${seconds % 60}s`;
-};
+const statePresentation = (task: BackgroundTaskView, frame: number) =>
+  taskStatePresentation(task.state, frame);
 
 const duration = (task: BackgroundTaskView, now: number): string =>
-  formatDuration((task.endedAt ?? now) - task.startedAt);
-
-const displayName = (task: BackgroundTaskView): string =>
-  sanitizeTerminalLine(task.name?.trim() || task.command);
+  formatElapsed((task.endedAt ?? now) - task.startedAt);
 
 export class TaskManagerComponent implements Component {
   private follow = true;
   private showTechnicalDetails = false;
   private alternateHelp = false;
-  private pendingStop: string | undefined;
+  /** Stop and clear wait for their own key again, or Enter. */
+  private pending:
+    | { readonly action: "stop"; readonly id: string }
+    | { readonly action: "clear" }
+    | undefined;
   private readonly shell = new ListDetailShell();
   private readonly options: TaskManagerOptions;
 
@@ -104,7 +82,7 @@ export class TaskManagerComponent implements Component {
   private applySelection(next: ListSelectionChange): void {
     if (next.changed) {
       this.follow = true;
-      this.pendingStop = undefined;
+      if (this.pending?.action === "stop") this.pending = undefined;
     }
   }
 
@@ -121,10 +99,11 @@ export class TaskManagerComponent implements Component {
     this.applySelection(this.shell.reconcile(tasks.map((task) => task.id)));
     const selected = tasks[this.shell.state.selected];
     if (
-      this.pendingStop &&
-      (this.pendingStop !== selected?.id || !isActiveTaskState(selected.state))
+      this.pending?.action === "stop"
+        ? this.pending.id !== selected?.id || !isActiveTaskState(selected.state)
+        : this.pending?.action === "clear" && !tasks.some((task) => !isActiveTaskState(task.state))
     )
-      this.pendingStop = undefined;
+      this.pending = undefined;
   }
 
   handleInput(data: string): void {
@@ -133,25 +112,28 @@ export class TaskManagerComponent implements Component {
     const selected = tasks[this.shell.state.selected];
     const matchesKeybinding = this.options.matchesKeybinding;
 
-    if (this.pendingStop) {
+    if (this.pending) {
+      const pending = this.pending;
+      const key = pending.action === "stop" ? "x" : "c";
       const resolution = this.shell.keymap.resolve(data, {
         mode: "confirmation",
         matchesKeybinding,
-        reservedKeys: new Set(["x"]),
+        reservedKeys: new Set([key]),
       });
-      const hasStableTarget = selected?.id === this.pendingStop;
+      const hasStableTarget = pending.action === "clear" || selected?.id === pending.id;
       const confirmed =
         hasStableTarget &&
         ((resolution?._tag === "Action" && resolution.action === "confirm") ||
-          confirmedReservedShortcut(resolution, data, "x"));
-      if (confirmed && selected) {
-        this.pendingStop = undefined;
-        this.options.stop(selected.id);
+          confirmedReservedShortcut(resolution, data, key));
+      if (confirmed) {
+        this.pending = undefined;
+        if (pending.action === "clear") this.options.clear();
+        else if (selected) this.options.stop(selected.id);
       } else if (
         !hasStableTarget ||
         (resolution?._tag === "Action" && resolution.action === "cancel")
       )
-        this.pendingStop = undefined;
+        this.pending = undefined;
       this.options.requestRender();
       return;
     }
@@ -173,9 +155,9 @@ export class TaskManagerComponent implements Component {
         this.follow = !this.follow;
         this.shell.resetDetailScroll();
       } else if (resolution.key === "x" && selected && isActiveTaskState(selected.state)) {
-        this.pendingStop = selected.id;
+        this.pending = { action: "stop", id: selected.id };
       } else if (resolution.key === "c" && tasks.some((task) => !isActiveTaskState(task.state)))
-        this.options.clear();
+        this.pending = { action: "clear" };
       this.options.requestRender();
       return;
     }
@@ -252,10 +234,16 @@ export class TaskManagerComponent implements Component {
     const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
     const escape = key("tui.select.cancel", "Esc");
     const inspect = `${key("tui.select.confirm", "Enter")} Inspect`;
-    const back = `${escape} ${this.shell.state.pane === "detail" ? "Back" : "Close"}`;
-    if (this.pendingStop)
+    const back =
+      this.shell.state.pane === "detail" ? `${escape} Back · q Close` : `${escape}/q Close`;
+    if (this.pending)
       return renderResponsiveManagerFooter(contentWidth, [
-        [`x Confirm stop ${sanitizeTerminalLine(this.pendingStop)}`, `${escape}/q Cancel`],
+        [
+          this.pending.action === "clear"
+            ? `c Confirm clearing ${countLabel(tasks.filter((task) => !isActiveTaskState(task.state)).length, "finished task")}`
+            : `x Confirm stop ${selected?.id === this.pending.id ? taskDisplayName(selected) : "the selected task"}`,
+          `${escape}/q Cancel`,
+        ],
       ]);
     const actions = [
       selected && isActiveTaskState(selected.state)
@@ -271,7 +259,7 @@ export class TaskManagerComponent implements Component {
         [
           `${navigation} Move · h/l Panes · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
           joinedActions ?? "No actions",
-          `? Back · ${back} · q Close`,
+          `? Back · ${back}`,
         ],
         [
           `${navigation} · h/l · C-u/d · PgUp/PgDn · gg/G`,
@@ -284,7 +272,7 @@ export class TaskManagerComponent implements Component {
       [
         `${navigation} Move · ${inspect} · h/l Panes`,
         joinedActions,
-        `t Technical · ? More · ${back} · q Close`,
+        `t Technical · ? More · ${back}`,
       ],
       [`${navigation} · ${inspect}`, joinedActions, `t Tech · ? · ${back}`],
       [inspect, "t Tech · ?", back],
@@ -296,10 +284,10 @@ export class TaskManagerComponent implements Component {
     const prefix = selected
       ? this.options.theme.fg(this.shell.state.pane === "list" ? "accent" : "muted", ">")
       : " ";
-    const frame = Math.floor(this.options.getNow() / 160);
+    const frame = spinnerFrameAt(this.options.getNow());
     const presentation = statePresentation(task, frame);
     const glyph = this.options.theme.fg(presentation.color, presentation.glyph);
-    const identity = displayName(task);
+    const identity = taskDisplayName(task);
     const text =
       (selected && this.shell.state.pane === "list"
         ? focusedField(this.options.theme, identity)
@@ -338,12 +326,12 @@ export class TaskManagerComponent implements Component {
   }
 
   private detailLines(task: BackgroundTaskView | undefined): string[] {
-    if (!task) return [this.options.theme.fg("dim", "No background tasks.")];
-    const presentation = statePresentation(task, Math.floor(this.options.getNow() / 160));
+    if (!task) return [this.options.theme.fg("dim", "No background tasks yet")];
+    const presentation = statePresentation(task, spinnerFrameAt(this.options.getNow()));
     const lines = [
       listDetailHeading(
         this.options.theme,
-        displayName(task),
+        taskDisplayName(task),
         this.shell.state.pane === "detail",
         managerTone.identity,
       ),
@@ -370,11 +358,14 @@ export class TaskManagerComponent implements Component {
     }
     if (task.droppedLogBytes > 0)
       lines.push(
-        this.options.theme.fg("warning", `… ${task.droppedLogBytes} bytes of older output removed`),
+        this.options.theme.fg(
+          "warning",
+          `… ${formatBytes(task.droppedLogBytes)} of older output removed`,
+        ),
       );
     const beforeLogs = lines.length;
     for (const line of this.logLines(task.logs)) lines.push(line);
-    if (lines.length === beforeLogs) lines.push(this.options.theme.fg("dim", "(no output)"));
+    if (lines.length === beforeLogs) lines.push(this.options.theme.fg("dim", "No output yet"));
     return lines;
   }
 
@@ -385,7 +376,7 @@ export class TaskManagerComponent implements Component {
     return [
       this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow)),
       ...window.visible,
-    ].map((line) => truncateToWidth(line, width, ""));
+    ].map((line) => clipToWidth(line, width, ""));
   }
 
   private listPane(
@@ -441,7 +432,7 @@ export class TaskManagerComponent implements Component {
           ? this.visibleTasks(tasks, height).map(({ task, index }) =>
               this.taskLine(task, index, inner),
             )
-          : [this.options.theme.fg("dim", "No background tasks.")];
+          : [this.options.theme.fg("dim", "No background tasks yet")];
     // Keep the hidden inspector's line count so unfollow stays anchored when reopened.
     return framedFill(this.frame, lines, height, inner, this.shell.state.pane);
   }

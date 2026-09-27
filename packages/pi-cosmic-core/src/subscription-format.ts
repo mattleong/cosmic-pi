@@ -86,9 +86,17 @@ export function usedToLeftPercent(value: number | null | undefined): number | nu
   return Predicate.isNumber(value) && Number.isFinite(value) ? clampPercent(100 - value) : null;
 }
 
+/** A local date and time of day, such as "Sep 27, 2026, 10:07 AM". */
+export function formatTimestamp(value: number): string {
+  return DateTime.formatLocal(DateTime.makeUnsafe(value), {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 /** Format an epoch-millis timestamp for diagnostic output, or "never" when absent. */
 export function formatTimestampOrNever(value: number | undefined): string {
-  return value === undefined ? "never" : DateTime.formatLocal(DateTime.makeUnsafe(value));
+  return value === undefined ? "never" : formatTimestamp(value);
 }
 
 /** Format a remaining-percent value for subscription status lines. */

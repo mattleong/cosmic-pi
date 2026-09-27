@@ -1,9 +1,9 @@
 import * as Predicate from "effect/Predicate";
-import { formatDisplayPath } from "../paths/display";
 import { getObjectValue } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getPathArg, getReadStartLine } from "./data/args";
 import { normalizeShellCommandWhitespace } from "./shell-command";
+import { formatDisplayPath } from "pi-cosmic-core";
 
 export type BuiltinCompactTool = "read" | "bash" | "write" | "edit" | "grep" | "find" | "ls";
 

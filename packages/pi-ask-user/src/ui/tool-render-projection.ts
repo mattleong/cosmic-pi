@@ -1,7 +1,5 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, stripTerminalControls } from "pi-cosmic-core";
-import { toolStatusLine } from "pi-cosmic-ui/tool";
+import { countLabel, decodeUnknownOrUndefined, stripTerminalControls } from "pi-cosmic-core";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
 
@@ -11,39 +9,41 @@ export const projection =
   <Input>(input: Input): S["Type"] | undefined =>
     decodeUnknownOrUndefined(schema, input);
 
-// Blocking replay deliberately never reads notes; async replay validates them.
-export const outcomeProjection = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
-  Schema.Union([
-    Schema.Struct({ outcome: Schema.Literal("cancelled") }),
-    Schema.Struct({
-      outcome: Schema.Literal("submitted"),
-      answers: Schema.Array(
-        Schema.Union([
-          Schema.Struct({
-            key: Schema.String,
-            kind: Schema.Literal("choices"),
-            labels: Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_CHOICES)),
-            ...fields,
-          }),
-          Schema.Struct({
-            key: Schema.String,
-            kind: Schema.Literals(["custom", "text"]),
-            text: Schema.String,
-            ...fields,
-          }),
-        ]),
-      ).check(Schema.isMaxLength(MAX_QUESTIONS)),
-    }),
-  ]);
+const note = { note: Schema.optional(Schema.String) };
 
-export const asyncOutcome = outcomeProjection({ note: Schema.optional(Schema.String) });
+/** Replayed answers and their notes. A malformed note declines the whole projection. */
+export const answerOutcome = Schema.Union([
+  Schema.Struct({ outcome: Schema.Literal("cancelled") }),
+  Schema.Struct({
+    outcome: Schema.Literal("submitted"),
+    answers: Schema.Array(
+      Schema.Union([
+        Schema.Struct({
+          key: Schema.String,
+          kind: Schema.Literal("choices"),
+          labels: Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_CHOICES)),
+          ...note,
+        }),
+        Schema.Struct({
+          key: Schema.String,
+          kind: Schema.Literals(["custom", "text"]),
+          text: Schema.String,
+          ...note,
+        }),
+      ]),
+    ).check(Schema.isMaxLength(MAX_QUESTIONS)),
+  }),
+]);
+export type ReplayedOutcome = typeof answerOutcome.Type;
+export type ReplayedAnswer = Extract<ReplayedOutcome, { outcome: "submitted" }>["answers"][number];
+export const decodeOutcome = projection(answerOutcome);
 
 const asyncSnapshotFields = {
   requestId: Schema.String,
   deliveryId: Schema.String,
   status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
   delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]),
-  outcome: Schema.optional(asyncOutcome),
+  outcome: Schema.optional(answerOutcome),
   presentation: Schema.optional(
     Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
   ),
@@ -61,6 +61,7 @@ export const expandedAsyncSnapshot = Schema.Struct({
   independentWork: Schema.optional(Schema.String),
   blockedWork: Schema.optional(Schema.String),
 });
+export type ReplayedSnapshot = typeof expandedAsyncSnapshot.Type;
 
 const asyncRows = <S extends Schema.ConstraintDecoder<unknown>>(snapshot: S) => {
   const decodeSingle = projection(snapshot);
@@ -84,13 +85,34 @@ export const decodeAsyncControl = projection(
   }),
 );
 
-export const decodeCallTitles = projection(
+/** Status without a request ID lists every retained questionnaire. */
+export const isStatusList = <Args>(args: Args): boolean => {
+  const control = decodeAsyncControl(args);
+  return control?.action === "status" && control.requestId === undefined;
+};
+
+export const decodeCallQuestions = projection(
   Schema.Struct({
-    questions: Schema.Array(Schema.Struct({ title: Schema.String })).check(
-      Schema.isMaxLength(MAX_QUESTIONS),
-    ),
+    questions: Schema.Array(
+      Schema.Struct({ title: Schema.String, key: Schema.optional(Schema.String) }),
+    ).check(Schema.isMaxLength(MAX_QUESTIONS)),
   }),
 );
+
+/** The call's question titles, or undefined when the arguments hold none. */
+export const callTitles = <Args>(args: Args): string | undefined =>
+  decodeCallQuestions(args)
+    ?.questions.map((question) => stripTerminalControls(question.title))
+    .join(", ") || undefined;
+
+/** Question titles by answer key, so answers read as the user saw them. */
+export const titlesByKey = <Args>(args: Args): ReadonlyMap<string, string> =>
+  new Map(
+    (decodeCallQuestions(args)?.questions ?? []).flatMap((question) =>
+      question.key === undefined ? [] : [[question.key, question.title] as const],
+    ),
+  );
+
 /** Compact-only evidence for matching a selected label; expanded replay stays title-only. */
 export const decodeCompactChoices = projection(
   Schema.Struct({
@@ -122,16 +144,64 @@ export function fallbackText<Content>(content: Content, allowString = false): st
     .join("\n");
 }
 
-export function answerLine(
-  answer:
-    | { readonly key: string; readonly kind: "choices"; readonly labels: readonly string[] }
-    | { readonly key: string; readonly kind: "custom" | "text"; readonly text: string },
-  theme: Theme,
-): string {
-  const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;
-  return toolStatusLine(
-    theme,
-    "success",
-    `${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`,
-  );
+/** Where one async questionnaire stands, in the words people read. */
+export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
+
+/** The snapshot fields that decide a questionnaire's state. */
+export interface SnapshotState {
+  readonly status: ReplayedSnapshot["status"];
+  readonly delivery: ReplayedSnapshot["delivery"];
+  readonly presentation?: ReplayedSnapshot["presentation"];
+  readonly outcome?: ReplayedOutcome | undefined;
+}
+
+/** Undefined for inconsistent snapshots, which keep their raw evidence instead. */
+export function questionnaireState(row: SnapshotState): QuestionnaireState | undefined {
+  switch (row.status) {
+    case "pending":
+      if (row.outcome || row.delivery !== "pending" || row.presentation === "settled")
+        return undefined;
+      return row.presentation === "queued" ? "queued" : "waiting";
+    case "failed":
+      return row.outcome ? undefined : "failed";
+    case "submitted":
+    case "cancelled":
+      if (row.outcome && row.outcome.outcome !== row.status) return undefined;
+      if (row.outcome?.outcome === "submitted" && row.outcome.answers.length === 0)
+        return undefined;
+      return row.status === "submitted" ? "answered" : "cancelled";
+  }
+}
+
+/** Each state's wording, long then short. */
+const STATE_WORDS = {
+  waiting: ["waiting for answers", "waiting"],
+  queued: ["queued", "queued"],
+  answered: ["answered", "answered"],
+  cancelled: ["cancelled", "cancelled"],
+  failed: ["failed", "failed"],
+} as const satisfies Readonly<Record<QuestionnaireState, readonly [string, string]>>;
+const STATE_ORDER: readonly QuestionnaireState[] = [
+  "failed",
+  "waiting",
+  "queued",
+  "answered",
+  "cancelled",
+];
+
+/** One questionnaire's state, longest wording first; the first that fits is shown. */
+export const stateWords = (state: QuestionnaireState): readonly string[] => [
+  ...new Set(STATE_WORDS[state]),
+];
+
+/** A retained list's states as counts, longest wording first; the first that fits is shown. */
+export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
+  if (states.length === 0) return ["none retained", "none"];
+  const counted = STATE_ORDER.flatMap((state) => {
+    const count = states.filter((entry) => entry === state).length;
+    return count === 0 ? [] : [[count, STATE_WORDS[state]] as const];
+  });
+  const wording = (short: 0 | 1) =>
+    counted.map(([count, words]) => `${count} ${words[short]}`).join(", ");
+  return [...new Set([wording(0), wording(1), countLabel(states.length, "questionnaire")])];
 }

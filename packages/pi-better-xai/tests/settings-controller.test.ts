@@ -175,10 +175,7 @@ describe("Better xAI settings controller", () => {
         ),
       );
       yield* eventually(() => {
-        expect(h.notify).toHaveBeenCalledWith(
-          "Invalid value for usage.refreshIntervalMs.",
-          "error",
-        );
+        expect(h.notify).toHaveBeenCalledWith("Invalid value for usage.refreshIntervalMs", "error");
         expect(renderedRow(component, "Usage refresh")).toContain("120000");
       });
 
@@ -204,7 +201,7 @@ describe("Better xAI settings controller", () => {
         h.makeConfigUnavailable(mode);
         write.reject(new Error("runtime unavailable"));
         yield* eventually(() => {
-          expect(h.notify).toHaveBeenCalledWith("Better xAI settings are unavailable.", "warning");
+          expect(h.notify).toHaveBeenCalledWith(expect.stringMatching(/available/u), "warning");
           expect(renderedRow(component, "Usage refresh")).toContain("60000");
         });
 

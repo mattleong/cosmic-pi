@@ -125,9 +125,9 @@ describe("working row", () => {
 
     h.row.promptStart();
     h.row.promptStart();
-    expect(h.delivered.at(-1)).toBe("Waiting for user");
+    expect(h.delivered.at(-1)).toBe("Waiting for you");
     h.advance(8);
-    expect(h.delivered.at(-1)).toBe("Waiting for user");
+    expect(h.delivered.at(-1)).toBe("Waiting for you");
 
     h.row.promptEnd();
     h.row.promptEnd();
@@ -174,7 +174,7 @@ describe("working row", () => {
     const writesAfterFailedWait = h.attempted.length;
     h.advance(8);
     expect(h.attempted.length).toBeGreaterThan(writesAfterFailedWait);
-    expect(h.delivered.at(-1)).toBe("Waiting for user");
+    expect(h.delivered.at(-1)).toBe("Waiting for you");
 
     h.failNextWrite();
     h.row.promptEnd();
@@ -193,7 +193,7 @@ describe("working row", () => {
     h.row.agentStart();
     h.row.promptStart();
     h.row.deactivate();
-    expect(h.delivered.slice(-2)).toEqual(["Waiting for user", undefined]);
+    expect(h.delivered.slice(-2)).toEqual(["Waiting for you", undefined]);
     expect(h.tickers.size).toBe(0);
     expect(h.row.isPrompting()).toBe(false);
   });

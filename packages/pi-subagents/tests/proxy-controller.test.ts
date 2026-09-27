@@ -321,8 +321,8 @@ describe("nested /subagents proxied actions", () => {
   });
 
   for (const [label, keys] of [
-    ["interrupt", ["i"]],
-    ["rename", ["n", "o", "k", ENTER]],
+    ["interrupt", ["i", "i"]],
+    ["rename", ["e", "o", "k", ENTER]],
   ] as const)
     effectTest(`accepts ${label} with its own matching receipt`, function* () {
       const fixture = yield* openProxyFleet(() => [caller, child()], {

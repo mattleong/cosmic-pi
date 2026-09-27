@@ -342,7 +342,7 @@ describe("subagent tool", () => {
     });
     expect(resultText(immediateResult)).toContain("states are unobserved");
     expect(resultText(immediateResult)).toContain(waiting.id);
-    expect(immediateUpdates.at(-1)).toContain("Await canceled before progress was observed");
+    expect(immediateUpdates.at(-1)).toContain("Await cancelled before progress was observed");
   });
 
   effectTest(

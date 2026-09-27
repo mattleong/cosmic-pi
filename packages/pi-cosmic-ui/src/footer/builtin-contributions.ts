@@ -1,5 +1,5 @@
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
-import { abbreviateHomePath, formatTokens } from "pi-cosmic-core";
+import { abbreviateHomePath, formatTokens, formatCost } from "pi-cosmic-core";
 import type {
   CosmicFooterColor,
   CosmicFooterStatusContribution,
@@ -182,7 +182,7 @@ export function builtinContributions(
   if (totals.cacheRead) metric("metrics.cacheRead", `r${formatTokens(totals.cacheRead)}`, 220);
   if (totals.cacheWrite) metric("metrics.cacheWrite", `w${formatTokens(totals.cacheWrite)}`, 230);
   if (totals.cost || subscription)
-    metric("metrics.cost", `$${totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`, 240).align =
+    metric("metrics.cost", `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`, 240).align =
       "right";
   for (const status of host.extensionStatuses) {
     const placement = statusPlacements.get(status.id);

@@ -14,6 +14,7 @@ import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
+  notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import {
   backgroundTaskCodeModeSessionId,
@@ -21,7 +22,8 @@ import {
 } from "./boundary/host-code-mode.ts";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
-import { BackgroundTaskConfigStore } from "./config/store.ts";
+import { BackgroundTaskConfigStore, BackgroundTaskSettingsWriter } from "./config/store.ts";
+import type { BackgroundTaskConfig } from "./config/schema.ts";
 import { BackgroundTaskService } from "./task/service.ts";
 import {
   makeBackgroundTaskLayer,
@@ -29,7 +31,7 @@ import {
   type BackgroundTaskRuntimeError,
   type BackgroundTaskSessionInput,
 } from "./layer.ts";
-import { registerTaskManagerCommand } from "./settings/controller.ts";
+import { registerTaskManagerCommand, registerTaskSettingsCommand } from "./settings/controller.ts";
 import { registerBackgroundTaskTool } from "./tools/background-task.ts";
 
 export interface BackgroundTaskApplicationBoundaries {
@@ -47,6 +49,8 @@ export function registerBackgroundTaskApplication(
   const bridge = makeProjectionBridge(pi.events);
   const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
   let releaseActivity: (() => void) | undefined;
+  /** The settings this session started with; `/tasks-settings` changes apply after /reload. */
+  let currentConfig: BackgroundTaskConfig | undefined;
   const revokeActivity = () => {
     releaseActivity?.();
     releaseActivity = undefined;
@@ -57,7 +61,10 @@ export function registerBackgroundTaskApplication(
     BackgroundTaskApplication,
     never,
     BackgroundTaskRuntimeError,
-    { readonly showFooterStatus: boolean; readonly scheduler: CodePreviewSchedulerServiceContract }
+    {
+      readonly config: BackgroundTaskConfig;
+      readonly scheduler: CodePreviewSchedulerServiceContract;
+    }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(pi, makeBackgroundTaskLayer(input, bridge.publish), {
@@ -72,9 +79,8 @@ export function registerBackgroundTaskApplication(
         yield* bestEffortHostBootstrap("pi-background-task.preview-settings", (signal) =>
           boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
         );
-        const config = yield* BackgroundTaskConfigStore;
         return {
-          showFooterStatus: config.showFooterStatus,
+          config: yield* BackgroundTaskConfigStore,
           scheduler: yield* CodePreviewSchedulerService,
         };
       }),
@@ -94,7 +100,8 @@ export function registerBackgroundTaskApplication(
           invokeHostCallback(() => pi.getActiveTools().includes("background_task"), false),
         run,
       });
-      bridge.setFooterEnabled(prepared.showFooterStatus);
+      currentConfig = prepared.config;
+      bridge.setFooterEnabled(prepared.config.showFooterStatus);
       bridge.setContext(ctx);
       const sessionId = backgroundTaskCodeModeSessionId(ctx);
       if (sessionId)
@@ -111,9 +118,13 @@ export function registerBackgroundTaskApplication(
         });
     },
     onDeactivated: () => {
+      currentConfig = undefined;
       revokeActivity();
       codeModeHost.deactivate();
       bridge.clear();
+    },
+    onStartFailure: ({ ctx }) => {
+      notifyAtHostBoundary(ctx, "Background Tasks couldn't start", "warning");
     },
   });
 
@@ -129,7 +140,7 @@ export function registerBackgroundTaskApplication(
       : Promise.reject(
           new PiSessionRuntimeError({
             operation: "run",
-            message: "Pi session runtime is not active.",
+            message: "Background Tasks isn't running in this session",
           }),
         );
 
@@ -137,7 +148,11 @@ export function registerBackgroundTaskApplication(
     stop: (id) =>
       run(BackgroundTaskService.use((service) => service.stop(id))).then(() => undefined),
     clear: () => run(BackgroundTaskService.use((service) => service.clear)).then(() => undefined),
-    status: () => run(BackgroundTaskConfigStore),
+  });
+  registerTaskSettingsCommand(pi, {
+    config: () => currentConfig,
+    write: (location, id, value) =>
+      run(BackgroundTaskSettingsWriter.use((writer) => writer.write(location, id, value))),
   });
 
   pi.on("session_start", (_event, ctx) => {

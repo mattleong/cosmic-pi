@@ -5,12 +5,15 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   captureHostSignal,
   invokeHostCallback,
   isProjectTrusted,
   notifyAtHostBoundary,
+  countLabel,
+  sanitizeTerminalLine,
 } from "pi-cosmic-core";
 import type { McpCommandPort } from "../application/lifecycle.ts";
 import { McpAuth } from "../auth/service.ts";
@@ -61,6 +64,62 @@ export const mcpConfigMetadata = (config: McpResolvedConfig): Schema.Json => ({
   diagnosticCount: config.diagnostics.length,
 });
 
+const MCP_SETTINGS_HELP = [
+  "MCP settings",
+  "",
+  "Usage:",
+  "  /mcp-settings status  Show configured servers and settings",
+  "  /mcp-settings reload  Reread the settings files",
+  "  /mcp-settings set-server <global|project> <id> <json>  Add or replace a server",
+  "  /mcp-settings remove-server <global|project> <id>  Remove a server",
+  "  /mcp-settings set-settings <global|project> <json>  Replace the gateway settings",
+  "  /mcp-settings help  Show this help",
+  "",
+  "Examples:",
+  '  /mcp-settings set-server global browser {"transport":"stdio","command":"npx","args":["browser-mcp"]}',
+  "  /mcp-settings remove-server project browser",
+].join("\n");
+
+const SettingsReplyData = Schema.Struct({
+  trusted: Schema.Boolean,
+  servers: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      scope: Schema.String,
+      enabled: Schema.Boolean,
+      transport: Schema.NullOr(Schema.String),
+      invalid: Schema.Boolean,
+    }),
+  ),
+  diagnosticCount: Schema.Number,
+});
+
+/** Settings replies in a terminal: sentences and a server list, never the raw envelope. */
+export const readableMcpSettingsOutcome = (reply: McpGatewayReply): string => {
+  if (reply.action === "settings.help") return MCP_SETTINGS_HELP;
+  if (reply.isError) return readableMcpOutcome(reply);
+  const data = Option.getOrUndefined(Schema.decodeUnknownOption(SettingsReplyData)(reply.data));
+  if (reply.action !== "settings.status" || !data)
+    return reply.action === "settings.reload"
+      ? "MCP settings reloaded"
+      : reply.action === "settings.remove-server"
+        ? "MCP server removed"
+        : "MCP settings saved";
+  const servers = data.servers.map(
+    (server) =>
+      `  ${sanitizeTerminalLine(server.id)} · ${server.scope} · ${server.invalid ? "invalid" : server.enabled ? "enabled" : "disabled"}${server.transport ? ` · ${sanitizeTerminalLine(server.transport)}` : ""}`,
+  );
+  return [
+    "MCP settings",
+    servers.length ? "Servers:" : "No MCP servers configured",
+    ...servers,
+    ...(data.diagnosticCount
+      ? [`${countLabel(data.diagnosticCount, "settings problem")}; open /mcp for details`]
+      : []),
+    ...(data.trusted ? [] : ["Project settings are ignored until you trust this project"]),
+  ].join("\n");
+};
+
 export const runMcpUserCommand = (
   args: string,
   pi: ExtensionAPI,
@@ -73,6 +132,11 @@ export const runMcpUserCommand = (
     const action = words[0] || "status";
     yield* gate(ctx, current, action !== "status" && action !== "browse" && action !== "result");
     const execution = yield* McpExecution;
+    // In a terminal, status is the dashboard; other modes get the reply as data.
+    if (action === "status" && words.length === 1 && ctx.mode === "tui") {
+      yield* runMcpManager(pi, ctx, current);
+      return reply("view", null);
+    }
     if (action === "status" && words.length === 1)
       return (yield* execution.execute(
         { action },
@@ -179,9 +243,10 @@ export const runMcpSettingsCommand = (
     if (Buffer.byteLength(args, "utf8") > 1024 * 1024) return yield* invalid();
     const text = args.trim();
     const store = yield* McpConfigStore;
-    if (text === "" || text === "show") {
+    if (text === "" || text === "help") return reply("settings.help", null);
+    if (text === "status") {
       yield* gate(ctx, current, false);
-      return reply("settings.show", mcpConfigMetadata(yield* store.snapshot));
+      return reply("settings.status", mcpConfigMetadata(yield* store.snapshot));
     }
     yield* gate(ctx, current, true);
     if (text === "reload") return reply("settings.reload", mcpConfigMetadata(yield* store.reload));
@@ -235,7 +300,7 @@ const commandHandler =
     const current = port.capture(ctx);
     const signal = captureHostSignal(ctx);
     if (!current() || signal._tag === "Unavailable") {
-      notifyAtHostBoundary(ctx, "MCP is unavailable for this session.", "warning");
+      notifyAtHostBoundary(ctx, "MCP isn't available in this session", "warning");
       return Promise.resolve();
     }
     const failureAction = settings ? "settings" : commandFailureAction(args);
@@ -262,9 +327,11 @@ const commandHandler =
         if (output.action === "view") return;
         const bounded = boundedMcpReply(output);
         const text =
-          ctx.mode === "tui" && !settings && args.trim() !== "status"
-            ? readableMcpOutcome(bounded)
-            : JSON.stringify(bounded);
+          ctx.mode !== "tui"
+            ? JSON.stringify(bounded)
+            : settings
+              ? readableMcpSettingsOutcome(bounded)
+              : readableMcpOutcome(bounded);
         if (invokeHostCallback(() => ctx.hasUI, false))
           notifyAtHostBoundary(ctx, text, bounded.isError ? "warning" : "info");
         else
@@ -283,7 +350,7 @@ export const mcpSettingsCompletions = (prefix: string) => {
     ? ["global", "project"]
         .filter((scope) => scope.startsWith(match[2]!))
         .map((scope) => `${match[1]} ${scope}`)
-    : ["show", "reload", "set-server", "remove-server", "set-settings"].filter((action) =>
+    : ["status", "help", "reload", "set-server", "remove-server", "set-settings"].filter((action) =>
         action.startsWith(prefix),
       );
   return candidates.length ? candidates.map((value) => ({ value, label: value })) : null;
@@ -291,14 +358,12 @@ export const mcpSettingsCompletions = (prefix: string) => {
 
 export const registerMcpCommands = (pi: ExtensionAPI, port: McpCommandPort): void => {
   pi.registerCommand("mcp", {
-    description:
-      "MCP dashboard | status | browse [ID] | result ID | connect ID | disconnect ID | refresh ID | auth ID [--manual] | logout ID",
+    description: "Open the MCP dashboard, or manage one server",
     getArgumentCompletions: (prefix) => mcpCompletions(prefix, port.serverIds()),
     handler: commandHandler(pi, port, false),
   });
   pi.registerCommand("mcp-settings", {
-    description:
-      "MCP settings: show | reload | set-server SCOPE ID JSON | remove-server SCOPE ID | set-settings SCOPE JSON",
+    description: "Configure MCP servers and settings",
     getArgumentCompletions: mcpSettingsCompletions,
     handler: commandHandler(pi, port, true),
   });

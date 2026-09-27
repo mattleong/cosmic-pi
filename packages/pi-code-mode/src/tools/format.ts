@@ -5,7 +5,7 @@ import * as Predicate from "effect/Predicate";
 
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeHostCallback, countLabel } from "pi-cosmic-core";
 import type { ExecutionReceipts } from "./execution-receipts.ts";
 import type {
   InitialPreviewPresentation,
@@ -183,7 +183,7 @@ export const progressResult = (
         text:
           counts.total === 0
             ? "code_mode: starting"
-            : `code_mode: ${counts.total} nested tool call${counts.total === 1 ? "" : "s"} (${settled} settled, ${counts.running} running, ${counts.queued} queued)${
+            : `code_mode: ${countLabel(counts.total, "nested tool call")} (${settled} settled, ${counts.running} running, ${counts.queued} queued)${
                 names.length > 0 ? `: ${names}${suffix}` : ""
               }`,
       },

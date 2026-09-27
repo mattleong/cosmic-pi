@@ -40,11 +40,7 @@ export const codeModeStatusCompactSummary = ({
   result,
   context,
 }: Parameters<SummaryProvider>[0]): ReturnType<SummaryProvider> => {
-  const heading = {
-    action: "status",
-    subject: "Effective limits",
-    compactSubject: "Limits",
-  } as const;
+  const heading = { action: "status", subject: "effective limits" } as const;
   if (result === undefined || phase !== "settled") return phase === "settled" ? undefined : heading;
   const details = decodeOption(StatusDetailsSchema, result.details);
   const status = details?.status;
@@ -74,7 +70,7 @@ export const codeModeStatusCompactSummary = ({
             },
       ],
     };
-  if (codeModeStatusFits(status)) return { ...heading, counters: ["5 limits"], outcome: "success" };
+  if (codeModeStatusFits(status)) return { ...heading, outcome: "success" };
   return {
     ...heading,
     outcome: "warning",
@@ -92,8 +88,8 @@ export const codeModeStatusCompactSummary = ({
 
 export const renderCodeModeStatusCall = (theme: Theme): Component => {
   const header = invokeHostCallback(
-    () => renderToolHeader({ title: "Code Mode status", subtitle: "· Effective limits" }, theme),
-    "Code Mode status · Effective limits",
+    () => renderToolHeader({ title: "Code Mode", subtitle: "status effective limits" }, theme),
+    "Code Mode status effective limits",
   );
   return new Text(header, 0, 0);
 };
@@ -121,18 +117,8 @@ export const renderCodeModeStatusResult = (
   } catch {
     // Hostile render state falls back to a conservative settled-unknown view.
   }
-  const failed = isError || summary?.outcome === "error";
-  const status = isPartial
-    ? "Reading effective limits"
-    : failed
-      ? "Status failed"
-      : summary?.outcome === "success"
-        ? "Effective limits loaded"
-        : summary?.outcome === "warning"
-          ? "Status refused by output limit"
-          : "Status outcome unavailable";
   // Hostile result content cannot establish status or suppress other presentation.
   const raw = invokeHostCallback(() => rawText(result), "");
-  const view = { isPartial, failed, expanded, contentOnly };
-  return renderPlainResultView(status, raw, summary, view, theme);
+  const counter = isError || summary?.outcome === "error" ? "" : (summary?.counters?.[0] ?? "");
+  return renderPlainResultView(counter, raw, { isPartial, expanded, contentOnly }, theme);
 };

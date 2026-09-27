@@ -1,5 +1,6 @@
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { expect, it } from "vitest";
-import type { FormField, OwnedFormRequest } from "../src/protocol.ts";
+import type { FormField, FormValue, OwnedFormRequest } from "../src/protocol.ts";
 import { formContent, initialFormValues } from "../src/questionnaire/form-model.ts";
 import {
   parseFormInput,
@@ -151,6 +152,37 @@ it("rejects conflicting bounds, duplicate options and invalid defaults", () => {
     { key: "x", type: "string", minLength: 3, maxLength: 1 },
     { key: "x", type: "enum", options: [{ value: "x" }, { value: "x" }] },
     { key: "x", type: "multi-enum", options: [{ value: "x" }], default: ["foreign"] },
-  ] satisfies FormField[])
-    expect(validateFormRequest({ kind: "form", message: "", fields: [field] })).toBeDefined();
+  ] satisfies FormField[]) {
+    const problem = validateFormRequest({ kind: "form", message: "", fields: [field] });
+    expect(problem).toBeDefined();
+    expect(issueMessageStyleProblems(problem ?? "")).toEqual([]);
+  }
+});
+
+it("words inline field errors in the shared message style", () => {
+  const cases: ReadonlyArray<readonly [FormField, FormValue | undefined]> = [
+    [{ key: "x", type: "string", required: true }, undefined],
+    [{ key: "x", type: "string" }, 3],
+    [{ key: "x", type: "string", maxLength: 1 }, "long"],
+    [{ key: "x", type: "string", format: "email" }, "not an email"],
+    [{ key: "x", type: "integer" }, 0.5],
+    [{ key: "x", type: "number", maximum: 1 }, 2],
+    [{ key: "x", type: "boolean" }, "yes"],
+    [{ key: "x", type: "enum", options: [{ value: "a" }] }, "b"],
+    [{ key: "x", type: "multi-enum", options: [{ value: "a" }] }, ["a", "a"]],
+    [{ key: "x", type: "multi-enum", options: [{ value: "a" }], minItems: 1 }, []],
+  ];
+  for (const [field, value] of cases) {
+    const problem = validateFormValue(field, value);
+    expect(problem).toBeDefined();
+    expect({ problem, style: issueMessageStyleProblems(problem ?? "") }).toEqual({
+      problem,
+      style: [],
+    });
+  }
+  expect(
+    issueMessageStyleProblems(
+      validateFormRequest({ kind: "url", message: "", url: "not a url" }) ?? "",
+    ),
+  ).toEqual([]);
 });

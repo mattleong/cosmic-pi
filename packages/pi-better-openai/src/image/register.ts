@@ -3,25 +3,27 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import {
   captureCodePreviewPresentationPolicy,
-  getTextContent,
   withCodePreviewShell,
   type CompactAnimationScheduler,
-  type CompactSummary,
 } from "pi-code-previews";
-import { imageMessagePresentation, renderImageContent } from "./presentation.ts";
-import { stripTerminalControls } from "pi-cosmic-core";
-import { containCommandFailure, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
-import { imageCompactSummary } from "./compact-summary.ts";
+import { failureMessage, invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
+import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
+import { imageCompactSummary, isSignInFailure } from "./compact-summary.ts";
+import { renderImageMessage } from "./message.ts";
+import {
+  renderImageCall,
+  renderImageContent,
+  renderImageRequest,
+  renderImageResult,
+} from "./presentation.ts";
+import { imageResultText } from "./result-text.ts";
 import { OpenAIImageService } from "./service.ts";
 import {
   TOOL_PARAMS,
-  isCodexImageDetails,
   type CodexImageDetails,
   type CodexImageResult,
   type ToolParams,
@@ -31,60 +33,6 @@ const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
 
 const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails => details;
-
-const resultText = (result: CodexImageDetails): string => {
-  const parts = [
-    `Generated image using OpenAI image_generation tool via openai-codex/${result.model}.`,
-    `Action: ${result.action}.`,
-    `Prompt: ${result.prompt}`,
-  ];
-  if (result.imageModel) parts.push(`Image model: ${result.imageModel}.`);
-  if (result.revisedPrompt) parts.push(`Revised prompt: ${result.revisedPrompt}`);
-  if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
-  return parts.join("\n");
-};
-
-const isLegacyCodexImageResult = <Value>(value: Value): value is Value & CodexImageResult =>
-  isCodexImageDetails(value) &&
-  Predicate.hasProperty(value, "data") &&
-  Predicate.isString(value.data);
-
-const isImageContent = <Value>(
-  value: Value,
-): value is Value & { type: "image"; data: string; mimeType: string } =>
-  Predicate.isObject(value) &&
-  value.type === "image" &&
-  Predicate.isString(value.data) &&
-  Predicate.isString(value.mimeType);
-
-/** Command messages carry validated details; only an attached image confirms completion. */
-const messageSummary = (details: CodexImageDetails, hasImage: boolean): CompactSummary => {
-  const base = { subject: details.savedPath || details.prompt, action: details.action };
-  if (details.status === "cancelled") return { ...base, outcome: "cancelled" };
-  if (details.status === "failed")
-    return {
-      ...base,
-      outcome: "error",
-      issues: [{ severity: "error", code: "image-failed", message: "Image generation failed" }],
-    };
-  if (details.status === "completed" && hasImage) return { ...base, outcome: "success" };
-  return {
-    ...base,
-    outcome: "uncertain",
-    issues: [
-      {
-        severity: "warning",
-        code: "image-status",
-        message:
-          details.status === "completed"
-            ? "Image generation was reported complete, but no image is attached"
-            : details.status === "in_progress"
-              ? "Image generation may still be running"
-              : "Image generation has no confirmed completion",
-      },
-    ],
-  };
-};
 
 export function registerOpenAIImage(
   pi: ExtensionAPI,
@@ -99,57 +47,30 @@ export function registerOpenAIImage(
     return run(generateEffect(params), signal);
   };
   const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
-  pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, options, theme) => {
-    const details = isCodexImageDetails(message.details) ? message.details : undefined;
-    const raw = Predicate.isString(message.content)
-      ? message.content
-      : getTextContent(message.content);
-    const text = details
-      ? [resultText(details), ...(raw ? ["Raw result", raw] : [])].join("\n")
-      : raw;
-    const image =
-      (Array.isArray(message.content) ? message.content.find(isImageContent) : undefined) ??
-      (isLegacyCodexImageResult(message.details) ? message.details : undefined);
-    const container = new Container();
-    const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
-    box.addChild(
-      compact
-        ? imageMessagePresentation(
-            details && messageSummary(details, image !== undefined),
-            text,
-            options.expanded,
-            theme,
-          )
-        : new Text(`${theme.fg("accent", theme.bold("[openai-image]"))}\n\n${text}`, 0, 0),
-    );
-    if (image)
-      box.addChild(
-        new Image(
-          image.data,
-          image.mimeType,
-          { fallbackColor: (line) => theme.fg("dim", line) },
-          details?.savedPath
-            ? { maxWidthCells: 80, maxHeightCells: 24, filename: details.savedPath }
-            : { maxWidthCells: 80, maxHeightCells: 24 },
-        ),
-      );
-    container.addChild(box);
-    return container;
-  });
+  // Messages carry no working directory; saved paths display relative to the latest one seen.
+  let cwd = "";
+  const noteCwd = (ctx: ExtensionContext) => {
+    cwd = invokeHostCallback(() => ctx.cwd, cwd);
+  };
+  pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, options, theme) =>
+    renderImageMessage(message, { expanded: options.expanded, compact, cwd }, theme),
+  );
   pi.registerCommand(OPENAI_IMAGE_COMMAND, {
     description: "Generate an image with OpenAI Codex image generation",
     handler: (args, ctx) => {
       const prompt = args.trim();
       if (!prompt) {
-        safeHostUi(() => ctx.ui.notify("Usage: /openai-image <prompt>", "error"));
+        notifyAtHostBoundary(ctx, "Usage: /openai-image <prompt>", "warning");
         return Promise.resolve();
       }
-      safeHostUi(() => ctx.ui.notify("Requesting OpenAI image...", "info"));
+      notifyAtHostBoundary(ctx, "Requesting an image from OpenAI…", "info");
       updateContext(ctx);
+      noteCwd(ctx);
       const signal = safeHostSignal(ctx);
       const request = containCommandFailure(generateEffect({ prompt }), ctx, {
-        failed: (message) => `OpenAI image generation failed: ${message}.`,
-        unexpected: "OpenAI image generation failed unexpectedly.",
+        failed: (message) =>
+          `Couldn't generate the image: ${isSignInFailure(message) ? "sign in with /login openai-codex" : failureMessage(message, "unknown error")}`,
+        unexpected: "Couldn't generate the image",
         defect: "Better OpenAI image command raised an unexpected defect.",
       });
       return run(request, signal)
@@ -162,7 +83,7 @@ export function registerOpenAIImage(
               pi.sendMessage({
                 customType: "openai-image",
                 content: [
-                  { type: "text", text: resultText(image) },
+                  { type: "text", text: imageResultText(image) },
                   { type: "image", data: image.data, mimeType: image.mimeType },
                 ],
                 display: true,
@@ -170,16 +91,11 @@ export function registerOpenAIImage(
               }),
             )
             .catch(() => {
-              safeHostUi(() =>
-                ctx.ui.notify("Unable to deliver the generated image message.", "warning"),
-              );
+              notifyAtHostBoundary(ctx, "Couldn't show the generated image", "warning");
             });
         })
         .catch(() => {
-          if (!signal?.aborted)
-            safeHostUi(() =>
-              ctx.ui.notify("OpenAI image generation failed unexpectedly.", "warning"),
-            );
+          if (!signal?.aborted) notifyAtHostBoundary(ctx, "Couldn't generate the image", "warning");
         });
     },
   });
@@ -194,12 +110,16 @@ export function registerOpenAIImage(
       "Pass the user's image prompt verbatim. Do not embellish or rewrite it unless explicitly requested.",
     ],
     parameters: TOOL_PARAMS,
+    renderCall: (args, theme, context) => renderImageCall(args, theme, context),
+    renderResult: (result, options, theme, context) =>
+      renderImageResult(result, options, theme, context),
     execute(_id, params, signal, onUpdate, ctx) {
-      const projectionText = `Requesting OpenAI image_generation via ${ctx.model?.id ?? "configured model"}...`;
+      noteCwd(ctx);
+      const projectionText = `Requesting OpenAI image_generation via ${ctx.model?.id ?? "configured model"}…`;
       onUpdate?.({ content: [{ type: "text", text: projectionText }], details: undefined });
       return generate(params, ctx, signal).then((result) => ({
         content: [
-          { type: "text", text: resultText(result) },
+          { type: "text", text: imageResultText(result) },
           { type: "image" as const, data: result.data, mimeType: result.mimeType },
         ],
         details: imageDetails(result),
@@ -210,7 +130,9 @@ export function registerOpenAIImage(
     withCodePreviewShell(tool, {
       compactSummary: imageCompactSummary,
       expandedContent: {
-        renderCall: (args) => new Text(stripTerminalControls(JSON.stringify(args, null, 2)), 0, 0),
+        // The compact heading shows the action; its subject may be clipped, so the prompt stays.
+        renderCall: (args, theme) =>
+          renderImageRequest(args, theme, { prompt: false, action: true }),
         renderResult: renderImageContent,
       },
       scheduleAnimation,

@@ -2,7 +2,7 @@
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { completeSettingsArguments, isProjectTrusted, synchronousNow } from "pi-cosmic-core";
+import { completeSettingsArguments, notifyAtHostBoundary, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
@@ -11,16 +11,10 @@ import {
   type AdaptiveHostRefreshTicker,
 } from "../boundary/host-refresh-ticker.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
+import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
-import {
-  MAX_DIRECT_CHILDREN,
-  MAX_SUBAGENT_DEPTH,
-  MIN_DIRECT_CHILDREN,
-  MIN_SUBAGENT_DEPTH,
-  type SubagentNestingPolicy,
-  type WriterWorkspaceMode,
-} from "../config/schema.ts";
+import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
   SubagentCopyProfileSetPatch,
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -40,7 +34,6 @@ import { SubagentFleetComponent, type FleetMessageDelivery } from "../ui/fleet.t
 import { subagentUiRefreshCadence } from "../ui/refresh.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { openProfileDashboard } from "./profile-dashboard.ts";
-import { captureProjectWriteTrust, profileSetPatchBase } from "./profile-write-context.ts";
 import type { JsonObject } from "pi-cosmic-core";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import type { SubagentProfileRestorePatch } from "../config/store.ts";
@@ -74,10 +67,7 @@ export interface FleetManagerActions {
   readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
   readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
-  readonly inspectWriterWorkspace: () => Promise<{
-    readonly mode: WriterWorkspaceMode;
-    readonly blockedReason?: string;
-  }>;
+  readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
   /** The coordinator rejects unsafe switches and persists accepted preferences for new sessions. */
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;
@@ -98,14 +88,15 @@ function openFleetManager(
 ): Promise<void> {
   if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
     if (ctx.hasUI)
-      ctx.ui.notify(
-        "Open Pi in an interactive terminal to view agents with /subagents.",
-        "warning",
-      );
+      notifyAtHostBoundary(ctx, "Open Pi in an interactive terminal to use /subagents", "warning");
     return Promise.resolve();
   }
   if (!actions.isAvailable()) {
-    ctx.ui.notify("Subagents are not active. Run /reload, then reopen /subagents.", "warning");
+    notifyAtHostBoundary(
+      ctx,
+      "Subagents aren't running; run /reload, then reopen /subagents",
+      "warning",
+    );
     return Promise.resolve();
   }
   return openOwnedSurfacePromise<undefined>(ctx, {
@@ -156,159 +147,13 @@ function openFleetManager(
   });
 }
 
-const promptLimit = (
-  ctx: ExtensionCommandContext,
-  label: string,
-  current: number,
-  minimum: number,
-  maximum: number,
-): Promise<number | undefined> =>
-  ctx.ui.input(`${label} (${minimum} to ${maximum})`, current.toString()).then((text) => {
-    if (text === undefined) return undefined;
-    const parsed = /^(?:0|[1-9][0-9]*)$/u.test(text.trim()) ? Number(text.trim()) : Number.NaN;
-    if (Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum) return parsed;
-    ctx.ui.notify(`${label} must be a whole number from ${minimum} to ${maximum}.`, "error");
-    return undefined;
-  });
-
-function openNestingSettings(
-  ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
-): Promise<void> {
-  if (!ctx.hasUI) return Promise.resolve();
-  const trusted = isProjectTrusted(ctx);
-  return actions.inspectProfiles(trusted).then((inspection) =>
-    ctx.ui
-      .select(
-        "Apply nesting limits to",
-        trusted ? ["Session", "Global", "Project"] : ["Session", "Global"],
-      )
-      .then((selectedScope) => {
-        const scope = (["session", "global", "project"] as const).find(
-          (candidate) => candidate === selectedScope?.toLowerCase(),
-        );
-        if (!scope) return;
-        const current: SubagentNestingPolicy =
-          scope === "session"
-            ? (inspection.session.nesting ?? inspection.session.effectiveConfig.nesting)
-            : scope === "project"
-              ? (inspection.project?.file.nesting ?? inspection.config.nesting)
-              : (inspection.global.file.nesting ?? inspection.config.nesting);
-        const saveNesting = (nesting?: SubagentNestingPolicy): Promise<void> | undefined => {
-          const patch = nesting ? { nesting } : {};
-          if (scope === "session")
-            return actions.patchSessionNesting({
-              expectedRevision: inspection.session.revision,
-              ...patch,
-            });
-          const writeTrust = captureProjectWriteTrust(
-            ctx,
-            scope,
-            "This project is no longer trusted. Nesting limits were not saved.",
-          );
-          if (!writeTrust) return;
-          return actions
-            .patchNesting({
-              ...profileSetPatchBase(inspection, scope, writeTrust.projectTrusted),
-              ...patch,
-            })
-            .then(() => ctx.ui.notify("Nesting limits saved. Run /reload to apply them.", "info"));
-        };
-        return ctx.ui
-          .select("Choose nesting limits", ["Set limits", "Inherit limits"])
-          .then((choice) => {
-            if (!choice) return;
-            if (choice.startsWith("Inherit")) return saveNesting();
-            return promptLimit(
-              ctx,
-              "Maximum direct children",
-              current.maxDirectChildren,
-              MIN_DIRECT_CHILDREN,
-              MAX_DIRECT_CHILDREN,
-            ).then((maxDirectChildren) =>
-              maxDirectChildren === undefined
-                ? undefined
-                : promptLimit(
-                    ctx,
-                    "Maximum depth",
-                    current.maxDepth,
-                    MIN_SUBAGENT_DEPTH,
-                    MAX_SUBAGENT_DEPTH,
-                  ).then((maxDepth) =>
-                    maxDepth === undefined
-                      ? undefined
-                      : saveNesting({ maxDirectChildren, maxDepth }),
-                  ),
-            );
-          });
-      }),
-  );
-}
-
-function openWriterWorkspaceSettings(
-  ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
-): Promise<void> {
-  const owner = actions.captureModelRefresh();
-  return actions
-    .inspectWriterWorkspace()
-    .then((snapshot) => {
-      if (!owner.isCurrent() || !actions.isAvailable()) return;
-      if (snapshot.blockedReason) {
-        ctx.ui.notify(snapshot.blockedReason, "warning");
-        return;
-      }
-      const labels =
-        snapshot.mode === "worktree"
-          ? ["Worktree", "Shared checkout"]
-          : ["Shared checkout", "Worktree"];
-      return ctx.ui.select("Writer workspace", labels).then((choice) => {
-        if (!owner.isCurrent() || !actions.isAvailable()) return;
-        const mode =
-          choice === "Worktree"
-            ? "worktree"
-            : choice === "Shared checkout"
-              ? "shared-checkout"
-              : undefined;
-        if (mode === undefined || mode === snapshot.mode) return;
-        return actions.setWriterWorkspaceMode(mode).then(() => {
-          if (owner.isCurrent())
-            ctx.ui.notify("Writer workspace updated and saved for new sessions.", "info");
-        });
-      });
-    })
-    .catch((error) => {
-      if (owner.isCurrent())
-        ctx.ui.notify(
-          error instanceof Error ? error.message : "Could not change writer workspace.",
-          "error",
-        );
-    });
-}
-
-function openSubagentSettings(
-  ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
-): Promise<void> {
-  if (!ctx.hasUI || !actions.isAvailable()) return Promise.resolve();
-  const owner = actions.captureModelRefresh();
-  return ctx.ui
-    .select("Subagents settings", ["Writer workspace", "Nesting limits"])
-    .then((choice) => {
-      if (!owner.isCurrent() || !actions.isAvailable()) return;
-      if (choice === "Writer workspace") return openWriterWorkspaceSettings(ctx, actions);
-      if (choice === "Nesting limits") return openNestingSettings(ctx, actions);
-      return;
-    });
-}
-
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): void {
   pi.registerCommand("subagents", {
-    description: "Open the subagent fleet or configure profiles",
+    description: "Open the subagent fleet, or edit profiles with /subagents profiles",
     getArgumentCompletions: (prefix) => {
       const profilePrefix = /^profiles\s+([^\s]*)$/u.exec(prefix.trimStart());
       if (profilePrefix) {
@@ -323,13 +168,11 @@ export function registerSubagentManagerCommand(
       }
       return completeSettingsArguments(prefix, [
         { id: "profiles", description: "Edit Current Session profiles and saved sets" },
-        { id: "settings", description: "Configure writer workspace and nesting limits" },
       ]);
     },
     handler: (args, ctx) => {
       const command = args.trim();
       if (!command) return openFleetManager(ctx, bridge, actions);
-      if (command === "settings") return openSubagentSettings(ctx, actions);
       const parts = command.split(/\s+/u);
       const profile = PROFILE_IDS.find((id) => id === parts[1]);
       if (parts[0] === "profiles" && (parts.length === 1 || (parts.length === 2 && profile)))
@@ -337,9 +180,10 @@ export function registerSubagentManagerCommand(
           initialProfile: profile ?? PROFILE_IDS[0],
           initialFocus: profile ? "fields" : "profiles",
         });
-      ctx.ui.notify(
-        "Usage: /subagents [settings | profiles [profile]]; use a known profile name. Omit arguments for the fleet inspector.",
-        "error",
+      notifyAtHostBoundary(
+        ctx,
+        "Usage: /subagents [profiles [profile]]; settings are in /subagents-settings",
+        "warning",
       );
       return Promise.resolve();
     },

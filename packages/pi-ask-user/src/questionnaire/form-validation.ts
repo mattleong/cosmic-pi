@@ -69,19 +69,19 @@ export function validateFormValue(
   field: FormField,
   value: FormValue | undefined,
 ): string | undefined {
-  if (value === undefined) return field.required ? "A value is required." : undefined;
+  if (value === undefined) return field.required ? "A value is required" : undefined;
   switch (field.type) {
     case "string": {
-      if (!Predicate.isString(value)) return "Enter text.";
+      if (!Predicate.isString(value)) return "Enter text";
       const length = [...value].length;
       if (
         value.length > 4096 ||
         length < (field.minLength ?? 0) ||
         length > (field.maxLength ?? 4096)
       )
-        return "Text length is outside the allowed range.";
+        return "Text length is outside the allowed range";
       if (field.format && !validFormat(value, field.format))
-        return "Text does not match the requested format.";
+        return "Text doesn't match the requested format";
       return undefined;
     }
     case "number":
@@ -91,16 +91,16 @@ export function validateFormValue(
         !Number.isFinite(value) ||
         (field.type === "integer" && !Number.isInteger(value))
       )
-        return "Enter a valid number.";
+        return "Enter a valid number";
       return value < (field.minimum ?? -Infinity) || value > (field.maximum ?? Infinity)
-        ? "Number is outside the allowed range."
+        ? "Number is outside the allowed range"
         : undefined;
     case "boolean":
-      return Predicate.isBoolean(value) ? undefined : "Choose true or false.";
+      return Predicate.isBoolean(value) ? undefined : "Choose true or false";
     case "enum":
       return Predicate.isString(value) && field.options.some((option) => option.value === value)
         ? undefined
-        : "Choose one listed option.";
+        : "Choose one listed option";
     case "multi-enum":
       if (
         !Array.isArray(value) ||
@@ -108,9 +108,9 @@ export function validateFormValue(
         new Set(value).size !== value.length ||
         value.some((item) => !field.options.some((option) => option.value === item))
       )
-        return "Choose listed options without duplicates.";
+        return "Choose listed options without duplicates";
       return value.length < (field.minItems ?? 0) || value.length > (field.maxItems ?? 64)
-        ? "Selection count is outside the allowed range."
+        ? "Selection count is outside the allowed range"
         : undefined;
   }
 }
@@ -124,34 +124,34 @@ export function validateFormRequest(request: OwnedFormRequest): string | undefin
             char.charCodeAt(0) <= 32 || (char.charCodeAt(0) >= 127 && char.charCodeAt(0) <= 159),
         )
       )
-        return "Invalid URL.";
+        return "The URL isn't valid";
     } catch {
-      return "Invalid URL.";
+      return "The URL isn't valid";
     }
     return undefined;
   }
   if (new Set(request.fields.map((field) => field.key)).size !== request.fields.length)
-    return "Field keys must be unique.";
+    return "Field keys must be unique";
   for (const field of request.fields) {
     if (field.type === "string" && (field.minLength ?? 0) > (field.maxLength ?? 4096))
-      return "Invalid text bounds.";
+      return "Text length bounds conflict";
     if (
       (field.type === "number" || field.type === "integer") &&
       (field.minimum ?? -Infinity) > (field.maximum ?? Infinity)
     )
-      return "Invalid number bounds.";
+      return "Number bounds conflict";
     if (field.type === "enum" || field.type === "multi-enum") {
       if (new Set(field.options.map((option) => option.value)).size !== field.options.length)
-        return "Option values must be unique.";
+        return "Option values must be unique";
       if (
         field.type === "multi-enum" &&
         ((field.minItems ?? 0) > (field.maxItems ?? 64) ||
           (field.minItems ?? 0) > field.options.length)
       )
-        return "Invalid selection bounds.";
+        return "Selection count bounds conflict";
     }
     if (field.default !== undefined && validateFormValue(field, field.default))
-      return "Invalid default value.";
+      return "The default value isn't valid";
   }
   return undefined;
 }

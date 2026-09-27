@@ -88,6 +88,39 @@ describe("subagent host notifier", () => {
     expect(content()).toContain(warning);
   });
 
+  it("labels a failure once, even when the worker's error names its own class", () => {
+    for (const error of ["Error: 429 Too Many Requests", "TypeError: bad input", "exit 1"]) {
+      const { notify, content } = notifier();
+      notify({
+        type: "completed",
+        runs: [completion("agent-1", "reader", { outcome: "failed", error })],
+      });
+      expect(content()).toContain(error);
+      expect(content()).not.toMatch(/Error: \w*Error:/u);
+    }
+  });
+
+  it("names a lone run in display-only details without changing delivered content", () => {
+    const { sendMessage, notify } = notifier();
+    notify({ type: "completed", runs: [completion("agent-1", "reader", { finalText: "ok" })] });
+    notify({
+      type: "question",
+      id: "agent-2",
+      name: "writer",
+      requestId: "q-1",
+      message: "May I?",
+      generation: 1,
+    });
+    const [completed, question] = sendMessage.mock.calls.map(([message]) => message);
+    expect(completed.details.name).toBe("reader");
+    expect(question.details.name).toBe("writer");
+    notify({
+      type: "completed",
+      runs: [completion("agent-3", "a"), completion("agent-4", "b")],
+    });
+    expect(sendMessage.mock.calls[2]?.[0].details.name).toBeUndefined();
+  });
+
   it("directs failed profiled runs through remaining candidates before generalist", () => {
     const { notify, content } = notifier();
 

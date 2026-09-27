@@ -294,7 +294,7 @@ export const makeMcpLifecycle = (
         active = undefined;
         receipts.deactivate();
         deactivateTool();
-        notifyAtHostBoundary(input.ctx, "MCP failed to register its tool.", "warning");
+        notifyAtHostBoundary(input.ctx, "MCP couldn't register its tool", "warning");
         return;
       }
       host = makeMcpCodeModeHost(pi.events);
@@ -380,8 +380,7 @@ export const makeMcpLifecycle = (
       receipts.deactivate();
       deactivateTool();
     },
-    onStartFailure: ({ ctx }) =>
-      notifyAtHostBoundary(ctx, "MCP failed to start for this session.", "warning"),
+    onStartFailure: ({ ctx }) => notifyAtHostBoundary(ctx, "MCP couldn't start", "warning"),
   });
   const start = (ctx: ExtensionContext): Promise<void> => {
     observeUserIntent();

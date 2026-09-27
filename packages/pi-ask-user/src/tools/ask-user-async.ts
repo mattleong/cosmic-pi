@@ -3,7 +3,7 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   AskUserAsyncParameters,
   AskUserAsyncControlParameters,
@@ -23,8 +23,7 @@ import {
   renderAsyncMessage,
   renderAsyncContent,
 } from "../ui/async-tool-render.ts";
-import { Text } from "@earendil-works/pi-tui";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { argumentsSection } from "../ui/tool-body.ts";
 
 export function registerAsyncAskUserTools(
   pi: ExtensionAPI,
@@ -34,8 +33,7 @@ export function registerAsyncAskUserTools(
 ): void {
   const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
   const expandedContent = {
-    renderCall: (args: Partial<AskUserAsyncRequest> | Partial<AskUserAsyncControl>) =>
-      new Text(stripTerminalControls(JSON.stringify(args, null, 2) ?? ""), 0, 0),
+    renderCall: <Args>(args: Args, theme: Theme) => argumentsSection(theme, args),
     renderResult: renderAsyncContent,
   };
   pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, (message, options, theme) =>
@@ -56,19 +54,14 @@ export function registerAsyncAskUserTools(
           "Async answer messages and control results carry stable delivery IDs. Treat repeated IDs as the same decision. Runtime shutdown, reload, replacement, and tree navigation revoke pending questionnaires.",
         ],
         renderCall(args, theme, context) {
-          return renderAsyncCall(args, theme, context.expanded);
+          return renderAsyncCall(args, theme, context);
         },
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncParameters,
         executionMode: "sequential",
         execute(_id, input, signal) {
           return start(input, signal).then((snapshot) => ({
-            content: [
-              {
-                type: "text" as const,
-                text: `${formatAsyncSnapshot(snapshot)}\nPresentation: ${snapshot.presentation ?? "open"}. Queued admission is not a mount or an answer.`,
-              },
-            ],
+            content: [{ type: "text" as const, text: formatAsyncSnapshot(snapshot) }],
             details: snapshot,
           }));
         },
@@ -90,7 +83,7 @@ export function registerAsyncAskUserTools(
         promptSnippet:
           "Await async answers when independent work is exhausted, or inspect/cancel a questionnaire",
         renderCall(args, theme, context) {
-          return renderAsyncCall(args, theme, context.expanded, true);
+          return renderAsyncCall(args, theme, context, true);
         },
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncControlParameters,

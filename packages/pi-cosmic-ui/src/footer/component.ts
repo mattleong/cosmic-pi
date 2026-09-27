@@ -3,7 +3,6 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import type {
   CosmicFooterContribution,
@@ -31,6 +30,7 @@ import {
   type FooterModel,
 } from "../boundary/host-footer-projection.ts";
 import type { FooterRegistry } from "./registry.ts";
+import { clipToWidth } from "../manager/chrome.ts";
 
 export function createFooterComponent(options: {
   pi: ExtensionAPI;
@@ -167,7 +167,7 @@ export function createFooterComponent(options: {
           } else if (otherDetails.length && width >= 64) {
             lines.push(renderContributionLine(otherDetails, width, theme, true));
           }
-          return lines.map((line) => truncateToWidth(line, width, ""));
+          return lines.map((line) => clipToWidth(line, width, ""));
         },
         [],
       );

@@ -1,11 +1,10 @@
 /** Execution-local, bounded presentation receipts. Raw arguments and results never persist. */
 import * as Schema from "effect/Schema";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot, clipText } from "pi-cosmic-core";
 import {
   BoundedIssuesSchema,
   MAX_RECEIPT_ISSUES,
-  clipText,
   cleanDiagnosticText as clean,
   retainIssues,
 } from "./issue-evidence.ts";

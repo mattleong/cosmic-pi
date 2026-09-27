@@ -24,13 +24,13 @@ it.each([0, 1, 125])("reports a supported tools count: %s", (tools) => {
 });
 it("does not describe an unsupported tools catalog as a loaded empty catalog", () => {
   const text = refresh(0, false, [{ family: "tools", reason: "rpc-method-not-found" }]);
-  expect(text).toMatch(/unavailable/i);
+  expect(text).toMatch(/unavailable|n't available/i);
   expect(text).not.toMatch(/\b0\b/);
 });
 it("keeps unavailable non-tools catalogs visible alongside a successful tools count", () => {
   const text = refresh(12, true, [{ family: "resources", reason: "rpc-method-not-found" }]);
   expect(text).toMatch(/\b12\b/);
-  expect(text).toMatch(/unavailable/i);
+  expect(text).toMatch(/unavailable|n't available/i);
 });
 it("never echoes gateway reply data or counts outside refresh feedback", () => {
   for (const isError of [false, true]) {

@@ -1,3 +1,4 @@
+import { countLabel } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "./model.ts";
 import { isActiveRunState } from "./model.ts";
 
@@ -25,10 +26,10 @@ export const fleetStatus = (projection: SubagentProjection): string | undefined 
   const retained = projection.runs.filter((run) => run.state === "reported").length;
   if (owned === 0) return undefined;
   return [
-    working ? `${working} subagent${working === 1 ? "" : "s"} working` : undefined,
-    waiting ? `${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : undefined,
+    working ? `${countLabel(working, "subagent")} running` : undefined,
+    waiting ? `${waiting} waiting for reply` : undefined,
     paused ? `${paused} paused` : undefined,
-    retained ? `${retained} retained` : undefined,
+    retained ? `${retained} reported` : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");

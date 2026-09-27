@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
-import { safeTextPrefix } from "../run/state.ts";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine, clipText } from "pi-cosmic-core";
 
 export interface SubagentCompletionNotification {
   readonly id: string;
@@ -43,8 +42,7 @@ const MAX_NOTIFICATION_CHARS = 32 * 1024;
 
 const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string => {
   const sanitized = sanitizeDiagnosticContent(value, { maximumLength: maximumLength + 2 }).trim();
-  if (sanitized.length <= maximumLength) return sanitized;
-  return `${safeTextPrefix(sanitized, Math.max(0, maximumLength - 1)).trimEnd()}…`;
+  return clipText(sanitized, maximumLength);
 };
 
 interface CompletionChunk {
@@ -52,11 +50,20 @@ interface CompletionChunk {
   readonly runs: ReadonlyArray<SubagentCompletionNotification>;
 }
 
+// Worker errors often carry their own class prefix; a second "Error:" label adds nothing.
+const ERROR_LABELLED = /^(?:[A-Z][A-Za-z]*)?Error\b/u;
+
+const failureText = (error: string | undefined): string => {
+  const text = error?.trim();
+  if (!text) return "Error: Run failed without an error report.";
+  return ERROR_LABELLED.test(text) ? text : `Error: ${text}`;
+};
+
 const completionBody = (run: SubagentCompletionNotification): string => {
   const warning = run.warning?.trim();
   const primary =
     run.outcome === "failed"
-      ? `Error: ${run.error?.trim() || "Run failed without an error report."}`
+      ? failureText(run.error)
       : run.finalText?.trim() || "Completed without a final report.";
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
@@ -158,6 +165,9 @@ const completionChunks = (
   return chunks;
 };
 
+/** A display name for compact rows, bounded like the transcript's other one-line labels. */
+const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
+
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   return (notification) => {
     if (notification.type === "completed") {
@@ -174,6 +184,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
                 total: chunk.runs.length,
                 failed: chunk.runs.filter((run) => run.outcome === "failed").length,
                 warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
+                ...(chunk.runs.length === 1 && { name: displayName(chunk.runs[0]!.name) }),
               },
               display: true,
             },
@@ -198,7 +209,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       pi.sendMessage(
         {
           customType: "pi-subagents-question",
-          details: { version: 1, kind: "question" },
+          details: { version: 1, kind: "question", name: displayName(notification.name) },
           content,
           display: true,
         },

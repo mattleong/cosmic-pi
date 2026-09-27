@@ -20,6 +20,8 @@ import { makeFrozenProjection } from "./projection.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./security.ts";
 import { formatTimestampOrNever } from "./subscription-format.ts";
 import { withUsageEligibility, type UsageProjectionBase } from "./usage-projection.ts";
+import { formatDuration } from "./display.ts";
+import { failureMessage, notificationText } from "./message-text.ts";
 
 /** Usage configuration fields the shared controller relies on. */
 export interface UsageControllerConfigFields {
@@ -215,7 +217,9 @@ export const makeUsageRefreshController = <
       );
     const notifyChanged = notifyHost("render", onChange);
     const notifyUser = (message: string, level: "info" | "warning") =>
-      notifyHost("notify", () => MutableRef.get(context).ui.notify(message, level));
+      notifyHost("notify", () =>
+        MutableRef.get(context).ui.notify(notificationText(message), level),
+      );
     const synchronizeState =
       options.synchronizeState ??
       ((current: P, ctx: ExtensionContext, clearUsage: boolean) =>
@@ -295,7 +299,7 @@ export const makeUsageRefreshController = <
                 error: undefined,
                 statusText:
                   value._tag === "Disabled"
-                    ? "Usage is hidden in Cosmic UI."
+                    ? "Usage is hidden in Cosmic UI"
                     : options.hiddenStatusText,
               });
             if (value._tag === "Failure" || value._tag === "Missing") {
@@ -308,7 +312,7 @@ export const makeUsageRefreshController = <
                   snapshot: undefined,
                   statusLine: undefined,
                   error: message,
-                  statusText: `Usage unavailable: ${message}`,
+                  statusText: `Usage unavailable: ${failureMessage(message, "unknown error")}`,
                   lastFetchAt: value.fetchedAt,
                 },
                 missing ? options.clearAuthPatch : value.patch,
@@ -427,7 +431,7 @@ export function formatUsageDebugReport(report: UsageDebugReport): string {
     `Last fetch: ${formatTimestampOrNever(report.lastFetchAt)}`,
     `Last successful update: ${formatTimestampOrNever(report.updatedAt)}`,
     `Last error: ${report.error ?? "none"}`,
-    `Refresh interval: ${report.refreshIntervalMs}ms`,
+    `Refresh interval: ${formatDuration(report.refreshIntervalMs)}`,
     `Endpoint: ${report.endpoint}`,
     `Auth file: ${report.authPath ?? "unknown"}`,
   ].join("\n");

@@ -22,7 +22,7 @@ import { makeAskUserTuiHost } from "./host-tui.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 const hostError = (operation: string) =>
-  new AskUserHostError({ operation, message: `Unable to ${operation} the user questionnaire.` });
+  new AskUserHostError({ operation, message: `Couldn't ${operation} the questionnaire.` });
 
 const notifyBestEffort = (
   ui: ExtensionUIContext,
@@ -97,7 +97,7 @@ const askSingleQuestion = (
       if (text !== undefined) return { kind: "custom", text };
       yield* notifyBestEffort(
         ui,
-        "Custom answer dismissed; choose an option or cancel the question.",
+        "Custom answer dismissed; choose an option or cancel the question",
         "info",
       );
     }
@@ -120,7 +120,7 @@ const askMultipleQuestion = (
         if (text !== undefined) return { kind: "custom", text };
         yield* notifyBestEffort(
           ui,
-          "Custom answer dismissed; choose listed options, write a custom answer, or cancel the question.",
+          "Custom answer dismissed; choose options, write an answer, or cancel the question",
           "info",
         );
         continue;
@@ -136,7 +136,7 @@ const askMultipleQuestion = (
         if (value === undefined) {
           yield* notifyBestEffort(
             ui,
-            "Choice selection dismissed; choose an answer mode or cancel the question.",
+            "Choice selection dismissed; choose how to answer or cancel the question",
             "info",
           );
           break;
@@ -145,7 +145,7 @@ const askMultipleQuestion = (
         if (!tokens.every((token) => /^\d+\.?$/.test(token))) {
           yield* notifyBestEffort(
             ui,
-            'Enter only choice numbers, or go back and choose "Write a custom answer."',
+            'Enter only choice numbers, or go back and choose "Write a custom answer"',
             "warning",
           );
           continue;
@@ -154,7 +154,7 @@ const askMultipleQuestion = (
         if (indices.some((index) => index < 0 || index >= question.choices.length)) {
           yield* notifyBestEffort(
             ui,
-            `Use choice numbers from 1 to ${question.choices.length}.`,
+            `Use choice numbers from 1 to ${question.choices.length}`,
             "warning",
           );
           continue;
@@ -199,7 +199,7 @@ const askOptionalNote = (
         "note",
       );
       if (note !== undefined) return attachNote(answer, note || undefined);
-      yield* notifyBestEffort(ui, "Note dismissed; choose how to continue.", "info");
+      yield* notifyBestEffort(ui, "Note dismissed; choose how to continue", "info");
     }
   });
 

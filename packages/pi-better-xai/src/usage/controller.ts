@@ -68,8 +68,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
         projectTrusted: options.projectTrusted,
         initialProjection: initialXaiProjection,
         hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
-        missingCredentialsMessage: (authPath) =>
-          `Missing xAI OAuth credentials in ${authPath}. Run /login xai.`,
+        missingCredentialsMessage: () => "Sign in with /login xai",
         clearAuthPatch: { authFound: false, teamId: undefined },
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate,

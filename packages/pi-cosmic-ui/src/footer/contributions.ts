@@ -1,24 +1,25 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type {
   CosmicFooterColor,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
+import { clipToWidth } from "../manager/chrome.ts";
 
 export function alignSides(left: string, right: string, width: number): string {
   if (width <= 0) return "";
-  if (!right) return truncateToWidth(left, width, "");
+  if (!right) return clipToWidth(left, width, "");
   const rightWidth = Math.min(visibleWidth(right), width);
-  const clippedRight = truncateToWidth(right, rightWidth, "");
+  const clippedRight = clipToWidth(right, rightWidth, "");
   if (!left) return `${" ".repeat(Math.max(0, width - visibleWidth(clippedRight)))}${clippedRight}`;
 
   const leftWidth = Math.max(0, width - visibleWidth(clippedRight) - 2);
-  const clippedLeft = truncateToWidth(left, leftWidth, "…");
+  const clippedLeft = clipToWidth(left, leftWidth, "…");
   const padding = " ".repeat(
     Math.max(1, width - visibleWidth(clippedLeft) - visibleWidth(clippedRight)),
   );
-  return truncateToWidth(`${clippedLeft}${padding}${clippedRight}`, width, "");
+  return clipToWidth(`${clippedLeft}${padding}${clippedRight}`, width, "");
 }
 
 const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
@@ -151,21 +152,21 @@ export function renderContributionLine(
   const rightBudget = width;
   const fittedRight = fitContributions(right, rightBudget, compact);
   const rightRaw = rawContributionLine(fittedRight, compact);
-  const clippedRight = truncateToWidth(rightRaw, rightBudget, "");
+  const clippedRight = clipToWidth(rightRaw, rightBudget, "");
   const rightWidth = visibleWidth(clippedRight);
 
   const reservedGap = left.length > 0 && rightWidth > 0 ? 2 : 0;
   const leftAvailable = Math.max(0, width - rightWidth - reservedGap);
   const fittedLeft = fitContributions(left, leftAvailable, compact);
   const leftRaw = rawContributionLine(fittedLeft, compact);
-  const clippedLeft = truncateToWidth(leftRaw, leftAvailable, "…");
+  const clippedLeft = clipToWidth(leftRaw, leftAvailable, "…");
   const leftWidth = visibleWidth(clippedLeft);
 
   const styledLeft = styledContributionLine(fittedLeft, compact, clippedLeft, leftRaw, theme);
   const styledRight = styledContributionLine(fittedRight, compact, clippedRight, rightRaw, theme);
-  if (!clippedRight) return truncateToWidth(styledLeft, width, "");
-  if (!clippedLeft) return truncateToWidth(styledRight, width, "");
+  if (!clippedRight) return clipToWidth(styledLeft, width, "");
+  if (!clippedLeft) return clipToWidth(styledRight, width, "");
 
   const padding = " ".repeat(Math.max(1, width - leftWidth - rightWidth));
-  return truncateToWidth(`${styledLeft}${padding}${styledRight}`, width, "");
+  return clipToWidth(`${styledLeft}${padding}${styledRight}`, width, "");
 }

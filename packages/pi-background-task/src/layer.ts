@@ -4,7 +4,7 @@ import * as Path from "effect/Path";
 import { CodePreviewSchedulerService } from "pi-code-previews";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { LocalProcess } from "./boundary/local-process.ts";
-import { BackgroundTaskConfigStore } from "./config/store.ts";
+import { BackgroundTaskConfigStore, BackgroundTaskSettingsWriter } from "./config/store.ts";
 import { BackgroundTaskService } from "./task/service.ts";
 import type { BackgroundTaskProjection } from "./task/model.ts";
 
@@ -22,10 +22,10 @@ export const makeBackgroundTaskLayer = (
     nodeFilePlatformLayer,
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
-  const config = BackgroundTaskConfigStore.layer({
-    cwd: input.cwd,
-    projectTrusted: input.projectTrusted,
-  }).pipe(Layer.provide(platform));
+  const config = Layer.merge(
+    BackgroundTaskConfigStore.layer({ cwd: input.cwd, projectTrusted: input.projectTrusted }),
+    BackgroundTaskSettingsWriter.layer,
+  ).pipe(Layer.provide(platform));
   return BackgroundTaskService.layer({ publish }).pipe(
     Layer.provideMerge(Layer.merge(config, Path.layer)),
     Layer.provide(LocalProcess.layer),

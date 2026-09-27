@@ -1,17 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  truncateToWidth,
-  visibleWidth,
-  wrapTextWithAnsi,
-  type Component,
-} from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
-import { managerNoticeGlyph, managerStateGlyph } from "pi-cosmic-ui/manager";
+import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { expandedSection } from "pi-code-previews";
+import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
-import {
-  composeToolComponent as renderComponent,
-  renderExpansionAffordance,
-} from "pi-cosmic-ui/tool";
+import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import type {
   CompactSubagentToolDetails,
   SubagentProfileCandidateCard,
@@ -28,11 +21,6 @@ import {
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
-
-export interface SemanticOutcomeBanner {
-  readonly color: "warning" | "success" | "error" | "accent";
-  readonly text: string;
-}
 
 /** [lower-cased code substrings, recovery text, optional message-only substrings]. */
 type FailureRecoveryRule = readonly [
@@ -207,7 +195,7 @@ export const renderProfileRoutesComponent = (
     if (profiles.length === 0)
       lines.push(theme.fg("muted", "No profile route details were persisted."));
     if (details.contentOmitted && !contentOnly)
-      lines.push(theme.fg("warning", "Long model or route-detail text was omitted."));
+      lines.push(theme.fg("dim", "Long model or route-detail text was omitted."));
     lines.push(
       theme.fg(
         "dim",
@@ -215,152 +203,113 @@ export const renderProfileRoutesComponent = (
       ),
     );
     return lines.flatMap((line) =>
-      expanded ? wrapTextWithAnsi(line, safeWidth) : [truncateToWidth(line, safeWidth)],
+      expanded ? wrapTextWithAnsi(line, safeWidth) : [clipToWidth(line, safeWidth)],
     );
   });
 
-const failureSuffix = (failures: ActionFailureCounts): string =>
-  [
-    failures.pending > 0 ? ` · ${failures.pending} awaiting confirmation` : "",
-    failures.unconfirmed > 0 ? ` · ${failures.unconfirmed} unconfirmed` : "",
-    failures.failed > 0 ? ` · ${failures.failed} failed` : "",
-  ].join("");
-
-/** Single-target actions: generic uncertainty never claims a definite failure. */
-const singleTargetText = (
+/** Nonzero exceptional counts, each in its own words: "1 awaiting confirmation · 1 failed". */
+const failureCounts = (
+  details: RunToolDetails,
   failures: ActionFailureCounts,
-  failed: string,
-  unconfirmed: string,
-  succeeded: string,
-): string => (failures.failed > 0 ? failed : failures.unconfirmed > 0 ? unconfirmed : succeeded);
+): ReadonlyArray<string> => [
+  ...(failures.pending > 0 ? [`${failures.pending} awaiting confirmation`] : []),
+  ...(failures.unconfirmed > 0 ? [`${failures.unconfirmed} unconfirmed`] : []),
+  // Status only reads, so a target it could not read is missing, not failed.
+  ...(failures.failed > 0
+    ? [`${failures.failed} ${details.action === "status" ? "missing" : "failed"}`]
+    : []),
+];
 
-const summaryText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
-  const plural = count === 1 ? "" : "s";
-  const unsuccessful = failures.pending + failures.unconfirmed + failures.failed;
-  const failedSuffix = failureSuffix(failures);
+/** What each action did to the targets it reached, as a count. */
+const primaryCount = (details: RunToolDetails, count: number): string => {
   switch (details.action) {
     case "list":
-      return count > 0 ? `${count} session subagent${plural}` : "No session subagents";
+      return count > 0 ? countLabel(count, "subagent") : "No subagents";
     case "status":
-      return `Status · ${count} found${unsuccessful > 0 ? ` · ${unsuccessful} missing` : ""}`;
+      return `${count} found`;
     case "send": {
       // closeOnReport=false targets started their next assignment; others got guidance.
-      const cards = details.cards;
-      const retained = cards.filter((card) => card.closeOnReport === false).length;
-      const label =
-        cards.length > 0 && retained === cards.length
-          ? "Next assignments"
-          : retained > 0
-            ? "Guidance/next assignments"
-            : "Guidance";
-      // Pending delivery is not delivered; confirmed operations are counted separately.
-      const received = failures.pending + failures.unconfirmed > 0 ? "confirmed" : "delivered";
-      return `${label} · ${count} ${received}${failedSuffix}`;
+      const retained = details.cards.filter((card) => card.closeOnReport === false).length;
+      return retained > 0 && retained === details.cards.length
+        ? `${countLabel(count, "next assignment")} started`
+        : `${count} delivered`;
     }
     case "reply":
-      return singleTargetText(
-        failures,
-        "Reply failed",
-        "Reply unconfirmed",
-        `Reply delivered to ${count} subagent${plural}`,
-      );
+      return `${count} delivered`;
     case "rename":
-      return singleTargetText(failures, "Rename failed", "Rename unconfirmed", "Subagent renamed");
+      return `${count} renamed`;
     case "interrupt":
-      return `Interrupt · ${count} paused${failedSuffix}`;
-    case "resume":
-      return `Resume · ${count} updated${failedSuffix}`;
-    case "stop":
-      return `Stop · ${count} updated${failedSuffix}`;
+      return `${count} paused`;
+    case "retry":
+      return `${countLabel(count, "retry", "retries")} started`;
+    case "claims":
+      return countLabel(count, "subagent");
     default:
-      return `${details.action} · ${count} result${plural}${failedSuffix}`;
+      return `${count} updated`;
   }
 };
 
-export type SemanticRunRenderer = (
+/**
+ * Routine counters as muted body text. A count of zero beside failures says nothing the
+ * failure count does not; the shell's issue lines explain the failures themselves.
+ */
+const countersText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
+  const exceptional = failureCounts(details, failures);
+  return [
+    ...(count > 0 || exceptional.length === 0 || details.action === "list"
+      ? [primaryCount(details, count)]
+      : []),
+    ...exceptional,
+  ].join(" · ");
+};
+
+export type RunCardRenderer = (
   cards: ReadonlyArray<SubagentRunCard>,
   expanded: boolean,
-  banner: SemanticOutcomeBanner,
+  counters: string,
   showReports: boolean,
 ) => Component;
+
+/** Failed targets by ID, code, and recovery: agent evidence, so only once expanded. */
+const failedTargetLines = (details: RunToolDetails, width: number, theme: Theme): string[] =>
+  (details.actionFailures ?? []).flatMap((failure) => {
+    const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+    const recovery =
+      actionFailureDisposition(details.action, failure) === "pending"
+        ? PENDING_DELIVERY_RECOVERY
+        : failureRecovery(failure.code, failure.message);
+    return [
+      ...wrapTextWithAnsi(
+        theme.fg(
+          "toolOutput",
+          `${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
+        ),
+        width,
+      ),
+      ...wrapTextWithAnsi(theme.fg("dim", `  Next: ${recovery}`), width),
+    ];
+  });
 
 export const renderCompactResultComponent = (
   details: RunToolDetails,
   expanded: boolean,
   theme: Theme,
-  renderRuns: SemanticRunRenderer,
+  renderRuns: RunCardRenderer,
 ): Component => {
-  const renderActionFailures = (width: number): ReadonlyArray<string> =>
-    (details.actionFailures ?? []).flatMap((failure) => {
-      const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-      const disposition = actionFailureDisposition(details.action, failure);
-      const recovery =
-        disposition === "pending"
-          ? PENDING_DELIVERY_RECOVERY
-          : failureRecovery(failure.code, failure.message);
-      // Pending and unconfirmed outcomes are amber warnings; only definite failures use error chrome.
-      const summary = theme.fg(
-        disposition === "failed" ? "error" : "warning",
-        `${disposition === "failed" ? managerStateGlyph("failed") : managerNoticeGlyph("warning")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
-      );
-      const summaryLines = expanded
-        ? wrapTextWithAnsi(summary, width)
-        : [truncateToWidth(summary, width)];
-      const hidden = !expanded && visibleWidth(summary) > width;
-      return [
-        ...summaryLines,
-        truncateToWidth(theme.fg("accent", `  Next: ${recovery}`), width),
-        ...(hidden
-          ? [truncateToWidth(renderExpansionAffordance("failure text", false, theme), width)]
-          : []),
-      ];
-    });
-
+  const failures = countActionFailures(details.action, details.actionFailures);
+  const failed = expandedSection(
+    theme,
+    failures.failed > 0 ? "Failed targets" : "Unconfirmed targets",
+    renderComponent((width) => failedTargetLines(details, Math.max(1, width), theme)),
+  );
   return renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const cards = details.cards;
-    const count = details.runCount;
-    const failures = countActionFailures(details.action, details.actionFailures);
-    const neutral =
-      details.action === "list" ||
-      details.action === "status" ||
-      details.action === "retry" ||
-      details.action === "claims";
-    const strict = details.action === "reply" || details.action === "rename";
-    const uncertain = failures.pending + failures.unconfirmed;
-    const color: SemanticOutcomeBanner["color"] =
-      failures.failed === 0
-        ? uncertain > 0
-          ? "warning"
-          : neutral
-            ? "accent"
-            : "success"
-        : details.action === "send"
-          ? count > 0
-            ? "warning"
-            : "error"
-          : strict
-            ? "error"
-            : "warning";
-    const summary: SemanticOutcomeBanner = { color, text: summaryText(details, count, failures) };
-    const omittedRuns = Math.max(0, count - cards.length);
-    const omissionCues = [
-      ...(omittedRuns > 0
-        ? [
-            `${cards.length} of ${count} shown · ${omittedRuns} omitted · use subagent_status for specific run IDs`,
-          ]
-        : []),
-      ...(details.contentOmitted
-        ? ["Report content omitted · use subagent_status for individual run IDs"]
-        : []),
-    ];
-    const omissionLines = omissionCues.flatMap((cue) =>
-      wrapTextWithAnsi(theme.fg("warning", cue), safeWidth),
-    );
+    const counters = countersText(details, details.runCount, failures);
     return [
-      ...renderRuns(cards, expanded, summary, details.action === "status").render(safeWidth),
-      ...omissionLines,
-      ...renderActionFailures(safeWidth),
+      ...renderRuns(details.cards, expanded, counters, details.action === "status").render(
+        safeWidth,
+      ),
+      ...(expanded && (details.actionFailures?.length ?? 0) > 0 ? failed.render(safeWidth) : []),
     ];
   });
 };

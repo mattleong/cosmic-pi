@@ -2,7 +2,12 @@ import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { galleryDirectory, galleryFrames, writeGallerySection } from "../testing";
+import {
+  galleryDirectory,
+  galleryFrames,
+  writeGallerySection,
+  type GalleryScenario,
+} from "../testing";
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
@@ -33,7 +38,59 @@ const text = (value: string): AgentToolResult<unknown> => ({
   details: {},
 });
 
-const scenarios = [
+const scenarios: ReadonlyArray<
+  Omit<GalleryScenario, "args"> & { readonly tool: string; readonly args: object }
+> = [
+  {
+    tool: "bash",
+    title: "bash awaiting approval",
+    args: { command: "rm -rf build" },
+    phase: "pending",
+  },
+  {
+    tool: "bash",
+    title: "bash streaming output",
+    args: { command: "pnpm test" },
+    result: text("> vitest run\n\n RUN  v4.1.10 /project\n ✓ tests/a.test.ts (3 tests)"),
+    phase: "running",
+  },
+  {
+    tool: "bash",
+    title: "bash success",
+    args: { command: "pnpm lint" },
+    result: text("Found 0 warnings and 0 errors."),
+  },
+  {
+    tool: "bash",
+    title: "bash cancelled",
+    args: { command: "pnpm dev" },
+    result: text("Command aborted"),
+    isError: true,
+  },
+  {
+    tool: "read",
+    title: "read success",
+    args: { path: "/project/src/a.ts" },
+    result: text("export const a = 1;\nexport const b = 2;\n"),
+  },
+  {
+    tool: "grep",
+    title: "grep matches",
+    args: { pattern: "TODO", path: "/project/src" },
+    result: text("a.ts:3: // TODO fix the retry\nb.ts:9: // TODO remove after launch"),
+  },
+  {
+    tool: "find",
+    title: "find files",
+    args: { pattern: "*.test.ts", path: "/project" },
+    result: text("tests/a.test.ts\ntests/b.test.ts"),
+  },
+  {
+    tool: "ls",
+    title: "list a directory",
+    args: { path: "/project" },
+    result: text("src/\ntests/\npackage.json"),
+  },
   {
     tool: "bash",
     title: "bash test failure",
@@ -81,7 +138,7 @@ const scenarios = [
     },
     result: text("Successfully wrote 60 bytes to /project/.env"),
   },
-] as const;
+];
 
 const directory = galleryDirectory(process.env) ?? "";
 

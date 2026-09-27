@@ -1,4 +1,5 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -66,7 +67,7 @@ export function layoutCompactHeader(
   counters = counters.filter((value) => value.trim());
   optional = counters.length ? [] : optional.filter((value) => value?.trim()).slice(0, 1);
   const remaining = width - visibleWidth(identity);
-  if (remaining <= 0) return { row: truncateToWidth(identity, width, ""), counter: undefined };
+  if (remaining <= 0) return { row: clipToWidth(identity, width, ""), counter: undefined };
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
   // Counters carry progress/outcome facts. Spend available subject space on them

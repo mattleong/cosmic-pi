@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { renderCompactIssues, type CompactSummary } from "pi-code-previews";
+import type { CompactSummary } from "pi-code-previews";
+import { toolRunningLine } from "pi-cosmic-ui/tool";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -29,27 +30,20 @@ export function renderCodeModeResultRead(
   theme: Theme,
   contentOnly = false,
 ): Component {
-  const failed = isError || summary?.outcome === "error";
-  const status = isPartial
-    ? "Reading retained result"
-    : failed
-      ? "Retained read failed"
-      : summary?.outcome === undefined
-        ? "Read outcome unavailable"
-        : "Page read succeeded";
-  const counters = summary?.counters ?? [];
-  const view = { isPartial, failed, expanded, contentOnly };
-  return renderPlainResultView([status, ...counters].join(" · "), raw, summary, view, theme);
+  // A failed read keeps its page quiet: the shell's issue explains it.
+  const counter = isError || summary?.outcome === "error" ? "" : (summary?.counters?.[0] ?? "");
+  return renderPlainResultView(counter, raw, { isPartial, expanded, contentOnly }, theme);
 }
 
-/** Plain status line and raw page shared by the read and status views. */
+/**
+ * The read and status views: a running line, a routine counter, and the raw page when expanded.
+ * The shell shows the heading and the issues, so this slot never repeats an outcome.
+ */
 export function renderPlainResultView(
-  status: string,
+  counter: string,
   raw: string,
-  summary: CompactSummary | undefined,
   view: {
     readonly isPartial: boolean;
-    readonly failed: boolean;
     readonly expanded: boolean;
     readonly contentOnly: boolean;
   },
@@ -60,8 +54,11 @@ export function renderPlainResultView(
     const safe = codeModeOutputText(text);
     return invokeHostCallback(() => theme.fg(color, safe), safe);
   };
-  // Content-only slots sit under the shell's heading and issues.
-  const heading = contentOnly && summary ? [] : [paint(view.failed ? "error" : "muted", status)];
+  const heading = isPartial
+    ? [invokeHostCallback(() => toolRunningLine(theme), "Running…")]
+    : contentOnly || !counter
+      ? []
+      : [paint("muted", counter)];
   // Painted up front so a hostile theme cannot fail while drawing.
   const output =
     expanded && !isPartial && raw.length > 0
@@ -70,12 +67,11 @@ export function renderPlainResultView(
           [4, new Text(paint("toolOutput", raw), 0, 0)],
         ] as const)
       : [];
-  const issues = summary && !contentOnly ? summary.issues : undefined;
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];
       const safeWidth = Math.floor(width);
-      const body = [
+      return [
         ...new Text(heading.join("\n"), 0, 0).render(safeWidth),
         // Same nesting as shared expanded sections: label at two columns, body at four.
         ...output.flatMap(([indent, part]) =>
@@ -84,21 +80,6 @@ export function renderPlainResultView(
             .map((line) => `${" ".repeat(indent)}${line}`),
         ),
       ];
-      if (!issues?.length) return body;
-      try {
-        return [...renderCompactIssues(issues, theme, safeWidth, expanded, ""), ...body];
-      } catch {
-        // A hostile host theme cannot hide retained recovery evidence.
-        const evidence = issues.flatMap((issue) =>
-          issue.severity === "info" && !expanded
-            ? []
-            : [issue.message, ...(expanded && issue.detail ? [issue.detail] : [])],
-        );
-        return [
-          ...new Text(evidence.map(codeModeOutputText).join("\n"), 0, 0).render(safeWidth),
-          ...body,
-        ];
-      }
     },
     invalidate() {},
   };

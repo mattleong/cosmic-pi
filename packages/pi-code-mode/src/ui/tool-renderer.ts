@@ -7,15 +7,15 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import {
-  planCompactPresentation,
-  renderCompactChildren,
-  renderCompactIssues,
-  type CompactSummary,
-} from "pi-code-previews";
+import { renderCompactChildren, type CompactSummary } from "pi-code-previews";
 import { invokeHostCallback, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
-import { expandKeyHint, renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
+import {
+  expandKeyHint,
+  renderExpansionAffordance,
+  renderToolHeader,
+  toolRunningLine,
+} from "pi-cosmic-ui/tool";
 import {
   decodeOption,
   MAX_INTENT_LENGTH,
@@ -82,15 +82,12 @@ export const renderCodeModeToolCall = <Args>(
   context?: { readonly expanded?: boolean; readonly executionStarted?: boolean },
 ): Component => {
   const read = codeModeReadRequest(args);
-  const header = read
-    ? {
-        title: "Code Mode result.read",
-        subtitle: truncateDisplay(sanitizeTerminalLine(read.id), 128),
-      }
-    : {
-        title: "Code Mode",
-        subtitle: `· ${describeCodeModeIntent(decodeOption(CodeModeArgumentsInputSchema, args)?.intent)}`,
-      };
+  const header = {
+    title: "Code Mode",
+    subtitle: read
+      ? "result.read saved output"
+      : describeCodeModeIntent(decodeOption(CodeModeArgumentsInputSchema, args)?.intent),
+  };
   const heading = new Text(renderToolHeader(header, theme), 0, 0);
   const awaitingResult = invokeHostCallback(
     () => context?.expanded === true && context.executionStarted !== true,
@@ -130,19 +127,11 @@ const renderCodeModeToolResultUnsafe = (
   const rows =
     presentation.summary?.children?.entries ??
     codeModeCallRows(details, phase, presentation.liveElapsed);
-  // Without a current summary, an error still explains itself with its first line.
-  const issues =
-    planCompactPresentation({
-      summary: presentation.summary,
-      phase,
-      isError,
-      errorText: raw,
-    }).collapsedSummary.issues ?? [];
+  // The shell shows the run's issues above this slot in both styles.
   if (expanded)
     return renderExpandedCodeModeResult({
       details,
       rows: [...rows],
-      issues,
       raw,
       isPartial,
       isError,
@@ -153,9 +142,8 @@ const renderCodeModeToolResultUnsafe = (
       program: presentation.program,
     });
   const container = new Container();
-  container.addChild(lines((width) => renderCompactIssues(issues, theme, width, false, "")));
   if (isPartial && details.counts.total === 0)
-    container.addChild(new Text(theme.fg("muted", "Starting…"), 0, 0));
+    container.addChild(new Text(toolRunningLine(theme, animationFrame), 0, 0));
   // Preview style lists every retained call; compact style keeps the five most relevant.
   container.addChild(
     lines((width) =>

@@ -9,12 +9,7 @@ import {
   mcpIssueMessages,
   mcpNoticesIssue,
 } from "../ui/compact-descriptions.ts";
-import {
-  firstLineMessage,
-  mergeCompactIssues,
-  restatesText,
-  type CompactIssue,
-} from "pi-code-previews";
+import { mergeCompactIssues, type CompactIssue } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { McpBoundaryError } from "../client/errors.ts";
@@ -28,6 +23,8 @@ import {
   decodeUnknownOrUndefined,
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
+  firstLineMessage,
+  restatesText,
 } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
 import { canonicalValidationWarning, isOwnedValidationNotice } from "../ui/validation-notices.ts";
@@ -47,6 +44,8 @@ const MAX_ENTRIES = 31;
 export interface McpNoticeEvidence {
   /** Sanitized notices that keep attention, in first-seen order. */
   readonly attention: readonly string[];
+  /** Notices MCP itself writes, named in people's terms with the notice as detail. */
+  readonly owned: readonly CompactIssue[];
   /** Routine discovery notices, shown only on expansion. */
   readonly information: readonly CompactIssue[];
   readonly incomplete: boolean;
@@ -59,6 +58,33 @@ export interface McpIssueProjection {
   readonly failure?: typeof FailureEvidence.Type | undefined;
   readonly boundary?: McpBoundaryView | undefined;
 }
+
+/** Notices MCP writes itself; the server's own notices are quoted instead. */
+const OWNED_NOTICES: ReadonlyArray<
+  readonly [prefix: string, CompactIssue["severity"], code: string, message: string]
+> = [
+  [
+    "Completed output was not retained and is not recoverable",
+    "warning",
+    "output-not-saved",
+    "Output wasn't saved",
+  ],
+  [
+    "Completed output was not retained; some native images were omitted",
+    "warning",
+    "output-not-saved",
+    "Output wasn't saved and some images were left out",
+  ],
+  ["Only the first 8 native images are shown", "info", "images-omitted", "Only 8 images are shown"],
+  ["Output is limited; use result.read", "info", "retained-output", "More output is saved"],
+  [
+    "Completed output exceeded normalization limits",
+    "warning",
+    "output-too-large",
+    "Output was too large to keep",
+  ],
+  ["No advertised tool metadata matched", "info", "no-match", "No tools matched"],
+];
 
 /** Envelope notices, redacted in full before bounding. An oversized notice is not a complete
  * instruction, so it marks the evidence incomplete rather than leaving a fragment. Owned
@@ -78,6 +104,7 @@ export function readMcpNotices<Reply>(
   let incomplete = count === undefined || count > 32;
   const attention: string[] = [];
   const information: CompactIssue[] = [];
+  const owned: CompactIssue[] = [];
   for (let index = 0; index < Math.min(count ?? 0, 32); index++) {
     const notice = field(notices, String(index)).value;
     if (!Predicate.isString(notice)) {
@@ -93,6 +120,12 @@ export function readMcpNotices<Reply>(
       continue;
     }
     if (!text) continue;
+    const known = OWNED_NOTICES.find(([prefix]) => text.startsWith(prefix));
+    if (known) {
+      const [, severity, code, message] = known;
+      owned.push({ severity, code, message, detail: text });
+      continue;
+    }
     const policy = classifyMcpDiscoveryNotice({
       action: Predicate.isString(context.action) ? context.action : "",
       outcome: context.outcome,
@@ -108,7 +141,12 @@ export function readMcpNotices<Reply>(
       });
     else if (!attention.includes(text)) attention.push(text);
   }
-  return { attention, information: mergeCompactIssues(information), incomplete };
+  return {
+    attention,
+    information: mergeCompactIssues(information),
+    owned: mergeCompactIssues(owned),
+    incomplete,
+  };
 }
 
 /** Every consumer shares this view. Any origin, including a malformed null, and malformed
@@ -234,15 +272,30 @@ export function projectMcpIssues<Reply>(
   const originFailed = field(origin, "isError").value === true;
   const originValidation = field(origin, "outputValidation").value;
   const unchanged = `Reading retained output does not change that outcome.\n${NO_REPLAY}`;
-  if (originFailed) add("origin-failed", "error", unchanged);
+  if (originFailed && action === "result.read") {
+    // A saved page of a failed call quotes that call's own first line when it is prose.
+    const page = field(data, "text").value;
+    const quoted =
+      Predicate.isString(page) && !/^\s*[[{]/u.test(page)
+        ? firstLineMessage(sanitizeDiagnosticContent(page, { maximumLength: 512 }), "")
+        : "";
+    add(
+      "origin-failed",
+      "error",
+      unchanged,
+      quoted ? `The earlier call failed: ${quoted}` : mcpIssueMessages["origin-failed"],
+    );
+  }
   if (!validation && originValidation === "failed") add("output-invalid", "error", unchanged);
   if (!validation && originValidation === "unavailable")
     add("validation-unavailable", "warning", `No mismatch was established.\n${NO_REPLAY}`);
 
+  // A remote failure is quoted only when the server reported one; a reply marked as an error
+  // for its own reasons, such as unsaved output, keeps its successful content out of the issue.
   if (
     field(reply, "isError").value === true &&
     !validation &&
-    (!originFailed || action === "result.read")
+    (action === "result.read" || originFailed || field(origin, "isError").value === undefined)
   ) {
     const remote = remoteErrorText(field, payload, data);
     lost ||= remote.lost;
@@ -275,6 +328,7 @@ export function projectMcpIssues<Reply>(
     add("unclassified-notices", "warning", detail && kept.join("\n"), message);
   }
   for (const issue of notices.information) push(issue);
+  for (const issue of notices.owned) push(issue);
   const undiscoveredCount = presentationArrayLength(undiscovered);
   if (undiscoveredCount)
     add("discovery-incomplete", "warning", mcpUndiscoveredNotice(undiscoveredCount));

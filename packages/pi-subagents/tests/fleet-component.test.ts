@@ -116,6 +116,21 @@ describe("/subagents selection identity", () => {
   });
 });
 
+describe("/subagents lifecycle confirmations", () => {
+  it("interrupts only after the same key confirms it, and cancels on Esc", () => {
+    const running = run("alpha", { state: "running", capabilities: ["interrupt"] });
+    const { component, actions } = makeFleet([running]);
+    component.render(100);
+    component.handleInput("i");
+    expect(actions.interrupt).not.toHaveBeenCalled();
+    component.handleInput(ESC);
+    component.handleInput("i");
+    component.handleInput("i");
+    expect(actions.interrupt).toHaveBeenCalledTimes(1);
+    expect(actions.interrupt).toHaveBeenCalledWith("alpha");
+  });
+});
+
 describe("/subagents tree navigation", () => {
   it("renders descendants in one parent-before-child hierarchy by default", () => {
     const { component } = makeFleet([

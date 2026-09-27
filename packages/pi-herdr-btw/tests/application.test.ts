@@ -109,7 +109,7 @@ describe("herdr-btw session host capture", () => {
         setup(h.ctx);
         yield* Effect.promise(() => h.start());
         expect(h.notify).toHaveBeenCalledOnce();
-        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "error");
+        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       }
     }),
   );

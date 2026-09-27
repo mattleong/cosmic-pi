@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { runCodePreviewSessionEffect } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { resolvePreviewPath } from "../paths/resolve";
-import { formatBytes } from "../shared/helpers";
+import { formatBytes } from "pi-cosmic-core";
 
 const PreviewByteLength = Schema.Natural;
 const SkippedExistingFilePreview = Schema.Struct({

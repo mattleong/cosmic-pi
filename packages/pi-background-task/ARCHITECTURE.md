@@ -8,8 +8,10 @@ Custom screens use the shared live viewport: centered at 90% of terminal width a
 
 - `src/extension.ts` is the thin Pi registration entrypoint; `src/layer.ts` owns session Layer
   composition; `src/application.ts` owns session lifecycle, tool, `/tasks`, footer, and Code Mode
-  capability wiring. `src/settings/controller.ts` routes `/tasks status` to the active runtime's
-  normalized config and keeps `/tasks` manager actions at Promise-shaped host boundaries. The manager
+  capability wiring. `src/settings/controller.ts` registers `/tasks-settings` on Cosmic UI's
+  shared settings shell, reporting the active runtime's normalized config as `status` and writing
+  global or trusted-project values through the store's `BackgroundTaskSettingsWriter`. It keeps
+  `/tasks` manager actions at Promise-shaped host boundaries. The manager
   opens on Cosmic UI's shared `screen` surface, so closing never pops an overlay stacked above it; a
   failed opening rejects the command.
 - `src/config/` — schema/defaults, normalization, and `store.ts` as the single persistence door. The store resolves project over global through core's `makeScopedConfigStore` with no default document, so it never writes and never probes an untrusted project.

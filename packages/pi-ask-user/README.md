@@ -167,9 +167,16 @@ The overlay shows question/answer progress, live text limits, mode-specific cont
 
 RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC text questions open a bounded native input directly, followed by the same optional-note and review/edit flow. RPC uses interruption-linked native dialogs, includes bounded preview text in question titles, and offers an optional bounded note after each answer. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path accepts only in-range choice numbers and re-prompts invalid input. A final native review shows sanitized answer summaries and lets the user submit, edit any answer, or cancel. Cancellation always discards every answer and note draft.
 
-## Compact tool cards
+## Transcript cards
 
-All three questionnaire tools opt into the shared `pi-code-previews` compact setting. The default `preview` style is unchanged. With `toolCallCollapsedStyle: "compact"` and after `/reload`, submitted results show an answer count; expansion restores the answers. Text answers, custom answers, and notes never appear in compact headlines. Cancellation keeps its original details and never means approval. Live transcript cards show question titles and counts without changing the separate questionnaire overlay. Known queued or pending results show request IDs and visible await guidance, never an answer or approval. Opening failures and unrecognized replies keep their existing cards. Automatic delivery failures keep status/await recovery guidance visible. Dialogs and automatic answer messages are unchanged.
+All three questionnaire tools use the shared `pi-code-previews` tool shell in both collapsed styles. Headings name the tool and its subject: question titles, or the control action. Request IDs never appear in headings or warnings.
+
+- The default `preview` style shows each answer on one line under its question, with its note beneath it; waiting or queued requests show their state, and status lists show counts.
+- The `compact` style (`toolCallCollapsedStyle: "compact"`, after `/reload`) shows one row: a verified choice label, the kind of a custom or written answer, or an answer count, plus pending state or list counts. Text answers, custom answers, and notes never appear in compact rows.
+- Both styles report problems in the same words: a failed questionnaire, failed automatic delivery, or a tool error is one plain line. Waiting and queued requests are informational, never warnings. A cancelled questionnaire shows ⊘ and never means approval.
+- Expanding a card shows the full arguments and the result the agent received under "Raw result", where request and delivery IDs and agent guidance stay.
+
+Automatic answer messages follow the same pattern and never show their runtime generation. Dialogs are unchanged.
 
 ## Development
 

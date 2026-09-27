@@ -34,11 +34,13 @@ const captureTool = (
   return tools[0]!;
 };
 
-// Renders the registered, shell-wrapped call or settled result under default preview settings.
+// Renders the registered, shell-wrapped call, or a settled result under the default request's
+// call, under default preview settings.
 const render = <Value extends object>(tool: AskUserTool, kind: "call" | "result", value: Value) => {
   const harness = createToolPresentationHarness(tool, { width: 240 });
-  if (kind === "call") harness.call(value, { executionStarted: true, isPartial: false });
-  else harness.result(opaqueFixture(value));
+  const settled = { executionStarted: true, isPartial: false };
+  harness.call(kind === "call" ? value : request, settled);
+  if (kind === "result") harness.result(opaqueFixture(value), settled);
   return harness.render().join("\n");
 };
 const resultOutput = <Details, Content>(tool: AskUserTool, details: Details, content: Content) =>
@@ -79,21 +81,28 @@ describe("ask_user tool", () => {
         expect(rendered).toContain("Historical choice");
       });
   });
-  it("ignores notes without reading them and rejects string fallback content", () => {
+  it("shows notes under their answer, declines malformed notes, and rejects string content", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
+    const answer = { key: "route", kind: "custom", text: "Scenic", note: "Avoid tolls" };
+    const lines = resultOutput(tool, { outcome: "submitted", answers: [answer] }, []).split("\n");
+    const answerLine = lines.findIndex((line) => line.includes("Scenic"));
+    expect(answerLine).toBeGreaterThanOrEqual(0);
+    expect(lines[answerLine + 1]).toMatch(/^\s+.*Avoid tolls/);
     const hostileNote = Object.defineProperty({}, "note", {
       get() {
         throw new Error("hostile note");
       },
     });
-    for (const note of [{ note: 123 }, { note: "hidden note" }, hostileNote]) {
-      const answer = Object.defineProperties(
+    for (const note of [{ note: 123 }, hostileNote]) {
+      const malformed = Object.defineProperties(
         { key: "route", kind: "custom", text: "Scenic" },
         Object.getOwnPropertyDescriptors(note),
       );
-      const rendered = resultOutput(tool, { outcome: "submitted", answers: [answer] }, []);
-      expect(rendered).toContain("Scenic");
-      expect(rendered).not.toContain("hidden note");
+      expect(
+        resultOutput(tool, { outcome: "submitted", answers: [malformed] }, [
+          { type: "text", text: "raw fallback" },
+        ]),
+      ).toContain("raw fallback");
     }
     expect(resultOutput(tool, null, "string fallback")).not.toContain("string fallback");
   });
@@ -125,7 +134,7 @@ describe("ask_user tool", () => {
     expect(submitted).toContain("Safe");
     expect(submitted).toContain("other");
     expect(submitted).toContain("A custom answer");
-    expect(resultOutput(tool, { outcome: "cancelled", answers: [] }, [])).toContain("cancelled");
+    expect(resultOutput(tool, { outcome: "cancelled", answers: [] }, [])).toMatch(/cancelled/i);
     return tool.execute("call", request, signal, undefined, opaqueFixture({})).then((result) => {
       expect(ask).toHaveBeenCalledWith(request, signal);
       expect(result.details).toEqual(outcome);

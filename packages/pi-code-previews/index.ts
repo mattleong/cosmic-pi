@@ -45,19 +45,12 @@ export {
   type CompactIssueSeverity,
 } from "./src/tools/compact-issues";
 export {
-  failureMessage,
-  firstLineMessage,
-  isAgentGuidance,
-  quoteText,
-  restatesText,
-  type QuotedText,
-} from "./src/tools/issue-message";
-export {
   exitStatusMeaning,
   outputFailureLine,
   OUTPUT_FAILURE_LINE_LIMIT,
 } from "./src/tools/process-failure";
 export { renderCompactIssues } from "./src/preview/compact-issues";
+export { previewIssuesSlot } from "./src/preview/preview-issues";
 export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
 export { planCompactPresentation } from "./src/tools/compact-presentation";
 

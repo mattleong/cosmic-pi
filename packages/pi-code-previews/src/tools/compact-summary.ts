@@ -1,9 +1,9 @@
 import type { CompactIssue } from "./compact-issues";
 import { compactIssueSeverity } from "./compact-issues";
-import { failureMessage } from "./issue-message";
 import { isSafeCompactSummary } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
+import { failureMessage } from "pi-cosmic-core";
 
 /** The registering session owns cancellation and shutdown. Undefined declines scheduling. */
 export type CompactAnimationScheduler = (

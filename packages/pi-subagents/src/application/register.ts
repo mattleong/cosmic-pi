@@ -17,6 +17,7 @@ import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
+  notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { registerSubagentActivity } from "../boundary/host-activity.ts";
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
@@ -39,7 +40,10 @@ import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
-import { registerSubagentManagerCommand } from "../settings/controller.ts";
+import {
+  registerSubagentManagerCommand,
+  type FleetManagerActions,
+} from "../settings/controller.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
 import type { FleetMessageDelivery } from "../ui/fleet.ts";
@@ -48,6 +52,7 @@ import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
+import { registerSubagentSettingsCommand } from "../settings/subagent-settings.ts";
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
@@ -102,7 +107,7 @@ function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>)
 }
 
 function notifyActivationFailure(ctx: ExtensionContext, message: string): void {
-  invokeHostCallback(() => ctx.hasUI && ctx.ui.notify(message, "error"), undefined);
+  if (invokeHostCallback(() => ctx.hasUI, false)) notifyAtHostBoundary(ctx, message, "warning");
 }
 
 export function registerSubagentApplication(
@@ -241,10 +246,7 @@ export function registerSubagentApplication(
         } catch {
           rememberDisabledTools(deactivateSubagentTools(pi));
           if (!slot.isCurrent(token)) return;
-          notifyActivationFailure(
-            activation.ctx,
-            "Subagents failed to activate because tool registration failed.",
-          );
+          notifyActivationFailure(activation.ctx, "Subagents couldn't register their tools");
           if (slot.isCurrent(token)) void slot.shutdown();
           return;
         }
@@ -289,7 +291,7 @@ export function registerSubagentApplication(
         rememberDisabledTools(deactivateSubagentTools(pi));
         notifyActivationFailure(
           activation.ctx,
-          "Subagents failed closed because configuration or runtime startup failed. Fix pi-subagents.json if present, inspect the logs, then run /reload.",
+          "Subagents couldn't start; check pi-subagents.json, then run /reload",
         );
       },
     });
@@ -326,7 +328,7 @@ export function registerSubagentApplication(
         ),
       );
 
-  registerSubagentManagerCommand(pi, bridge, {
+  const managerActions: FleetManagerActions = {
     isAvailable: () => currentActivation !== undefined,
     captureModelRefresh: () => {
       const activation = currentActivation;
@@ -449,7 +451,9 @@ export function registerSubagentApplication(
           signal,
         ),
       ),
-  });
+  };
+  registerSubagentManagerCommand(pi, bridge, managerActions);
+  registerSubagentSettingsCommand(pi, managerActions);
 
   const prepareActivation = (
     ctx: ExtensionContext,
@@ -470,7 +474,7 @@ export function registerSubagentApplication(
       agentDirectory = (boundaries.getAgentDirectory ?? getAgentDir)();
     } catch {
       const shutdown = slot.shutdown();
-      notifyActivationFailure(ctx, "Subagents failed to capture the session environment.");
+      notifyActivationFailure(ctx, "Subagents couldn't read this session's environment");
       return shutdown;
     }
     const activation: CapturedActivation = {

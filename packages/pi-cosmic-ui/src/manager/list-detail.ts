@@ -6,7 +6,7 @@
  * domain imports and takes no host callbacks; callers own row rendering, actions, prompts,
  * and follow policy.
  */
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { ManagerLayoutTier } from "./chrome.ts";
 import {
   decodeFullScreenPrintable,
@@ -20,12 +20,13 @@ import {
   movementOffset,
   type ListMotion,
 } from "./list-navigation.ts";
+import { clipToWidth } from "./chrome.ts";
 
 export type ListDetailPane = "list" | "detail";
 
 /** Clips and space-pads one row to an exact display width. */
 export const padListDetailRow = (text: string, width: number): string => {
-  const clipped = truncateToWidth(text, Math.max(0, width), "");
+  const clipped = clipToWidth(text, Math.max(0, width), "");
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 };
 

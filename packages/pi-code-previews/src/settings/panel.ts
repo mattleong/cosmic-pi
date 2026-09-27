@@ -18,6 +18,7 @@ interface SettingsListControllerOptions {
   notify: (message: string, level: "info" | "warning") => void;
   done: () => void;
   loadOptions: LoadSettingsOptions;
+  effects?: SettingsPanelSaveEffects;
 }
 
 export interface SettingsPanelSaveEffects {
@@ -57,6 +58,7 @@ export function createCodePreviewSettingsModel({
   done,
   loadOptions,
   theme,
+  effects,
 }: SettingsListControllerOptions): CodePreviewSettingsModel {
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
@@ -67,15 +69,20 @@ export function createCodePreviewSettingsModel({
       return;
     }
 
+    // The reset row asks for a second press: its middle value only arms the reset.
+    if (id === "resetToDefaults" && value !== "reset now") {
+      if (value === "keep current") syncSettingsListValues(list, draftSettings);
+      return;
+    }
     const previousTheme = draftSettings.shikiTheme;
-    const resetRequested = id === "resetToDefaults" && value === "reset now";
+    const resetRequested = id === "resetToDefaults";
     const next = updateSetting(draftSettings, id, value);
     const changeRevision = ++revision;
     draftSettings = next;
     syncSettingsListValues(list, draftSettings);
-    void persistSettingsChange(next, previousTheme, loadOptions)
+    void persistSettingsChange(next, previousTheme, loadOptions, effects)
       .then(() => {
-        if (resetRequested) notify("Code preview settings reset to defaults", "info");
+        if (resetRequested) notify("Code preview settings restored to defaults", "info");
       })
       .catch((error) => {
         // Only the latest failed edit rolls the panel draft back. Older saves may fail while a

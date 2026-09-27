@@ -10,14 +10,17 @@ import * as Path from "effect/Path";
 import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
+  countLabel,
 } from "pi-cosmic-core";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
-import type {
-  BackgroundLogSlice,
-  BackgroundTaskSnapshot,
-  BackgroundTaskStatus,
-  BackgroundTaskStatusWait,
-  StartBackgroundTask,
+import {
+  discardedOutputText,
+  type BackgroundLogMetadata,
+  type BackgroundLogSlice,
+  type BackgroundTaskSnapshot,
+  type BackgroundTaskStatus,
+  type BackgroundTaskStatusWait,
+  type StartBackgroundTask,
 } from "../task/model.ts";
 import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import { BackgroundTaskService } from "../task/service.ts";
@@ -34,23 +37,30 @@ export interface BackgroundTaskCommandResult {
 const required = (
   value: string | undefined,
   field: string,
+  action: BackgroundTaskToolInput["action"],
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
   value?.trim()
     ? Effect.succeed(value.trim())
-    : new InvalidBackgroundCommandError({
-        message: `${field} is required for this background_task action.`,
-      });
+    : new InvalidBackgroundCommandError({ message: `The ${action} action requires ${field}.` });
 
 const MAX_TASK_LINE_CHARS = 8_192;
+const ERROR_PREFIX = "\n  error: ";
 
+/**
+ * The agent's line for one task: identity, state, exit code and signal, then the command, with
+ * any reported error on its own line beneath.
+ */
 export const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
-  const suffix = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
-  return truncateLine(
+  const exit = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
+  const signal = task.signal ? ` signal=${task.signal}` : "";
+  const line = truncateLine(
     sanitizeTerminalLine(
-      `${task.id}${task.name ? ` ${task.name}` : ""} ${task.state}${suffix} — ${task.command}`,
+      `${task.id}${task.name ? ` ${task.name}` : ""} ${task.state}${exit}${signal} — ${task.command}`,
     ),
     MAX_TASK_LINE_CHARS,
   ).text;
+  const error = task.error && sanitizeTerminalLine(task.error);
+  return error ? `${line}${ERROR_PREFIX}${truncateLine(error, MAX_TASK_LINE_CHARS).text}` : line;
 };
 
 const boundedText = (text: string, maxBytes: number): string =>
@@ -109,11 +119,11 @@ const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskStatus>, maxBytes: nu
     const line = block.text;
     const lineBytes = utf8ByteLength(line);
     const omittedAfter = tasks.length - index - 1;
-    const markerAfter = `[${omittedAfter} background task${omittedAfter === 1 ? "" : "s"} omitted]`;
+    const markerAfter = `[${countLabel(omittedAfter, "background task")} omitted]`;
     const reservedMarkerBytes = omittedAfter > 0 ? 1 + utf8ByteLength(markerAfter) : 0;
     if (used + separatorBytes + lineBytes + reservedMarkerBytes > maxBytes) {
       const omitted = tasks.length - index;
-      const marker = `[${omitted} background task${omitted === 1 ? "" : "s"} omitted]`;
+      const marker = `[${countLabel(omitted, "background task")} omitted]`;
       const markerBytes = utf8ByteLength(marker);
       if (used + separatorBytes + markerBytes <= maxBytes) lines.push(marker);
       break;
@@ -140,6 +150,8 @@ const formatWait = (result: BackgroundTaskStatusWait): string => {
   );
 };
 
+const NO_NEW_OUTPUT = "(no new output)";
+
 const formatLogs = (slice: BackgroundLogSlice, maxBytes: number) => {
   const content = sanitizeTerminalText(
     slice.events
@@ -148,15 +160,31 @@ const formatLogs = (slice: BackgroundLogSlice, maxBytes: number) => {
   );
   const cut = truncateTail(content, { maxLines: DEFAULT_MAX_LINES, maxBytes });
   const { truncated, outputBytes, totalBytes, outputLines, totalLines } = cut;
+  // `backgroundLogLines` reads this layout back: one metadata line, then the gap line, if any.
   const metadata = `[${slice.id} state=${slice.state} cursor=${slice.nextCursor} earliest=${slice.earliestAvailableCursor}]\n`;
-  const gap = slice.droppedBytes > 0 ? `[${slice.droppedBytes} earlier log bytes discarded]\n` : "";
+  const gap = slice.droppedBytes > 0 ? `[${discardedOutputText(slice.droppedBytes)}]\n` : "";
   return {
-    text: `${metadata}${gap}${cut.content || "(no new output)"}`,
+    text: `${metadata}${gap}${cut.content || NO_NEW_OUTPUT}`,
     // Five explicit fields: persisted details never store the truncated log text a second time.
     truncation: truncated
       ? { truncated, outputBytes, totalBytes, outputLines, totalLines }
       : undefined,
   };
+};
+
+/**
+ * The log lines of a `logs` result's text, without the metadata and discarded-output lines this
+ * module writes before them. Empty when the slice had no new output.
+ */
+export const backgroundLogLines = (
+  text: string,
+  logs: Pick<BackgroundLogMetadata, "droppedBytes">,
+): ReadonlyArray<string> => {
+  const lines = text
+    .replace(/\r?\n$/u, "")
+    .split(/\r?\n/u)
+    .slice(logs.droppedBytes > 0 ? 2 : 1);
+  return lines.length === 1 && lines[0] === NO_NEW_OUTPUT ? [] : lines;
 };
 
 const reply = (text: string, details: BackgroundTaskToolDetails): BackgroundTaskCommandResult => ({
@@ -209,7 +237,7 @@ export const executeBackgroundTaskCommand = (
       case "start": {
         const name = input.name?.trim();
         const request: StartBackgroundTask = {
-          command: yield* required(input.command, "command"),
+          command: yield* required(input.command, "command", input.action),
           cwd: path.resolve(sessionCwd, input.cwd ?? "."),
           ...(name && { name }),
           ...(input.timeoutSeconds !== undefined && {
@@ -236,7 +264,7 @@ export const executeBackgroundTaskCommand = (
         });
       }
       case "status": {
-        const task = yield* service.status(yield* required(input.id, "id"));
+        const task = yield* service.status(yield* required(input.id, "id", input.action));
         return taskReply(formatBackgroundTask(task), task, maxTextBytes, (snapshot) => ({
           action: "status",
           snapshot,
@@ -244,7 +272,7 @@ export const executeBackgroundTaskCommand = (
       }
       case "logs": {
         const slice = yield* service.logs({
-          id: yield* required(input.id, "id"),
+          id: yield* required(input.id, "id", input.action),
           ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
           ...(input.tailLines !== undefined && { tailLines: input.tailLines }),
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
@@ -260,11 +288,11 @@ export const executeBackgroundTaskCommand = (
       case "wait": {
         if (input.until === undefined) {
           return yield* new InvalidBackgroundCommandError({
-            message: "until is required for the background_task wait action.",
+            message: "The wait action requires until.",
           });
         }
         const wait = yield* service.wait({
-          id: yield* required(input.id, "id"),
+          id: yield* required(input.id, "id", input.action),
           until: input.until,
           ...(input.contains !== undefined && { contains: input.contains }),
           ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
@@ -276,7 +304,10 @@ export const executeBackgroundTaskCommand = (
         }));
       }
       case "stop": {
-        const task = yield* service.stop(yield* required(input.id, "id"), input.force);
+        const task = yield* service.stop(
+          yield* required(input.id, "id", input.action),
+          input.force,
+        );
         return taskReply(
           `Stopped ${formatBackgroundTask(task)}`,
           task,
@@ -290,20 +321,14 @@ export const executeBackgroundTaskCommand = (
       case "stop_all": {
         const tasks = yield* service.stopAll(input.force);
         return reply(
-          boundedText(
-            `Stopped ${tasks.length} background task${tasks.length === 1 ? "" : "s"}.`,
-            maxTextBytes,
-          ),
+          boundedText(`Stopped ${countLabel(tasks.length, "background task")}.`, maxTextBytes),
           { action: input.action, tasks: tasks.map(detailsSnapshot) },
         );
       }
       case "clear": {
         const removed = yield* service.clear;
         return reply(
-          boundedText(
-            `Cleared ${removed} completed background task${removed === 1 ? "" : "s"}.`,
-            maxTextBytes,
-          ),
+          boundedText(`Cleared ${countLabel(removed, "completed background task")}.`, maxTextBytes),
           { action: input.action, removed },
         );
       }

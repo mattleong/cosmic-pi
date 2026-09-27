@@ -26,6 +26,7 @@ import {
 } from "pi-cosmic-core";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
@@ -38,6 +39,7 @@ import {
   createParentCompactSummary,
   createParentExpandedContent,
 } from "../tools/compact-parent-summary.ts";
+import { parentToolRenderers } from "../tools/render-parent.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
@@ -48,7 +50,6 @@ import {
   type LocalPiChildIpcChannel,
 } from "./local-pi-ipc.ts";
 
-const PARENT_REPLY_PREFIX = "Parent replied: ";
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 const CHILD_PROXY_TOOL_NAMES = [...SUBAGENT_TOOL_NAMES, "contact_parent"];
@@ -337,6 +338,7 @@ export function registerSubagentChildBridge(
     pi.registerTool(
       withCodePreviewShell(
         {
+          ...parentToolRenderers("contact_parent", "Contact Parent"),
           name: "contact_parent",
           label: "Contact Parent",
           description:

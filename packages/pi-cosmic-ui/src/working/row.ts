@@ -7,22 +7,11 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { synchronousNow } from "pi-cosmic-core";
+import { formatElapsed, synchronousNow } from "pi-cosmic-core";
 import type { HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
 import { startHostUiTicker } from "../boundary/host-status.ts";
 
-const WAITING_MESSAGE = "Waiting for user";
-
-function formatWorkingElapsed(milliseconds: number): string {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  const seconds = totalSeconds % 60;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes === 0) return `${seconds}s`;
-  const minutes = totalMinutes % 60;
-  if (totalMinutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-  const hours = Math.floor(totalMinutes / 60);
-  return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
-}
+const WAITING_MESSAGE = "Waiting for you";
 
 /** The rate uses Pi's four-characters-per-token heuristic over the output clock. */
 const formatWorkingMessage = (
@@ -30,7 +19,7 @@ const formatWorkingMessage = (
   outputCharacters: number,
   outputMilliseconds: number,
 ): string => {
-  const message = `Working · ${formatWorkingElapsed(milliseconds)}`;
+  const message = `Working · ${formatElapsed(milliseconds)}`;
   if (outputCharacters <= 0 || outputMilliseconds < 1_000) return message;
   return `${message} · ~${(outputCharacters / 4 / (outputMilliseconds / 1_000)).toFixed(1)} tok/s`;
 };

@@ -30,13 +30,13 @@ Usage display requires pi's `xai` OAuth credentials. The extension reads them th
 
 - `/xai-usage` shows current xAI subscription usage.
 - `/xai-settings` configures usage refresh details.
-- `/cosmic-ui` controls footer visibility, density, and layout.
+- `/cosmic-ui-settings` controls footer visibility, density, and layout.
 
 ## Footer
 
 The extension publishes a data-oriented usage primitive over the versioned Cosmic UI event protocol when a host is present.
 
-Cosmic UI owns the footer and renders `xai.usage` with progress bars matching `openai.usage`. In `/cosmic-ui`, xAI usage is either `automatic` on eligible models or `hidden`. Hidden usage skips automatic requests and suppresses both custom-footer and status-line output. `/xai-usage` still fetches once on an eligible model. Disabling the custom footer restores Pi's default footer without discarding visibility preferences. Better xAI never replaces the footer.
+Cosmic UI owns the footer and renders `xai.usage` with progress bars matching `openai.usage`. In `/cosmic-ui-settings`, xAI usage is either `automatic` on eligible models or `hidden`. Hidden usage skips automatic requests and suppresses both custom-footer and status-line output. `/xai-usage` still fetches once on an eligible model. Disabling the custom footer restores Pi's default footer without discarding visibility preferences. Better xAI never replaces the footer.
 
 ```text
 xAI     7d ████████░░ 82%  mo ████████░░ 83%

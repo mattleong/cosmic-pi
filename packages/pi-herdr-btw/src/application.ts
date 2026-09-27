@@ -33,7 +33,7 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
     onDeactivated: () => parentReferenceBridge.clear(),
     onStartFailure: ({ ctx }) => {
       parentReferenceBridge.clear();
-      notifyHerdrBtw(ctx, "The /herdr-btw command failed to initialize.", "error");
+      notifyHerdrBtw(ctx, "Herdr BTW couldn't start", "warning");
     },
   });
 
@@ -45,7 +45,7 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
   pi.on("session_start", (_event, ctx) => {
     const captured = captureHerdrBtwSession(ctx);
     if (!captured || captured.aborted) {
-      notifyHerdrBtw(ctx, "The /herdr-btw command could not capture this Pi session.", "error");
+      notifyHerdrBtw(ctx, "Herdr BTW couldn't attach to this Pi session", "warning");
       return slot.shutdown();
     }
     const launchOwner = {

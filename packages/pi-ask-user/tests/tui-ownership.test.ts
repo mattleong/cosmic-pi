@@ -167,7 +167,7 @@ for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) 
         expect(error).toEqual(
           new AskUserHostError({
             operation: "render",
-            message: "Unable to render the user questionnaire.",
+            message: "Couldn't show the questionnaire.",
           }),
         );
       }

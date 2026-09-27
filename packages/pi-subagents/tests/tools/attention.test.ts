@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { runAttention } from "../../src/tools/attention.ts";
-import { runAttentionIssues } from "../../src/tools/compact-run-issues.ts";
+import { compactRunIssues } from "../../src/tools/compact-run-issues.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import { attentionRecoveryText } from "../../src/tools/format.ts";
 import { containedWriter, view } from "../fixtures/run-view.ts";
@@ -35,7 +35,7 @@ it("gives each attention state one issue line and agent steps for the same run",
   ]) {
     const details = makeCompactToolDetails({ action: "status", runs: [run] });
     const cards = "cards" in details ? details.cards : [];
-    const lines = runAttentionIssues(cards).filter((issue) => issue.severity === "warning");
+    const lines = compactRunIssues(cards).filter((issue) => issue.severity === "warning");
     expect(lines).toHaveLength(1);
     expect(lines[0]?.message.startsWith(run.name)).toBe(true);
     expect(attentionRecoveryText([run])).toContain(run.id);

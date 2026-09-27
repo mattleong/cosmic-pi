@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
-import { formatToolCallDuration } from "../../src/preview/format";
 import type { CompactChild, CompactSummary } from "../../src/tools/compact-summary";
 import { compactChildren, plainTheme as theme, stripAnsi } from "../support/render";
+import { formatDuration } from "pi-cosmic-core";
 
 describe("shared semantic row", () => {
   it("uses identical clipping and detail priorities after branch indentation", () => {
@@ -21,7 +21,7 @@ describe("shared semantic row", () => {
               name: "read",
               phase: "settled",
               summary: { ...fields, outcome: "warning" },
-              duration: formatToolCallDuration(12_300),
+              duration: formatDuration(12_300),
               elapsedMs: 12_300,
               timingEnabled,
             },
@@ -50,7 +50,7 @@ describe("shared semantic row", () => {
               ...(detail === "counter" && { counters: ["result count"] }),
               ...(detail === "metadata" && { metadata: ["result detail"] }),
             };
-            const duration = formatToolCallDuration(elapsedMs);
+            const duration = formatDuration(elapsedMs);
             const standalone = renderCompactToolCall(
               {
                 name,

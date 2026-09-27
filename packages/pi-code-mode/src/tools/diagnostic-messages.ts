@@ -3,10 +3,10 @@
  * its wording. The raw diagnostic stays in the result.
  */
 import * as Predicate from "effect/Predicate";
-import { firstLineMessage } from "pi-code-previews";
 import type { CodeModeDiagnosticFacts } from "../boundary/codemode-runtime.ts";
 import { nestedToolLabel } from "./compact-subject.ts";
 import { failureMessage, type FailureEvidence } from "./failure-evidence.ts";
+import { formatDuration, firstLineMessage } from "pi-cosmic-core";
 
 /** A diagnostic as presentation reads it: its kind, own message, and recorded facts. */
 interface Diagnostic {
@@ -20,13 +20,6 @@ const lead = (text: string) =>
   firstLineMessage(text, "")
     .split(/; | - /u)[0]!
     .trim();
-
-const duration = (ms: number) =>
-  ms < 1_000
-    ? `${ms} ms`
-    : ms < 60_000
-      ? `${Number((ms / 1_000).toFixed(1))} s`
-      : `${Number((ms / 60_000).toFixed(1))} min`;
 
 /** Path segments such as `["edits", 0, "oldText"]`, shown as `edits[0].oldText`. */
 const fieldPath = (field: ReadonlyArray<string | number>) =>
@@ -81,7 +74,7 @@ const describe = ({ kind, message, facts = {} }: Diagnostic): string => {
     case "TimeoutExceeded":
       return facts.timeoutMs === undefined
         ? lead(message)
-        : `Timed out after ${duration(facts.timeoutMs)}`;
+        : `Timed out after ${formatDuration(facts.timeoutMs)}`;
     case "ToolFailure":
       return tool ? `Stopped after a ${tool} call failed` : lead(message);
     default:

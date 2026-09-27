@@ -1,23 +1,33 @@
 // Pi tool execution and synchronous rendering are host boundaries.
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import {
+  defineTool,
+  type AgentToolResult,
+  type ExtensionAPI,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core";
-import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
+import { toolRunningLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { AskUserParameters, type AskUserRequest } from "../questionnaire/schema.ts";
-import {
-  answerLine,
-  decodeCallTitles,
-  fallbackText,
-  outcomeProjection,
-  projection,
-} from "../ui/tool-render-projection.ts";
-
 import { askUserCompactSummary } from "../ui/compact-summary.ts";
-
-const decodeOutcomeDetails = projection(outcomeProjection({}));
+import {
+  answersBody,
+  argumentsSection,
+  callBody,
+  cancelledLine,
+  emptyBody,
+  expandedResult,
+  stacked,
+  type RenderContext,
+} from "../ui/tool-body.ts";
+import {
+  callTitles,
+  decodeOutcome,
+  fallbackText,
+  titlesByKey,
+} from "../ui/tool-render-projection.ts";
 
 export function registerAskUserTool(
   pi: ExtensionAPI,
@@ -48,27 +58,22 @@ export function registerAskUserTool(
         details: outcome satisfies AskUserOutcome,
       }));
     },
-    renderCall(args, theme) {
-      const questions = decodeCallTitles(args)?.questions ?? [];
-      const titles = questions.map((question) => stripTerminalControls(question.title)).join(", ");
-      const count = `${questions.length} question${questions.length === 1 ? "" : "s"}`;
-      return new Text(
-        renderToolHeader(
-          { title: "ask_user", subtitle: `${count}${titles ? ` (${titles})` : ""}` },
-          theme,
-        ),
-        0,
-        0,
-      );
+    renderCall(args, theme, context) {
+      return callBody({ title: "Ask user", subtitle: callTitles(args) }, args, theme, context);
     },
-    renderResult(result, _options, theme) {
-      const details = decodeOutcomeDetails(result.details);
-      if (details?.outcome === "cancelled")
-        return new Text(toolStatusLine(theme, "warning", "Questionnaire cancelled"), 0, 0);
-      if (details?.outcome === "submitted") {
-        const lines = details.answers.map((answer) => answerLine(answer, theme));
-        return new Text(lines.join("\n"), 0, 0);
-      }
+    renderResult(result, options, theme, context) {
+      if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
+      const details = decodeOutcome(result.details);
+      // The shell states failures and the cancellations Pi reports; the body states the rest.
+      const cancelled = details?.outcome === "cancelled" && !context.isError;
+      if (options.expanded)
+        return cancelled
+          ? stacked([cancelledLine(theme), expandedContent(result, theme, context)])
+          : expandedContent(result, theme, context);
+      if (context.isError) return emptyBody();
+      if (cancelled) return cancelledLine(theme);
+      if (details?.outcome === "submitted")
+        return answersBody(details.answers, titlesByKey(context.args), theme, true);
       return new Text(fallbackText(result.content), 0, 0);
     },
   });
@@ -76,26 +81,26 @@ export function registerAskUserTool(
     withCodePreviewShell(tool, {
       compactSummary: askUserCompactSummary,
       expandedContent: {
-        renderCall: (args) => new Text(stripTerminalControls(JSON.stringify(args, null, 2)), 0, 0),
-        renderResult(result, _options, theme) {
-          const details = decodeOutcomeDetails(result.details);
-          return new Text(
-            details?.outcome === "submitted"
-              ? [
-                  ...details.answers.map((answer) => answerLine(answer, theme)),
-                  ...(fallbackText(result.content)
-                    ? ["Raw result", fallbackText(result.content)]
-                    : []),
-                ].join("\n")
-              : details?.outcome === "cancelled"
-                ? "Do not immediately ask the same questions again."
-                : fallbackText(result.content),
-            0,
-            0,
-          );
-        },
+        renderCall: (args, theme) => argumentsSection(theme, args),
+        renderResult: (result, _options, theme, context) => expandedContent(result, theme, context),
       },
       scheduleAnimation,
     }),
+  );
+}
+
+/** The labeled agent-facing text; a replay without text shows its answers whole. */
+function expandedContent<Details>(
+  result: AgentToolResult<Details>,
+  theme: Theme,
+  context: Pick<RenderContext, "args" | "isError">,
+): Component {
+  const details = decodeOutcome(result.details);
+  return expandedResult(
+    fallbackText(result.content),
+    context.isError,
+    details?.outcome === "submitted" ? details.answers : undefined,
+    titlesByKey(context.args),
+    theme,
   );
 }

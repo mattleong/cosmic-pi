@@ -1,7 +1,8 @@
-import { firstLineMessage, quoteText, type CompactIssue } from "pi-code-previews";
+import { type CompactIssue } from "pi-code-previews";
 import { runAttention } from "./attention.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
+import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
 
 /**
  * Card-scoped issue. The message is one sentence that starts with the worker's name; the
@@ -32,9 +33,9 @@ const staticSkipCodes = new Set([
 /** Producer copy that reads as a standalone sentence, continued after `name:`. */
 export const continued = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 
-/** A collapsed name for a worker whose card has no display name of its own. */
+/** A collapsed name for a subagent whose card has no display name of its own. */
 export const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
-  (card.name === card.id ? "Worker" : card.name).slice(0, 60);
+  (card.name === card.id ? "Subagent" : card.name).slice(0, 60);
 
 /** A reported writer's changes still need review before integration. */
 export const hasChangesToReview = (card: SubagentRunCard): boolean =>
@@ -47,25 +48,67 @@ const cardIssueAdder =
   (severity, code, message, detail) =>
     issues.push({ severity, code: `${card.id}:${code}`, message, ...(detail && { detail }) });
 
-/** Only what each run needs from its parent, as the other views' issue lines. */
-export function runAttentionIssues(cards: readonly SubagentRunCard[]): CompactIssue[] {
-  const issues: CompactIssue[] = [];
-  for (const card of cards) attentionIssues(card, cardLabel(card), cardIssueAdder(issues, card));
-  return issues;
+/** How a projection's issues read; each flag makes routine facts quieter. */
+export interface RunIssueOptions {
+  /** A clean settled view keeps routine selection history to expansion. */
+  readonly quietHistory?: boolean | undefined;
+  /** The caller asked for a pause, so a paused run is the expected result. */
+  readonly requestedPause?: boolean | undefined;
+}
+
+const PROFILE_OPTION_KEY =
+  /^([^/]+)\/([^/]+)\/(.+):([^:]+):[^:]+:[^:]+:openaiFastMode=(?:true|false):closeOnReport=(?:true|false)$/u;
+
+/** A profile option key as people read a route: "local/pi · anthropic/claude-opus-4-7:high". */
+export const profileOptionLabel = (key: string): string => {
+  const match = PROFILE_OPTION_KEY.exec(key);
+  return match ? `${match[1]}/${match[2]} · ${match[3]}:${match[4]}` : key;
+};
+
+/** Each skipped option by its route, with the reason in people's terms. */
+const skippedOptionsDetail = (card: SubagentRunCard): string =>
+  card.selection.skippedCandidates
+    .map(
+      (entry) =>
+        `${profileOptionLabel(entry.candidate)}: ${failureMessage(entry.reason, "skipped", QUOTED_TEXT_LIMIT)}`,
+    )
+    .join("\n");
+
+function selectionIssues(
+  card: SubagentRunCard,
+  label: string,
+  add: AddIssue,
+  quiet: boolean,
+): void {
+  const skipped = card.selection.skippedCandidates;
+  if (!skipped.length) return;
+  const detail = skippedOptionsDetail(card);
+  // A retry moves past the option that failed: the expected step, not a problem.
+  if (skipped.every((entry) => entry.code === "previous_run_failed")) {
+    add("info", "selection-skipped", `${label} moved on to its next profile option`, detail);
+    return;
+  }
+  add(
+    quiet ? "info" : "warning",
+    "selection-skipped",
+    skipped.length === 1
+      ? `${label}: a configured option was skipped`
+      : `${label}: ${skipped.length} configured options were skipped`,
+    detail,
+  );
 }
 
 /** Card audits are bounded projections, never authority for granting paths. */
 export function compactRunIssues(
   cards: readonly SubagentRunCard[],
-  reportsOnlyOmitted: boolean,
-  quietHistory: boolean,
+  options: RunIssueOptions = {},
 ): CompactIssue[] {
   const issues: CompactIssue[] = [];
   for (const card of cards) {
     const issueStart = issues.length;
     const label = cardLabel(card);
     const add = cardIssueAdder(issues, card);
-    attentionIssues(card, label, add);
+    attentionIssues(card, label, add, options.requestedPause === true);
     if (card.steeringDelivery) {
       const evidence = steeringDeliveryEvidence[card.steeringDelivery];
       add(
@@ -75,23 +118,14 @@ export function compactRunIssues(
         `steeringDelivery=${card.steeringDelivery}. ${evidence.detail}`,
       );
     }
-    evidenceIssues(card, label, add, reportsOnlyOmitted);
-    const skipped = card.selection.skippedCandidates;
-    if (!skipped.length) continue;
+    evidenceIssues(card, label, add);
     // Clean terminal static skips are routine history: kept, but only on expansion.
     const quiet =
-      quietHistory &&
+      options.quietHistory === true &&
       ["completed", "reported"].includes(card.state) &&
       issues.length === issueStart &&
-      skipped.every((entry) => staticSkipCodes.has(entry.code));
-    add(
-      quiet ? "info" : "warning",
-      "selection-skipped",
-      skipped.length === 1
-        ? `${label}: a configured option was skipped`
-        : `${label}: ${skipped.length} configured options were skipped`,
-      skipped.map((entry) => `${entry.candidate}: ${entry.reason}`).join("\n"),
-    );
+      card.selection.skippedCandidates.every((entry) => staticSkipCodes.has(entry.code));
+    selectionIssues(card, label, add, quiet);
   }
   return issues;
 }
@@ -126,7 +160,12 @@ function outsideClaims(card: SubagentRunCard): string {
   return `${shown}${paths.length > 1 ? ` and ${paths.length - 1} more` : ""} outside its file claims`;
 }
 
-function attentionIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
+function attentionIssues(
+  card: SubagentRunCard,
+  label: string,
+  add: AddIssue,
+  requestedPause: boolean,
+): void {
   const id = JSON.stringify(card.id);
   const attention = runAttention(card);
   switch (attention?.kind) {
@@ -172,7 +211,7 @@ function attentionIssues(card: SubagentRunCard, label: string, add: AddIssue): v
       return;
     case "paused":
       add(
-        "warning",
+        requestedPause ? "info" : "warning",
         "paused-recovery",
         `${label} is paused`,
         attention.canResume
@@ -201,12 +240,7 @@ function attentionIssues(card: SubagentRunCard, label: string, add: AddIssue): v
   }
 }
 
-function evidenceIssues(
-  card: SubagentRunCard,
-  label: string,
-  add: AddIssue,
-  reportsOnlyOmitted: boolean,
-): void {
+function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   // Retry guidance belongs with the failure it follows, not on a line of its own.
   const retryGuidance =
     "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.";
@@ -254,15 +288,10 @@ function evidenceIssues(
   }
   if (card.selection.warning)
     quote(add, label, "selection-warning", card.selection.warning, "has a launch option warning");
-  reportEvidenceIssues(card, label, add, reportsOnlyOmitted);
+  reportEvidenceIssues(card, label, add);
 }
 
-function reportEvidenceIssues(
-  card: SubagentRunCard,
-  label: string,
-  add: AddIssue,
-  reportsOnlyOmitted: boolean,
-): void {
+function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   // Reviewing reported changes is the normal next step, not a problem.
   if (hasChangesToReview(card))
     add(
@@ -271,9 +300,12 @@ function reportEvidenceIssues(
       `${label}: changes are ready for review`,
       "A report does not approve workspace integration.",
     );
-  const partialReport =
-    card.finalTextTruncated && (!reportsOnlyOmitted || card.finalText !== undefined);
-  if (card.writeClaimsOmitted || card.errorTruncated || partialReport)
+  // Text this view leaves out entirely is one note for the whole view; only clipped text or
+  // claims are this run's own gap.
+  const clipped =
+    (card.finalTextTruncated === true && card.finalText !== undefined) ||
+    (card.errorTruncated === true && card.error !== undefined);
+  if (card.writeClaimsOmitted || clipped)
     add(
       "warning",
       "evidence-omitted",

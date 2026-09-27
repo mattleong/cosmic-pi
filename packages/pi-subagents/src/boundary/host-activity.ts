@@ -18,6 +18,7 @@ import {
 } from "../ui/activity-panel.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
 import { formatRunRoute } from "../ui/run-presentation.ts";
+import { runStateLabel } from "../ui/run-state.ts";
 
 const PROVIDER = "pi-subagents";
 const RUN_STATUS = {
@@ -55,17 +56,18 @@ export function subagentActivityItems(
 ): readonly ActivityItem[] {
   const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
   const runs = projectFleetTree(projection.runs, "root", new Set()).rows.map(({ run }) => {
+    const title = sanitizeDiagnosticContent(run.name, { maximumLength: 512 });
     return Object.freeze({
       id: run.id,
       kind: "agent" as const,
-      title: sanitizeDiagnosticContent(run.name, { maximumLength: 512 }),
+      title,
       ...runAttention(run),
       revision: `${projection.revision}:${presentation.revision}`,
       awaited: awaited.has(run.id),
       startedAt: run.startedAt,
       updatedAt: run.lastActivityAt,
       summary: sanitizeDiagnosticContent(
-        `${run.state} · ${run.currentTool ?? run.progress ?? run.runtime}`,
+        `${runStateLabel(run.state)} · ${run.currentTool ?? run.progress ?? run.runtime}`,
         { maximumLength: 4096 },
       ),
       actions: Object.freeze(
@@ -75,7 +77,7 @@ export function subagentActivityItems(
                 {
                   id: "stop",
                   label: "Stop",
-                  confirmation: `Stop ${run.id} and all its descendants?`,
+                  confirmation: `Stop "${title}" and all its subagents?`,
                 },
               ]
             : []),
@@ -84,7 +86,7 @@ export function subagentActivityItems(
                 {
                   id: "interrupt",
                   label: "Interrupt",
-                  confirmation: `Interrupt ${run.id}? Its descendants will continue running.`,
+                  confirmation: `Interrupt "${title}"? Its subagents keep running.`,
                 },
               ]
             : []),

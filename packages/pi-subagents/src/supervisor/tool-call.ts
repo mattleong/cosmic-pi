@@ -16,6 +16,7 @@ import {
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "./mcp-contract.ts";
 import {
+  PARENT_REPLY_PREFIX,
   SupervisorChannelIdSchema,
   type SupervisorChannelConfig,
   type SupervisorDeliveryId,
@@ -132,7 +133,7 @@ export const runSupervisorTool = (
                 })
                 .pipe(
                   Effect.timeout(CALL_TIMEOUT_MILLIS),
-                  Effect.as(ok(`Parent reply: ${reply.message}`)),
+                  Effect.as(ok(`${PARENT_REPLY_PREFIX}${reply.message}`)),
                 ),
             ),
           ),

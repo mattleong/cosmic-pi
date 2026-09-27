@@ -43,12 +43,7 @@ export const codeModeCompactSummary = (
   try {
     const input = decodeOption(ArgsSchema, args);
     if (input?.action === "result.read") {
-      const heading = {
-        action: input.action,
-        subject: input.id ?? "",
-        compactSubject: "Saved output",
-        showTiming: true as const,
-      };
+      const heading = { action: input.action, subject: "saved output", showTiming: true as const };
       if (result === undefined || phase !== "settled")
         return phase === "settled" ? undefined : heading;
       return resultReadCompactSummary(result.details, input.id ?? "");

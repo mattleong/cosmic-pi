@@ -3,35 +3,110 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { stripTerminalControls } from "pi-cosmic-core";
-import { renderCompactRow, type CompactSummary } from "pi-code-previews";
+import { countLabel, stripTerminalControls } from "pi-cosmic-core";
+import { clipToWidth } from "pi-cosmic-ui/manager";
+import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
+const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120));
 const Details = Schema.Union([
-  Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("question") }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("question"),
+    name: Schema.optional(Name),
+  }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("completed"),
     total: Count,
     failed: Count,
     warnings: Count,
+    name: Schema.optional(Name),
   }),
 ]);
+type NotificationDetails = typeof Details.Type;
 const Envelope = Schema.Struct({
+  customType: Schema.optional(Schema.String),
   content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
   details: Schema.optional(Schema.Unknown),
 });
 
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 
-/** The message content remains the agent's record. Only its compact human view changes. */
+interface NotificationRow {
+  readonly summary: CompactSummary;
+  /** Only for messages whose outcome is not recorded: a neutral mark, never a guess. */
+  readonly status?: CompactStatus;
+}
+
+/** Notices forwarded into a nested session carry no typed outcome, so they stay neutral. */
+const UNTYPED_SUBJECTS = new Map([
+  ["pi-subagents-proxy-notification", "Update about a nested subagent"],
+  ["pi-subagents-peer-notice", "Working directory shared with other subagents"],
+]);
+
+const completedRow = (
+  details: Extract<NotificationDetails, { readonly kind: "completed" }>,
+): NotificationRow => {
+  const finished = details.total - details.failed;
+  const outcome = details.failed ? "error" : details.warnings ? "warning" : "success";
+  const single = details.total === 1 && details.name;
+  const subject = single
+    ? `${details.name} ${details.failed ? "failed" : details.warnings ? "finished with a warning" : "finished"}`
+    : [
+        finished ? `${finished} finished` : "",
+        details.failed ? `${details.failed} failed` : "",
+        details.warnings ? `${details.warnings} with warnings` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+  return { summary: { subject, outcome } };
+};
+
+/** Typed counts and names when the notifier recorded them; a neutral row otherwise. */
+const notificationRow = (
+  customType: string | undefined,
+  details: NotificationDetails | undefined,
+): NotificationRow => {
+  if (details?.kind === "question")
+    return {
+      summary: { subject: `${details.name ?? "A subagent"} needs a reply`, outcome: "warning" },
+    };
+  if (
+    details?.kind === "completed" &&
+    details.total > 0 &&
+    details.failed <= details.total &&
+    details.warnings <= details.total
+  )
+    return completedRow(details);
+  return {
+    summary: { subject: UNTYPED_SUBJECTS.get(customType ?? "") ?? "Subagent update" },
+    status: "returned",
+  };
+};
+
+/** What expanding a notification reveals, in the words of its kind. */
+const expansionLabel = (details: NotificationDetails | undefined): string =>
+  details?.kind === "question"
+    ? "question"
+    : details?.kind === "completed"
+      ? details.failed === details.total
+        ? countLabel(details.total, "failure detail")
+        : countLabel(details.total, "report")
+      : "message";
+
+/**
+ * The message content remains the agent's record; collapsed, it is one human row in either
+ * style, so run IDs and agent procedures appear only once expanded. Preview style adds the
+ * expansion hint its tool rows use.
+ */
 export function renderSubagentNotification<Input>(
   input: Input,
   options: { expanded: boolean; outputPad: number },
   compact: boolean,
   theme: Theme,
-): Component | undefined {
-  if (!compact) return undefined;
+): Component {
   const envelope = Option.getOrUndefined(Schema.decodeUnknownOption(Envelope)(input));
   if (options.expanded) {
     const content = envelope?.content;
@@ -46,40 +121,24 @@ export function renderSubagentNotification<Input>(
     return new Text(stripTerminalControls(text), options.outputPad, 0);
   }
   const details = Option.getOrUndefined(Schema.decodeUnknownOption(Details)(envelope?.details));
-  let summary: CompactSummary = { subject: "Worker update", outcome: "uncertain" };
-  if (details?.kind === "question")
-    summary = { subject: "A worker needs a reply.", outcome: "warning" };
-  else if (
-    details?.kind === "completed" &&
-    details.total > 0 &&
-    details.failed <= details.total &&
-    details.warnings <= details.total
-  ) {
-    const parts = [
-      details.failed
-        ? `${details.failed} worker${details.failed === 1 ? "" : "s"} reported errors`
-        : "",
-      details.total > details.failed
-        ? `${details.total - details.failed} worker reports received`
-        : "",
-      details.warnings ? `${details.warnings} with warnings` : "",
-    ].filter(Boolean);
-    summary = {
-      subject: parts.join("; "),
-      outcome: details.failed ? "error" : details.warnings ? "warning" : "success",
-    };
-  }
+  const { summary, status } = notificationRow(envelope?.customType, details);
+  const hint = compact
+    ? undefined
+    : renderExpansionAffordance(expansionLabel(details), false, theme);
   return {
-    render: (width) =>
-      new Text(
-        renderCompactRow(
-          { name: "subagents", phase: "settled", summary },
-          theme,
-          Math.max(1, width - options.outputPad * 2),
-        ),
+    render: (width) => {
+      const inner = Math.max(1, width - options.outputPad * 2);
+      const row = renderCompactRow(
+        { name: "subagents", phase: "settled", summary, ...(status && { status }) },
+        theme,
+        inner,
+      );
+      return new Text(
+        hint ? `${row}\n${clipToWidth(hint, inner)}` : row,
         options.outputPad,
         0,
-      ).render(width),
+      ).render(width);
+    },
     invalidate() {},
   };
 }

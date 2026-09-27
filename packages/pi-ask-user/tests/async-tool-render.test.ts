@@ -9,6 +9,7 @@ import {
 } from "../src/ui/async-tool-render.ts";
 
 const output = (component: Component) => component.render(240).join("\n");
+const callContext = (expanded = false) => ({ expanded, state: {} });
 const outcome = {
   outcome: "submitted",
   answers: [
@@ -24,19 +25,27 @@ const snapshot = {
   delivery: "sent",
   outcome,
 };
+// The agent-facing text names the request; the transcript shows it only under its label.
+const agentText = `Request ${snapshot.requestId} · delivery ${snapshot.deliveryId}\nComplete agent guidance remains available.`;
 const message = {
   details: { ...snapshot, generation: "generation-private-id" },
-  content: "Complete agent guidance remains available.",
+  content: agentText,
 };
 const result = <Details, Content>(details: Details, expanded = false, content?: Content) =>
   output(renderAsyncResult({ details, content }, { expanded, isPartial: false }, theme));
 
 describe("async questionnaire replay rendering", () => {
-  it("compact notifications keep answers and unknown content behind expansion", () => {
-    for (const input of [message, { content: "Full fallback diagnostic" }]) {
+  it("compact notifications keep the delivered text, answers, and unknown content behind expansion", () => {
+    const withoutText = { details: message.details, content: "" };
+    for (const input of [message, withoutText, { content: "Full fallback diagnostic" }]) {
       for (const expanded of [false, true, false]) {
         const text = output(renderAsyncMessage(input, { expanded, outputPad: 0 }, theme, true));
+        expect(text).not.toContain("generation-private-id");
         if (input === message) {
+          expect(text.includes("Complete agent guidance")).toBe(expanded);
+          expect(text).not.toContain("Scenic");
+        } else if (input === withoutText) {
+          // A replay without text shows its answers and notes whole.
           expect(text.includes("Scenic")).toBe(expanded);
           expect(text.includes("Avoid tolls")).toBe(expanded);
         } else {
@@ -76,32 +85,43 @@ describe("async questionnaire replay rendering", () => {
     }
   });
 
-  it("projects answers and notes without exposing delivery metadata until expanded", () => {
+  it("previews answers with notes beneath them and keeps IDs in the labeled raw text", () => {
     for (const rendered of [
-      result(snapshot),
-      result({ requests: [snapshot] }),
+      result(snapshot, false, agentText),
+      result({ requests: [snapshot] }, false, agentText),
       output(renderAsyncMessage(message, { expanded: false, outputPad: 0 }, theme)),
     ]) {
-      expect(rendered).toContain("Scenic");
-      expect(rendered).toContain("Tomorrow morning");
-      expect(rendered).toContain("Avoid tolls");
-      expect(rendered).toContain("Text answer");
-      expect(rendered).toContain("with another line");
-      expect(rendered).toContain("Text context");
+      const lines = rendered.split("\n");
+      for (const value of ["Scenic", "Tomorrow morning", "Text answer"])
+        expect(rendered).toContain(value);
+      // Notes sit indented beneath their own answer.
+      const scenic = lines.findIndex((line) => line.includes("Scenic"));
+      expect(lines[scenic + 1]).toMatch(/^\s+.*Avoid tolls/);
+      const text = lines.findIndex((line) => line.includes("Text answer"));
+      expect(lines.slice(text + 1).join("\n")).toMatch(/^\s+.*Text context/m);
+      // Multi-line text keeps one line and an expansion hint until expanded.
+      expect(rendered).not.toContain("with another line");
+      expect(rendered).toMatch(/expand/);
       expect(rendered).not.toContain(snapshot.requestId);
       expect(rendered).not.toContain(snapshot.deliveryId);
     }
     for (const rendered of [
-      result(snapshot, true, message.content),
+      result(snapshot, true, agentText),
       output(renderAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)),
     ]) {
-      expect(rendered).toContain(snapshot.requestId);
-      expect(rendered).toContain(snapshot.deliveryId);
-      expect(rendered).toContain(message.content);
+      const lines = rendered.split("\n");
+      const label = lines.findIndex((line) => line.trim() === "Raw result");
+      expect(label).toBeGreaterThanOrEqual(0);
+      expect(lines.slice(0, label).join("\n")).not.toContain(snapshot.requestId);
+      expect(lines.slice(label).join("\n")).toContain(snapshot.requestId);
+      expect(lines.slice(label).join("\n")).toContain(snapshot.deliveryId);
+      expect(rendered).not.toContain("generation-private-id");
     }
+    const unlabeled = { ...snapshot, outcome: { ...outcome, answers: [outcome.answers[2]!] } };
+    expect(result(unlabeled, true)).toContain("with another line");
   });
 
-  it("retains expanded legacy IDs and work fields without accepting malformed work", () => {
+  it("expands legacy IDs and work fields without accepting malformed work", () => {
     for (const id of ["", "x".repeat(257)]) {
       const legacy = {
         ...snapshot,
@@ -113,10 +133,13 @@ describe("async questionnaire replay rendering", () => {
       for (const details of [legacy, { requests: [legacy] }]) {
         expect(result(details, true)).toContain("Avoid tolls");
         const content = output(
-          renderAsyncContent({ details }, { expanded: true, isPartial: false }, theme),
+          renderAsyncContent(
+            { details, content: "Continue only this independent work: Inspect first" },
+            { expanded: true, isPartial: false },
+            theme,
+          ),
         );
-        expect(content).toContain("Independent work: Inspect first");
-        expect(content).toContain("Wait for answers before: Wait for decision");
+        expect(content).toContain("Inspect first");
       }
       expect(
         output(
@@ -130,15 +153,15 @@ describe("async questionnaire replay rendering", () => {
     }
     const invalid = { ...snapshot, independentWork: 123 };
     expect(result(invalid, false, "raw fallback").trimEnd()).toBe("raw fallback");
-    expect(
-      output(
-        renderAsyncContent(
-          { details: invalid, content: "raw fallback" },
-          { expanded: true, isPartial: false },
-          theme,
-        ),
-      ).trimEnd(),
-    ).toBe("raw fallback");
+    const expanded = output(
+      renderAsyncContent(
+        { details: invalid, content: "raw fallback" },
+        { expanded: true, isPartial: false },
+        theme,
+      ),
+    );
+    expect(expanded).toContain("raw fallback");
+    expect(expanded).not.toContain("Avoid tolls");
   });
 
   it("prefers a valid single snapshot over an invalid list", () => {
@@ -189,7 +212,7 @@ describe("async questionnaire replay rendering", () => {
       kind: "custom",
       text: `value-${index + 1}`,
     }));
-    expect(output(renderAsyncCall({ questions }, theme, false))).toContain("Question 6");
+    expect(output(renderAsyncCall({ questions }, theme, callContext()))).toContain("Question 6");
     expect(
       result({ ...snapshot, outcome: { outcome: "submitted", answers: answers.slice(0, 6) } }),
     ).toContain("value-6");
@@ -242,7 +265,7 @@ describe("async questionnaire replay rendering", () => {
           },
         }),
         theme,
-        false,
+        callContext(true),
       ),
     ).not.toThrow();
   });
@@ -261,11 +284,77 @@ describe("async questionnaire replay rendering", () => {
     const rendered = [
       result(details, true),
       output(renderAsyncMessage({ content: dirty }, { expanded: false, outputPad: 0 }, theme)),
-      output(renderAsyncCall({ questions: [{ title: dirty }] }, theme, false)),
+      output(renderAsyncCall({ questions: [{ title: dirty }] }, theme, callContext())),
     ];
     for (const text of rendered) {
       expect(text).toContain("value");
       expect(text).not.toContain("\u001b");
+    }
+  });
+
+  it("shows routine state and counts collapsed, and leaves failures to the shell", () => {
+    const pending = { ...snapshot, status: "pending", delivery: "pending", outcome: undefined };
+    const waiting = result({ ...pending, presentation: "open" });
+    const queued = result({ ...pending, presentation: "queued" });
+    expect(waiting).toMatch(/waiting/i);
+    expect(queued).toMatch(/queued/i);
+    expect(queued).not.toMatch(/waiting/i);
+    const listed = output(
+      renderAsyncResult(
+        { details: { requests: [{ ...pending, presentation: "open" }, snapshot] } },
+        { expanded: false, isPartial: false },
+        theme,
+        { args: { action: "status" } },
+      ),
+    );
+    expect(listed).toMatch(/1 waiting/);
+    expect(listed).toMatch(/1 answered/);
+    expect(result({ requests: [] })).not.toBe("");
+    // A returned cancellation is stated once, as cancelled; failures are the shell's issue lines.
+    const cancelledResult = { ...snapshot, status: "cancelled", outcome: { outcome: "cancelled" } };
+    expect(result(cancelledResult, false, agentText)).toMatch(/⊘ Cancelled/);
+    expect(result(cancelledResult, false, agentText)).not.toContain("⚠");
+    const failed = { ...snapshot, status: "failed", outcome: undefined };
+    expect(result(failed, false, agentText).trim()).toBe("");
+    for (const details of [snapshot, cancelledResult])
+      expect(
+        output(
+          renderAsyncResult({ details }, { expanded: false, isPartial: false }, theme, {
+            isError: true,
+          }),
+        ).trim(),
+      ).toBe("");
+  });
+
+  it("marks cancelled messages as cancelled, never as a warning", () => {
+    const cancelledMessage = {
+      details: { ...message.details, outcome: { outcome: "cancelled" } },
+      content: "The user cancelled the questionnaire.",
+    };
+    for (const compact of [false, true])
+      for (const expanded of [false, true]) {
+        const text = output(
+          renderAsyncMessage(cancelledMessage, { expanded, outputPad: 0 }, theme, compact),
+        );
+        expect(text).toContain("⊘");
+        expect(text).not.toContain("⚠");
+      }
+  });
+
+  it("headers name the tool and subject without request IDs", () => {
+    for (const expanded of [false, true]) {
+      for (const action of ["status", "await", "cancel"]) {
+        const heading = output(
+          renderAsyncCall(
+            { action, requestId: "request-private-id" },
+            theme,
+            callContext(expanded),
+            true,
+          ),
+        ).split("\n")[0];
+        expect(heading).toContain(action);
+        expect(heading).not.toContain("request-private-id");
+      }
     }
   });
 });

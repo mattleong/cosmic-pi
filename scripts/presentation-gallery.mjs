@@ -13,6 +13,7 @@ const packages = [
   "pi-mcp",
   "pi-background-task",
   "pi-ask-user",
+  "pi-better-openai",
 ];
 const outIndex = process.argv.indexOf("--out");
 const out = resolve(

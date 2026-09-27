@@ -147,8 +147,9 @@ describe("subagent compact semantic policy", () => {
       }),
     );
     expect(summary?.counters).toHaveLength(1);
+    // Counters use the run rows' state words.
     expect(summary?.counters?.[0]).toContain("1 running");
-    expect(summary?.counters?.[0]).toContain("1 completed");
+    expect(summary?.counters?.[0]).toContain("1 finished");
     expect(summary?.metadata).toEqual([]);
   });
   it("keeps a requested target separate from lifecycle operations throughout rendering", () => {
@@ -170,7 +171,8 @@ describe("subagent compact semantic policy", () => {
               },
         context: renderContextFixture(),
       });
-      expect(summary?.subject).toBe(phase === "pending" ? "target-1" : "Worker");
+      // Before a receipt names the run, the heading has no subject rather than its ID.
+      expect(summary?.subject).toBe(phase === "pending" ? "" : "Worker");
       expect(summary?.action).toBe("interrupt");
       expect(summary?.metadata).not.toContain("target-1");
     }
@@ -188,7 +190,8 @@ describe("subagent compact semantic policy", () => {
         { action: "retry", runIds: ["source-1"] },
       );
       expect(summary?.action).toBe("retry");
-      expect(summary?.subject).toBe("source-1");
+      // The successor's name heads the row; a name that is only an ID never does.
+      expect(summary?.subject).toBe(name === "Retry worker" ? name : "");
       expect(summary?.metadata).not.toContain("successor-2");
       expect(summary?.metadata).not.toContain("source-1");
       expect(summary?.issues).toEqual([]);
@@ -360,8 +363,10 @@ describe("subagent compact semantic policy", () => {
         });
         const summary = summarize(action, details);
         const receipt = summary?.counters?.join(" ");
-        expect(receipt).toContain(action === "send" ? "sent" : "replied");
-        expect(receipt).toContain(`${accepted} confirmed`);
+        const word = action === "send" ? "sent" : "replied";
+        // A zero beside a failure count says nothing; accepted operations are counted.
+        if (accepted > 0) expect(receipt).toContain(`${accepted} ${word}`);
+        else expect(receipt).not.toContain(word);
         expect(receipt).toContain("1 failed");
         expect(summary?.outcome).toBe("error");
         expect(
@@ -406,7 +411,11 @@ describe("subagent compact semantic policy", () => {
           expect(details(summary?.issues)).toContain("Do not resend");
           expect(messages(summary?.issues)).not.toContain("Do not resend");
           if (action === "send" || action === "reply")
-            expect(summary?.counters?.join(" ")).toContain(`${confirmed} confirmed`);
+            expect(summary?.counters?.join(" ")).toContain(
+              confirmed
+                ? `1 ${action === "send" ? "sent" : "replied"}, 1 unconfirmed`
+                : "1 unconfirmed",
+            );
           const mixed = makeCompactToolDetails({
             action,
             runs: [],
@@ -437,8 +446,8 @@ describe("subagent compact semantic policy", () => {
     };
     const definite = { id: "definite-run", code: "not_running", message: "Worker is not running" };
     for (const [confirmed, failures, outcome, parts] of [
-      [0, [pendingFailure], "uncertain", ["0 confirmed", "1 awaiting confirmation"]],
-      [1, [pendingFailure], "uncertain", ["1 confirmed", "1 awaiting confirmation"]],
+      [0, [pendingFailure], "uncertain", ["1 awaiting confirmation"]],
+      [1, [pendingFailure], "uncertain", ["1 sent", "1 awaiting confirmation"]],
       [0, [pendingFailure, definite], "error", ["1 awaiting confirmation", "1 failed"]],
       [1, [pendingFailure, unflagged], "uncertain", ["1 awaiting confirmation", "1 unconfirmed"]],
     ] as const) {
@@ -648,7 +657,9 @@ describe("subagent compact semantic policy", () => {
       runs: [view({ writeIntent: "writer", writeClaims: ["src/a.ts"] })],
     });
     const summary = summarize("claims", details, "settled", { action: "list" });
-    expect(summary?.action).toBe("list");
+    // The operation reads as a word, never the raw argument token.
+    expect(summary?.action).toBeTruthy();
+    expect(summary?.action).not.toBe("list");
     expect(summary?.counters).toContain("1 file claim");
     expect(summary?.metadata?.join(" ")).not.toContain("src/a.ts");
     expect(
@@ -743,7 +754,8 @@ describe("subagent compact semantic policy", () => {
       "settled",
       { runIds: ["target"] },
     );
-    expect(summary?.subject).toBe("target");
+    // An unnamed target stays unnamed: its ID is expanded-only detail.
+    expect(summary?.subject).toBe("");
     expect(summary?.counters).toContain("0/1 finished");
     expect(summary?.outcome).toBe("uncertain");
     expect(summary?.issues?.some((issue) => issue.code === "targets-omitted")).toBe(true);
@@ -830,8 +842,14 @@ describe("subagent compact semantic policy", () => {
     if (reports.action === "models") throw new Error("Expected run details");
     const { reportsOnlyOmitted, ...unknown } = reports;
     expect(reportsOnlyOmitted).toBe(true);
-    expect(summarize("list", unknown)?.outcome).toBe("uncertain");
-    expect(compactIssueSeverity(summarize("list", unknown)?.issues)).toBe("warning");
+    // A list never carries reports, so any omission there is one routine note.
+    expect(summarize("list", unknown)?.outcome).toBe("success");
+    expect(summarize("list", unknown)?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
+    // A status view that loses evidence cannot confirm its targets.
+    const status = makeCompactToolDetails({ action: "status", runs: [view()] });
+    const omittedStatus = { ...status, contentOmitted: true };
+    expect(summarize("status", omittedStatus)?.outcome).toBe("uncertain");
+    expect(compactIssueSeverity(summarize("status", omittedStatus)?.issues)).toBe("warning");
   });
 
   it("keeps distinct run and selection warning identities even when their text matches", () => {
@@ -949,8 +967,8 @@ describe("subagent compact semantic policy", () => {
     expect(
       summarize("status", makeCompactToolDetails({ action: "status", runs: [] }), "running", {
         runIds: ["a", "b", "c"],
-      })?.counters,
-    ).toEqual(["3 targets"]);
+      })?.counters?.join(" "),
+    ).toContain("3");
   });
 
   it("marks isolated writers' reports as ready for review without warning", () => {
@@ -1033,7 +1051,9 @@ describe("subagent compact semantic policy", () => {
     const clean = discovery([profile, { ...profile, id: "worker", candidates: [] }]);
     expect(clean?.outcome).toBe("success");
     expect(clean?.issues).toEqual([]);
-    expect(clean?.counters).toEqual(["1 statically eligible, 1 disabled profiles"]);
+    expect(clean?.counters).toHaveLength(1);
+    expect(clean?.counters?.[0]).toContain("1 statically eligible");
+    expect(clean?.counters?.[0]).toContain("1 disabled");
     for (const unavailable of [
       { ...profile, candidates: [{ ...candidate, status: "skipped" }] },
       { ...profile, source: "global-invalid", candidates: [] },
@@ -1042,12 +1062,12 @@ describe("subagent compact semantic policy", () => {
       const summary = discovery([unavailable]);
       expect(summary?.outcome).toBe("warning");
       expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["warning"]);
-      expect(summary?.counters?.join(" ")).toContain("1 unavailable profiles");
+      expect(summary?.counters?.join(" ")).toContain("1 unavailable");
       expect(summary?.counters?.join(" ")).toContain("0 statically eligible");
-      expect(summary?.counters).not.toContain("1 eligible profiles");
+      expect(summary?.counters?.join(" ")).not.toContain("1 eligible");
     }
     expect(discovery([{ ...profile, candidates: [] }])?.counters).toEqual([
-      "0 statically eligible, 1 disabled profiles",
+      "0 statically eligible, 1 disabled profile",
     ]);
     expect(
       summarize(
@@ -1211,5 +1231,159 @@ describe("subagent compact semantic policy", () => {
         issueMessageStyleProblems(issue.message, { forbidden: [id], maxLength: 160 }),
         issue.message,
       ).toEqual([]);
+  });
+  it("keeps failed actions and rejected calls in people's terms, with service text expanded", () => {
+    const id = "agent-ns-42";
+    const serviceText = (code: string) =>
+      `Subagent ${id} failed [${code}]; use subagent_status({ runIds: ["${id}"] }) first.`;
+    const codes = [
+      "run_waiting_for_parent",
+      "parent_question_missing",
+      "retry_route_exhausted",
+      "write_claim_change_not_waiting",
+      "SubagentNotFoundError",
+      "report_delivery_backlog",
+      "an_unrecognised_code",
+      "reply_outcome_uncertain",
+    ];
+    for (const code of codes)
+      for (const [tool, action] of [
+        ["reply", "reply"],
+        ["lifecycle", "retry"],
+        ["claims", "grant"],
+      ] as const) {
+        const detailsAction = tool === "lifecycle" ? action : tool;
+        const summary = summarize(
+          tool,
+          makeCompactToolDetails({
+            action: detailsAction,
+            runs: [],
+            actionFailures: [{ id, code, message: serviceText(code) }],
+          }),
+          "settled",
+          { action, runIds: [id] },
+          true,
+        );
+        expect(summary?.subject).not.toContain(id);
+        const failure = summary?.issues?.find((issue) => issue.code.endsWith(":action-failed"));
+        expect(failure?.detail).toContain(serviceText(code));
+        for (const issue of summary?.issues ?? [])
+          if (issue.severity !== "info")
+            expect(
+              issueMessageStyleProblems(issue.message, { forbidden: [id] }),
+              issue.message,
+            ).toEqual([]);
+      }
+    // A visible card names the failed target instead of a generic subject.
+    const named = summarize(
+      "send",
+      makeCompactToolDetails({
+        action: "send",
+        runs: [view({ id: "other", name: "docs-sweep" }), view({ id, name: "auth-review" })],
+        actionFailures: [{ id, code: "run_waiting_for_parent", message: serviceText("x") }],
+      }),
+    );
+    expect(messages(named?.issues)).toContain("auth-review");
+    // Calls rejected before any receipt keep their heading and explain themselves.
+    const provider = (tool: string) => createSubagentCompactSummary(`subagent_${tool}`);
+    for (const [tool, args, text] of [
+      [
+        "lifecycle",
+        { action: "stop", runIds: [id], message: "Wrap up" },
+        'subagent_lifecycle message is valid only when action="resume".',
+      ],
+      ["workspace", { action: "prepare", workspaceId: "ws-1" }, "The revision no longer matches."],
+      ["send", { runIds: [id], message: "x" }, `Subagent ${id} rejected send({ runId: "${id}" }).`],
+    ] as const) {
+      const summary = provider(tool)({
+        phase: "settled",
+        args,
+        result: { content: [{ type: "text", text }], details: {} },
+        context: renderContextFixture({ isError: true }),
+      });
+      expect(summary?.outcome).toBe("error");
+      expect(summary?.subject).not.toContain(id);
+      expect(summary?.subject).not.toContain("ws-1");
+      const [issue] = summary?.issues ?? [];
+      expect(issue?.severity).toBe("error");
+      expect(issueMessageStyleProblems(issue?.message ?? "", { forbidden: [id] })).toEqual([]);
+      expect(`${issue?.message}\n${issue?.detail ?? ""}`).toContain(text.replace(/\.$/u, ""));
+    }
+  });
+  it("treats requested results and routine history as routine, not warnings", () => {
+    // A pause the call asked for is its result.
+    const interrupted = summarize(
+      "lifecycle",
+      makeCompactToolDetails({ action: "interrupt", runs: [view({ state: "paused" })] }),
+      "settled",
+      { action: "interrupt", runIds: ["agent-1"] },
+    );
+    expect(interrupted?.outcome).toBe("success");
+    expect(interrupted?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
+    // A retry moving past its failed option is the expected step, explained in people's terms.
+    const key =
+      "local/pi/anthropic/claude-opus-4-7:high:fresh:read-only:openaiFastMode=false:closeOnReport=true";
+    const retried = summarize(
+      "lifecycle",
+      makeCompactToolDetails({
+        action: "retry",
+        runs: [
+          view({
+            id: "successor",
+            selection: {
+              ...view().selection,
+              candidateIndex: 1,
+              skippedCandidates: [
+                {
+                  candidate: key,
+                  code: "previous_run_failed",
+                  reason: "Candidate 1 failed in source: Error: 429 Too Many Requests",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+      "settled",
+      { action: "retry", runIds: ["source"] },
+    );
+    expect(retried?.outcome).toBe("success");
+    const skipped = retried?.issues?.find((issue) => issue.code.endsWith("selection-skipped"));
+    expect(skipped?.severity).toBe("info");
+    expect(skipped?.detail).not.toContain("openaiFastMode=");
+    expect(skipped?.detail).not.toContain("source");
+    // A list leaves report text out on purpose: one note for the whole list, not one per run.
+    const listed = summarize(
+      "list",
+      makeCompactToolDetails({
+        action: "list",
+        runs: [
+          view({ id: "a", state: "completed", finalText: "report" }),
+          view({ id: "b", state: "reported", finalText: "report" }),
+          view({ id: "c", state: "failed", error: "Rate limit exceeded" }),
+        ],
+      }),
+    );
+    const omissions = (listed?.issues ?? []).filter((issue) =>
+      issue.code.endsWith("evidence-omitted"),
+    );
+    expect(omissions.map((issue) => issue.severity)).toEqual(["info"]);
+  });
+
+  it("counts failed and stopped await targets apart from finished ones", () => {
+    const summary = summarize(
+      "await",
+      awaitReceipt([
+        view({ id: "a", state: "completed" }),
+        view({ id: "b", state: "failed" }),
+        view({ id: "c", state: "stopped" }),
+      ]),
+      "settled",
+      { runIds: ["a", "b", "c"] },
+    );
+    const counter = summary?.counters?.join(" ") ?? "";
+    expect(counter).toContain("1/3 finished");
+    expect(counter).toContain("1 failed");
+    expect(counter).toContain("1 stopped");
   });
 });

@@ -7,6 +7,7 @@ import {
 import { expandedSection, withCodePreviewShell } from "pi-code-previews";
 import { Container } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
+import { isTypedReceipt } from "./compact-heading.ts";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
@@ -33,6 +34,7 @@ import {
   type SubagentToolInput,
   type SubagentToolParameters,
 } from "./schema.ts";
+import { countLabel } from "pi-cosmic-core";
 
 type SubagentToolSpec<N extends SubagentToolName> = Pick<
   ToolDefinition<SubagentToolParameters<N>>,
@@ -73,7 +75,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     ],
     prepareArguments: prepareSubagentStartArguments,
     renderCall: (args, theme, context) =>
-      renderSubagentStartCall(args.agents, theme, context?.expanded === true),
+      renderSubagentStartCall(args.agents, theme, context?.expanded === true, false, context),
     lease: (presentation, args) => presentation.beginStart(args.agents.length),
   },
   [SUBAGENT_TOOL_NAME.list]: {
@@ -87,11 +89,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     description:
       "Inspect up to twelve specific subagent run IDs, including each run's capabilities.",
     renderCall: (args, theme) =>
-      renderSubagentCall(
-        `Inspect ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
-        args.runIds.join(", "),
-        theme,
-      ),
+      renderSubagentCall(`Inspect ${countLabel(args.runIds.length, "subagent")}`, "", theme),
   },
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
@@ -119,8 +117,8 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Send the same guidance message to one or more running subagents. For a reported retained run, this begins its next assignment and report generation. Mixed-target calls report each success and failure.",
     renderCall: (args, theme) =>
       renderSubagentCall(
-        `Guide ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
-        `${args.runIds.join(", ")} · “${args.message}”`,
+        `Guide ${countLabel(args.runIds.length, "subagent")}`,
+        `“${args.message}”`,
         theme,
       ),
   },
@@ -128,7 +126,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     label: "Reply to Subagent",
     description: "Answer a blocking parent question from one subagent.",
     renderCall: (args, theme) =>
-      renderSubagentCall("Reply to subagent", `${args.runId} · “${args.message}”`, theme),
+      renderSubagentCall("Reply to subagent", `“${args.message}”`, theme),
   },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
@@ -142,10 +140,10 @@ const TOOL_SPECS: SubagentToolSpecs = {
     ],
     renderCall: (args, theme) => {
       const action = `${args.action[0]?.toUpperCase() ?? ""}${args.action.slice(1)}`;
-      const message = args.action === "resume" && args.message ? ` · “${args.message}”` : "";
+      const message = args.action === "resume" && args.message ? `“${args.message}”` : "";
       return renderSubagentCall(
-        `${action} ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
-        `${args.runIds.join(", ")}${message}`,
+        `${action} ${countLabel(args.runIds.length, "subagent")}`,
+        message,
         theme,
       );
     },
@@ -153,8 +151,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.rename]: {
     label: "Rename Subagent",
     description: "Change one subagent's local display name.",
-    renderCall: (args, theme) =>
-      renderSubagentCall("Rename subagent", `${args.runId} → ${args.name}`, theme),
+    renderCall: (args, theme) => renderSubagentCall("Rename subagent", `to ${args.name}`, theme),
   },
   [SUBAGENT_TOOL_NAME.claims]: {
     label: "Manage Writer Claims",
@@ -173,9 +170,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
           : args.action === "resume_admission"
             ? "Resume writer admission"
             : `${args.action === "grant" ? "Grant" : "Revoke"} writer claims`,
-        args.action === "list"
-          ? (args.runIds ?? []).join(", ")
-          : `${args.runId ?? ""}${args.paths !== undefined ? ` · ${args.paths.join(", ")}` : ""}`,
+        args.action === "list" ? "" : (args.paths ?? []).join(", "),
         theme,
       ),
   },
@@ -190,12 +185,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Use subagent_workspace prepare for the reviewed revision, then run relevant tests in its returned combined cwd. Do not edit that prepared tree. Only after review and passing tests, automatically call integrate with that exact revisionId and preparationId. Do not commit or stage parent changes.",
       "If review or tests fail, use subagent_workspace revise with concrete feedback, then await its successor and review the new workspace revision from the beginning. Stale preparation or parent changes require a fresh prepare and test pass. Use discard only for a proposal you intend to delete.",
     ],
-    renderCall: (args, theme) =>
-      renderSubagentCall(
-        "Writer workspace",
-        `${args.action ?? ""} ${args.workspaceId ?? ""}`,
-        theme,
-      ),
+    renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
   },
 };
 
@@ -254,6 +244,7 @@ export function registerSubagentTools(
       renderResult: (result, options, theme, context) =>
         renderSubagentResult(result, options.isPartial, options.expanded, theme, {
           panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
+          isError: context.isError,
         }),
     });
     const project = createSubagentCompactSummary(tool.name);
@@ -281,7 +272,10 @@ export function registerSubagentTools(
             );
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
+            isError: context.isError,
           });
+          // A rejected call's text is its whole result; the content already labels it.
+          if (!isTypedReceipt(result.details)) return content;
           if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
           // The typed projection is bounded; keep all returned recovery evidence and earlier
           // content middleware accessible for classified errors and for pending delivery,

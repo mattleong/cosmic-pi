@@ -204,6 +204,9 @@ export function askUserWithDependencies(
       bridge.clear();
       bridge.setContext(undefined);
     },
+    onStartFailure: ({ ctx }) => {
+      notifyAtHostBoundary(ctx, "Ask User couldn't start", "warning");
+    },
   });
 
   pi.registerCommand("ask-user", {

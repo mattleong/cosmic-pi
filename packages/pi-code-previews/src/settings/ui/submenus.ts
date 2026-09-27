@@ -136,7 +136,7 @@ export class ThemeSelectSubmenu extends Container {
     this.addChild(new Spacer(1));
     this.addChild(this.selectList);
     this.addChild(new Spacer(1));
-    this.addChild(new Text("Enter to select · Esc to go back", 0, 0));
+    this.addChild(new Text("Enter Select · Esc Back", 0, 0));
   }
 
   handleInput(data: string): void {

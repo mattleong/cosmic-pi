@@ -25,9 +25,9 @@ export interface DirectoryModelSessionInput {
  */
 export type DirectoryModelWarn = (message: string) => void;
 
-const READ_WARNING = "Directory model preference is invalid; using Pi's current model.";
-const IDENTIFY_WARNING = "Directory model preference is unavailable for this working directory.";
-const WRITE_WARNING = "Unable to save the directory model preference.";
+const READ_WARNING = "The saved model for this directory is invalid, so Pi kept its current model";
+const IDENTIFY_WARNING = "Couldn't identify this directory to remember its model";
+const WRITE_WARNING = "Couldn't save the model for this directory";
 
 export class DirectoryModelPreferenceService extends Context.Service<DirectoryModelPreferenceService>()(
   "pi-directory-models/preference/service/DirectoryModelPreferenceService",
@@ -76,7 +76,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
             return recovered(
               preferenceFromSelectedModel(pi, canonicalCwd, selected),
               "current",
-              "Unable to read Pi's current model preference.",
+              "Couldn't read Pi's current model",
             );
           });
 

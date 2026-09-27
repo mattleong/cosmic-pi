@@ -83,7 +83,7 @@ Resource URIs route only through the selected server's `resources/read`. The cli
 
 ### User commands
 
-The implemented argument-first commands are `/mcp status`, `/mcp connect ID`, `/mcp disconnect ID`, `/mcp refresh ID`, `/mcp auth ID [--manual]`, and `/mcp logout ID`. Bare `/mcp` means status. Persistent editing uses `/mcp-settings show`, `reload`, `set-server global|project ID JSON`, `remove-server global|project ID`, and `set-settings global|project JSON`; bare `/mcp-settings` means show. There is no custom picker. Supported TUI/RPC dialogs run explicit login; print/JSON mode can check existing credentials but cannot prompt or start a callback listener.
+The implemented argument-first commands are `/mcp status`, `/mcp connect ID`, `/mcp disconnect ID`, `/mcp refresh ID`, `/mcp auth ID [--manual]`, and `/mcp logout ID`. Bare `/mcp` means status, which opens the dashboard in a terminal. Persistent editing uses `/mcp-settings status`, `help`, `reload`, `set-server global|project ID JSON`, `remove-server global|project ID`, and `set-settings global|project JSON`; bare `/mcp-settings` means help. There is no custom picker. Supported TUI/RPC dialogs run explicit login; print/JSON mode can check existing credentials but cannot prompt or start a callback listener.
 
 Authentication starts from an explicit user command. An ordinary gateway or Code Mode call returns `AuthRequired` instead of opening a browser unexpectedly. Authorization codes, callback URLs containing codes, tokens, and client secrets never pass through model-facing tool parameters or results.
 

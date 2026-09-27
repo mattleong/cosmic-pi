@@ -1,6 +1,5 @@
 /** Human causes for process failures: one output line, or what an exit status means. */
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
-import { firstLineMessage } from "./issue-message";
+import { sanitizeDiagnosticContent, firstLineMessage } from "pi-cosmic-core";
 
 // Output lines that name a failure: error words, failing tests, exception classes.
 const CAUSE_WORD = /\b(?:error|errors|fail|failed|failure|failures|fatal|panic|panicked)\b/iu;

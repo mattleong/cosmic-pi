@@ -23,6 +23,7 @@ import type {
 } from "../../src/tools/compact-summary";
 import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 import { failingRenderer, plainTheme, textResult as result } from "../support/render";
+import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Result = Awaited<ReturnType<Definition["execute"]>>;
@@ -510,7 +511,7 @@ it.effect("cooperative animation uses its injected owner without a previews runt
           const initial = h.rows(240).join("\n");
           let previous = initial;
           for (let frame = 0; frame < 2; frame++) {
-            yield* TestClock.adjust(100);
+            yield* TestClock.adjust(SPINNER_FRAME_MS);
             const current = h.rows(240).join("\n");
             assert.notEqual(current, previous);
             if (!timing) {
@@ -531,18 +532,18 @@ it.effect("cooperative animation uses its injected owner without a previews runt
             assert.deepEqual(streamed.slice(1), progress.slice(1));
           }
           h.update({ isPartial: false }, result("done"));
-          yield* TestClock.adjust(200);
+          yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
           assert.equal(ticks, 2);
           const active = harness(summarize, "off", {
             timing,
             scheduleAnimation: scheduler.schedule,
           });
           active.call({ executionStarted: true, invalidate: () => ticks++ });
-          yield* TestClock.adjust(100);
+          yield* TestClock.adjust(SPINNER_FRAME_MS);
           assert.equal(ticks, 3);
         }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
       );
-      yield* TestClock.adjust(200);
+      yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
       assert.equal(ticks, 3, "owner shutdown must stop cooperative animation");
     }
   }),
@@ -561,10 +562,10 @@ it.effect("preview-style duration refresh also uses the injected session schedul
           scheduleAnimation: scheduler.schedule,
         });
         h.update({ executionStarted: true, invalidate: () => ticks++ }, result("live output"));
-        yield* TestClock.adjust(200);
+        yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
         assert.equal(ticks, 2);
         h.update({ isPartial: false }, result("done"));
-        yield* TestClock.adjust(200);
+        yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
         assert.equal(ticks, 2);
       }
     }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
@@ -607,24 +608,24 @@ it.effect(
             const h = harness(summarize, "off", { timing });
             h.call({ invalidate: () => ticks++ });
             const pending = h.rows().join("");
-            yield* TestClock.adjust(200);
+            yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
             assert.equal(ticks, 0);
             assert.equal(h.rows().join(""), pending);
             h.call({ executionStarted: true });
             const firstFrame = h.rows().join("");
             h.update({}, result(""));
             h.update({}, result(""));
-            yield* TestClock.adjust(200);
+            yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
             assert.equal(ticks, 2, "repeated slot updates must share one animation timer");
             assert.notEqual(h.rows().join(""), firstFrame);
             if (!timing) {
               assert.equal(h.state.codePreviewTimingStartedAt, undefined);
               assert.doesNotMatch(h.rows().join(""), /\d+(?:ms|s)\b/u);
               h.update({ expanded: true });
-              yield* TestClock.adjust(200);
+              yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
               assert.equal(ticks, 2);
               h.update({ expanded: false });
-              yield* TestClock.adjust(100);
+              yield* TestClock.adjust(SPINNER_FRAME_MS);
               assert.equal(ticks, 3);
             }
             h.update({ isPartial: false }, result("final"));
@@ -635,7 +636,7 @@ it.effect(
             assert.equal(h.rows().join(""), settled);
             const activeAtShutdown = harness(summarize, "off", { timing });
             activeAtShutdown.call({ executionStarted: true, invalidate: () => ticks++ });
-            yield* TestClock.adjust(100);
+            yield* TestClock.adjust(SPINNER_FRAME_MS);
             assert.equal(ticks, settledTicks + 1);
           }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
         );

@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens } from "pi-cosmic-core";
 import type { CosmicFooterTextContribution, CosmicFooterTheme } from "../protocol/protocol.ts";
 import {
@@ -8,6 +8,7 @@ import {
   renderContributionLine,
 } from "./contributions.ts";
 import { contextConsumptionTone, progressBar } from "./meter.ts";
+import { clipToWidth } from "../manager/chrome.ts";
 
 function contextUsageCandidates(
   usage: { contextWindow?: number; tokens?: number | null; percent?: number | null } | undefined,
@@ -52,7 +53,7 @@ export function renderModelContextLine(
   // wide, retain the percentage before clipping identity; counts and then the meter are dropped.
   const context =
     candidates.find((candidate) => visibleWidth(candidate) <= contextBudget) ??
-    truncateToWidth(candidates.at(-1) ?? "", width, "");
+    clipToWidth(candidates.at(-1) ?? "", width, "");
   const contextWidth = visibleWidth(context);
   const leftBudget = Math.max(0, width - contextWidth - (leftRaw ? 2 : 0));
   const left = modelIdentity.length

@@ -1,7 +1,6 @@
 import * as Predicate from "effect/Predicate";
 
 import * as Clock from "effect/Clock";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -11,6 +10,7 @@ import {
   formatWindowedUsageLine,
   JsonHttpClient,
   usedToLeftPercent,
+  formatTimestamp,
 } from "pi-cosmic-core";
 import type { CodexCredentials } from "../auth/codex-auth.ts";
 
@@ -152,7 +152,7 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
     `  5 hour: ${formatPercent(snapshot.fiveHourLeftPercent)} left`,
     `  7 day:  ${formatPercent(snapshot.sevenDayLeftPercent)} left`,
     `  Source: ${USAGE_URL}`,
-    `  Updated: ${DateTime.formatLocal(DateTime.makeUnsafe(now))}`,
+    `  Updated: ${formatTimestamp(now)}`,
   ].join("\n");
 }
 
@@ -175,15 +175,15 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
           return new CodexUsageError({
             operation: malformed ? "decode" : "request",
             message: malformed
-              ? "Codex usage response was malformed."
-              : "Codex usage request failed.",
+              ? "OpenAI returned an unreadable usage response"
+              : "Usage request failed",
           });
         }),
       );
     if (response._tag === "Rejected")
       return yield* new CodexUsageError({
         operation: "request",
-        message: `Codex usage request failed (${response.status})`,
+        message: `Usage request failed with status ${response.status}`,
       });
     const now = yield* Clock.currentTimeMillis;
     return parseUsageSnapshot(response.body, modelId, now);

@@ -1,14 +1,23 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { invokeHostCallback, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
-import { managerStateGlyph } from "pi-cosmic-ui/manager";
+import { type Component } from "@earendil-works/pi-tui";
+import {
+  invokeHostCallback,
+  sanitizeTerminalLine,
+  synchronousNow,
+  countLabel,
+} from "pi-cosmic-core";
+import {
+  managerStateGlyph,
+  clipToWidth,
+  spinnerFrameAt,
+  SPINNER_FRAME_MS,
+} from "pi-cosmic-ui/manager";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
-import type { SemanticOutcomeBanner } from "./render-management.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import { renderResponsiveRunRows, runTiming, type RunHierarchy } from "./render-run-rows.ts";
 
@@ -34,9 +43,7 @@ export interface AwaitSummaryOutcome {
 }
 
 const firstFinishedSummary = (run: AwaitProgressRun): string =>
-  `${sanitizeTerminalLine(run.name)} ${
-    run.state === "reported" ? "reported first · retained" : `${runStateLabel(run.state)} first`
-  }`;
+  `${sanitizeTerminalLine(run.name)} ${runStateLabel(run.state)} first`;
 
 const interruptedOutcome = (outcome: AwaitSummaryOutcome): boolean =>
   outcome.cancelled === true || outcome.timedOut === true || outcome.attentionRequired === true;
@@ -52,19 +59,41 @@ const firstFinishedRun = (
         .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
     : undefined;
 
-/** Settled waits color any_finished by the first finished run; live progress never settles. */
-export const awaitSummaryColor = (
+const COUNTED_STATES = [
+  "starting",
+  "running",
+  "waiting_for_parent",
+  "paused",
+  "stopping",
+  "failed",
+  "stopped",
+] as const;
+
+/**
+ * The wait's routine counters for people: finished targets apart from failed and stopped
+ * ones, then usage. Outcomes and problems are the shell's issue lines, not repeated here.
+ */
+export const formatAwaitCounters = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
-  outcome: AwaitSummaryOutcome,
-): SemanticOutcomeBanner["color"] => {
-  if (interruptedOutcome(outcome)) return "warning";
+  usage = "",
+  outcome: AwaitSummaryOutcome = {},
+): string => {
+  const targetCount = outcome.targetCount ?? runs.length;
+  const descendantCount = outcome.descendantCount ?? 0;
   const first = outcome.settled === true ? firstFinishedRun(runs, until) : undefined;
-  if (first) return first.state === "failed" ? "error" : "accent";
-  if (runs.some((run) => run.state === "failed")) return "error";
-  return runs.length > 0 && runs.every((run) => isAssignmentFinishedRunState(run.state))
-    ? "success"
-    : "warning";
+  const done = runs.filter((run) => run.state === "completed" || run.state === "reported").length;
+  const states = COUNTED_STATES.flatMap((state) => {
+    const count = runs.filter((run) => run.state === state).length;
+    return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
+  });
+  return [
+    ...(first ? [firstFinishedSummary(first)] : []),
+    `${done}/${targetCount} finished`,
+    ...states,
+    ...(usage ? [usage] : []),
+    ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
+  ].join(" · ");
 };
 
 const awaitHeading = (
@@ -75,7 +104,7 @@ const awaitHeading = (
   targetCount: number,
   firstRun: AwaitProgressRun | undefined,
 ): string => {
-  if (outcome.cancelled) return "Await canceled";
+  if (outcome.cancelled) return "Await cancelled";
   if (outcome.timedOut) return "Await timed out";
   if (outcome.attentionRequired) return "Parent action required";
   if (outcome.settled !== true)
@@ -118,10 +147,8 @@ export const formatAwaitSummary = (
     ...activeSummary,
     ...(failed > 0 ? [`${failed} failed`] : []),
     ...(usage ? [usage] : []),
-    ...(outcome.settled ? [] : [`◎${targetCount} target${targetCount === 1 ? "" : "s"}`]),
-    ...(descendantCount > 0
-      ? [`${descendantCount} descendant${descendantCount === 1 ? "" : "s"}`]
-      : []),
+    ...(outcome.settled ? [] : [`◎${countLabel(targetCount, "target")}`]),
+    ...(descendantCount > 0 ? [`${countLabel(descendantCount, "descendant")}`] : []),
   ].join(" · ");
 };
 
@@ -176,7 +203,7 @@ export const syncAwaitProgressTicker = (
       const weakState = new WeakRef(context.state);
       let stopTimer = () => {};
       const cleanup = () => invokeHostCallback(stopTimer, undefined);
-      stopTimer = startTicker(160, () => {
+      stopTimer = startTicker(SPINNER_FRAME_MS, () => {
         const active = weakState.deref();
         if (active) active.piSubagentsAwaitInvalidate?.();
         else cleanup();
@@ -192,6 +219,9 @@ export const syncAwaitProgressTicker = (
   invokeHostCallback(stop, undefined);
 };
 
+/** A bounded hierarchy says so in passing; which descendants matter is the fleet's job. */
+export const DESCENDANTS_OMITTED = "Some descendants are not shown";
+
 export const renderAwaitProgressComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
   targets: ReadonlyArray<SubagentRunCard>,
@@ -202,7 +232,7 @@ export const renderAwaitProgressComponent = (
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const frame = Math.floor(synchronousNow() / 160);
+    const frame = spinnerFrameAt(synchronousNow());
     const usage = aggregateUsage(runs, "compact");
     const targetIds = hierarchy.awaitedRunIds ?? new Set(targets.map((run) => run.id));
     const summary = {
@@ -211,20 +241,12 @@ export const renderAwaitProgressComponent = (
       descendantCount: runs.filter((run) => !targetIds.has(run.id)).length,
     };
     return [
-      truncateToWidth(
-        theme.fg(
-          awaitSummaryColor(targets, until, outcome),
-          formatAwaitSummary(targets, until, usage, summary),
-        ),
+      clipToWidth(
+        theme.fg("muted", formatAwaitCounters(targets, until, usage, summary)),
         safeWidth,
       ),
       ...(hierarchy.contextOmitted
-        ? [
-            truncateToWidth(
-              theme.fg("warning", "Some descendant context was omitted from this card."),
-              safeWidth,
-            ),
-          ]
+        ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), safeWidth)]
         : []),
       ...renderResponsiveRunRows(runs, safeWidth, theme, { frame, hierarchy }),
     ];

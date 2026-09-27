@@ -7,6 +7,7 @@ import {
   bestEffortHostBootstrap,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
+  notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import {
   defineTool,
@@ -47,6 +48,7 @@ import {
   createParentCompactSummary,
   createParentExpandedContent,
 } from "../tools/compact-parent-summary.ts";
+import { parentToolRenderers } from "../tools/render-parent.ts";
 import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
@@ -367,11 +369,14 @@ export default function registerPiSubagentSupervisorBridge(
     ];
     for (const tool of tools)
       pi.registerTool(
-        withCodePreviewShell(tool, {
-          scheduleAnimation,
-          compactSummary: createParentCompactSummary(tool.name),
-          expandedContent: createParentExpandedContent(tool.name),
-        }),
+        withCodePreviewShell(
+          { ...tool, ...parentToolRenderers(tool.name, tool.label) },
+          {
+            scheduleAnimation,
+            compactSummary: createParentCompactSummary(tool.name),
+            expandedContent: createParentExpandedContent(tool.name),
+          },
+        ),
       );
     pi.setActiveTools([
       ...new Set([
@@ -402,7 +407,11 @@ export default function registerPiSubagentSupervisorBridge(
     const config = pi.getFlag("pi-subagents-supervisor-config");
     if (!Predicate.isString(config)) {
       if (ctx.hasUI)
-        ctx.ui.notify("Private subagent supervisor configuration is missing.", "error");
+        notifyAtHostBoundary(
+          ctx,
+          "Subagent supervisor couldn't start: configuration is missing",
+          "error",
+        );
       return;
     }
     if (runtimeApi.apiKey && runtimeApi.provider)
@@ -411,7 +420,7 @@ export default function registerPiSubagentSupervisorBridge(
     return slot.start({ configPath: config, ctx }).then((token) => {
       if (token === undefined || shuttingDown || !slot.isCurrent(token)) {
         if (!shuttingDown && ctx.hasUI)
-          ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
+          notifyAtHostBoundary(ctx, "Subagent supervisor couldn't connect to its parent", "error");
         return;
       }
     });

@@ -1,4 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext as ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Result from "effect/Result";
 import {
   captureHostSignal,
@@ -11,19 +14,43 @@ import {
 } from "pi-cosmic-core";
 import { hasCustomSurface, type OwnedSurfaceOutcome } from "./host-surface.ts";
 
+/** One settings scope, such as `global` or `project`; the first listed is the default. */
+export interface SettingsCommandScope {
+  readonly name: string;
+  readonly description: string;
+}
+
 export interface SettingsCommandOptions<Config> {
   /** The command name without its slash, such as `xai-settings`. */
   readonly command: string;
   readonly description: string;
-  /** The provider name used in messages, such as `Better xAI`. */
+  /** The extension name used in messages, such as `Better xAI`. */
   readonly title: string;
   readonly descriptors: ReadonlyArray<
-    Pick<SettingsOptionDescriptor<Config>, "id" | "description" | "values" | "currentValue">
+    Pick<SettingsOptionDescriptor<Config>, "id" | "description" | "values" | "currentValue"> & {
+      /** Values beyond `values` are accepted and validated by `apply`, such as integers. */
+      readonly openValues?: boolean | undefined;
+    }
   >;
   /** `<id> <value>` examples listed by help. */
   readonly examples: ReadonlyArray<string>;
+  /** Extra help lines after the examples, such as how scopes combine. */
+  readonly notes?: ((ctx: ExtensionContext) => ReadonlyArray<string>) | undefined;
+  /**
+   * Optional scopes named before the setting id. Apply receives the chosen scope, or the first
+   * one when the command names none. Without scopes the grammar is `<id> <value>`.
+   */
+  readonly scopes?: ReadonlyArray<SettingsCommandScope> | undefined;
+  /**
+   * Why a scope cannot be edited right now, such as an untrusted project; undefined allows. It is
+   * checked before every apply, scripted or from a picker.
+   */
+  readonly scopeBlocked?:
+    | ((ctx: ExtensionContext, scope: string) => string | undefined)
+    | undefined;
   readonly config: (ctx: ExtensionContext) => Config | undefined;
-  readonly diagnostics: (ctx: ExtensionContext) => string;
+  /** The `status` report: effective values and anything else worth checking. */
+  readonly status: (ctx: ExtensionContext) => string | Promise<string>;
   /** Runs on every invocation and before each apply. */
   readonly onInvoke?: (ctx: ExtensionContext) => void;
   /**
@@ -32,38 +59,59 @@ export interface SettingsCommandOptions<Config> {
    * runs without one when the getter throws; a rejection stays silent once its signal aborted.
    */
   readonly signal?: "required" | "optional";
-  /** Persists one validated value; a rejection means the settings runtime is unavailable. */
+  /**
+   * Persists one validated value; a rejection means the settings runtime is unavailable. A
+   * `stale` failure, such as one from a replaced session, is silent.
+   */
   readonly apply: (
     ctx: ExtensionContext,
     id: string,
     value: string,
     signal: AbortSignal | undefined,
-  ) => Promise<Result.Result<unknown, { readonly message: string }>>;
-  /** Runs after each successful apply, such as a footer refresh. */
-  readonly afterApply: (ctx: ExtensionContext) => void;
+    scope?: string,
+  ) => Promise<
+    Result.Result<unknown, { readonly message: string; readonly stale?: boolean | undefined }>
+  >;
+  /**
+   * Shows the value a scope now holds after an apply; defaults to the effective value. Code
+   * Mode shows the scope's own value, which may be `inherit`.
+   */
+  readonly displayValue?:
+    | ((ctx: ExtensionContext, id: string, scope: string | undefined) => string | undefined)
+    | undefined;
+  /** Runs after each successful apply, such as a footer refresh or an availability notice. */
+  readonly afterApply: (ctx: ExtensionContext, id: string, scope: string | undefined) => void;
   /**
    * Opens the provider's picker, reporting `Blocked` when it has no config. The session's
    * `apply` shows the committed or restored value through `show`, or else notifies `id = value`.
+   * `show` returns false when a newer choice has replaced this one; a stale failure is silent.
    */
   readonly open: (
     ctx: ExtensionContext,
     session: {
       readonly config: () => Config | undefined;
-      readonly apply: (id: string, value: string, show?: (value: string) => void) => Promise<void>;
+      readonly apply: (
+        id: string,
+        value: string,
+        show?: (value: string) => boolean | void,
+        scope?: string,
+      ) => Promise<void>;
     },
   ) => Promise<OwnedSurfaceOutcome<unknown>>;
 }
 
 /**
- * Registers a provider's `/…-settings` command: completions, help, guarded diagnostics,
- * validation messages, and the scripted and interactive apply. Pickers stay with the provider.
+ * Registers an extension's `/…-settings` command: completions, help, status, validation
+ * messages, and the scripted and interactive apply. Pickers stay with the provider.
  */
 export function registerSettingsCommand<Config>(
   pi: ExtensionAPI,
   options: SettingsCommandOptions<Config>,
 ): void {
   const { command, title, descriptors } = options;
-  const unavailable = `${title} settings are unavailable.`;
+  const scopes = options.scopes ?? [];
+  const scopeNames = scopes.map((scope) => scope.name);
+  const unavailable = `${title} settings aren't available right now`;
   const readConfig = (ctx: ExtensionContext) =>
     invokeHostCallback(() => options.config(ctx), undefined);
   const invoked = (ctx: ExtensionContext) =>
@@ -81,11 +129,14 @@ export function registerSettingsCommand<Config>(
     id: string,
     value: string,
     signal: AbortSignal | undefined,
-    show?: (value: string) => void,
+    show?: (value: string) => boolean | void,
+    scope = scopeNames[0],
   ): Promise<void> => {
     invoked(ctx);
     const descriptor = descriptors.find((entry) => entry.id === id);
     const persisted = (): string | undefined => {
+      if (options.displayValue)
+        return invokeHostCallback(() => options.displayValue?.(ctx, id, scope), undefined);
       const cfg = readConfig(ctx);
       return descriptor && cfg
         ? invokeHostCallback(() => descriptor.currentValue(cfg), undefined)
@@ -94,23 +145,41 @@ export function registerSettingsCommand<Config>(
     // Snapshot before the write so an optimistic display can still be rolled back when the
     // config becomes unavailable while the update is in flight.
     const before = show ? persisted() : undefined;
-    const display = (current: string | undefined) => {
-      if (show && current !== undefined) invokeHostCallback(() => show(current), undefined);
-    };
-    return options.apply(ctx, id, value, signal).then(
+    /** False only when the picker says a newer choice replaced this one. */
+    const display = (current: string | undefined): boolean =>
+      !show ||
+      current === undefined ||
+      invokeHostCallback(() => show(current), undefined) !== false;
+    // Checked for pickers too, right before the write, since trust can change while one is open.
+    const blocked =
+      scope === undefined
+        ? undefined
+        : invokeHostCallback(() => options.scopeBlocked?.(ctx, scope), undefined);
+    if (blocked) {
+      if (display(before)) notifyAtHostBoundary(ctx, blocked, "warning");
+      return Promise.resolve();
+    }
+    return options.apply(ctx, id, value, signal, scope).then(
       (settlement) => {
         if (Result.isFailure(settlement)) {
-          notifyAtHostBoundary(ctx, settlement.failure.message, "error");
-          return display(persisted() ?? before);
+          if (display(persisted() ?? before) && settlement.failure.stale !== true)
+            notifyAtHostBoundary(ctx, settlement.failure.message, "error");
+          return;
         }
-        invokeHostCallback(() => options.afterApply(ctx), undefined);
         const current = persisted() ?? value;
         if (show) display(current);
-        else notifyAtHostBoundary(ctx, `${id} = ${current}`, "info");
+        else
+          notifyAtHostBoundary(
+            ctx,
+            `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`,
+            "info",
+          );
+        invokeHostCallback(() => options.afterApply(ctx, id, scope), undefined);
       },
       () => {
-        if (!optionalSignal || !signal?.aborted) notifyAtHostBoundary(ctx, unavailable, "warning");
-        display(persisted() ?? before);
+        const current = display(persisted() ?? before);
+        if (current && (!optionalSignal || !signal?.aborted))
+          notifyAtHostBoundary(ctx, unavailable, "warning");
       },
     );
   };
@@ -122,69 +191,85 @@ export function registerSettingsCommand<Config>(
       .open(ctx, {
         config: () => readConfig(ctx),
         // The picker can outlive the signal it opened with.
-        apply: (id, value, show) =>
-          applySetting(ctx, id, value, optionalSignal ? currentSignal(ctx) : captured.signal, show),
+        apply: (id, value, show, scope) =>
+          applySetting(
+            ctx,
+            id,
+            value,
+            optionalSignal ? currentSignal(ctx) : captured.signal,
+            show,
+            scope,
+          ),
       })
       .then((outcome) => {
         if (outcome._tag === "Blocked") notifyAtHostBoundary(ctx, unavailable, "warning");
         if (outcome._tag === "Failed")
-          notifyAtHostBoundary(ctx, `Unable to open ${title} settings.`, "warning");
+          notifyAtHostBoundary(ctx, `Couldn't open ${title} settings`, "warning");
       });
   };
 
+  const scopeToken = scopes.length > 0 ? `[${scopeNames.join("|")}] ` : "";
   const showHelp = (ctx: ExtensionContext) => {
     // Help remains useful before the session runtime has published its config.
     const cfg = readConfig(ctx);
+    const notes = invokeHostCallback(() => options.notes?.(ctx) ?? [], []);
     const lines = [
       `${title} settings`,
       ...descriptors.map(
         (descriptor) =>
-          `  ${descriptor.id}${cfg ? `=${descriptor.currentValue(cfg)}` : ""}  — ${descriptor.description}`,
+          `  ${descriptor.id}${cfg ? ` = ${descriptor.currentValue(cfg)}` : ""}  — ${descriptor.description}`,
       ),
       "",
       "Usage:",
-      `  /${command}`,
-      `  /${command} <id> <value>`,
-      `  /${command} diagnostics`,
+      `  /${command}  Open the settings list`,
+      `  /${command} ${scopeToken}<id> <value>  Change one setting`,
+      `  /${command} status  Show effective values`,
+      `  /${command} help  Show this help`,
       "",
       "Examples:",
       ...options.examples.map((example) => `  /${command} ${example}`),
+      ...(notes.length > 0 ? ["", ...notes] : []),
     ];
     notifyAtHostBoundary(ctx, lines.join("\n"), "info");
   };
 
   const handle = (args: string, ctx: ExtensionContext) => {
     invoked(ctx);
-    const dispatch = dispatchSettingsCommand(args, descriptors);
+    const dispatch = dispatchSettingsCommand(args, descriptors, scopeNames);
     switch (dispatch._tag) {
       case "OpenInteractive":
         return hasCustomSurface(ctx) ? openInteractive(ctx) : showHelp(ctx);
       case "Help":
         return showHelp(ctx);
-      case "Diagnostics": {
-        const text = invokeHostCallback<string | undefined>(
-          () => options.diagnostics(ctx),
-          undefined,
-        );
-        if (text === undefined)
-          return notifyAtHostBoundary(ctx, `${title} diagnostics are unavailable.`, "warning");
-        return notifyAtHostBoundary(ctx, text, "info");
-      }
+      case "Status":
+        return Promise.resolve()
+          .then(() => options.status(ctx))
+          .then(
+            (text) => notifyAtHostBoundary(ctx, text, "info"),
+            () => notifyAtHostBoundary(ctx, unavailable, "warning"),
+          );
       case "Invalid":
         return notifyAtHostBoundary(
           ctx,
           dispatch.reason === "invalid-value"
-            ? `Invalid value for ${dispatch.id}. Expected one of: ${dispatch.allowedValues.join(", ")}`
+            ? `${dispatch.id} must be one of: ${dispatch.allowedValues.join(", ")}`
             : dispatch.reason === "missing-value"
-              ? `Missing value for ${dispatch.id}. Usage: /${command} <id> <value>`
+              ? `Usage: /${command} ${scopeToken}<id> <value>`
               : `Unknown setting: ${dispatch.id}`,
-          "error",
+          "warning",
         );
       case "Apply": {
         const captured = captureSignal(ctx);
         if (captured._tag === "Unavailable")
           return notifyAtHostBoundary(ctx, unavailable, "warning");
-        return applySetting(ctx, dispatch.id, dispatch.value, captured.signal);
+        return applySetting(
+          ctx,
+          dispatch.id,
+          dispatch.value,
+          captured.signal,
+          undefined,
+          dispatch.scope ?? scopeNames[0],
+        );
       }
     }
   };
@@ -192,10 +277,19 @@ export function registerSettingsCommand<Config>(
   pi.registerCommand(command, {
     description: options.description,
     getArgumentCompletions: (prefix) =>
-      completeSettingsArguments(prefix, descriptors, [
-        { value: "help", label: "help", description: "Show setting ids and usage" },
-        { value: "diagnostics", label: "diagnostics", description: `Show ${title} diagnostics` },
-      ]),
+      completeSettingsArguments(
+        prefix,
+        descriptors,
+        [
+          { value: "status", label: "status", description: "Show effective values" },
+          { value: "help", label: "help", description: "Show setting ids and usage" },
+        ],
+        scopes.map((scope) => ({
+          value: scope.name,
+          label: scope.name,
+          description: scope.description,
+        })),
+      ),
     handler: (args, ctx) => Promise.resolve(handle(args, ctx)),
   });
 }
