@@ -1,5 +1,7 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { expect, it } from "vitest";
-import { mcpCompletions } from "../../src/manager/controller.ts";
+import { registerMcpCommands } from "../../src/settings/controller.ts";
 import type { McpManagerSnapshot } from "../../src/manager/model.ts";
 import { serverActions } from "../../src/manager/policy.ts";
 import { actionMenu } from "../../src/ui/actions.ts";
@@ -474,9 +476,30 @@ it("the reserved mode key remains ordinary search text", () => {
 });
 
 it("command completion uses exact configured IDs and does not invent result history", () => {
-  expect(mcpCompletions("browse a", ["a", "another", "b"])?.map((item) => item.value)).toEqual([
-    "browse a",
-    "browse another",
-  ]);
-  expect(mcpCompletions("result ", ["a"])).toBeNull();
+  let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  registerMcpCommands(
+    extensionApiFixture({
+      registerCommand: (
+        _name: string,
+        registered: Parameters<ExtensionAPI["registerCommand"]>[1],
+      ) => {
+        command = registered;
+      },
+    }),
+    {
+      run: () => Promise.reject(new Error("Completion must not run MCP work")),
+      capture: () => () => true,
+      serverIds: () => ["a", "another", "b"],
+    },
+  );
+  const values = (prefix: string) => {
+    const items = command?.getArgumentCompletions?.(prefix);
+    if (items instanceof Promise) throw new Error("MCP completion is synchronous");
+    return items?.map((item) => item.value) ?? null;
+  };
+  expect(values("browse a")).toEqual(["browse a", "browse another"]);
+  expect(values("auth a --")).toBeNull();
+  expect(values("result ")).toBeNull();
+  expect(values("se")).toEqual(["settings"]);
+  expect(values("settings set-s")).toEqual(["settings set-server", "settings set-settings"]);
 });

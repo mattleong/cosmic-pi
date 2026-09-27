@@ -15,12 +15,11 @@ import {
   type CodePreviewApplication,
   type CodePreviewRuntimeError,
 } from "../layer";
-import { registerHealthCommand } from "../commands/health";
+import { registerCodePreviewsCommand } from "../commands/register";
 import { makeSettingsAdmission, type SettingsAdmission } from "../config/coordinator";
 import type { CodePreviewSettings } from "../config/schema";
 import { CodePreviewSettingsService } from "../config/store";
 import { codePreviewSettings } from "../config/state";
-import { registerSettingsCommand } from "../settings/controller";
 import { CodePreviewSyntaxService } from "../syntax/service";
 import {
   clearCodePreviewSessionCapability,
@@ -69,8 +68,7 @@ export interface CodePreviewExtensionDependencies {
   readonly initializeSyntax: (
     theme: string,
   ) => Effect.Effect<void, never, CodePreviewSyntaxService>;
-  readonly registerHealth: typeof registerHealthCommand;
-  readonly registerSettings: typeof registerSettingsCommand;
+  readonly registerCommands: typeof registerCodePreviewsCommand;
   readonly registerRenderers: typeof registerToolRenderers;
 }
 
@@ -85,8 +83,7 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
       service.load(admission, { projectCwd: cwd, projectTrusted }),
     ),
   initializeSyntax: (theme) => CodePreviewSyntaxService.use((service) => service.initialize(theme)),
-  registerHealth: registerHealthCommand,
-  registerSettings: registerSettingsCommand,
+  registerCommands: registerCodePreviewsCommand,
   registerRenderers: registerToolRenderers,
 };
 
@@ -97,8 +94,7 @@ export function codePreviewsWithDependencies(
 ): Promise<void> {
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
-  dependencies.registerHealth(pi);
-  dependencies.registerSettings(pi);
+  dependencies.registerCommands(pi);
 
   const startup = (input: SessionInput) =>
     Effect.gen(function* () {

@@ -149,10 +149,10 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
     }),
   );
@@ -165,7 +165,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       let active = false;
       const h = yield* harness({ cosmicUi: { active: () => active } });
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", expect.any(String));
       const fallback = h.setStatus.mock.lastCall?.[1];
       expect(fallback).not.toBe("");
@@ -243,7 +243,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
@@ -255,11 +255,11 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       throwOnRead(h.ctx, "signal");
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("settings usage.showResetTimes false", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
       expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
@@ -274,7 +274,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       throwOnRead(h.ctx.ui, "custom");
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
     }),
@@ -306,7 +306,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: open });
 
         h.notify.mockClear();
-        yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
+        yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
 
         expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
@@ -356,7 +356,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
 
       expect(renderResult).toEqual(expect.any(Array));
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
@@ -387,7 +387,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
@@ -429,7 +429,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       expect(stalled.interruptions()).toBe(1);
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
@@ -474,7 +474,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       h.notify.mockImplementation(() => {
         throw new Error("host-notification-secret");
       });
-      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );

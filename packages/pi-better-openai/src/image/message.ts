@@ -53,7 +53,7 @@ const legacyImage = <Details>(details: Details): ImagePart | undefined =>
     : undefined;
 
 /**
- * `/openai-image` messages classify their details exactly as the tool does, and show the same
+ * `/openai image` messages classify their details exactly as the tool does, and show the same
  * body beneath one heading. This renderer owns the message's Image component, including images
  * that older messages kept in details.
  */

@@ -10,6 +10,7 @@ import {
 } from "pi-code-previews/testing";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { registerExtensionCommand } from "pi-cosmic-core";
 import { registerOpenAIImage } from "../src/image/register.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
 
@@ -129,7 +130,12 @@ describe.skipIf(!directory)("presentation gallery", () => {
         });
         try {
           const { tools, messageRenderers } = captureRegistrations((pi) =>
-            registerOpenAIImage(pi, noExecution, noContext),
+            registerOpenAIImage(
+              pi,
+              registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
+              noExecution,
+              noContext,
+            ),
           );
           const tool = tools.find((entry) => entry.name === "openai_image")!;
           const renderer = messageRenderers.get("openai-image")!;

@@ -1,18 +1,25 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars } from "../../../shared/terminal-text";
-import { toolStatusLine } from "pi-cosmic-ui/tool";
+import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 
 export function renderResultPrelude(options: {
   isPartial: boolean;
   theme: Theme;
-  loadingLabel: string;
+  /** A verb for the running line, such as "Reading…"; without one it is the shared line. */
+  loadingLabel?: string;
   isError?: boolean;
   expanded?: boolean;
   errorText?: string;
 }): Component | undefined {
   if (options.isPartial)
-    return new Text(toolStatusLine(options.theme, "running", options.loadingLabel), 0, 0);
+    return new Text(
+      options.loadingLabel
+        ? toolStatusLine(options.theme, "running", options.loadingLabel)
+        : toolRunningLine(options.theme),
+      0,
+      0,
+    );
   // The issue line above the body already summarises the error; expansion shows it all.
   if (options.isError)
     return renderPreviewError(options.theme, options.expanded, options.errorText);

@@ -3,9 +3,14 @@ import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import { invokeHostCallback, notifyAtHostBoundary, type CapturedHostSignal } from "pi-cosmic-core";
 import {
-  registerSettingsCommand,
+  invokeHostCallback,
+  notifyAtHostBoundary,
+  registerExtensionCommand,
+  type CapturedHostSignal,
+} from "pi-cosmic-core";
+import {
+  settingsSubcommand,
   type SettingsCommandOptions,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import type { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
@@ -27,7 +32,7 @@ import {
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import { CodeModeConfigStore, type CodeModeState } from "../config/store.ts";
 
-const COMMAND = "code-mode-settings";
+const COMMAND = "code-mode";
 const UNAVAILABLE_MESSAGE = "Code Mode settings aren't available right now";
 const INHERIT_VALUE = "inherit";
 /** A throwing host getter is treated as aborted, so settings fail closed without side effects. */
@@ -80,9 +85,9 @@ export interface CodeModeSettingsControllerOptions {
 type SettingsSession = Parameters<SettingsCommandOptions<CodeModeState>["open"]>[1];
 
 /**
- * `/code-mode-settings` through the shared settings shell: help, status, scoped scripted
+ * `/code-mode settings` through the shared settings shell: help, status, scoped scripted
  * changes, and validation messages are the shell's; the scope choice, the settings list, and
- * the custom integer prompt stay here.
+ * the custom integer prompt stay here. `/code-mode` has no other subcommands yet.
  */
 export function registerCodeModeSettingsController(
   pi: ExtensionAPI,
@@ -221,8 +226,8 @@ export function registerCodeModeSettingsController(
     );
   };
 
-  registerSettingsCommand<CodeModeState>(pi, {
-    command: COMMAND,
+  const settings = settingsSubcommand<CodeModeState>({
+    root: COMMAND,
     description: "Configure Code Mode (trusted projects only)",
     title: "Code Mode",
     descriptors: CODE_MODE_SETTING_DESCRIPTORS.map((descriptor) => ({
@@ -271,5 +276,10 @@ export function registerCodeModeSettingsController(
       if (id === "enabled" && state) notifyAtHostBoundary(ctx, availabilityLine(state), "info");
     },
     open,
+  });
+  registerExtensionCommand(pi, {
+    name: COMMAND,
+    description: "Code Mode settings",
+    subcommands: [settings],
   });
 }

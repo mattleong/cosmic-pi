@@ -1,37 +1,29 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
-  registerSettingsCommand,
+  settingsSubcommand,
   type SettingsCommandOptions,
 } from "../src/boundary/host-settings-command.ts";
 
 interface DemoConfig {
   readonly mode: string;
 }
-type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 type Options = SettingsCommandOptions<DemoConfig>;
 
 const harness = (
   overrides: Partial<Options> = {},
   context: { readonly mode?: string; readonly signal?: AbortSignal } = {},
 ) => {
-  let command: Command | undefined;
   const notify = vi.fn();
   const apply = vi.fn<Options["apply"]>(() => Promise.resolve(Result.succeed(undefined)));
   const open = vi.fn<Options["open"]>(() =>
     Promise.resolve({ _tag: "Settled" as const, value: undefined }),
   );
-  const pi = extensionApiFixture({
-    registerCommand: (_name: string, registered: Command) => {
-      command = registered;
-    },
-  });
-  registerSettingsCommand(pi, {
-    command: "demo-settings",
+  const command = settingsSubcommand({
+    root: "demo",
     description: "Configure the demo provider",
     title: "Demo",
     descriptors: [
@@ -57,7 +49,7 @@ const harness = (
     ui: { notify, custom: () => Promise.resolve(undefined) },
   });
   const invoke = (args: string) =>
-    Effect.promise(() => Promise.resolve(command?.handler(args, ctx)));
+    Effect.promise(() => Promise.resolve(command.handler(args, ctx)));
   const throwOnSignal = () =>
     Object.defineProperty(ctx, "signal", {
       configurable: true,

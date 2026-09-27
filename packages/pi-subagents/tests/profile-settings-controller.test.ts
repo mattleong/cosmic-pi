@@ -30,7 +30,6 @@ import {
 import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 import { effectTest, step } from "./support/effect-test.ts";
-import { registerSubagentSettingsCommand } from "../src/settings/subagent-settings.ts";
 
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
 
@@ -142,7 +141,6 @@ const setup = (
   const managerActions = actions(options.value ?? inspection());
   // These command tests never open the fleet manager, so the bridge is never read.
   registerSubagentManagerCommand(pi, opaqueFixture({}), managerActions);
-  registerSubagentSettingsCommand(pi, managerActions);
   const ui = {
     notify: vi.fn(),
     confirm: vi.fn().mockResolvedValue(true),
@@ -163,7 +161,7 @@ const setup = (
   return {
     command: handlers.get("subagents"),
     settings: (args: string) =>
-      handlers.get("subagents-settings")?.(args, ctx) ?? Promise.resolve(),
+      handlers.get("subagents")?.(`settings ${args}`, ctx) ?? Promise.resolve(),
     completions,
     ctx,
     overlays,

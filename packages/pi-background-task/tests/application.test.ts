@@ -30,10 +30,7 @@ import {
   type BackgroundTaskApplicationBoundaries,
 } from "../src/application.ts";
 import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
-import {
-  registerTaskManagerCommand,
-  type TaskManagerCommandActions,
-} from "../src/settings/controller.ts";
+import { registerTasksCommand, type TaskManagerActions } from "../src/settings/controller.ts";
 import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
@@ -80,7 +77,7 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
   const fixture = {
     events,
     registerCommand: vi.fn((name: string, definition: RegisteredCommand) => {
-      if (name === "tasks-settings") command = definition;
+      if (name === "tasks") command = definition;
     }),
     registerTool,
     getActiveTools: () => [...activeTools],
@@ -118,7 +115,7 @@ const managerTask = (state: BackgroundTaskState): BackgroundTaskView => {
 
 function tasksCommandHarness(
   state: BackgroundTaskState = "exited",
-  actions: Partial<TaskManagerCommandActions> = {},
+  actions: Partial<TaskManagerActions> = {},
 ) {
   let command: RegisteredCommand | undefined;
   const host = fakeCustomSurfaceHost({
@@ -144,9 +141,12 @@ function tasksCommandHarness(
     get: () => ({ tasks: [managerTask(state)] }),
     subscribe: () => () => {},
   });
-  registerTaskManagerCommand(pi, bridge, {
+  registerTasksCommand(pi, bridge, {
     stop: () => Promise.resolve(),
     clear: () => Promise.resolve(),
+    config: () => undefined,
+    read: () => Promise.resolve({}),
+    write: () => Promise.resolve(),
     ...actions,
   });
   if (!command) throw new Error("task command was not registered");
@@ -259,14 +259,14 @@ describe("background-task Pi lifecycle", () => {
         yield* Effect.promise(() => app.emit("session_start", ctx));
         writeFileSync(fixture.configPath, '{"maxRunning":2,"maxWaitSeconds":4}');
 
-        yield* Effect.promise(() => app.runCommand("status", ctx));
+        yield* Effect.promise(() => app.runCommand("settings status", ctx));
         const firstMessage = notify.mock.calls[0]?.[0];
         expect(firstMessage).toEqual(expect.stringContaining("maxRunning = 64"));
         expect(firstMessage).toEqual(expect.stringContaining("maxWaitSeconds = 120"));
 
         notify.mockClear();
         yield* Effect.promise(() => app.emit("session_start", ctx));
-        yield* Effect.promise(() => app.runCommand("status", ctx));
+        yield* Effect.promise(() => app.runCommand("settings status", ctx));
         const replacementMessage = notify.mock.calls[0]?.[0];
         expect(replacementMessage).toEqual(expect.stringContaining("maxRunning = 2"));
         expect(replacementMessage).toEqual(expect.stringContaining("maxWaitSeconds = 4"));
@@ -452,15 +452,13 @@ describe("background-task Pi lifecycle", () => {
 });
 
 describe("/tasks command", () => {
-  it.effect("points arguments at /tasks-settings instead of opening the manager", () => {
+  it.effect("warns about arguments that name no subcommand instead of opening the manager", () => {
     const command = tasksCommandHarness();
     return Effect.gen(function* () {
       yield* Effect.promise(() => command.run("status"));
       expect(command.custom).not.toHaveBeenCalled();
-      expect(command.notify).toHaveBeenCalledWith(
-        expect.stringContaining("/tasks-settings"),
-        "warning",
-      );
+      // The usage line names the settings subcommand.
+      expect(command.notify).toHaveBeenCalledWith(expect.stringContaining("settings"), "warning");
     });
   });
 

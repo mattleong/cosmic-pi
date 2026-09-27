@@ -51,35 +51,62 @@ const store = makeScopedConfigStore({
   }),
 });
 
-export interface BackgroundTaskSettingsWriterContract {
+/** Where one setting is stored: the global file, or a trusted project's file. */
+export interface BackgroundTaskSettingsLocation {
+  readonly cwd: string;
+  readonly scope: "global" | "project";
+}
+
+export interface BackgroundTaskSettingsFilesContract {
+  /** The values one scope's file sets itself; empty when the file sets none. */
+  readonly read: (
+    location: BackgroundTaskSettingsLocation,
+  ) => Effect.Effect<Partial<BackgroundTaskConfig>, BackgroundTaskConfigError>;
   /**
-   * Writes one setting into the global or trusted-project document. The running session keeps
-   * the settings it started with; the change applies after /reload.
+   * Writes one setting into the global or trusted-project document, or removes the scope's own
+   * value when `value` is undefined. The running session keeps the settings it started with;
+   * the change applies after /reload.
    */
   readonly write: (
-    location: { readonly cwd: string; readonly scope: "global" | "project" },
+    location: BackgroundTaskSettingsLocation,
     id: keyof BackgroundTaskConfig,
-    value: boolean | number | string,
+    value: boolean | number | string | undefined,
   ) => Effect.Effect<void, BackgroundTaskConfigError>;
 }
 
-export class BackgroundTaskSettingsWriter extends Context.Service<
-  BackgroundTaskSettingsWriter,
-  BackgroundTaskSettingsWriterContract
->()("pi-background-task/config/store/BackgroundTaskSettingsWriter") {
+/** The settings files `/tasks settings` reads and edits, one scope at a time. */
+export class BackgroundTaskSettingsFiles extends Context.Service<
+  BackgroundTaskSettingsFiles,
+  BackgroundTaskSettingsFilesContract
+>()("pi-background-task/config/store/BackgroundTaskSettingsFiles") {
   static readonly layer = Layer.effect(
     this,
     Effect.gen(function* () {
       const directory = yield* AgentDirectory;
       const services = yield* Effect.context<JsonDocumentStore | Path.Path>();
+      const pathOf = (location: BackgroundTaskSettingsLocation) =>
+        store
+          .configPaths(location.cwd, directory)
+          .pipe(
+            Effect.map((paths) => (location.scope === "project" ? paths.project : paths.global)),
+          );
       return {
+        read: (location) =>
+          pathOf(location).pipe(
+            Effect.flatMap(store.readConfig),
+            Effect.map((values) => values ?? {}),
+            Effect.provide(services),
+          ),
         write: (location, id, value) =>
-          store.configPaths(location.cwd, directory).pipe(
-            Effect.flatMap((paths) =>
-              store.modifyConfig(
-                location.scope === "project" ? paths.project : paths.global,
-                (document) => ({ value: undefined, document: { ...document, [id]: value } }),
-              ),
+          pathOf(location).pipe(
+            Effect.flatMap((path) =>
+              store.modifyConfig(path, (document) => ({
+                value: undefined,
+                document:
+                  value === undefined
+                    ? Object.fromEntries(Object.entries(document).filter(([key]) => key !== id))
+                    : { ...document, [id]: value },
+              })),
             ),
             Effect.provide(services),
           ),

@@ -108,6 +108,19 @@ export {
   type HostUiContext,
 } from "./src/host-session.ts";
 export {
+  completeExtensionCommand,
+  extensionCommandOverview,
+  extensionCommandUsage,
+  registerExtensionCommand,
+  routeExtensionCommand,
+  type CommandCompletion,
+  type ExtensionCommand,
+  type ExtensionCommandBare,
+  type ExtensionCommandOptions,
+  type ExtensionCommandRoute,
+  type ExtensionSubcommand,
+} from "./src/host-command.ts";
+export {
   makeSessionCapabilityProtocol,
   querySessionCapability,
   type SessionCapabilityProtocolOptions,

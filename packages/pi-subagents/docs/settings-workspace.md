@@ -59,7 +59,7 @@ Saving is available only from Current Session. The save dialog takes a name and 
 
 ## Nesting settings
 
-`/subagents-settings` still edits nesting policy in Session, Global, or trusted Project scope. Direct children accept integers from 1 through 32 and depth accepts integers from 0 through 8. The controller rejects invalid input instead of clamping it. Session changes apply to later batches immediately. Persistent nesting writes require `/reload`; lowering a limit never stops admitted runs.
+`/subagents settings` still edits nesting policy in Session, Global, or trusted Project scope. Direct children accept integers from 1 through 32 and depth accepts integers from 0 through 8. The controller rejects invalid input instead of clamping it. Session changes apply to later batches immediately. Persistent nesting writes require `/reload`; lowering a limit never stops admitted runs.
 
 ## Module responsibilities
 

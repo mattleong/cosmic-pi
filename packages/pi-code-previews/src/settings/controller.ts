@@ -1,10 +1,15 @@
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { formatDisplayPath, isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core";
-import { registerSettingsCommand as registerSharedSettingsCommand } from "pi-cosmic-ui/boundary/host-settings-command";
+import {
+  formatDisplayPath,
+  isProjectTrusted,
+  notifyAtHostBoundary,
+  type ExtensionSubcommand,
+} from "pi-cosmic-core";
+import { settingsSubcommand } from "pi-cosmic-ui/boundary/host-settings-command";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import {
   managerSettingsTheme,
@@ -38,10 +43,10 @@ const loadOptions = (ctx: ExtensionCommandContext): LoadSettingsOptions => ({
   projectTrusted: isProjectTrusted(ctx),
 });
 
-/** `/code-preview-settings` through the shared settings shell; the grouped list stays here. */
-export function registerSettingsCommand(pi: ExtensionAPI): void {
-  registerSharedSettingsCommand<CodePreviewSettings>(pi, {
-    command: "code-preview-settings",
+/** `/code-previews settings` through the shared settings shell; the grouped list stays here. */
+export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
+  return settingsSubcommand<CodePreviewSettings>({
+    root: "code-previews",
     description: "Configure code previews and how tool calls look",
     title: "Code Previews",
     descriptors: SCRIPTED_SETTINGS.map((setting) => ({

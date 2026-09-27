@@ -10,7 +10,12 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { failureMessage, invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
+import {
+  failureMessage,
+  invokeHostCallback,
+  notifyAtHostBoundary,
+  type ExtensionCommand,
+} from "pi-cosmic-core";
 import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
 import { imageCompactSummary, isSignInFailure } from "./compact-summary.ts";
 import { renderImageMessage } from "./message.ts";
@@ -30,12 +35,13 @@ import {
 } from "./types.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
-const OPENAI_IMAGE_COMMAND = "openai-image";
 
 const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails => details;
 
+/** Registers the image tool and message renderer, and adds or replaces `/openai image`. */
 export function registerOpenAIImage(
   pi: ExtensionAPI,
+  command: ExtensionCommand,
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
   updateContext: (ctx: ExtensionContext) => void,
   scheduleAnimation?: CompactAnimationScheduler,
@@ -55,12 +61,14 @@ export function registerOpenAIImage(
   pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, options, theme) =>
     renderImageMessage(message, { expanded: options.expanded, compact, cwd }, theme),
   );
-  pi.registerCommand(OPENAI_IMAGE_COMMAND, {
+  command.add({
+    name: "image",
+    arguments: "<prompt>",
     description: "Generate an image with OpenAI Codex image generation",
     handler: (args, ctx) => {
       const prompt = args.trim();
       if (!prompt) {
-        notifyAtHostBoundary(ctx, "Usage: /openai-image <prompt>", "warning");
+        notifyAtHostBoundary(ctx, "Usage: /openai image <prompt>", "warning");
         return Promise.resolve();
       }
       notifyAtHostBoundary(ctx, "Requesting an image from OpenAI…", "info");

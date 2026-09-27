@@ -10,7 +10,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import { beforeAll, describe, vi } from "vitest";
-import { InvalidSettingError } from "pi-cosmic-core";
+import { InvalidSettingError, registerExtensionCommand } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -79,7 +79,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   });
   const pi = extensionApiFixture({
     registerCommand(name: string, value: RegisteredCommand) {
-      if (name === "xai-settings") command = value;
+      if (name === "xai") command = value;
     },
   });
   const runImpl = vi.fn(() => responses.shift()?.() ?? Promise.resolve(Result.succeed(undefined)));
@@ -89,7 +89,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
       return value as A;
     });
 
-  registerSettingsController(pi, {
+  registerSettingsController(registerExtensionCommand(pi, { name: "xai", description: "" }), {
     config: () => {
       if (configAvailability === "throws") throw new Error("projection unavailable");
       return configAvailability === "available" ? currentConfig : undefined;
@@ -101,7 +101,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
 
   const invoke = (args: string): Promise<void> => {
     if (!command) throw new Error("settings command was not registered");
-    return Promise.resolve(command.handler(args, ctx));
+    return Promise.resolve(command.handler(`settings ${args}`, ctx));
   };
   const open = Effect.gen(function* () {
     const closed = invoke("");

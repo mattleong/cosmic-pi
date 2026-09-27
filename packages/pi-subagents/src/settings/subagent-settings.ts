@@ -1,13 +1,21 @@
 /**
- * `/subagents-settings` through the shared settings shell: the writer workspace, and nesting
+ * `/subagents settings` through the shared settings shell: the writer workspace, and nesting
  * limits for the session, global, or trusted-project scope.
  */
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
-import { failureMessage, invokeHostCallback, isProjectTrusted } from "pi-cosmic-core";
-import { registerSettingsCommand } from "pi-cosmic-ui/boundary/host-settings-command";
+import {
+  failureMessage,
+  invokeHostCallback,
+  isProjectTrusted,
+  type ExtensionSubcommand,
+} from "pi-cosmic-core";
+import {
+  settingsSubcommand,
+  type SettingsCommandOptions,
+} from "pi-cosmic-ui/boundary/host-settings-command";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import {
   createSettingsListSurface,
@@ -116,10 +124,7 @@ const parseLimit = (field: NestingField, value: string): number | undefined => {
 const failed = (message: string): SettingsResult => Result.fail({ message });
 const succeeded: SettingsResult = Result.succeed(undefined);
 
-export function registerSubagentSettingsCommand(
-  pi: ExtensionAPI,
-  actions: FleetManagerActions,
-): void {
+export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
   /**
    * Runs only while this session is current: a replaced or stopped session must not change its
    * successor, and says nothing once it has been replaced.
@@ -238,7 +243,7 @@ export function registerSubagentSettingsCommand(
 
   const open = (
     ctx: ExtensionCommandContext,
-    session: Parameters<Parameters<typeof registerSettingsCommand<undefined>>[1]["open"]>[1],
+    session: Parameters<SettingsCommandOptions<undefined>["open"]>[1],
   ) => {
     if (!actions.isAvailable()) return Promise.resolve({ _tag: "Blocked" as const });
     const trusted = isProjectTrusted(ctx);
@@ -315,8 +320,8 @@ export function registerSubagentSettingsCommand(
     );
   };
 
-  registerSettingsCommand<undefined>(pi, {
-    command: "subagents-settings",
+  return settingsSubcommand<undefined>({
+    root: "subagents",
     description: "Configure the writer workspace and subagent nesting limits",
     title: "Subagents",
     descriptors: [

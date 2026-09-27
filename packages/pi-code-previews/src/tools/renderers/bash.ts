@@ -56,11 +56,7 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
     },
 
     renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
-      const prelude = renderResultPrelude({
-        isPartial,
-        theme,
-        loadingLabel: "Running…",
-      });
+      const prelude = renderResultPrelude({ isPartial, theme });
       if (prelude) return prelude;
       if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
         return renderHiddenPreviewExpandHint(renderContext.state, theme);

@@ -85,7 +85,7 @@ function settingsHarness() {
   });
   const open = () => {
     if (!command) throw new Error("Settings command was not registered.");
-    return command("", ctx);
+    return command("settings", ctx);
   };
   const input = (data = "\r") => {
     if (!surface?.handleInput) throw new Error("Settings surface was not opened.");

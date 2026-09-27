@@ -499,6 +499,9 @@ describe("MCP session ownership", () => {
       const expected = mcpFailureReply("refresh", error);
       expect(notification).toBe(yield* encodeOutput(expected));
       expect(notification).not.toContain("private-failure");
+      // Settings are a subcommand of the same command.
+      yield* host(() => Promise.resolve(commands.get("mcp")!.handler("settings status", ctx)));
+      expect(h.notify.mock.calls.at(-1)?.[0]).toContain('"action":"settings.status"');
       yield* host(() => h.lifecycle.shutdown());
     }),
   );

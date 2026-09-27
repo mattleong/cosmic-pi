@@ -472,18 +472,20 @@ exit; `unknown` means the host operation may still have taken effect. No timeout
 output refusal undoes a write. Inspect receipts, retained provider output or affected state, and
 never replay completed or uncertain operations merely to recover output.
 
-## `/code-mode-settings`
+## `/code-mode settings`
 
-- `/code-mode-settings` opens the interactive TUI editor. Choose a scope, then edit values.
+Bare `/code-mode` lists its subcommands; typing `/code-mode ` autocompletes them.
+
+- `/code-mode settings` opens the interactive TUI editor. Choose a scope, then edit values.
   Integer rows cycle through presets and include a `custom…` prompt for any value inside the
   documented bounds. Outside the interactive TUI, the bare command never prompts. RPC hosts
   receive help through notifications; print and JSON modes resolve without blocking.
-- `/code-mode-settings status` — effective values with per-field provenance
+- `/code-mode settings status` — effective values with per-field provenance
   (`default`/`global`/`project`) and the current availability.
-- `/code-mode-settings [global|project] <id> <value>` — set one field. Integer fields accept
+- `/code-mode settings [global|project] <id> <value>` — set one field. Integer fields accept
   any value inside the documented bounds. Scope defaults to `global`; `project` is accepted
   only in trusted projects.
-- `/code-mode-settings [global|project] <id> inherit` — remove the field from that scope so it
+- `/code-mode settings [global|project] <id> inherit` — remove the field from that scope so it
   inherits (project → global → default).
 
 ## Configuration

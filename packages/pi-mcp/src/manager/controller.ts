@@ -187,24 +187,12 @@ export const runMcpManager = (
     );
   });
 
-/** Completion uses only IDs from the already-published safe snapshot. */
-export const mcpCompletions = (prefix: string, ids: ReadonlyArray<string>) => {
-  if (prefix.length > 256) return null;
-  const commands = [
-    "status",
-    "browse",
-    "result",
-    "connect",
-    "disconnect",
-    "refresh",
-    "auth",
-    "logout",
-  ];
-  const match = /^(connect|disconnect|refresh|auth|logout|browse)\s+(\S*)$/.exec(prefix);
-  const candidates = match
-    ? ids.filter((id) => id.startsWith(match[2]!)).map((id) => `${match[1]} ${id}`)
-    : commands.filter((command) => command.startsWith(prefix));
-  return candidates.length
-    ? candidates.slice(0, 100).map((value) => ({ value, label: value }))
-    : null;
+/**
+ * A server subcommand's argument completion. It uses only IDs from the already-published safe
+ * snapshot and completes only the first argument.
+ */
+export const mcpServerCompletions = (prefix: string, ids: ReadonlyArray<string>) => {
+  if (prefix.length > 256 || /\s/u.test(prefix)) return null;
+  const candidates = ids.filter((id) => id.startsWith(prefix)).slice(0, 100);
+  return candidates.length ? candidates.map((value) => ({ value, label: value })) : null;
 };

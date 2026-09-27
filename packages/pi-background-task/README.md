@@ -53,7 +53,7 @@ Optional configuration may be placed in:
 
 `shellPath` is an optional string (for example `"shellPath": "/bin/bash"`); when omitted, tasks run in the platform default shell.
 
-`/tasks-settings` edits these values from Pi: bare in a terminal it opens a settings list, `/tasks-settings maxRunning 16` writes the global file, and `/tasks-settings project maxWaitSeconds 60` writes the trusted project's file. Changes apply after `/reload`. `/tasks-settings status` prints the normalized settings active in the current session without rereading the files, and `/tasks-settings help` lists every setting.
+`/tasks settings` edits these values from Pi. Bare in a terminal it opens a settings list with a Global row for each setting, plus a Project row when the project is trusted; each row shows the value that scope's file sets, or `inherit`. `/tasks settings maxRunning 16` writes the global file, `/tasks settings project maxWaitSeconds 60` writes the trusted project's file, and `inherit` removes a scope's own value. Changes apply after `/reload`. `/tasks settings status` prints the normalized settings active in the current session without rereading the files, and `/tasks settings help` lists every setting.
 
 Captured output is bounded and sanitized before TUI rendering. `/tasks` preserves only safe ANSI SGR colors and text styles; cursor movement, screen erasure, terminal-title, hyperlink, clipboard, and other control sequences are removed. Background tasks receive `FORCE_COLOR=1` by default so compatible CLIs highlight piped output, unless the environment already sets `FORCE_COLOR` or `NO_COLOR`. Complete output should be redirected explicitly to a file when required.
 

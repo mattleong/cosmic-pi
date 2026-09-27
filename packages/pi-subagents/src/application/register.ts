@@ -52,7 +52,6 @@ import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
-import { registerSubagentSettingsCommand } from "../settings/subagent-settings.ts";
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
@@ -453,7 +452,6 @@ export function registerSubagentApplication(
       ),
   };
   registerSubagentManagerCommand(pi, bridge, managerActions);
-  registerSubagentSettingsCommand(pi, managerActions);
 
   const prepareActivation = (
     ctx: ExtensionContext,

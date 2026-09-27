@@ -1,4 +1,4 @@
-/** Interruptible Pi dialog boundaries for `/code-mode-settings`. */
+/** Interruptible Pi dialog boundaries for `/code-mode settings`. */
 import type {
   ExtensionCommandContext,
   KeybindingsManager,

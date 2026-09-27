@@ -9,7 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, registerExtensionCommand } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -172,8 +172,9 @@ it.effect("image command and tool results keep one base64 payload", () =>
       .mockResolvedValueOnce(Option.some(generated))
       .mockResolvedValue(generated);
     // SAFETY: The mock returns the command and tool values expected by these two runner calls.
-    const run = runFixture as Parameters<typeof registerOpenAIImage>[1];
-    registerOpenAIImage(pi, run, vi.fn());
+    const run = runFixture as Parameters<typeof registerOpenAIImage>[2];
+    const command = registerExtensionCommand(pi, { name: "openai", description: "OpenAI" });
+    registerOpenAIImage(pi, command, run, vi.fn());
     const ctx = extensionContextFixture({
       model: { id: "gpt-5.5" },
       signal: undefined,
@@ -181,7 +182,7 @@ it.effect("image command and tool results keep one base64 payload", () =>
     });
 
     yield* Effect.promise(() =>
-      Promise.resolve(commands.get("openai-image")?.("draw a comet", ctx)),
+      Promise.resolve(commands.get("openai")?.("image draw a comet", ctx)),
     );
     const commandMessage = sendMessage.mock.calls[0]?.[0];
     const toolResult = yield* Effect.promise<AgentToolResult<unknown>>(() =>
@@ -264,7 +265,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       expect(h.toolActivations).toBe(1);
       vi.mocked(h.ctx.ui.notify).mockClear();
-      yield* invoke(h.commands.get("openai-usage")?.("", h.ctx));
+      yield* invoke(h.commands.get("openai")?.("usage", h.ctx));
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
     }),
@@ -282,7 +283,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("session_start");
       vi.mocked(h.ctx.ui.notify).mockClear();
 
-      yield* invoke(h.commands.get("openai-fast")?.("", h.ctx));
+      yield* invoke(h.commands.get("openai")?.("fast", h.ctx));
 
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
@@ -298,7 +299,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       h.ctx.signal = controller.signal;
       vi.mocked(h.ctx.ui.notify).mockClear();
 
-      yield* invoke(h.commands.get("openai-image")?.("cancelled prompt", h.ctx));
+      yield* invoke(h.commands.get("openai")?.("image cancelled prompt", h.ctx));
 
       expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
@@ -318,7 +319,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         model: { ...replacement.model, provider: "anthropic", id: "claude" },
       };
       yield* h.emit("model_select", { model: selected.model }, selected);
-      yield* invoke(h.commands.get("openai-usage")?.("", selected));
+      yield* invoke(h.commands.get("openai")?.("usage", selected));
 
       expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown", {}, selected);
@@ -382,7 +383,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       yield* h.emit("session_start");
       expect(h.ctx.ui.setFooter).not.toHaveBeenCalled();
-      yield* invoke(h.commands.get("openai-settings")?.("usage.showResetTimes false", h.ctx));
+      yield* invoke(h.commands.get("openai")?.("settings usage.showResetTimes false", h.ctx));
       yield* h.emit("session_shutdown");
     }),
   );

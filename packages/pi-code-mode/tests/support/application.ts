@@ -114,8 +114,11 @@ export const applicationHarness = (
     start: (ctx: Context, reason = "startup") => invoke("session_start", { reason }, ctx),
     shutdown: (ctx: Context, reason = "quit") => invoke("session_shutdown", { reason }, ctx),
     tree: (ctx: Context) => invoke("session_tree", { reason: "tree" }, ctx),
+    /** Runs `/code-mode settings <args>`. */
     command: (args: string, ctx: Context) =>
-      Promise.resolve(commands.get("code-mode-settings")?.handler(args, ctx)).then(() => undefined),
+      Promise.resolve(commands.get("code-mode")?.handler(`settings ${args}`.trim(), ctx)).then(
+        () => undefined,
+      ),
     writeGlobalConfig: (json: string) => {
       const directory = join(agentDir, "extensions");
       mkdirSync(directory, { recursive: true });

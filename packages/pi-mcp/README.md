@@ -80,7 +80,7 @@ A stdio server's default cwd is its owning project root or agent directory. Rela
 
 Trusted sessions, enabled servers, and exact-name tool allow/deny rules are the intended MCP authorization model. Per-call approval of tool arguments is an optional future policy, not an implementation defect or a completion requirement for this scope. Permitted tools can run without another confirmation, including sensitive operations. Server annotations never grant permission.
 
-Changes require `/mcp-settings reload` or a settings command. There is no watcher, discovery beyond these three paths, automatic package installation, or cross-session metadata cache. Project settings commands write only to `.pi/extensions/pi-mcp.json`; they never modify `.mcp.json`. Writes preserve unrelated JSON fields and reject invalid legacy root fields without rewriting them.
+Changes require `/mcp settings reload` or a settings command. There is no watcher, discovery beyond these three paths, automatic package installation, or cross-session metadata cache. Project settings commands write only to `.pi/extensions/pi-mcp.json`; they never modify `.mcp.json`. Writes preserve unrelated JSON fields and reject invalid legacy root fields without rewriting them.
 
 | Setting            | Default  | Bounds        |
 | ------------------ | -------- | ------------- |
@@ -105,15 +105,15 @@ Changes require `/mcp-settings reload` or a settings command. There is no watche
 /mcp auth ID
 /mcp auth ID --manual
 /mcp logout ID
-/mcp-settings
-/mcp-settings status
-/mcp-settings reload
-/mcp-settings set-server global|project ID JSON
-/mcp-settings remove-server global|project ID
-/mcp-settings set-settings global|project JSON
+/mcp settings
+/mcp settings status
+/mcp settings reload
+/mcp settings set-server global|project ID JSON
+/mcp settings remove-server global|project ID
+/mcp settings set-settings global|project JSON
 ```
 
-Bare `/mcp` and `/mcp status` open the server dashboard in TUI. In RPC and noninteractive modes they return the structured status reply. Bare `/mcp-settings` and `/mcp-settings help` list the settings commands; `/mcp-settings status` shows the configuration. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project override reveals the `.mcp.json` entry, or the global entry if none exists there; use `{ "enabled": false }` to keep it disabled.
+Everything is one `/mcp` command; typing `/mcp ` autocompletes its subcommands and configured server IDs. Bare `/mcp` and `/mcp status` open the server dashboard in TUI. In RPC and noninteractive modes they return the structured status reply. Bare `/mcp settings` and `/mcp settings help` list the settings commands; `/mcp settings status` shows the configuration. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project override reveals the `.mcp.json` entry, or the global entry if none exists there; use `{ "enabled": false }` to keep it disabled.
 
 ### Dashboard and cached metadata
 

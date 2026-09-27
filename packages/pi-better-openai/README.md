@@ -10,7 +10,7 @@ Requires Node.js 22.22.2+, 24.15.0+, or 26+.
 pi install npm:pi-better-openai
 ```
 
-Install `pi-cosmic-ui` to compose OpenAI usage and the fast indicator into the shared footer. Configure footer visibility in `/cosmic-ui-settings`. Without an active Cosmic footer, Better OpenAI automatically uses Pi's status line.
+Install `pi-cosmic-ui` to compose OpenAI usage and the fast indicator into the shared footer. Configure footer visibility in `/cosmic-ui settings`. Without an active Cosmic footer, Better OpenAI automatically uses Pi's status line.
 
 ```bash
 pi install npm:pi-cosmic-ui
@@ -23,29 +23,29 @@ The source is maintained in the [cosmic-pi monorepo](https://github.com/mattleon
 Usage display and image generation require pi's `openai-codex` OAuth credentials.
 
 1. In pi, run `/login openai-codex`.
-2. Verify subscription usage with `/openai-usage`, or run `/openai-settings diagnostics`.
+2. Verify subscription usage with `/openai usage`, or run `/openai settings status`.
 3. The extension reads credentials through pi's model registry, which refreshes and saves them in pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
 
 ## Features
 
-- Fast mode for all `openai` and `openai-codex` models, toggled with `/openai-fast` or in `/openai-settings`.
+- Fast mode for all `openai` and `openai-codex` models, toggled with `/openai fast` or in `/openai settings`.
 - Optional OpenAI-native context compaction for `openai-responses` models. Pi still decides when to compact; Better OpenAI replaces threshold and manual compaction with `POST /responses/compact`. Provider failures and overflow recovery fall back to Pi compaction.
-- OpenAI subscription usage display via `/openai-usage` and the footer.
-- Interactive TUI settings picker via `/openai-settings`, plus scriptable updates via `/openai-settings <id> <value>`; run `/openai-settings help` for available keys.
+- OpenAI subscription usage display via `/openai usage` and the footer.
+- Interactive TUI settings picker via `/openai settings`, plus scriptable updates via `/openai settings <id> <value>`; run `/openai settings help` for available keys.
 - Automatic contribution of fast-mode and usage footer primitives when `pi-cosmic-ui` is installed.
-- OpenAI image generation/editing through the `openai_image` tool and `/openai-image` command.
-- Commands:
-  - `/openai-fast` toggles fast mode.
-  - `/openai-image <prompt>` generates an image directly.
-  - `/openai-usage` shows current OpenAI subscription usage.
-  - `/openai-settings` opens the interactive picker, or shows help outside the TUI; `/openai-settings help` lists settings and `/openai-settings diagnostics` shows diagnostics.
+- OpenAI image generation/editing through the `openai_image` tool and `/openai image` command.
+- Commands, all under `/openai` (type `/openai ` to autocomplete them; bare `/openai` lists them):
+  - `/openai usage` shows current OpenAI subscription usage.
+  - `/openai fast` toggles fast mode.
+  - `/openai image <prompt>` generates an image directly.
+  - `/openai settings` opens the interactive picker, or shows help outside the TUI; `/openai settings help` lists settings and `/openai settings status` shows diagnostics.
 
 ## UI primitives
 
 Better OpenAI publishes data-oriented fast-mode and usage primitives over the versioned Cosmic UI event protocol when a host is present. Better OpenAI depends on `pi-cosmic-ui` only for that narrow plain-data protocol client; provider behavior stays correct when no Cosmic UI host answers discovery.
 
-`/cosmic-ui-settings` is the only footer settings panel. OpenAI usage has `automatic` and `hidden` choices; the fast indicator has its own visibility toggle. Hidden usage skips automatic requests, but `/openai-usage` still fetches once on an eligible model. Hiding the fast indicator does not change fast-mode requests.
+`/cosmic-ui settings` is the only footer settings panel. OpenAI usage has `automatic` and `hidden` choices; the fast indicator has its own visibility toggle. Hidden usage skips automatic requests, but `/openai usage` still fetches once on an eligible model. Hiding the fast indicator does not change fast-mode requests.
 
 Cosmic UI owns layout and rendering. Better OpenAI supplies data and never replaces the footer. When Cosmic UI's custom footer is disabled, its visibility preferences still apply to Pi's status-line fallback. Without Cosmic UI, usage is automatic on eligible models. Provider configuration has no footer mode or usage-display switch.
 
@@ -101,7 +101,7 @@ The tool's `model` parameter and `image.defaultModel` still select the mainline 
 Use the command for quick generation:
 
 ```text
-/openai-image draw an otter reading a terminal
+/openai image draw an otter reading a terminal
 ```
 
 Agents can call the `openai_image` tool directly. Supported parameters:
@@ -110,7 +110,7 @@ Agents can call the `openai_image` tool directly. Supported parameters:
 - `action`: `auto`, `generate`, or `edit`.
 - `images`: up to five distinct project-local reference/edit image paths. Paths must stay inside the current workspace and point to readable PNG, JPEG, WebP, or GIF files; each file is limited to 20 MB and the combined input to 50 MB.
 - `model`: mainline Codex model override, for example `openai-codex/gpt-5.5`. Defaults to the current `openai-codex` session model, otherwise `image.defaultModel`. This does not select the hosted image model.
-- `imageModel`: `gpt-image-2.5-sunburst` by default, or `gpt-image-2.5-flare`. Applies only to this call; `/openai-image <prompt>` uses Sunburst.
+- `imageModel`: `gpt-image-2.5-sunburst` by default, or `gpt-image-2.5-flare`. Applies only to this call; `/openai image <prompt>` uses Sunburst.
 - `outputFormat`: `png`, `jpeg`, or `webp`.
 - `save`: `project`, `global`, `custom`, or `none`.
 - `saveDir`: required for `save: "custom"` unless `PI_IMAGE_SAVE_DIR` is set.

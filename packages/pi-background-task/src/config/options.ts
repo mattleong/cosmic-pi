@@ -43,7 +43,7 @@ export function normalizeConfig(value: Partial<BackgroundTaskConfig> = {}): Back
   return shellPath ? { ...normalizedConfig, shellPath } : normalizedConfig;
 }
 
-/** One `/tasks-settings` setting: its words, and how a typed value becomes a stored one. */
+/** One `/tasks settings` setting: its words, and how a typed value becomes a stored one. */
 export interface BackgroundTaskSettingDescriptor {
   readonly id: keyof BackgroundTaskConfig;
   readonly label: string;

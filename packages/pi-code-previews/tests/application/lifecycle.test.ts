@@ -213,8 +213,7 @@ function harness(options: HarnessOptions = {}) {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
   });
   const dependencies: CodePreviewExtensionDependencies = {
-    registerHealth: () => undefined,
-    registerSettings: () => undefined,
+    registerCommands: () => undefined,
     registerRenderers: options.realRenderers
       ? (rendererPi, cwd, rendererOptions) =>
           registerToolRenderers(rendererPi, cwd, { ...rendererOptions, toolOptions: {} })

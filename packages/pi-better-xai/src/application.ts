@@ -14,6 +14,7 @@ import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
+  registerExtensionCommand,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
@@ -32,8 +33,6 @@ import {
   resetProjection,
   synchronizeProjectionContext,
 } from "./usage/projection.ts";
-
-const XAI_STATUS_COMMAND = "xai-usage";
 
 export interface BetterXaiExtensionDependencies {
   readonly startupEffect: () => Effect.Effect<void, never, XaiUsageService>;
@@ -115,8 +114,13 @@ export function registerBetterXaiApplication(
     },
   });
 
-  pi.registerCommand(XAI_STATUS_COMMAND, {
-    description: "Show xAI subscription usage status",
+  const command = registerExtensionCommand(pi, {
+    name: "xai",
+    description: "xAI usage and settings",
+  });
+  command.add({
+    name: "usage",
+    description: "Show xAI subscription usage",
     handler: (_args, ctx) => {
       const capturedSignal = captureHostSignal(ctx);
       if (capturedSignal._tag === "Unavailable") {
@@ -132,7 +136,7 @@ export function registerBetterXaiApplication(
     },
   });
 
-  registerSettingsController(pi, {
+  registerSettingsController(command, {
     config,
     updateFooter,
     formatDebugStatus: (ctx) => formatDebug(projection, ctx),

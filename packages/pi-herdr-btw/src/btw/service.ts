@@ -30,8 +30,10 @@ import {
   waitForAvailableShell,
 } from "./validation.ts";
 
-export const HERDR_BTW_NEW_COMMAND = "herdr-btw-new";
-const NEW_COMMAND_GUIDANCE = `Run /${HERDR_BTW_NEW_COMMAND} to start a fresh side session`;
+export const HERDR_BTW_COMMAND = "herdr-btw";
+/** The fresh-session subcommand, typed after `/herdr-btw`. */
+export const HERDR_BTW_NEW_SUBCOMMAND = "new";
+const NEW_COMMAND_GUIDANCE = `Run /${HERDR_BTW_COMMAND} ${HERDR_BTW_NEW_SUBCOMMAND} to start a fresh side session`;
 
 const retainPaneFailure = (
   failure: HerdrBtwError,

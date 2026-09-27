@@ -1,7 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext as ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext as ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Result from "effect/Result";
 import {
   captureHostSignal,
@@ -10,6 +7,7 @@ import {
   invokeHostCallback,
   notifyAtHostBoundary,
   type CapturedHostSignal,
+  type ExtensionSubcommand,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core";
 import { hasCustomSurface, type OwnedSurfaceOutcome } from "./host-surface.ts";
@@ -21,8 +19,8 @@ export interface SettingsCommandScope {
 }
 
 export interface SettingsCommandOptions<Config> {
-  /** The command name without its slash, such as `xai-settings`. */
-  readonly command: string;
+  /** The extension's command without its slash, such as `xai`; settings live at `/xai settings`. */
+  readonly root: string;
   readonly description: string;
   /** The extension name used in messages, such as `Better xAI`. */
   readonly title: string;
@@ -101,14 +99,14 @@ export interface SettingsCommandOptions<Config> {
 }
 
 /**
- * Registers an extension's `/…-settings` command: completions, help, status, validation
- * messages, and the scripted and interactive apply. Pickers stay with the provider.
+ * An extension's `settings` subcommand, for `/<extension> settings`: completions, help, status,
+ * validation messages, and the scripted and interactive apply. Pickers stay with the provider.
  */
-export function registerSettingsCommand<Config>(
-  pi: ExtensionAPI,
+export function settingsSubcommand<Config>(
   options: SettingsCommandOptions<Config>,
-): void {
-  const { command, title, descriptors } = options;
+): ExtensionSubcommand {
+  const { title, descriptors } = options;
+  const command = `${options.root} settings`;
   const scopes = options.scopes ?? [];
   const scopeNames = scopes.map((scope) => scope.name);
   const unavailable = `${title} settings aren't available right now`;
@@ -274,9 +272,10 @@ export function registerSettingsCommand<Config>(
     }
   };
 
-  pi.registerCommand(command, {
+  return {
+    name: "settings",
     description: options.description,
-    getArgumentCompletions: (prefix) =>
+    complete: (prefix) =>
       completeSettingsArguments(
         prefix,
         descriptors,
@@ -291,5 +290,5 @@ export function registerSettingsCommand<Config>(
         })),
       ),
     handler: (args, ctx) => Promise.resolve(handle(args, ctx)),
-  });
+  };
 }

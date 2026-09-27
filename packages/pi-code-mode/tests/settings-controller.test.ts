@@ -128,7 +128,7 @@ const makeHarness = (
     commandAbort,
     hostDone,
     notify,
-    open: () => Promise.resolve(commands.get("code-mode-settings")?.handler("", ctx)),
+    open: () => Promise.resolve(commands.get("code-mode")?.handler("settings", ctx)),
     order,
     overlaps: () => overlaps,
     runCount: () => runCount,

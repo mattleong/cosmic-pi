@@ -1,6 +1,6 @@
 # pi-mcp architecture
 
-`pi-mcp` owns one Pi `mcp` gateway, `/mcp` and `/mcp-settings` commands, and the producer side of `tools.mcp.request`. All execution goes through `McpExecution`; Code Mode does not own a second connection manager. The [README](./README.md) defines configuration, public actions, limits, and supported modes. The [original plan](../../docs/plans/pi-mcp.md), [UI upgrade record](../../docs/plans/pi-mcp-ui.md), and [modernization record](../../docs/plans/pi-mcp-modernization.md) record their historical acceptance evidence. [CAPABILITIES.md](./CAPABILITIES.md) separates supported behavior and restrictions; the [feature follow-up](../../docs/plans/pi-mcp-features.md) tracks current implementation and acceptance.
+`pi-mcp` owns one Pi `mcp` gateway, the `/mcp` command (registered through core's `registerExtensionCommand`, with server actions and `settings` as subcommands), and the producer side of `tools.mcp.request`. All execution goes through `McpExecution`; Code Mode does not own a second connection manager. The [README](./README.md) defines configuration, public actions, limits, and supported modes. The [original plan](../../docs/plans/pi-mcp.md), [UI upgrade record](../../docs/plans/pi-mcp-ui.md), and [modernization record](../../docs/plans/pi-mcp-modernization.md) record their historical acceptance evidence. [CAPABILITIES.md](./CAPABILITIES.md) separates supported behavior and restrictions; the [feature follow-up](../../docs/plans/pi-mcp-features.md) tracks current implementation and acceptance.
 
 ## Application and authority
 

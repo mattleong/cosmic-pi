@@ -27,7 +27,13 @@ import {
 import { steeringDeliveryEvidence } from "../tools/outcome.ts";
 import { aggregateUsage } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
-import { clipToWidth, spinnerFrameAt, managerNoticeGlyph } from "pi-cosmic-ui/manager";
+import {
+  clipToWidth,
+  managerActivityLabel,
+  managerNoticeGlyph,
+  spinnerFrameAt,
+  type ManagerActivityKind,
+} from "pi-cosmic-ui/manager";
 
 export interface SessionOutputRenderOptions {
   readonly now?: number;
@@ -177,14 +183,20 @@ const addSteeringDelivery = (container: Container, run: SubagentRunView, theme: 
   addStyledRow(container, style, steeringDeliveryEvidence[run.steeringDelivery].message, theme);
 };
 
+/** A live state in the word every extension uses for it: "Starting…", "Running…". */
+const liveLabel = (kind: ManagerActivityKind): string => {
+  const word = managerActivityLabel(kind);
+  return `${word.charAt(0).toUpperCase()}${word.slice(1)}…`;
+};
+
 /** Per-state guidance shown when a run has no activity, notices, or live fields at all. */
 const EMPTY_ACTIVITY_LABELS = {
-  starting: "Starting…",
-  running: "Working…",
+  starting: liveLabel("pending"),
+  running: liveLabel("running"),
   waiting_for_parent: "Waiting for parent…",
   reported: "Report delivered; retained backend is idle.",
-  stopping: "Stopping…",
-  completed: "Completed without tool activity.",
+  stopping: liveLabel("stopping"),
+  completed: "Finished without tool activity.",
   failed: "No tool activity before failure.",
   stopped: "Stopped.",
 } as const satisfies Readonly<Record<Exclude<SubagentRunState, "paused">, string>>;

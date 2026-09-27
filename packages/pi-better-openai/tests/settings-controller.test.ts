@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { redactDiagnosticValue, formatDuration } from "pi-cosmic-core";
+import { redactDiagnosticValue, formatDuration, registerExtensionCommand } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -71,7 +71,7 @@ function settingsHarness(
   });
   const pi = extensionApiFixture({
     registerCommand(name: string, value: RegisteredCommand) {
-      if (name === "openai-settings") command = value;
+      if (name === "openai") command = value;
     },
   });
   const runImpl = vi.fn(() => responses.shift()?.() ?? Promise.resolve({}));
@@ -81,7 +81,7 @@ function settingsHarness(
       return value as A;
     });
 
-  registerSettingsController(pi, {
+  registerSettingsController(registerExtensionCommand(pi, { name: "openai", description: "" }), {
     config: () => currentConfig,
     updateContext: vi.fn(),
     updateFooter: vi.fn(),
@@ -93,7 +93,7 @@ function settingsHarness(
 
   const invoke = (args: string): Promise<void> => {
     if (!command) throw new Error("settings command was not registered");
-    return Promise.resolve(command.handler(args, ctx));
+    return Promise.resolve(command.handler(`settings ${args}`, ctx));
   };
   const open = Effect.gen(function* () {
     const closed = invoke("");

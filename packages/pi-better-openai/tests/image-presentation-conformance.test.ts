@@ -4,6 +4,7 @@ import {
   captureRegistrations,
   createToolPresentationHarness,
 } from "pi-code-previews/testing";
+import { registerExtensionCommand } from "pi-cosmic-core";
 import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { imageRecordSummary } from "../src/image/compact-summary.ts";
@@ -30,6 +31,7 @@ function register(style: (typeof styles)[number]) {
   const { tools, messageRenderers } = captureRegistrations((pi) =>
     registerOpenAIImage(
       pi,
+      registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
       () => {
         throw new Error("Rendering must not execute");
       },

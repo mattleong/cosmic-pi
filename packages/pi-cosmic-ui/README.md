@@ -17,9 +17,9 @@ pi -e ./packages/pi-cosmic-ui -e ./packages/pi-better-openai
 
 ## Configure
 
-Run `/cosmic-ui-settings` for all footer settings, including OpenAI usage, xAI usage, and the fast indicator. Provider settings no longer have footer modes or usage-display switches.
+Run `/cosmic-ui settings` for all footer settings, including OpenAI usage, xAI usage, and the fast indicator. Provider settings no longer have footer modes or usage-display switches.
 
-- Usage is `automatic` on eligible models or `hidden`. Hidden usage stops automatic requests, but `/openai-usage` and `/xai-usage` still fetch on demand.
+- Usage is `automatic` on eligible models or `hidden`. Hidden usage stops automatic requests, but `/openai usage` and `/xai usage` still fetch on demand.
 - Hiding the fast indicator does not disable fast mode.
 - Disabling the custom footer restores Pi's default footer. Provider visibility preferences still apply to its status-line fallback.
 
@@ -76,7 +76,7 @@ Cosmic Pi's full-screen managers and pickers use a centered window at 90% of ter
 
 `pi-cosmic-ui/boundary/host-surface` owns one `ctx.ui.custom` opening in a `screen`, `dock`, `inline`, or plain `overlay` placement. It keeps the pinned-Pi close guard (hide the owned overlay, show an inert non-capturing overlay, call `done`, hide the guard), so closing never pops a newer overlay stacked above. It holds a finish until mount, gives late or stale factories an inert component, admits in the same frame as `custom`, and exposes an external close. Inline surfaces close the editor slot with a guarded `done` and no overlay guard. `openOwnedSurface` is the Effect door and `openOwnedSurfacePromise` the Promise door, whose callers map a `Failed` outcome themselves; `hasCustomSurface` is the fail-closed capability check. Callers keep their domain lifecycle: gates, bridges, tickers, subscriptions, and error wording. `pi-cosmic-ui/testing` exports `fakeCustomSurfaceHost`, a Vitest-free model of pinned Pi 0.86's custom host with explicit mounting and one-shot close faults.
 
-`pi-cosmic-ui/boundary/host-settings-command` registers a provider's `/…-settings` command from its option descriptors: completions, help with examples, diagnostics, validation messages, and the scripted `<id> <value>` apply. The provider supplies config and diagnostics accessors, the persistence call, an `afterApply` refresh, and its own picker, which opens through `host-surface` and uses the shell's apply. Better xAI and Better OpenAI use it.
+`pi-cosmic-ui/boundary/host-settings-command` builds an extension's `settings` subcommand (`/<extension> settings`) from its option descriptors: completions, help with examples, `status`, optional scopes, diagnostics, validation messages, and the scripted `[scope] <id> <value>` apply. The extension supplies config and status accessors, the persistence call, an `afterApply` refresh, and its own picker, which opens through `host-surface` and uses the shell's apply, and adds the subcommand to the command `registerExtensionCommand` from `pi-cosmic-core` registers. Every workspace extension with settings uses it except MCP.
 
 ## Extension contributions
 

@@ -138,7 +138,7 @@ export const registerSubagentProxyManagerCommand = (
         if (ctx.hasUI)
           notifyAtHostBoundary(
             ctx,
-            "Subagent settings are managed in the root Pi session",
+            "Subagent profiles and settings are managed in the root Pi session",
             "warning",
           );
         return Promise.resolve();

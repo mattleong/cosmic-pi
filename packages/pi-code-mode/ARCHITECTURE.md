@@ -1,7 +1,7 @@
 # Architecture
 
 `pi-code-mode` owns one Effect-managed Pi extension. It provides trusted-project configuration,
-the session lifecycle, `/code-mode-settings`, and one `code_mode` tool. A `{code,intent?}` call runs one
+the session lifecycle, `/code-mode settings` (through core's `registerExtensionCommand` and Cosmic UI's settings shell), and one `code_mode` tool. A `{code,intent?}` call runs one
 confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
 `write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its

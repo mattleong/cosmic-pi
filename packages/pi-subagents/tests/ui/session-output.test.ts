@@ -1,6 +1,7 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
+import { managerActivityLabel } from "pi-cosmic-ui/manager";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import { renderSubagentSessionOutput } from "../../src/ui/session-output.ts";
 import { runStateGlyph, runStateLabel } from "../../src/ui/run-state.ts";
@@ -30,7 +31,8 @@ describe("subagent session output projection", () => {
     expect(text).toContain(`${runStateGlyph("running")} ${runStateLabel("running")}`);
     expect(text).toContain("fresh · provider/model:high");
     expect(text).toContain("read-only");
-    expect(text).toContain("Working…");
+    // Idle guidance uses the state word every extension uses.
+    expect(text.toLowerCase()).toContain(`${managerActivityLabel("running")}…`);
     expect(text).not.toContain("Technical details");
     expect(text).not.toContain("agent-1");
   });

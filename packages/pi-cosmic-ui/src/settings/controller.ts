@@ -12,7 +12,7 @@ import {
   type ResolvedCosmicUiConfig,
 } from "../config/schema.ts";
 import { type HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
-import { registerSettingsCommand as registerSharedSettingsCommand } from "../boundary/host-settings-command.ts";
+import { settingsSubcommand } from "../boundary/host-settings-command.ts";
 import { openOwnedSurfacePromise } from "../boundary/host-surface.ts";
 import { CosmicUiService } from "../protocol/service.ts";
 import {
@@ -20,7 +20,7 @@ import {
   createSettingsListSurface,
   settingsRowGenerations,
 } from "../manager/settings-surface.ts";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, registerExtensionCommand } from "pi-cosmic-core";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -112,7 +112,7 @@ const settingDescriptors = [
   }),
 ];
 
-/** `/cosmic-ui-settings` through the shared settings shell; the picker stays here. */
+/** `/cosmic-ui`, whose `settings` use the shared settings shell; the picker stays here. */
 export function registerSettingsCommand(
   pi: ExtensionAPI,
   options: {
@@ -125,8 +125,8 @@ export function registerSettingsCommand(
 ): void {
   const hostQuery = <A>(callback: () => A, fallback: A) =>
     options.callbacks.invoke("host-query", callback, fallback);
-  registerSharedSettingsCommand<ResolvedCosmicUiConfig>(pi, {
-    command: "cosmic-ui-settings",
+  const settings = settingsSubcommand<ResolvedCosmicUiConfig>({
+    root: "cosmic-ui",
     description: "Configure the Cosmic UI footer",
     title: "Cosmic UI",
     descriptors: settingDescriptors,
@@ -202,5 +202,10 @@ export function registerSettingsCommand(
           }).surface,
       });
     },
+  });
+  registerExtensionCommand(pi, {
+    name: "cosmic-ui",
+    description: "Cosmic UI footer settings",
+    subcommands: [settings],
   });
 }

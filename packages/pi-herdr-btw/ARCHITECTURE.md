@@ -1,6 +1,6 @@
 # Architecture
 
-`pi-herdr-btw` is an Effect-managed Pi extension for one reusable blank side session per parent Pi session. `/herdr-btw` focuses or resumes the linked child. `/herdr-btw-new` creates a fresh child and supersedes the link after confirmed startup and child-file validation. The extension never closes user-owned panes.
+`pi-herdr-btw` is an Effect-managed Pi extension for one reusable blank side session per parent Pi session. `/herdr-btw` focuses or resumes the linked child. `/herdr-btw new` creates a fresh child and supersedes the link after confirmed startup and child-file validation. The extension never closes user-owned panes.
 
 ## Ownership and lifecycle
 
@@ -8,7 +8,7 @@
 
 `session_start` captures the guarded host session and constructs one managed runtime. The runtime owns command serialization and the Herdr workflows. The session slot publishes the immutable child parent-reference capability only from its generation-checked `onActivated` hook and clears it during deactivation. `session_shutdown` disposes the runtime but does not close panes or child sessions.
 
-The two commands are TUI-only. A single Effect semaphore serializes calls within one extension runtime. Each command first probes the captured parent path through the bounded no-follow session-header boundary and requires its header ID to match the captured parent ID. Parent and child paths must also resolve to distinct regular files before startup or reuse. Command handlers resolve with `HerdrBtwResult`; typed workflow failures and runtime rejection remain Promise failures that the TUI controller reports through the same bounded notification path. Prompt text reaches the command directly and is passed to Herdr as one bounded argument.
+`src/btw/controller.ts` registers the one `/herdr-btw` command through core's `registerExtensionCommand`: free text goes to the linked side session and the `new` subcommand starts a fresh one. Both are TUI-only. A single Effect semaphore serializes calls within one extension runtime. Each command first probes the captured parent path through the bounded no-follow session-header boundary and requires its header ID to match the captured parent ID. Parent and child paths must also resolve to distinct regular files before startup or reuse. Command handlers resolve with `HerdrBtwResult`; typed workflow failures and runtime rejection remain Promise failures that the TUI controller reports through the same bounded notification path. Prompt text reaches the command directly and is passed to Herdr as one bounded argument.
 
 ## Reusable side session
 
@@ -28,7 +28,7 @@ Reuse validates the linked child header and parent-child file distinction before
 
 The resume path takes another snapshot immediately before `agent start` and applies the same conflict rule. If a candidate appeared while the pane was prepared, startup is refused and the empty pane is retained for inspection. This narrows the duplicate-writer race but is not a cross-process session-file lease. A manually launched Pi under an unrelated name and path remains outside this coordination boundary. Child files share the normal project session directory, so Pi's recency-based `--continue` selection may choose a side session.
 
-`/herdr-btw-new` skips link reuse and creates a new blank child. It appends a replacement link only after startup and child validation. Failures before that commit leave the previous link authoritative.
+`/herdr-btw new` skips link reuse and creates a new blank child. It appends a replacement link only after startup and child validation. Failures before that commit leave the previous link authoritative.
 
 ## Live parent reference
 

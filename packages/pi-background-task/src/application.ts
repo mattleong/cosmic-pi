@@ -22,7 +22,7 @@ import {
 } from "./boundary/host-code-mode.ts";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
-import { BackgroundTaskConfigStore, BackgroundTaskSettingsWriter } from "./config/store.ts";
+import { BackgroundTaskConfigStore, BackgroundTaskSettingsFiles } from "./config/store.ts";
 import type { BackgroundTaskConfig } from "./config/schema.ts";
 import { BackgroundTaskService } from "./task/service.ts";
 import {
@@ -31,7 +31,7 @@ import {
   type BackgroundTaskRuntimeError,
   type BackgroundTaskSessionInput,
 } from "./layer.ts";
-import { registerTaskManagerCommand, registerTaskSettingsCommand } from "./settings/controller.ts";
+import { registerTasksCommand } from "./settings/controller.ts";
 import { registerBackgroundTaskTool } from "./tools/background-task.ts";
 
 export interface BackgroundTaskApplicationBoundaries {
@@ -49,7 +49,7 @@ export function registerBackgroundTaskApplication(
   const bridge = makeProjectionBridge(pi.events);
   const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
   let releaseActivity: (() => void) | undefined;
-  /** The settings this session started with; `/tasks-settings` changes apply after /reload. */
+  /** The settings this session started with; `/tasks settings` changes apply after /reload. */
   let currentConfig: BackgroundTaskConfig | undefined;
   const revokeActivity = () => {
     releaseActivity?.();
@@ -144,15 +144,14 @@ export function registerBackgroundTaskApplication(
           }),
         );
 
-  registerTaskManagerCommand(pi, bridge, {
+  registerTasksCommand(pi, bridge, {
     stop: (id) =>
       run(BackgroundTaskService.use((service) => service.stop(id))).then(() => undefined),
     clear: () => run(BackgroundTaskService.use((service) => service.clear)).then(() => undefined),
-  });
-  registerTaskSettingsCommand(pi, {
     config: () => currentConfig,
+    read: (location) => run(BackgroundTaskSettingsFiles.use((files) => files.read(location))),
     write: (location, id, value) =>
-      run(BackgroundTaskSettingsWriter.use((writer) => writer.write(location, id, value))),
+      run(BackgroundTaskSettingsFiles.use((files) => files.write(location, id, value))),
   });
 
   pi.on("session_start", (_event, ctx) => {

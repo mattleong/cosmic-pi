@@ -18,25 +18,25 @@ Install `pi-cosmic-ui` as well to render Better xAI's usage primitive with the s
 Usage display requires pi's `xai` OAuth credentials. The extension reads them through pi's model registry, which refreshes and saves them; it never writes pi's auth store.
 
 1. Run `/login xai` and complete subscription OAuth.
-2. Verify with `/xai-usage`, or open `/xai-settings` and check **Diagnostics**.
+2. Verify with `/xai usage`, or run `/xai settings status`.
 
 ## Features
 
-- xAI subscription usage display via `/xai-usage` and the footer.
+- xAI subscription usage display via `/xai usage` and the footer.
 - Weekly + monthly windows from xAI's CLI billing endpoints.
 - Cosmic UI integration when a host is present.
 
 ### Commands
 
-- `/xai-usage` shows current xAI subscription usage.
-- `/xai-settings` configures usage refresh details.
-- `/cosmic-ui-settings` controls footer visibility, density, and layout.
+- `/xai usage` shows current xAI subscription usage.
+- `/xai settings` configures usage refresh details; `/xai settings help` lists them and `/xai settings status` shows diagnostics. Type `/xai ` to autocomplete both.
+- `/cosmic-ui settings` controls footer visibility, density, and layout.
 
 ## Footer
 
 The extension publishes a data-oriented usage primitive over the versioned Cosmic UI event protocol when a host is present.
 
-Cosmic UI owns the footer and renders `xai.usage` with progress bars matching `openai.usage`. In `/cosmic-ui-settings`, xAI usage is either `automatic` on eligible models or `hidden`. Hidden usage skips automatic requests and suppresses both custom-footer and status-line output. `/xai-usage` still fetches once on an eligible model. Disabling the custom footer restores Pi's default footer without discarding visibility preferences. Better xAI never replaces the footer.
+Cosmic UI owns the footer and renders `xai.usage` with progress bars matching `openai.usage`. In `/cosmic-ui settings`, xAI usage is either `automatic` on eligible models or `hidden`. Hidden usage skips automatic requests and suppresses both custom-footer and status-line output. `/xai usage` still fetches once on an eligible model. Disabling the custom footer restores Pi's default footer without discarding visibility preferences. Better xAI never replaces the footer.
 
 ```text
 xAI     7d ████████░░ 82%  mo ████████░░ 83%

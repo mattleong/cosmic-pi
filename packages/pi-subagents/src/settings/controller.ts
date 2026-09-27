@@ -2,7 +2,12 @@
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { completeSettingsArguments, notifyAtHostBoundary, synchronousNow } from "pi-cosmic-core";
+import {
+  notifyAtHostBoundary,
+  registerExtensionCommand,
+  synchronousNow,
+  type ExtensionSubcommand,
+} from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
@@ -34,6 +39,7 @@ import { SubagentFleetComponent, type FleetMessageDelivery } from "../ui/fleet.t
 import { subagentUiRefreshCadence } from "../ui/refresh.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { openProfileDashboard } from "./profile-dashboard.ts";
+import { subagentSettingsSubcommand } from "./subagent-settings.ts";
 import type { JsonObject } from "pi-cosmic-core";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import type { SubagentProfileRestorePatch } from "../config/store.ts";
@@ -147,45 +153,47 @@ function openFleetManager(
   });
 }
 
+/** `/subagents profiles [profile]`: the profile dashboard, optionally on one profile. */
+const profilesSubcommand = (
+  pi: ExtensionAPI,
+  actions: FleetManagerActions,
+): ExtensionSubcommand => ({
+  name: "profiles",
+  description: "Edit Current Session profiles and saved sets",
+  arguments: "[profile]",
+  complete: (prefix) => {
+    const matches = PROFILE_IDS.filter((profile) => profile.startsWith(prefix.trim())).map(
+      (profile) => ({
+        value: profile,
+        label: profile,
+        description: `Edit ${profile} in Current Session`,
+      }),
+    );
+    return matches.length ? matches : null;
+  },
+  handler: (args, ctx) => {
+    const parts = args.trim().split(/\s+/u).filter(Boolean);
+    const profile = PROFILE_IDS.find((id) => id === parts[0]);
+    if (parts.length === 0 || (parts.length === 1 && profile))
+      return openProfileDashboard(pi, ctx, actions, {
+        initialProfile: profile ?? PROFILE_IDS[0],
+        initialFocus: profile ? "fields" : "profiles",
+      });
+    notifyAtHostBoundary(ctx, `Usage: /subagents profiles [${PROFILE_IDS.join("|")}]`, "warning");
+    return Promise.resolve();
+  },
+});
+
+/** `/subagents` opens the fleet; `profiles` and `settings` are its subcommands. */
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): void {
-  pi.registerCommand("subagents", {
-    description: "Open the subagent fleet, or edit profiles with /subagents profiles",
-    getArgumentCompletions: (prefix) => {
-      const profilePrefix = /^profiles\s+([^\s]*)$/u.exec(prefix.trimStart());
-      if (profilePrefix) {
-        const matches = PROFILE_IDS.filter((profile) =>
-          profile.startsWith(profilePrefix[1] ?? ""),
-        ).map((profile) => ({
-          value: `profiles ${profile}`,
-          label: profile,
-          description: `Edit ${profile} in Current Session`,
-        }));
-        return matches.length ? matches : null;
-      }
-      return completeSettingsArguments(prefix, [
-        { id: "profiles", description: "Edit Current Session profiles and saved sets" },
-      ]);
-    },
-    handler: (args, ctx) => {
-      const command = args.trim();
-      if (!command) return openFleetManager(ctx, bridge, actions);
-      const parts = command.split(/\s+/u);
-      const profile = PROFILE_IDS.find((id) => id === parts[1]);
-      if (parts[0] === "profiles" && (parts.length === 1 || (parts.length === 2 && profile)))
-        return openProfileDashboard(pi, ctx, actions, {
-          initialProfile: profile ?? PROFILE_IDS[0],
-          initialFocus: profile ? "fields" : "profiles",
-        });
-      notifyAtHostBoundary(
-        ctx,
-        "Usage: /subagents [profiles [profile]]; settings are in /subagents-settings",
-        "warning",
-      );
-      return Promise.resolve();
-    },
+  registerExtensionCommand(pi, {
+    name: "subagents",
+    description: "Open the subagent fleet, or edit profiles and settings",
+    bare: { handler: (_args, ctx) => openFleetManager(ctx, bridge, actions) },
+    subcommands: [profilesSubcommand(pi, actions), subagentSettingsSubcommand(actions)],
   });
 }

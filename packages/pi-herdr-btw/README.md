@@ -38,8 +38,10 @@ If the former package was installed previously, remove its source shown by `pi l
 ```text
 /herdr-btw
 /herdr-btw Explain the parent's latest design decision.
-/herdr-btw-new Start a separate side conversation.
+/herdr-btw new Start a separate side conversation.
 ```
+
+Text after `/herdr-btw` is the prompt for the side session, except that a first word of exactly `new` starts a fresh side session instead, with the rest as its prompt. To send a prompt that begins with the word "new" to the existing side session, reword its start.
 
 `/herdr-btw` keeps one reusable side session per parent Pi session:
 
@@ -47,9 +49,9 @@ If the former package was installed previously, remove its source shown by `pi l
 2. If that child Pi is still running, it validates the linked file and exact live Herdr identity, then focuses the existing pane and delivers the optional question.
 3. If the pane was closed or Pi exited, it validates the child file and reopens the same session with `--session` in a new sibling pane.
 
-`/herdr-btw-new` always creates a fresh blank side session. The new link becomes authoritative after startup and child-file validation. A later prompt or focus failure does not discard a child that already started successfully. The command never closes the previous user-owned pane.
+`/herdr-btw new` always creates a fresh blank side session. The new link becomes authoritative after startup and child-file validation. A later prompt or focus failure does not discard a child that already started successfully. The command never closes the previous user-owned pane.
 
-If a recorded link or child file is missing, malformed, replaced, or ambiguous, `/herdr-btw` fails closed and asks you to use `/herdr-btw-new`.
+If a recorded link or child file is missing, malformed, replaced, or ambiguous, `/herdr-btw` fails closed and asks you to use `/herdr-btw new`.
 
 ## Live parent reference
 
@@ -69,7 +71,7 @@ The extension serializes its own BTW commands and checks Herdr once when selecti
 
 Side-session files share the project's normal Pi session directory. As a result, `pi -c` may choose a recently active side session. Use `/herdr-btw` for deterministic side-session reopening. If agent startup fails after the blank child file is reserved, an unlinked blank session may remain in `/resume` and can be deleted there.
 
-Every successful pane belongs to the user. Parent reload, shutdown, and `/herdr-btw-new` do not close old panes. Both Pi sessions share the same working directory, so either can modify project files concurrently.
+Every successful pane belongs to the user. Parent reload, shutdown, and `/herdr-btw new` do not close old panes. Both Pi sessions share the same working directory, so either can modify project files concurrently.
 
 Prompt text is passed as one Herdr argument with a fixed non-flag prefix. No model or shell interprets it on the parent side. Mutating Herdr requests with uncertain outcomes are not retried or cleaned up destructively.
 

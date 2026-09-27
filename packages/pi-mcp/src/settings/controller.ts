@@ -13,7 +13,9 @@ import {
   isProjectTrusted,
   notifyAtHostBoundary,
   countLabel,
+  registerExtensionCommand,
   sanitizeTerminalLine,
+  type ExtensionSubcommand,
 } from "pi-cosmic-core";
 import type { McpCommandPort } from "../application/lifecycle.ts";
 import { McpAuth } from "../auth/service.ts";
@@ -23,7 +25,7 @@ import { copyAuthChallenge } from "../auth/challenge.ts";
 import { presentMcpAuthPanel } from "../boundary/host-auth-panel.ts";
 import { confirmMcpAction } from "../boundary/host-ui.ts";
 import { McpManager } from "../manager/service.ts";
-import { mcpCompletions, readableMcpOutcome, runMcpManager } from "../manager/controller.ts";
+import { mcpServerCompletions, readableMcpOutcome, runMcpManager } from "../manager/controller.ts";
 import { managerSelection } from "../ui/manager-state.ts";
 import { makeMcpLoginUi, mcpHasLoginUi } from "../boundary/host-auth.ts";
 import { boundedMcpReply, mcpFailureReply } from "../boundary/host-tool-result.ts";
@@ -68,16 +70,16 @@ const MCP_SETTINGS_HELP = [
   "MCP settings",
   "",
   "Usage:",
-  "  /mcp-settings status  Show configured servers and settings",
-  "  /mcp-settings reload  Reread the settings files",
-  "  /mcp-settings set-server <global|project> <id> <json>  Add or replace a server",
-  "  /mcp-settings remove-server <global|project> <id>  Remove a server",
-  "  /mcp-settings set-settings <global|project> <json>  Replace the gateway settings",
-  "  /mcp-settings help  Show this help",
+  "  /mcp settings status  Show configured servers and settings",
+  "  /mcp settings reload  Reread the settings files",
+  "  /mcp settings set-server <global|project> <id> <json>  Add or replace a server",
+  "  /mcp settings remove-server <global|project> <id>  Remove a server",
+  "  /mcp settings set-settings <global|project> <json>  Replace the gateway settings",
+  "  /mcp settings help  Show this help",
   "",
   "Examples:",
-  '  /mcp-settings set-server global browser {"transport":"stdio","command":"npx","args":["browser-mcp"]}',
-  "  /mcp-settings remove-server project browser",
+  '  /mcp settings set-server global browser {"transport":"stdio","command":"npx","args":["browser-mcp"]}',
+  "  /mcp settings remove-server project browser",
 ].join("\n");
 
 const SettingsReplyData = Schema.Struct({
@@ -356,15 +358,80 @@ export const mcpSettingsCompletions = (prefix: string) => {
   return candidates.length ? candidates.map((value) => ({ value, label: value })) : null;
 };
 
+interface McpServerSubcommand {
+  readonly name: string;
+  readonly description: string;
+  readonly arguments?: string;
+  /** Completes a configured server ID as the first argument. */
+  readonly servers: boolean;
+}
+
+/** `/mcp <name> …` subcommands that share the user command handler. */
+const MCP_SUBCOMMANDS: readonly McpServerSubcommand[] = [
+  {
+    name: "status",
+    description: "Open the dashboard, or print status outside a terminal",
+    servers: false,
+  },
+  {
+    name: "browse",
+    arguments: "[server]",
+    description: "Browse cached tools, resources, and prompts",
+    servers: true,
+  },
+  { name: "result", arguments: "<id>", description: "Open a saved result", servers: false },
+  {
+    name: "connect",
+    arguments: "<server>",
+    description: "Connect a server without signing in",
+    servers: true,
+  },
+  { name: "disconnect", arguments: "<server>", description: "Disconnect a server", servers: true },
+  {
+    name: "refresh",
+    arguments: "<server>",
+    description: "Discover or refresh a server's metadata",
+    servers: true,
+  },
+  {
+    name: "auth",
+    arguments: "<server> [--manual]",
+    description: "Sign in to a server",
+    servers: true,
+  },
+  {
+    name: "logout",
+    arguments: "<server>",
+    description: "Delete a server's local credentials",
+    servers: true,
+  },
+];
+
+/** One `/mcp` command: the dashboard when bare, server actions, and `settings`. */
 export const registerMcpCommands = (pi: ExtensionAPI, port: McpCommandPort): void => {
-  pi.registerCommand("mcp", {
-    description: "Open the MCP dashboard, or manage one server",
-    getArgumentCompletions: (prefix) => mcpCompletions(prefix, port.serverIds()),
-    handler: commandHandler(pi, port, false),
-  });
-  pi.registerCommand("mcp-settings", {
-    description: "Configure MCP servers and settings",
-    getArgumentCompletions: mcpSettingsCompletions,
-    handler: commandHandler(pi, port, true),
+  const run = commandHandler(pi, port, false);
+  const servers = (prefix: string) => mcpServerCompletions(prefix, port.serverIds());
+  const subcommands = MCP_SUBCOMMANDS.map(
+    (entry): ExtensionSubcommand => ({
+      name: entry.name,
+      description: entry.description,
+      arguments: entry.arguments,
+      complete: entry.servers ? servers : undefined,
+      handler: (args, ctx) => run(`${entry.name} ${args}`.trim(), ctx),
+    }),
+  );
+  registerExtensionCommand(pi, {
+    name: "mcp",
+    description: "Open the MCP dashboard, manage one server, or change settings",
+    bare: { handler: (_args, ctx) => run("", ctx) },
+    subcommands: [
+      ...subcommands,
+      {
+        name: "settings",
+        description: "Configure MCP servers and settings",
+        complete: mcpSettingsCompletions,
+        handler: commandHandler(pi, port, true),
+      },
+    ],
   });
 };

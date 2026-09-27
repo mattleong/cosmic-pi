@@ -39,19 +39,19 @@ Once installed, previews are enhanced automatically for:
 - `find`
 - `ls`
 
-Open settings inside pi with:
+Everything lives under one command, `/code-previews`; type it and a space to autocomplete its subcommands. Open settings inside pi with:
 
 ```text
-/code-preview-settings
+/code-previews settings
 ```
 
-Check status with:
+`/code-previews settings help` lists every setting, `/code-previews settings status` shows the values in effect, and `/code-previews settings <id> <value>` changes one. Check status with:
 
 ```text
-/code-preview-health
+/code-previews health
 ```
 
-The health panel shows configured tools, installed replacements, registration errors, disabled tools, and replacements skipped because another extension owns that tool. Individual tool toggles are available in the Preview tools submenu in `/code-preview-settings` and take effect after `/reload`.
+The health panel shows configured tools, installed replacements, registration errors, disabled tools, and replacements skipped because another extension owns that tool. Individual tool toggles are available in the Preview tools submenu in `/code-previews settings` and take effect after `/reload`.
 
 Renderer installation is best effort after planning completes. A discovery or definition-construction failure stops startup before registration begins. If one `registerTool` call fails, later replacements are still attempted and successful replacements keep a live session runtime. Attempted names and successful installs are tracked separately, so a Pi 0.84 refresh failure after registry mutation remains retryable on the next session start. There is no rollback of successful installs.
 
@@ -103,7 +103,7 @@ Set this in `code-previews.json`, or under `codePreview` in a trusted project's 
 }
 ```
 
-You can also choose **Collapsed tool calls** under **Appearance** in `/code-preview-settings`, or start Pi with `CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE=compact`. The default is `preview`, which keeps the existing presentation. The wrapper captures this setting at tool registration; changes require `/reload`.
+You can also choose **Collapsed tool calls** under **Appearance** in `/code-previews settings`, or start Pi with `CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE=compact`. The default is `preview`, which keeps the existing presentation. The wrapper captures this setting at tool registration; changes require `/reload`.
 
 In compact mode, ordinary collapsed calls use one extension-rendered text row while arguments arrive, during execution, and after settlement. The row prioritizes the status glyph, tool name and optional action, then the target subject and whole counter tokens. Counters are alternatives in priority order: the first that fits is selected, so a provider can offer a shorter fallback such as `3 failed` for narrow rows; without counters, the first nonempty metadata item is selected. Counters can use the remaining terminal cells while preserving up to 12 subject cells. Long subjects yield space to whole progress counters before those counters are dropped. Long subjects use grapheme-safe middle elision to retain both ends. There is at most one routine detail. When no counter or metadata is present, enabled timing appears for bash or calls lasting at least ten seconds. A cooperative provider can set `showTiming: true` to show measured timing beside its routine detail, including short calls. Counts take priority when both cannot fit. Compact rows omit the expand hint. Optional fields disappear before the identity is clipped at very narrow widths. Counters are never partially displayed. Status uses shared icons instead of words. The running icon animates even when `toolCallTiming` is off; it stops after settlement or session shutdown. With timing off, expansion pauses the hidden icon's animation and collapsing resumes it. Pending calls have no execution duration, and restored calls do not gain a fabricated duration.
 

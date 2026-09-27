@@ -23,6 +23,7 @@ import {
   makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
   failureMessage,
+  registerExtensionCommand,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
@@ -69,8 +70,6 @@ import {
 } from "./usage/projection.ts";
 
 const FAST_ID = "fast";
-/** The slash command; the startup flag keeps its short `--fast` name. */
-const FAST_COMMAND = "openai-fast";
 
 export interface BetterOpenAIExtensionDependencies {
   readonly loadPreviewSettings?: (
@@ -97,6 +96,11 @@ export function betterOpenAIWithDependencies(
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-openai");
+  // `/openai image` arrives with each session; the startup flag keeps its short `--fast` name.
+  const command = registerExtensionCommand(pi, {
+    name: "openai",
+    description: "OpenAI usage, fast mode, images, and settings",
+  });
   const config = () => {
     const cfg = MutableRef.get(projection).config;
     if (cfg) return cfg;
@@ -197,7 +201,7 @@ export function betterOpenAIWithDependencies(
     onActivated: ({ ctx, context }, token, { injectionIngress, scheduler }) => {
       currentContext = context;
       recordFastInjection = injectionIngress;
-      registerOpenAIImage(pi, run, updateContext, (intervalMs, tick) =>
+      registerOpenAIImage(pi, command, run, updateContext, (intervalMs, tick) =>
         currentContext === context && slot.isCurrent(token)
           ? scheduler.schedule(intervalMs, tick)
           : undefined,
@@ -259,12 +263,25 @@ export function betterOpenAIWithDependencies(
         notifyAtHostBoundary(ctx, `Couldn't ${COMMAND_VERBS[operation]}`, "warning");
     });
 
-  pi.registerCommand(FAST_COMMAND, {
+  command.add({
+    name: "usage",
+    description: "Show OpenAI subscription usage",
+    handler: (_args, ctx) => {
+      updateContext(ctx);
+      const signal = safeHostSignal(ctx);
+      const refresh = OpenAIUsageService.use((service) =>
+        service.refresh({ notify: true, force: true }),
+      );
+      return runHostCommand(refresh, "usage", ctx, signal);
+    },
+  });
+  command.add({
+    name: "fast",
     description: "Toggle OpenAI fast mode",
     handler: (args, ctx) => {
       updateContext(ctx);
       if (args.trim()) {
-        notifyAtHostBoundary(ctx, "Usage: /openai-fast", "warning");
+        notifyAtHostBoundary(ctx, "Usage: /openai fast", "warning");
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
@@ -291,17 +308,6 @@ export function betterOpenAIWithDependencies(
       return runHostCommand(update, "fast mode", ctx, signal);
     },
   });
-  pi.registerCommand("openai-usage", {
-    description: "Show OpenAI subscription usage status",
-    handler: (_args, ctx) => {
-      updateContext(ctx);
-      const signal = safeHostSignal(ctx);
-      const refresh = OpenAIUsageService.use((service) =>
-        service.refresh({ notify: true, force: true }),
-      );
-      return runHostCommand(refresh, "usage", ctx, signal);
-    },
-  });
   const formatDebugStatus = (ctx: ExtensionContext) => {
     const cfg = config();
     return [
@@ -316,7 +322,7 @@ export function betterOpenAIWithDependencies(
       `Config: ${cfg.configPath}`,
     ].join("\n");
   };
-  registerSettingsController(pi, {
+  registerSettingsController(command, {
     config: () => MutableRef.get(projection).config,
     updateContext,
     updateFooter,
