@@ -41,6 +41,8 @@ import { SubagentService, type SubagentServiceContract } from "../run/service.ts
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
+import { isPendingDeliveryError } from "../tools/outcome.ts";
+import type { FleetMessageDelivery } from "../ui/fleet.ts";
 import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
@@ -343,7 +345,18 @@ export function registerSubagentApplication(
     resume: (id, message) =>
       run(SubagentService.use((service) => service.resume(id, message))).then(() => undefined),
     send: (id, message) =>
-      run(SubagentService.use((service) => service.send(id, message))).then(() => undefined),
+      run(
+        SubagentService.use((service) =>
+          service.send(id, message).pipe(
+            Effect.as<FleetMessageDelivery>("delivered"),
+            // Backend-owned pending guidance is neither delivered nor failed; only that exact
+            // typed disposition resolves. Generic uncertainty and failures still reject.
+            Effect.catchIf(isPendingDeliveryError, () =>
+              Effect.succeed<FleetMessageDelivery>("pending"),
+            ),
+          ),
+        ),
+      ),
     reply: (id, message) =>
       run(SubagentService.use((service) => service.reply(id, message))).then(() => undefined),
     rename: (id, name) =>

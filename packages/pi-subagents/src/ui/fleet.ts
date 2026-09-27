@@ -41,6 +41,7 @@ import {
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   hasSubagentCapability,
+  hasUnresolvedSteeringDelivery,
   isActiveRunState,
   type SubagentProjection,
   type SubagentRunView,
@@ -52,11 +53,21 @@ import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state
 
 export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
 
+/**
+ * `delivered` means the owning coordinator accepted the message. `pending` means native delivery
+ * remains backend-owned and unconfirmed: it is neither delivered nor failed and must not be resent.
+ */
+export type FleetMessageDelivery = "delivered" | "pending";
+
 export interface FleetActions {
   readonly stop: (id: string) => Promise<void>;
   readonly interrupt: (id: string) => Promise<void>;
   readonly resume: (id: string, message?: string) => Promise<void>;
-  readonly message: (id: string, mode: FleetMessageMode, message: string) => Promise<void>;
+  readonly message: (
+    id: string,
+    mode: FleetMessageMode,
+    message: string,
+  ) => Promise<FleetMessageDelivery>;
   readonly rename: (id: string, name: string) => Promise<void>;
 }
 
@@ -74,19 +85,28 @@ export interface FleetOptions {
   readonly actions: FleetActions;
   /** Nested Pi cannot navigate above this authenticated run. Root uses the virtual root node. */
   readonly visibilityRootId?: string | undefined;
+  /** Host subscriptions released when the surface disposes this component. */
+  readonly onDispose?: (() => void) | undefined;
 }
 
-const canMessage = (run: SubagentRunView | undefined): boolean =>
-  Boolean(
-    run &&
-    ((run.state === "reported" && run.closeOnReport === false) ||
-      (run.state === "running" && hasSubagentCapability(run, "steer")) ||
-      (run.state === "waiting_for_parent" && hasSubagentCapability(run, "parent-contact"))),
-  );
+/**
+ * The one message a run can currently accept. Pending or unresolved native guidance rejects new
+ * input and queue-cancelling interruption; parent-question replies and stop stay available.
+ */
+const messageMode = (run: SubagentRunView | undefined): FleetMessageMode | undefined => {
+  if (!run) return undefined;
+  if (run.state === "waiting_for_parent")
+    return hasSubagentCapability(run, "parent-contact") ? "reply" : undefined;
+  if (hasUnresolvedSteeringDelivery(run)) return undefined;
+  if (run.state === "reported" && run.closeOnReport === false) return "next-assignment";
+  if (run.state === "running" && hasSubagentCapability(run, "steer")) return "guidance";
+  return undefined;
+};
 const canInterrupt = (run: SubagentRunView | undefined): boolean =>
   Boolean(
     run &&
     hasSubagentCapability(run, "interrupt") &&
+    !hasUnresolvedSteeringDelivery(run) &&
     (run.state === "running" || run.state === "waiting_for_parent"),
   );
 const canResume = (run: SubagentRunView | undefined): boolean =>
@@ -111,16 +131,21 @@ type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "re
 
 const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
 
-const shortcutUnavailableReason = (key: string): string =>
-  key === "m"
-    ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
-    : key === "i"
-      ? "This run cannot be interrupted in its current state or backend."
-      : key === "r"
-        ? "This run cannot be resumed in its current state or backend."
-        : key === "n"
-          ? "This run cannot be renamed in its current state or backend."
-          : "This run is not currently stoppable.";
+const UNRESOLVED_GUIDANCE_REASON =
+  "Guidance delivery to this run is still unresolved; wait for it to settle or stop the run.";
+
+const shortcutUnavailableReason = (key: string, run: SubagentRunView): string =>
+  (key === "m" || key === "i") && hasUnresolvedSteeringDelivery(run)
+    ? UNRESOLVED_GUIDANCE_REASON
+    : key === "m"
+      ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
+      : key === "i"
+        ? "This run cannot be interrupted in its current state or backend."
+        : key === "r"
+          ? "This run cannot be resumed in its current state or backend."
+          : key === "n"
+            ? "This run cannot be renamed in its current state or backend."
+            : "This run is not currently stoppable.";
 
 /** Fixed list-pane tree keys resolve before the configurable navigation keymap. */
 const fixedTreeDirection = (data: string, pane: ListDetailPane): "back" | "forward" | undefined => {
@@ -145,13 +170,10 @@ const FLEET_ACTION_LABELS = [
 
 const fleetActionLabels = (selected: SubagentRunView): ReadonlyArray<FleetActionLabel> => {
   const labels: FleetActionLabel[] = [];
-  if (canMessage(selected)) {
+  const mode = messageMode(selected);
+  if (mode) {
     const messageLabel =
-      selected.state === "waiting_for_parent"
-        ? "m Reply"
-        : selected.state === "reported"
-          ? "m New task"
-          : "m Guide";
+      mode === "reply" ? "m Reply" : mode === "next-assignment" ? "m New task" : "m Guide";
     labels.push({ full: messageLabel, compact: messageLabel });
   }
   for (const [can, full, compact] of FLEET_ACTION_LABELS)
@@ -179,7 +201,28 @@ const promptTitle = (prompt: FleetPrompt): string =>
   `${PROMPT_TITLE_PREFIX[prompt.kind]} ${prompt.runName}`;
 
 const promptInstruction = (kind: FleetPromptKind): string => PROMPT_INSTRUCTIONS[kind];
-type FleetNotice = { readonly kind: "info" | "success" | "error"; readonly text: string };
+
+/** Submission rechecks the live run, so a prompt opened earlier can never act on a stale state. */
+const promptAvailable = (kind: FleetPromptKind, run: SubagentRunView | undefined): boolean =>
+  kind === "resume"
+    ? canResume(run)
+    : kind === "rename"
+      ? canRename(run)
+      : messageMode(run) === kind;
+
+const promptUnavailableFeedback = (kind: FleetPromptKind, run: SubagentRunView | undefined) =>
+  run && (kind === "guidance" || kind === "next-assignment") && hasUnresolvedSteeringDelivery(run)
+    ? "Nothing was sent: earlier guidance delivery is still unresolved."
+    : "Nothing was sent: this run no longer accepts this input in its current state.";
+
+const MESSAGE_LABELS = {
+  reply: "Reply",
+  "next-assignment": "Next assignment",
+  guidance: "Guidance",
+} as const satisfies Record<FleetMessageMode, string>;
+
+export type FleetNoticeKind = "info" | "success" | "warning" | "error";
+type FleetNotice = { readonly kind: FleetNoticeKind; readonly text: string };
 type FleetPrompt = {
   readonly kind: FleetPromptKind;
   readonly runId: string;
@@ -215,6 +258,11 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.options.visibilityRootId ?? "root",
       this.collapsedRunIds,
     );
+  }
+
+  /** The settled or in-progress action outcome currently shown to the user, if any. */
+  get noticeKind(): FleetNoticeKind | undefined {
+    return this.notice?.kind;
   }
 
   get focused(): boolean {
@@ -271,6 +319,15 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private performAction(progress: string, success: string, operation: () => Promise<void>): void {
+    this.performOutcome(progress, operation, () => ({ kind: "success", text: success }));
+  }
+
+  /** Runs one action once; only its own settled value decides the notice, never a retry. */
+  private performOutcome<A>(
+    progress: string,
+    operation: () => Promise<A>,
+    settled: (value: A) => FleetNotice,
+  ): void {
     this.busyAction = progress;
     this.notice = { kind: "info", text: progress };
     this.options.requestRender();
@@ -279,14 +336,14 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.notice = notice;
       this.options.requestRender();
     };
-    let result: Promise<void>;
+    let result: Promise<A>;
     try {
       result = operation();
     } catch (error) {
       result = Promise.reject(error);
     }
     void Promise.resolve(result).then(
-      () => settle({ kind: "success", text: success }),
+      (value) => settle(settled(value)),
       (error) =>
         settle({
           kind: "error",
@@ -301,6 +358,13 @@ export class SubagentFleetComponent implements Component, Focusable {
     const message = prompt.input.getValue().trim();
     if (prompt.kind !== "resume" && !message) {
       prompt.feedback = prompt.kind === "rename" ? "Enter a new display name." : "Enter a message.";
+      this.options.requestRender();
+      return;
+    }
+    const current = this.options.getProjection().runs.find((run) => run.id === prompt.runId);
+    if (!promptAvailable(prompt.kind, current)) {
+      // Keep the typed text: the run may become eligible again, and Esc still cancels.
+      prompt.feedback = promptUnavailableFeedback(prompt.kind, current);
       this.options.requestRender();
       return;
     }
@@ -333,8 +397,21 @@ export class SubagentFleetComponent implements Component, Focusable {
         : mode === "next-assignment"
           ? `Next assignment sent to ${name}.`
           : `Guidance sent to ${name}.`;
-    this.performAction(`${verb}…`, success, () =>
-      this.options.actions.message(prompt.runId, mode, message),
+    this.performOutcome(
+      `${verb}…`,
+      () => this.options.actions.message(prompt.runId, mode, message),
+      (delivery): FleetNotice =>
+        delivery === "delivered"
+          ? { kind: "success", text: success }
+          : delivery === "pending"
+            ? {
+                kind: "warning",
+                text: `${MESSAGE_LABELS[mode]} for ${name} is awaiting delivery confirmation; do not resend.`,
+              }
+            : {
+                kind: "error",
+                text: `${MESSAGE_LABELS[mode]} for ${name} was not confirmed and may already have arrived. Do not resend; inspect the run's status.`,
+              },
     );
   }
 
@@ -434,12 +511,13 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.shell.resetDetailScroll();
     } else if (!selected) this.notice = { kind: "info", text: "No subagent run is selected." };
     else if (!this.applyRunShortcut(key, selected))
-      this.notice = { kind: "info", text: shortcutUnavailableReason(key) };
+      this.notice = { kind: "info", text: shortcutUnavailableReason(key, selected) };
     this.options.requestRender();
   }
 
   /** Applies one run shortcut; returns false when it does not apply to the run's state or backend. */
   private applyRunShortcut(key: string, selected: SubagentRunView): boolean {
+    const mode = messageMode(selected);
     if (key === "x" && canStop(selected)) this.pendingStop = selected.id;
     else if (key === "i" && canInterrupt(selected))
       this.performAction(
@@ -448,15 +526,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         () => this.options.actions.interrupt(selected.id),
       );
     else if (key === "r" && canResume(selected)) this.openPrompt(selected, "resume");
-    else if (key === "m" && canMessage(selected))
-      this.openPrompt(
-        selected,
-        selected.state === "waiting_for_parent"
-          ? "reply"
-          : selected.state === "reported"
-            ? "next-assignment"
-            : "guidance",
-      );
+    else if (key === "m" && mode) this.openPrompt(selected, mode);
     else if (key === "n" && canRename(selected)) this.openPrompt(selected, "rename");
     else return false;
     return true;
@@ -534,8 +604,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   private renderNotice(width: number, notice: FleetNotice): string {
     const inner = Math.max(0, width - 2);
     const glyph = managerNoticeGlyph(notice.kind);
-    const color =
-      notice.kind === "error" ? "error" : notice.kind === "success" ? "success" : "muted";
+    const color = notice.kind === "info" ? "muted" : notice.kind;
     return framedRow(
       this.frame,
       this.options.theme.fg(color, `${glyph} ${sanitizeTerminalLine(notice.text)}`),
@@ -805,5 +874,9 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   invalidate(): void {
     this.prompt?.input.invalidate();
+  }
+
+  dispose(): void {
+    this.options.onDispose?.();
   }
 }

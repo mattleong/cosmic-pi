@@ -346,7 +346,8 @@ describe("subagent compact semantic policy", () => {
         const summary = summarize(action, details);
         const receipt = summary?.counters?.join(" ");
         expect(receipt).toContain(action === "send" ? "sent" : "replied");
-        expect(receipt?.match(/\d+/g) ?? []).toEqual(accepted === 1 ? [] : [String(accepted)]);
+        expect(receipt).toContain(`${accepted} confirmed`);
+        expect(receipt).toContain("1 failed");
         expect(summary?.outcome).toBe("error");
         expect(
           summary?.issues?.some(
@@ -406,6 +407,89 @@ describe("subagent compact semantic policy", () => {
       }
     },
   );
+
+  it("keeps typed pending delivery an uncertain warning with distinct counters", () => {
+    const pendingFailure = {
+      id: "pending-run",
+      code: "steer_outcome_uncertain",
+      message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
+      pendingDelivery: true as const,
+    };
+    const unflagged = {
+      id: "unflagged-run",
+      code: pendingFailure.code,
+      message: pendingFailure.message,
+    };
+    const definite = { id: "definite-run", code: "not_running", message: "Worker is not running" };
+    for (const [confirmed, failures, outcome, parts] of [
+      [0, [pendingFailure], "uncertain", ["0 confirmed", "1 awaiting confirmation"]],
+      [1, [pendingFailure], "uncertain", ["1 confirmed", "1 awaiting confirmation"]],
+      [0, [pendingFailure, definite], "error", ["1 awaiting confirmation", "1 failed"]],
+      [1, [pendingFailure, unflagged], "uncertain", ["1 awaiting confirmation", "1 unconfirmed"]],
+    ] as const) {
+      const projected = makeCompactToolDetails({
+        action: "send",
+        runs: confirmed ? [view({ id: "confirmed-run" })] : [],
+        actionFailures: failures,
+      });
+      const summary = summarize("send", projected);
+      expect(summary?.outcome).toBe(outcome);
+      for (const part of parts) expect(summary?.counters?.join(" ")).toContain(part);
+      const pendingIssues = (summary?.issues ?? []).filter((issue) =>
+        issue.code.startsWith("run:pending-run:"),
+      );
+      // Pending is a warning, never an error; identity and code stay expanded-only.
+      expect(pendingIssues.map((issue) => issue.severity)).toEqual(["warning", "info"]);
+      expect(messages(pendingIssues)).not.toMatch(/pending-run|steer_outcome_uncertain|failed/);
+      expect(details(pendingIssues)).toContain("steer_outcome_uncertain");
+      expect(details(pendingIssues)).toContain("Do not resend");
+      expect(details(pendingIssues)).toContain("stop remains available");
+      if (outcome !== "error") expect(compactIssueSeverity(summary?.issues)).toBe("warning");
+    }
+    // A flag decoded on another action keeps its code-based uncertainty.
+    const reply = makeCompactToolDetails({
+      action: "reply",
+      runs: [],
+      actionFailures: [{ ...unflagged, code: "steer_outcome_uncertain" }],
+    });
+    const forged = summarize("reply", {
+      ...reply,
+      actionFailures: [{ ...pendingFailure, id: "unflagged-run" }],
+    });
+    expect(forged?.counters?.join(" ")).toContain("1 unconfirmed");
+    expect(forged?.counters?.join(" ")).not.toContain("awaiting confirmation");
+  });
+
+  it("never advises resending or retrying an unconfirmed or pending action", () => {
+    for (const code of [
+      "steer_outcome_uncertain",
+      "claude_steering_outcome_uncertain",
+      "stop_cleanup_unconfirmed",
+      "writer_lease_cleanup_unconfirmed",
+    ]) {
+      for (const pendingDelivery of [false, true]) {
+        const summary = summarize(
+          "send",
+          makeCompactToolDetails({
+            action: "send",
+            runs: [],
+            actionFailures: [
+              {
+                id: "target",
+                code,
+                message: "Evidence",
+                ...(pendingDelivery && { pendingDelivery: true as const }),
+              },
+            ],
+          }),
+        );
+        for (const issue of summary?.issues ?? []) {
+          const advice = (issue.detail ?? "").replace(/Do not resend, retry[^.;]*/g, "");
+          expect(advice).not.toMatch(/\b(resend|retry)\b/i);
+        }
+      }
+    }
+  });
 
   it("accepts only matching typed failure details when Pi reports an error", () => {
     const failedWorker = makeCompactToolDetails({

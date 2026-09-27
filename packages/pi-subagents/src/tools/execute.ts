@@ -53,6 +53,7 @@ import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
+import { isPendingDeliveryError } from "./outcome.ts";
 import {
   claimsOperationError,
   lifecycleMessageError,
@@ -80,10 +81,14 @@ export interface SubagentToolRuntime {
   ) => Promise<A>;
 }
 
-/** Partitions typed failures and runs in target order; defects and interruption propagate. */
+/**
+ * Partitions typed failures and runs in target order; defects and interruption propagate.
+ * Only steering sends preserve the backend's typed pending-delivery flag.
+ */
 const forEachOutcome = <R>(
   ids: ReadonlyArray<string>,
   operation: (id: string) => Effect.Effect<SubagentRunView, SubagentError, R>,
+  allowPendingDelivery = false,
 ) =>
   Effect.partition(
     ids,
@@ -94,6 +99,8 @@ const forEachOutcome = <R>(
             id,
             message: error.message,
             code: subagentErrorCode(error),
+            ...(allowPendingDelivery &&
+              isPendingDeliveryError(error) && { pendingDelivery: true as const }),
           }),
         ),
       ),
@@ -219,7 +226,7 @@ export const executeSubagentActionEffect = (
             );
             return completeObservations(
               observations,
-              [formatActionFailures(actionFailures)],
+              [formatActionFailures(action, actionFailures)],
               () => ({
                 actionFailures,
               }),
@@ -272,7 +279,7 @@ export const executeSubagentActionEffect = (
         const ids = yield* requiredTargetIds(action, input.args.runIds);
         const message = yield* requiredMessage(action, input.args.message);
         yield* authorize(ids);
-        return present(yield* forEachOutcome(ids, (id) => service.send(id, message)));
+        return present(yield* forEachOutcome(ids, (id) => service.send(id, message), true));
       }
       case SUBAGENT_TOOL_NAME.reply: {
         const id = yield* requiredRunId(action, input.args.runId);
@@ -419,7 +426,10 @@ export const executeSubagentActionEffect = (
       if (actionFailures.length > 0)
         return input.tool === SUBAGENT_TOOL_NAME.status
           ? detailedText()
-          : joinBoundedToolText([acknowledgement(), formatActionFailures(actionFailures)]);
+          : joinBoundedToolText([
+              acknowledgement(),
+              formatActionFailures(subagentToolAction(input), actionFailures),
+            ]);
       if (runs.length === 0) return "No subagent runs.";
       switch (input.tool) {
         case SUBAGENT_TOOL_NAME.list:

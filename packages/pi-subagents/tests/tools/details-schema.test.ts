@@ -9,10 +9,99 @@ import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
 } from "../../src/tools/details-schema.ts";
+import { actionFailureDisposition, marksSubagentToolError } from "../../src/tools/outcome.ts";
 import { containedWriter } from "../fixtures/run-view.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
+const pendingFailure = {
+  id: "pending",
+  code: "steer_outcome_uncertain",
+  message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
+  pendingDelivery: true as const,
+};
+/** Historical and generic uncertain failures carry the same code without the typed flag. */
+const unflaggedFailure = {
+  id: pendingFailure.id,
+  code: pendingFailure.code,
+  message: pendingFailure.message,
+};
+
+const actionFailuresOf = <ValueInput>(value: ValueInput) => {
+  const decoded = decodeCompactToolDetails(value);
+  if (!decoded || decoded.action === "models") return undefined;
+  return decoded.actionFailures;
+};
+
 describe("subagent detail evidence", () => {
+  it("keeps typed pending delivery additive, send-scoped, and distinct from uncertainty", () => {
+    const pending = makeCompactToolDetails({
+      action: "send",
+      runs: [view()],
+      actionFailures: [pendingFailure],
+    });
+    expect(decodeCompactToolDetails(pending)).toEqual(pending);
+    expect(actionFailuresOf(pending)).toEqual([expect.objectContaining({ pendingDelivery: true })]);
+    // Pending-only and pending-plus-confirmed results are not Pi tool errors.
+    expect(marksSubagentToolError(pending)).toBe(false);
+    const unflagged = makeCompactToolDetails({
+      action: "send",
+      runs: [],
+      actionFailures: [unflaggedFailure],
+    });
+    expect(decodeCompactToolDetails(unflagged)).toEqual(unflagged);
+    expect(actionFailureDisposition("send", unflaggedFailure)).toBe("unconfirmed");
+    expect(marksSubagentToolError(unflagged)).toBe(true);
+    for (const [action, failures] of [
+      ["send", [pendingFailure, { id: "definite", code: "not_running", message: "Not running" }]],
+      ["send", [pendingFailure, { ...unflaggedFailure, id: "unflagged" }]],
+    ] as const) {
+      const mixed = makeCompactToolDetails({ action, runs: [], actionFailures: failures });
+      expect(marksSubagentToolError(mixed)).toBe(true);
+    }
+  });
+
+  it("omits invalid pending flags at the producer but classifies decoded ones by action and code", () => {
+    const wrongCode = { ...pendingFailure, code: "claude_steering_outcome_uncertain" };
+    const definite = { ...pendingFailure, code: "not_running" };
+    for (const [action, failure] of [
+      ["send", wrongCode],
+      ["send", definite],
+      ["reply", pendingFailure],
+      ["resume", pendingFailure],
+    ] as const) {
+      const projected = makeCompactToolDetails({ action, runs: [], actionFailures: [failure] });
+      expect(actionFailuresOf(projected)?.[0]).not.toHaveProperty("pendingDelivery");
+      expect(marksSubagentToolError(projected)).toBe(true);
+    }
+    const base = makeCompactToolDetails({
+      action: "send",
+      runs: [],
+      actionFailures: [unflaggedFailure],
+    });
+    for (const [action, failure, disposition] of [
+      ["send", pendingFailure, "pending"],
+      ["reply", pendingFailure, "unconfirmed"],
+      ["stop", pendingFailure, "unconfirmed"],
+      ["send", wrongCode, "unconfirmed"],
+      ["send", definite, "failed"],
+    ] as const) {
+      // Structurally valid flags decode, so receipts keep their error semantics.
+      const forged = decodeCompactToolDetails({ ...base, action, actionFailures: [failure] });
+      expect(forged).toBeDefined();
+      const decoded = actionFailuresOf(forged)?.[0];
+      expect(decoded?.pendingDelivery).toBe(true);
+      expect(actionFailureDisposition(action, decoded ?? {})).toBe(disposition);
+      expect(marksSubagentToolError(forged!)).toBe(disposition !== "pending");
+    }
+    for (const pendingDelivery of [false, "true", 1, null])
+      expect(
+        decodeCompactToolDetails({
+          ...base,
+          actionFailures: [{ ...pendingFailure, pendingDelivery }],
+        }),
+      ).toBeUndefined();
+  });
+
   it("preserves native delivery evidence at every density without changing historical v2 cards", () => {
     const historical = makeCompactToolDetails({ action: "status", runs: [view()] });
     expect(decodeCompactToolDetails(historical)).toEqual(historical);

@@ -26,6 +26,22 @@ describe("failure recovery guidance", () => {
     expect(failureRecovery("run_not_found", "")).not.toEqual(actionFallback);
   });
 
+  it("never gives retry-shaped guidance for uncertain outcomes or unconfirmed cleanup", () => {
+    for (const context of ["start", "action"] as const)
+      for (const code of [
+        "steer_outcome_uncertain",
+        "start_outcome_uncertain",
+        "writer_lease_cleanup_unconfirmed",
+        "profile_harness_cleanup_unconfirmed",
+        "retry_outcome_uncertain",
+        "reply_outcome_uncertain",
+      ]) {
+        const recovery = failureRecovery(code, "Evidence", context);
+        expect(recovery).toMatch(/do not (resend|retry)/i);
+        expect(recovery).not.toMatch(/then retry|before retrying|resend it/i);
+      }
+  });
+
   it("matches codes case-insensitively", () => {
     expect(failureRecovery("REPLY_TOO_LARGE", "")).toEqual(failureRecovery("reply_too_large", ""));
   });

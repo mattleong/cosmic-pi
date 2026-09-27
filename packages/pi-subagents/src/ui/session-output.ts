@@ -22,6 +22,7 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
+import { steeringDeliveryEvidence } from "../tools/outcome.ts";
 import { aggregateUsage, formatDuration, formatRelativeAge } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 
@@ -149,7 +150,7 @@ const NOTICE_STYLES = {
 
 const addStyledRow = (
   container: Container,
-  style: (typeof NOTICE_STYLES)[keyof typeof NOTICE_STYLES],
+  style: { readonly glyph: string; readonly color: "muted" | "warning" | "success" },
   text: string,
   theme: Theme,
 ): void =>
@@ -159,6 +160,19 @@ const addStyledRow = (
       theme.fg(style.color, sanitizeTerminalLine(text)),
     ),
   );
+
+/**
+ * Native guidance delivery only, from the shared tool evidence. Confirmation is never shown as
+ * incorporation, and every other state keeps attention because the input may already have arrived.
+ */
+const addSteeringDelivery = (container: Container, run: SubagentRunView, theme: Theme): void => {
+  if (run.steeringDelivery === undefined) return;
+  const style =
+    run.steeringDelivery === "confirmed"
+      ? ({ glyph: runStateGlyph("completed"), color: "success" } as const)
+      : NOTICE_STYLES.warning;
+  addStyledRow(container, style, steeringDeliveryEvidence[run.steeringDelivery].message, theme);
+};
 
 /** Per-state guidance shown when a run has no activity, notices, or live fields at all. */
 const EMPTY_ACTIVITY_LABELS = {
@@ -386,6 +400,7 @@ export function renderSubagentSessionOutput(
   );
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Activity")), 0, 0));
+  addSteeringDelivery(container, run, theme);
   addLiveActivity(container, run, theme, now);
   addAssistantConclusion(container, run, theme);
   if (options.showTechnicalDetails) addTechnicalDetails(container, run, theme);

@@ -6,7 +6,11 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
-import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  SubagentNotFoundError,
+  SubagentProcessError,
+} from "../../src/run/errors.ts";
 import {
   STEERING_DELIVERY_STATES,
   hasUnresolvedSteeringDelivery,
@@ -494,6 +498,55 @@ describe("subagent tool", () => {
         action: "interrupt",
         actionFailures: [{ id: "agent-2", code: "already_paused" }],
       });
+    },
+  );
+
+  effectTest(
+    "separates pending guidance from unconfirmed and failed targets in model text",
+    function* () {
+      const steering = (pendingDelivery: boolean) =>
+        new SubagentProcessError({
+          operation: "steer",
+          code: "steer_outcome_uncertain",
+          message: "Acknowledgement is pending.",
+          ...(pendingDelivery && { pendingDelivery: true }),
+        });
+      const service = subagentServiceDouble({
+        send: (id) =>
+          id === "pending"
+            ? Effect.fail(steering(true))
+            : id === "unflagged"
+              ? Effect.fail(steering(false))
+              : id === "bad"
+                ? Effect.fail(
+                    new InvalidSubagentRequestError({ code: "not_running", message: "Paused." }),
+                  )
+                : Effect.succeed(view({ id })),
+      });
+      const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_send"), {
+        runIds: ["good", "pending", "unflagged", "bad"],
+        message: "Conclude.",
+      });
+      const sections = resultText(result!).split("\n\n");
+      const section = (id: string) => sections.find((entry) => entry.includes(`  ${id} [`)) ?? "";
+      // Only confirmed targets are acknowledged as delivered.
+      expect(sections[0]).toContain("good");
+      expect(sections[0]).not.toMatch(/pending|unflagged|bad/);
+      expect(section("pending")).toContain("awaiting confirmation");
+      expect(section("pending")).toContain("Do not resend");
+      expect(section("pending")).toContain("stop remains available");
+      expect(section("unflagged")).toContain("Unconfirmed targets");
+      expect(section("unflagged")).toContain("Do not resend");
+      expect(section("bad")).toContain("Failed targets");
+      expect(new Set([section("pending"), section("unflagged"), section("bad")]).size).toBe(3);
+      expect(result?.details).toMatchObject({
+        actionFailures: [
+          { id: "pending", pendingDelivery: true },
+          { id: "unflagged", code: "steer_outcome_uncertain" },
+          { id: "bad", code: "not_running" },
+        ],
+      });
+      expect(result?.details).not.toHaveProperty("actionFailures.1.pendingDelivery");
     },
   );
 

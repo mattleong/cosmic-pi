@@ -1,14 +1,19 @@
 // Behavior-first component tests for the /subagents fleet: expandable hierarchy,
 // selection identity across reorder, Esc detail → list → close, and pending action/prompt
 // clearing on identity change. Assertions use transitions and callbacks, not exact chrome.
+import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
-import type { SubagentRunView } from "../src/run/model.ts";
+import { STEERING_DELIVERY_STATES, type SubagentRunView } from "../src/run/model.ts";
+import { steeringDeliveryEvidence } from "../src/tools/outcome.ts";
 import {
   SubagentFleetComponent,
   type FleetActions,
   type FleetKeybindingId,
+  type FleetMessageDelivery,
+  type FleetNoticeKind,
 } from "../src/ui/fleet.ts";
+import { effectTest, step } from "./support/effect-test.ts";
 import { view } from "./tools/fixtures/tool-harness.ts";
 
 const run = (id: string, overrides: Partial<SubagentRunView> = {}): SubagentRunView =>
@@ -20,6 +25,7 @@ const makeFleet = (
     readonly height?: number;
     readonly matchesKeybinding?: (data: string, id: FleetKeybindingId) => boolean;
     readonly visibilityRootId?: string;
+    readonly message?: FleetActions["message"];
   } = {},
 ) => {
   let runs = initial;
@@ -28,7 +34,9 @@ const makeFleet = (
     stop: vi.fn(() => Promise.resolve()),
     interrupt: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
-    message: vi.fn(() => Promise.resolve()),
+    message: vi.fn(
+      options.message ?? ((): Promise<FleetMessageDelivery> => Promise.resolve("delivered")),
+    ),
     rename: vi.fn(() => Promise.resolve()),
   };
   const close = vi.fn();
@@ -236,5 +244,123 @@ describe("/subagents pending state on identity change", () => {
     component.handleInput(ENTER);
     expect(actions.message).toHaveBeenCalledTimes(1);
     expect(actions.message).toHaveBeenCalledWith("alpha", "guidance", "hi");
+  });
+});
+
+const press = (component: SubagentFleetComponent, ...keys: string[]) => {
+  for (const key of keys) component.handleInput(key);
+};
+
+/** Waits until the one in-flight action leaves its progress notice. */
+const settledNotice = (component: SubagentFleetComponent) =>
+  step(() =>
+    vi.waitFor(() => {
+      expect(component.noticeKind).toBeDefined();
+      expect(component.noticeKind).not.toBe("info");
+    }),
+  ).pipe(Effect.map(() => component.noticeKind));
+
+const question = { requestId: "q", message: "Which file?", createdAt: 1 };
+
+describe("/subagents message outcomes", () => {
+  const outcomes: ReadonlyArray<
+    readonly [string, () => Promise<FleetMessageDelivery>, FleetNoticeKind]
+  > = [
+    ["delivered guidance as success", () => Promise.resolve("delivered"), "success"],
+    [
+      "pending guidance as neither success nor failure",
+      () => Promise.resolve("pending"),
+      "warning",
+    ],
+    ["a rejected message as an error", () => Promise.reject(new Error("rejected")), "error"],
+  ];
+  for (const [label, message, expected] of outcomes)
+    effectTest(`shows ${label}`, function* () {
+      const { component, actions } = makeFleet([run("alpha")], { message });
+      press(component, "m", "h", "i", ENTER);
+      expect(yield* settledNotice(component)).toBe(expected);
+      expect(actions.message).toHaveBeenCalledTimes(1);
+    });
+
+  effectTest("keeps reply and next-assignment success distinct from guidance", function* () {
+    const replying = makeFleet([run("alpha", { state: "waiting_for_parent", question })]);
+    press(replying.component, "m", "o", "k", ENTER);
+    expect(yield* settledNotice(replying.component)).toBe("success");
+    expect(replying.actions.message).toHaveBeenCalledWith("alpha", "reply", "ok");
+
+    const next = makeFleet([run("alpha", { state: "reported", closeOnReport: false })]);
+    press(next.component, "m", "o", "k", ENTER);
+    expect(yield* settledNotice(next.component)).toBe("success");
+    expect(next.actions.message).toHaveBeenCalledWith("alpha", "next-assignment", "ok");
+  });
+});
+
+describe("/subagents unresolved guidance delivery", () => {
+  for (const steeringDelivery of ["pending", "unresolved"] as const) {
+    it(`blocks new guidance and interruption while delivery is ${steeringDelivery}`, () => {
+      const { component, actions } = makeFleet([run("alpha", { steeringDelivery })]);
+      // Without a prompt, the printable keys are ignored and Enter only inspects the run.
+      press(component, "m", "z", "z", ENTER, "h", "i");
+      expect(actions.message).not.toHaveBeenCalled();
+      expect(actions.interrupt).not.toHaveBeenCalled();
+
+      press(component, "x", "x");
+      expect(actions.stop).toHaveBeenCalledWith("alpha");
+    });
+
+    it(`blocks a retained next assignment while delivery is ${steeringDelivery}`, () => {
+      const { component, actions } = makeFleet([
+        run("alpha", { state: "reported", closeOnReport: false, steeringDelivery }),
+      ]);
+      press(component, "m", "z", "z", ENTER);
+      expect(actions.message).not.toHaveBeenCalled();
+    });
+
+    it(`keeps a parent-question reply available while delivery is ${steeringDelivery}`, () => {
+      const { component, actions } = makeFleet([
+        run("alpha", { state: "waiting_for_parent", question, steeringDelivery }),
+      ]);
+      press(component, "m", "o", "k", ENTER);
+      expect(actions.message).toHaveBeenCalledWith("alpha", "reply", "ok");
+    });
+  }
+
+  for (const steeringDelivery of ["confirmed", "not-sent", "report-unconfirmed"] as const)
+    it(`allows guidance after ${steeringDelivery} delivery`, () => {
+      const { component, actions } = makeFleet([run("alpha", { steeringDelivery })]);
+      press(component, "m", "o", "k", ENTER);
+      expect(actions.message).toHaveBeenCalledWith("alpha", "guidance", "ok");
+    });
+
+  it("never sends a guidance prompt opened before delivery became pending", () => {
+    const { component, actions, setRuns } = makeFleet([run("alpha")]);
+    press(component, "m", "h", "i");
+    setRuns([run("alpha", { steeringDelivery: "pending" })]);
+    press(component, ENTER);
+    expect(actions.message).not.toHaveBeenCalled();
+
+    // The typed prompt survives, so a later settled state can still send it exactly once.
+    setRuns([run("alpha", { steeringDelivery: "confirmed" })]);
+    press(component, ENTER);
+    expect(actions.message).toHaveBeenCalledTimes(1);
+    expect(actions.message).toHaveBeenCalledWith("alpha", "guidance", "hi");
+  });
+
+  it("never sends a stale guidance prompt as a reply after the run starts waiting", () => {
+    const { component, actions, setRuns } = makeFleet([run("alpha")]);
+    press(component, "m", "h", "i");
+    setRuns([run("alpha", { state: "waiting_for_parent", question })]);
+    press(component, ENTER);
+    expect(actions.message).not.toHaveBeenCalled();
+  });
+
+  it("shows each guidance delivery state from the shared evidence in the detail pane", () => {
+    const { component, setRuns } = makeFleet([run("alpha")], { height: 30 });
+    const withoutDelivery = component.render(200).join("\n");
+    for (const state of STEERING_DELIVERY_STATES) {
+      expect(withoutDelivery).not.toContain(steeringDeliveryEvidence[state].message);
+      setRuns([run("alpha", { steeringDelivery: state })]);
+      expect(component.render(200).join("\n")).toContain(steeringDeliveryEvidence[state].message);
+    }
   });
 });

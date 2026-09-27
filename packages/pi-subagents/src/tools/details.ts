@@ -32,6 +32,7 @@ import {
   MAX_FAILURE_CODE_CHARS,
   MAX_FAILURE_MESSAGE_CHARS,
   MAX_PROFILE_CHARS,
+  PENDING_DELIVERY_FAILURE_CODE,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
   type RunDetailsAction,
@@ -481,6 +482,7 @@ export const projectSubagentProfileRoutes = (
 };
 
 const projectActionFailures = (
+  action: RunDetailsAction,
   failures: ReadonlyArray<CompactToolActionFailure> | undefined,
   density: DetailDensity,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
@@ -488,10 +490,16 @@ const projectActionFailures = (
   const limits = DENSITY_LIMITS[density];
   return failures.slice(0, MAX_TARGET_RUNS).map((failure) => {
     const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
+    // Persist the flag only where it can mean pending; decoders still accept it structurally.
+    const pendingDelivery =
+      action === "send" &&
+      failure.pendingDelivery === true &&
+      code === PENDING_DELIVERY_FAILURE_CODE;
     return {
       id: requiredText(failure.id, limits.actionFailureId, "unknown-run"),
       ...(code !== undefined && { code }),
       message: requiredText(failure.message, limits.actionFailureMessage, "Action failed."),
+      ...(pendingDelivery && { pendingDelivery: true as const }),
     };
   });
 };
@@ -616,7 +624,7 @@ const runDetailsCandidate = (
     input.action === "list" ? projectRunCardTree(input.runs).map((row) => row.run) : input.runs;
   const source = orderedRuns.slice(0, MAX_TARGET_RUNS);
   const cards = projectedCards(source, density, includeReports);
-  const failures = projectActionFailures(input.actionFailures, density);
+  const failures = projectActionFailures(input.action, input.actionFailures, density);
   const omitted = !includeReports && reportsWereOmitted(source);
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,

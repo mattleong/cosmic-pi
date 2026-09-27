@@ -12,6 +12,8 @@ import {
   captureRegistrations,
   createToolPresentationHarness,
   probeAnimationOwnership,
+  withPresentationSettings,
+  type ToolPresentationHarness,
 } from "pi-code-previews/testing";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
@@ -227,6 +229,102 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
     );
   }
   expect(result).toEqual(original);
+});
+
+const pendingInput = { runIds: ["confirmed", "pending-target"], message: "exact pending guidance" };
+/** Middleware-added native image; Pi, not the tool renderer, owns its bytes. */
+const pendingImage = {
+  type: "image" as const,
+  mimeType: "image/png",
+  data: "cGVuZGluZy1uYXRpdmUtaW1hZ2U=",
+};
+const definiteFailure = { id: "bad", code: "not_running", message: "Not running" };
+const pendingSend = (extra: ReadonlyArray<typeof definiteFailure> = []) => ({
+  content: [
+    { type: "text" as const, text: "raw pending output sentinel; middleware evidence" },
+    pendingImage,
+  ],
+  details: makeCompactToolDetails({
+    action: "send",
+    runs: [view({ id: "confirmed" })],
+    actionFailures: [
+      {
+        id: "pending-target",
+        code: "steer_outcome_uncertain",
+        message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
+        pendingDelivery: true,
+      },
+      ...extra,
+    ],
+  }),
+});
+/** Pending delivery is neither delivered nor failed, so a pending-only receipt never says so. */
+const reportsFailure = /\bfail(?:ed|ure)?\b/i;
+
+/** Renders one state and proves rendering left the result and its native image untouched. */
+function renderUnchanged(
+  harness: ToolPresentationHarness,
+  result: ReturnType<typeof pendingSend>,
+  state: { readonly expanded: boolean; readonly isError: boolean },
+): string {
+  const original = structuredClone(result);
+  harness.call(pendingInput, state);
+  harness.result(result, state);
+  const text = harness.render(160).join("\n");
+  expect(result).toEqual(original);
+  expect(result.content[1]).toBe(pendingImage);
+  // Renderers never take ownership of native image bytes or inline them as text.
+  expect(text).not.toContain(pendingImage.data);
+  return text;
+}
+
+it("expands pending delivery evidence without claiming failure and keeps definite failures distinct", () => {
+  const tool = registered().find((entry) => entry.name === "subagent_send")!;
+  const harness = createToolPresentationHarness(tool);
+  for (const expanded of [false, true, false, true]) {
+    // Host receipts leave a pending-only send unflagged.
+    const text = renderUnchanged(harness, pendingSend(), { expanded, isError: false });
+    expect(text).toContain("awaiting confirmation");
+    expect(text).not.toMatch(reportsFailure);
+    expect(text.includes("steer_outcome_uncertain")).toBe(expanded);
+    expect(text.includes("pending-target")).toBe(expanded);
+    expect(text.includes("Do not resend")).toBe(expanded);
+    expect(text.includes("exact pending guidance")).toBe(expanded);
+    expect(text.includes("raw pending output sentinel; middleware evidence")).toBe(expanded);
+  }
+  for (const expanded of [false, true, false, true]) {
+    const mixed = pendingSend([definiteFailure]);
+    const text = renderUnchanged(harness, mixed, { expanded, isError: true });
+    expect(text).toContain("awaiting confirmation");
+    expect(text).toMatch(reportsFailure);
+    for (const evidence of ["steer_outcome_uncertain", "Do not resend", definiteFailure.code])
+      expect(text.includes(evidence)).toBe(expanded);
+    expect(text.includes("raw pending output sentinel; middleware evidence")).toBe(expanded);
+  }
+});
+
+it("gives pending delivery only no-resend recovery in the default preview style", () => {
+  const tool = withPresentationSettings(
+    { toolCallCollapsedStyle: "preview" },
+    () => registered().find((entry) => entry.name === "subagent_send")!,
+  );
+  for (const expanded of [false, true]) {
+    const harness = createToolPresentationHarness(tool);
+    const pending = renderUnchanged(harness, pendingSend(), { expanded, isError: false });
+    expect(pending).toContain("exact pending guidance");
+    expect(pending).toContain("awaiting confirmation");
+    expect(pending).toContain("steer_outcome_uncertain");
+    expect(pending).toMatch(/do not resend/i);
+    expect(pending).not.toMatch(reportsFailure);
+    expect(pending).not.toMatch(/then retry|before retrying|resend it/i);
+    const mixed = renderUnchanged(harness, pendingSend([definiteFailure]), {
+      expanded,
+      isError: true,
+    });
+    expect(mixed).toMatch(/do not resend/i);
+    expect(mixed).toMatch(reportsFailure);
+    expect(mixed).toContain(definiteFailure.code);
+  }
 });
 
 it("retains unique guidance input when expansion replaces the original call heading", () => {

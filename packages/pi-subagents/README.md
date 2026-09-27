@@ -241,6 +241,8 @@ Claude allows `Agent`, `Task`, `TaskOutput`, `TaskStop`, and `SendMessage`, requ
 
 ### Diagnosing Claude steering
 
+When native acknowledgement is still pending after the ten-second caller wait, `subagent_send` lists the worker under `Guidance awaiting confirmation`. The backend is still tracking delivery, so the call is not a tool error and does not claim delivery. Do not resend, retry, interrupt, or replace the worker merely for that reason; continue or await it, and stop remains available. Status reports the later `steeringDelivery` fact. Unconfirmed and failed targets remain errors.
+
 For an opt-in live timing probe, set `PI_SUBAGENTS_REAL_CLAUDE_MODEL` and `PI_SUBAGENTS_REAL_CLAUDE_STEERING_SCENARIO` (`tool`, `generation`, or `native-agent`), then run `pnpm --filter pi-subagents smoke:local-claude-steering`. This can incur provider usage and never runs in the normal suite. See [timing evidence and probe limits](docs/local-backends.md#live-steering-timing-probe). Failure diagnostics retain bounded metadata and the actual termination cause, not raw prompts or native identifiers.
 
 ## Native preflight safety

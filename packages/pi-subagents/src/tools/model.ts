@@ -45,6 +45,8 @@ export interface SubagentActionFailure {
   readonly message: string;
   /** Machine-actionable failure code (specific validation code or the error tag). */
   readonly code?: string;
+  /** The backend's typed pending-delivery flag, produced only for `send` steering. */
+  readonly pendingDelivery?: true;
 }
 
 export interface ProfileCandidateDiscovery extends ProfileCandidate {

@@ -15,7 +15,7 @@ import { registerSubagentChildBridge } from "../../src/boundary/host-child.ts";
 import registerSupervisorBridge from "../../src/boundary/host-pi-supervisor-extension.ts";
 import { registerSubagentErrorReceipts } from "../../src/boundary/host-tool-result.ts";
 import type { LocalPiChildIpcHandlers } from "../../src/boundary/local-pi-ipc.ts";
-import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
+import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentBackendRegistry } from "../../src/backend/service.ts";
@@ -24,6 +24,7 @@ import {
   makeCompactToolDetails,
   makeStartDetails,
 } from "../../src/tools/details.ts";
+import { decodeCompactToolDetails } from "../../src/tools/details-schema.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { eventBus } from "../support/questionnaire.ts";
@@ -111,6 +112,20 @@ const failure = (code = "claude_steering_outcome_uncertain", id = "uncertain") =
   code,
   message: "Input may already have been sent. Do not resend this guidance.",
 });
+const pendingFailure = (id = "pending") => ({
+  id,
+  code: "steer_outcome_uncertain",
+  message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
+  pendingDelivery: true as const,
+});
+/** Backend steering failures exactly as the send producer receives them. */
+const steeringError = (pendingDelivery: boolean, code = "steer_outcome_uncertain") =>
+  new SubagentProcessError({
+    operation: "steer",
+    code,
+    message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
+    ...(pendingDelivery && { pendingDelivery: true }),
+  });
 const failed = () => ({
   content: [{ type: "text" as const, text: "exact failure and no-resend evidence" }],
   details: makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failure()] }),
@@ -202,6 +217,91 @@ effectTest(
       expect(patched.details).toBe(response.details);
       expect(patched.content).toBe(patchedContent);
       expect(yield* h.result(original)).toEqual(original); // one-shot, no replay
+    }
+  },
+);
+
+effectTest(
+  "leaves typed pending delivery unflagged while real failures in the same send still mark it",
+  function* () {
+    const image = { type: "image" as const, mimeType: "image/png", data: "YQ==" };
+    const h = ownedTools(
+      subagentServiceDouble({
+        send: (id) =>
+          id === "good"
+            ? Effect.succeed(view({ id }))
+            : id === "pending" || id === "pending-2"
+              ? Effect.fail(steeringError(true))
+              : id === "unflagged"
+                ? Effect.fail(steeringError(false))
+                : id === "wrong-code"
+                  ? Effect.fail(steeringError(true, "start_outcome_uncertain"))
+                  : Effect.fail(new InvalidSubagentRequestError(failure("not_running", id))),
+      }),
+    );
+    const cases: ReadonlyArray<readonly [ReadonlyArray<string>, boolean]> = [
+      [["pending"], false],
+      [["pending", "pending-2"], false],
+      [["good", "pending"], false],
+      [["pending", "bad"], true],
+      [["pending", "unflagged"], true],
+      [["unflagged"], true],
+      [["wrong-code"], true],
+    ];
+    for (const [ids, isError] of cases) {
+      const response = yield* execute(h.tools.get("subagent_send")!, {
+        runIds: ids,
+        message: "guidance",
+      });
+      const text = response.content.map((part) => ("text" in part ? part.text : "")).join("\n");
+      const flagged = ids.filter((id) => id.startsWith("pending"));
+      expect(response.details).toMatchObject({
+        action: "send",
+        runCount: ids.filter((id) => id === "good").length,
+      });
+      const decoded = decodeCompactToolDetails(response.details);
+      const failures = decoded && decoded.action !== "models" ? (decoded.actionFailures ?? []) : [];
+      expect(failures.filter((entry) => entry.pendingDelivery === true)).toHaveLength(
+        flagged.length,
+      );
+      // Pending guidance is neither claimed delivered nor reported as a failed target.
+      if (flagged.length > 0) {
+        expect(text).toContain("awaiting confirmation");
+        expect(text).toContain("Do not resend");
+      }
+      if (!ids.includes("good")) expect(text).not.toContain("delivered");
+      if (!ids.some((id) => id === "bad")) expect(text).not.toContain("Failed targets");
+      if (ids.some((id) => id === "unflagged" || id === "wrong-code"))
+        expect(text).toContain("Unconfirmed targets");
+      // Content middleware may add native images; receipts never replace content or details.
+      const content = [...response.content, image];
+      const patched = yield* h.result(event({ ...response, content }));
+      expect(patched.isError).toBe(isError);
+      expect(patched.content).toBe(content);
+      expect(patched.details).toBe(response.details);
+    }
+  },
+);
+
+effectTest(
+  "classifies structurally decoded pending flags by action and code before marking receipts",
+  function* () {
+    const h = host();
+    const receipts = registerSubagentErrorReceipts(h.pi);
+    const owner = receipts.activate();
+    const base = makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failure()] });
+    for (const [tool, action, entry, isError] of [
+      ["subagent_send", "send", pendingFailure(), false],
+      ["subagent_send", "send", { ...pendingFailure(), code: "not_running" }, true],
+      ["subagent_send", "send", { ...pendingFailure(), code: "send_outcome_uncertain" }, true],
+      ["subagent_reply", "reply", pendingFailure(), true],
+      ["subagent_lifecycle", "stop", pendingFailure(), true],
+    ] as const) {
+      const details = { ...base, action, actionFailures: [entry] };
+      receipts.retain(owner, tool, "call", action, details);
+      const patched = yield* h.result(event({ content: [], details }, tool));
+      expect(patched.isError).toBe(isError);
+      expect(patched.details).toBe(details);
     }
   },
 );
@@ -390,10 +490,22 @@ describe.each(["local", "delegated"] as const)("%s Pi serialized proxy", (kind) 
       try {
         yield* h.emit("session_start");
         const tool = h.tools.get("subagent_send")!;
-        for (const failures of [[failure()], [failure("not_running")], []]) {
+        for (const [confirmed, failures] of [
+          [0, [failure()]],
+          [0, [failure("not_running")]],
+          [0, []],
+          [0, [pendingFailure()]],
+          [1, [pendingFailure()]],
+          [0, [pendingFailure(), failure("not_running", "definite")]],
+          [0, [pendingFailure(), failure("steer_outcome_uncertain", "unflagged")]],
+        ] as const) {
           response = {
             content: [{ type: "text", text: "exact proxy evidence" }],
-            details: makeCompactToolDetails({ action: "send", runs: [], actionFailures: failures }),
+            details: makeCompactToolDetails({
+              action: "send",
+              runs: confirmed ? [view({ id: "confirmed" })] : [],
+              actionFailures: failures,
+            }),
           };
           const decoded = yield* execute(
             tool,
@@ -404,7 +516,8 @@ describe.each(["local", "delegated"] as const)("%s Pi serialized proxy", (kind) 
           expect(decoded.details).not.toBe(response.details);
           expect((yield* h.result(event(response))).isError).toBe(false);
           const patched = yield* h.result(event(decoded));
-          expect(patched.isError).toBe(failures.length > 0);
+          // Typed pending delivery survives the private wire without becoming a tool error.
+          expect(patched.isError).toBe(failures.some((entry) => !("pendingDelivery" in entry)));
           expect(patched.details).toBe(decoded.details);
           expect(patched.content).toBe(decoded.content);
         }

@@ -6,7 +6,7 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
-import { managerStateGlyph } from "pi-cosmic-ui/manager";
+import { managerNoticeGlyph, managerStateGlyph } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
 import {
   composeToolComponent as renderComponent,
@@ -18,6 +18,13 @@ import type {
   SubagentProfileRouteCard,
   SubagentRunCard,
 } from "./details-schema.ts";
+import {
+  actionFailureDisposition,
+  countActionFailures,
+  isUncertainToolFailure,
+  unconfirmedActionRecovery,
+  type ActionFailureCounts,
+} from "./outcome.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
@@ -55,20 +62,12 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "The original profile route is exhausted; only now consider a generalist replacement.",
   ],
   [
-    ["retry_cleanup_unconfirmed", "retry_outcome_uncertain"],
-    "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.",
-  ],
-  [
     ["retry_claim", "retry_already"],
     "Inspect the predecessor and its linked successor with subagent_status.",
   ],
   [
     ["report_delivery_backlog"],
     "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.",
-  ],
-  [
-    ["reply_outcome_uncertain"],
-    "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.",
   ],
   [
     ["reply_send_failed"],
@@ -94,6 +93,20 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "Inspect the effective route with subagent_models or edit it with /subagents profiles.",
   ],
 ];
+/** Uncertain outcomes never reach retry-shaped rules; these keep their specific no-resend hints. */
+const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
+  [
+    ["retry_cleanup_unconfirmed", "retry_outcome_uncertain"],
+    "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.",
+  ],
+  [
+    ["reply_outcome_uncertain"],
+    "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.",
+  ],
+];
+const PENDING_DELIVERY_RECOVERY =
+  "Delivery is still tracked; do not resend, retry, interrupt, or replace for this. Continue or await; stop remains available.";
+
 export const failureRecovery = (
   code: string | undefined,
   message: string,
@@ -101,8 +114,14 @@ export const failureRecovery = (
 ): string => {
   const normalizedCode = code?.toLowerCase() ?? "";
   const normalizedMessage = message.toLowerCase();
-  const [rules, fallback] =
-    context === "start"
+  const [rules, fallback] = isUncertainToolFailure({ code: normalizedCode })
+    ? [
+        UNCERTAIN_FAILURE_RECOVERY_RULES,
+        context === "start"
+          ? "Do not retry the launch automatically; it may already have taken effect. Inspect subagent_list and subagent_status before recovery."
+          : unconfirmedActionRecovery,
+      ]
+    : context === "start"
       ? [
           START_FAILURE_RECOVERY_RULES,
           "Review the launch failure and profile route before retrying.",
@@ -200,19 +219,30 @@ export const renderProfileRoutesComponent = (
     );
   });
 
-const summaryText = (
-  details: RunToolDetails,
-  count: number,
-  failed: number,
-  failedSuffix: string,
-): string => {
+const failureSuffix = (failures: ActionFailureCounts): string =>
+  [
+    failures.pending > 0 ? ` · ${failures.pending} awaiting confirmation` : "",
+    failures.unconfirmed > 0 ? ` · ${failures.unconfirmed} unconfirmed` : "",
+    failures.failed > 0 ? ` · ${failures.failed} failed` : "",
+  ].join("");
+
+/** Single-target actions: generic uncertainty never claims a definite failure. */
+const singleTargetText = (
+  failures: ActionFailureCounts,
+  failed: string,
+  unconfirmed: string,
+  succeeded: string,
+): string => (failures.failed > 0 ? failed : failures.unconfirmed > 0 ? unconfirmed : succeeded);
+
+const summaryText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
   const plural = count === 1 ? "" : "s";
-  const missing = failed > 0 ? ` · ${failed} missing` : "";
+  const unsuccessful = failures.pending + failures.unconfirmed + failures.failed;
+  const failedSuffix = failureSuffix(failures);
   switch (details.action) {
     case "list":
       return count > 0 ? `${count} session subagent${plural}` : "No session subagents";
     case "status":
-      return `Status · ${count} found${missing}`;
+      return `Status · ${count} found${unsuccessful > 0 ? ` · ${unsuccessful} missing` : ""}`;
     case "send": {
       // closeOnReport=false targets started their next assignment; others got guidance.
       const cards = details.cards;
@@ -223,12 +253,19 @@ const summaryText = (
           : retained > 0
             ? "Guidance/next assignments"
             : "Guidance";
-      return `${label} · ${count} delivered${failedSuffix}`;
+      // Pending delivery is not delivered; confirmed operations are counted separately.
+      const received = failures.pending + failures.unconfirmed > 0 ? "confirmed" : "delivered";
+      return `${label} · ${count} ${received}${failedSuffix}`;
     }
     case "reply":
-      return failed > 0 ? "Reply failed" : `Reply delivered to ${count} subagent${plural}`;
+      return singleTargetText(
+        failures,
+        "Reply failed",
+        "Reply unconfirmed",
+        `Reply delivered to ${count} subagent${plural}`,
+      );
     case "rename":
-      return failed > 0 ? "Rename failed" : "Subagent renamed";
+      return singleTargetText(failures, "Rename failed", "Rename unconfirmed", "Subagent renamed");
     case "interrupt":
       return `Interrupt · ${count} paused${failedSuffix}`;
     case "resume":
@@ -256,10 +293,15 @@ export const renderCompactResultComponent = (
   const renderActionFailures = (width: number): ReadonlyArray<string> =>
     (details.actionFailures ?? []).flatMap((failure) => {
       const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-      const recovery = failureRecovery(failure.code, failure.message);
+      const disposition = actionFailureDisposition(details.action, failure);
+      const recovery =
+        disposition === "pending"
+          ? PENDING_DELIVERY_RECOVERY
+          : failureRecovery(failure.code, failure.message);
+      // Pending and unconfirmed outcomes are amber warnings; only definite failures use error chrome.
       const summary = theme.fg(
-        "error",
-        `${managerStateGlyph("failed")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
+        disposition === "failed" ? "error" : "warning",
+        `${disposition === "failed" ? managerStateGlyph("failed") : managerNoticeGlyph("warning")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
       );
       const summaryLines = expanded
         ? wrapTextWithAnsi(summary, width)
@@ -278,18 +320,21 @@ export const renderCompactResultComponent = (
     const safeWidth = Math.max(1, width);
     const cards = details.cards;
     const count = details.runCount;
-    const failed = details.actionFailures?.length ?? 0;
+    const failures = countActionFailures(details.action, details.actionFailures);
     const neutral =
       details.action === "list" ||
       details.action === "status" ||
       details.action === "retry" ||
       details.action === "claims";
     const strict = details.action === "reply" || details.action === "rename";
+    const uncertain = failures.pending + failures.unconfirmed;
     const color: SemanticOutcomeBanner["color"] =
-      failed === 0
-        ? neutral
-          ? "accent"
-          : "success"
+      failures.failed === 0
+        ? uncertain > 0
+          ? "warning"
+          : neutral
+            ? "accent"
+            : "success"
         : details.action === "send"
           ? count > 0
             ? "warning"
@@ -297,10 +342,7 @@ export const renderCompactResultComponent = (
           : strict
             ? "error"
             : "warning";
-    const summary: SemanticOutcomeBanner = {
-      color,
-      text: summaryText(details, count, failed, failed > 0 ? ` · ${failed} failed` : ""),
-    };
+    const summary: SemanticOutcomeBanner = { color, text: summaryText(details, count, failures) };
     const omittedRuns = Math.max(0, count - cards.length);
     const omissionCues = [
       ...(omittedRuns > 0

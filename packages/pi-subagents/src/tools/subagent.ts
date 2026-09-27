@@ -17,6 +17,7 @@ import {
 } from "../run/tool-policy.ts";
 import { decodeStartAwaitCardDetails } from "./details-schema.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
+import { hasReturnedFailureEvidence } from "./outcome.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import {
   renderSubagentCall,
@@ -281,9 +282,10 @@ export function registerSubagentTools(
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
           });
-          if (!context.isError) return content;
+          if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
           // The typed projection is bounded; keep all returned recovery evidence and earlier
-          // content middleware accessible even when a classified error can use the shell.
+          // content middleware accessible for classified errors and for pending delivery,
+          // which is returned failure evidence without Pi's error flag.
           const container = new Container();
           container.addChild(content);
           container.addChild(

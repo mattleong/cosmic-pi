@@ -19,7 +19,13 @@ import { formatRunRoute, formatSessionAge } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import type { SubagentToolAction } from "./schema.ts";
-import { steeringDeliveryEvidence } from "./outcome.ts";
+import {
+  actionFailureDisposition,
+  pendingDeliveryEvidence,
+  steeringDeliveryEvidence,
+  unconfirmedActionRecovery,
+  type ActionFailureDisposition,
+} from "./outcome.ts";
 
 export const selectionSourceLabel = (
   run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
@@ -439,16 +445,35 @@ export const formatStartResult = (
   ).text;
 };
 
-export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): string =>
-  failures.length === 0
-    ? ""
-    : [
-        `Failed targets (${failures.length})`,
-        ...failures.map((failure) => {
-          const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-          return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
-        }),
-      ].join("\n");
+const actionFailureLine = (failure: SubagentActionFailure): string => {
+  const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+  return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
+};
+
+const ACTION_FAILURE_SECTIONS = [
+  ["pending", "Guidance awaiting confirmation", pendingDeliveryEvidence.detail],
+  ["unconfirmed", "Unconfirmed targets", unconfirmedActionRecovery],
+  ["failed", "Failed targets", undefined],
+] as const satisfies ReadonlyArray<readonly [ActionFailureDisposition, string, string | undefined]>;
+
+/** Pending delivery is neither delivered nor failed; each disposition keeps its own section. */
+export const formatActionFailures = (
+  action: SubagentToolAction,
+  failures: ReadonlyArray<SubagentActionFailure>,
+): string =>
+  ACTION_FAILURE_SECTIONS.flatMap(([disposition, title, guidance]) => {
+    const entries = failures.filter(
+      (failure) => actionFailureDisposition(action, failure) === disposition,
+    );
+    if (entries.length === 0) return [];
+    return [
+      [
+        `${title} (${entries.length})`,
+        ...entries.map(actionFailureLine),
+        ...(guidance ? [`  ${guidance}`] : []),
+      ].join("\n"),
+    ];
+  }).join("\n\n");
 
 export const managementAcknowledgement = (
   action: Exclude<SubagentToolAction, "models" | "start">,

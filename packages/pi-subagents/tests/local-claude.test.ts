@@ -6,8 +6,15 @@ import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import { processError } from "../src/run/errors.ts";
+import { processError, SubagentProcessError } from "../src/run/errors.ts";
 import { makeLocalClaudeInputDelivery } from "../src/backend/local-claude-input-delivery.ts";
+
+/** The only typed producer evidence that lets callers treat guidance as still pending. */
+const pendingGuidance = {
+  operation: "steer",
+  code: "steer_outcome_uncertain",
+  pendingDelivery: true,
+} as const;
 
 /** Input delivery whose preparation pauses until the test releases it. */
 const gatedInputs = (scope: Scope.Scope) => {
@@ -155,10 +162,16 @@ describe("Claude input delivery ownership", () => {
         yield* Deferred.await(sent);
         const pending = inputs.pending;
         yield* TestClock.adjust("11 seconds");
-        expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true);
+        const deadline = yield* Effect.flip(Fiber.join(caller));
+        // Only a caller deadline over still-tracked guidance is flagged pending; the backend lives.
+        expect(deadline).toBeInstanceOf(SubagentProcessError);
+        expect(deadline).toMatchObject(pendingGuidance);
+        expect(inputs.failure).toBeUndefined();
         expect(terminations).toBe(0);
         expect(inputs.pending).toBe(pending);
-        expect(Exit.isFailure(yield* Effect.exit(inputs.send("Duplicate", 1, "steer")))).toBe(true);
+        const duplicate = yield* Effect.flip(inputs.send("Duplicate", 1, "steer"));
+        expect(duplicate).toMatchObject({ code: "steer_not_sent" });
+        expect(duplicate).not.toMatchObject({ pendingDelivery: true });
         if (!pending) return yield* Effect.die("Missing pending guidance");
         yield* Deferred.succeed(pending.acknowledgement, undefined);
         yield* yieldUntil(() => inputs.pending === undefined);
@@ -194,6 +207,8 @@ describe("Claude input delivery ownership", () => {
         yield* TestClock.adjust("1 second");
         yield* Deferred.await(terminated);
         expect(inputs.failure?.code).toBe("steer_outcome_uncertain");
+        // Watchdog closure is terminal uncertainty, never pending delivery.
+        expect(inputs.failure).not.toMatchObject({ pendingDelivery: true });
         expect(Exit.isFailure(yield* Effect.exit(inputs.send("No resend", 1, "steer")))).toBe(true);
         yield* Fiber.await(caller);
       }),
@@ -235,11 +250,81 @@ describe("Claude input delivery ownership", () => {
         yield* Scope.Scope,
         () => Effect.void,
       );
-      expect(Exit.isFailure(yield* Effect.exit(inputs.send("Guidance", 1, "steer")))).toBe(true);
+      const failure = yield* Effect.flip(inputs.send("Guidance", 1, "steer"));
+      expect(failure).toMatchObject({ operation: "steer", code: "steer_outcome_uncertain" });
+      // Unknown write and cleanup outcomes are not tracked guidance and never read as pending.
+      expect(failure).not.toMatchObject({ pendingDelivery: true });
       expect(inputs.failure?.code).toBe("steer_outcome_uncertain");
       expect(Exit.isFailure(yield* Effect.exit(inputs.send("No resend", 1, "steer")))).toBe(true);
     }),
   );
+
+  it.effect("uncertain native write outlasting the caller deadline is not reported pending", () =>
+    Effect.gen(function* () {
+      const terminating = yield* Deferred.make<void>();
+      const releaseTermination = yield* Deferred.make<void>();
+      const inputs = makeLocalClaudeInputDelivery(
+        {
+          send: () =>
+            Effect.fail(
+              processError("send", "transport_outcome_uncertain", "write outcome unknown"),
+            ),
+          terminate: () =>
+            Deferred.succeed(terminating, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseTermination)),
+            ),
+        },
+        yield* Scope.Scope,
+        () => Effect.void,
+      );
+      const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
+      yield* Deferred.await(terminating);
+      yield* TestClock.adjust("11 seconds");
+      const deadline = yield* Effect.flip(Fiber.join(caller));
+      expect(deadline).toMatchObject({ operation: "steer", code: "steer_outcome_uncertain" });
+      expect(deadline).not.toMatchObject({ pendingDelivery: true });
+      yield* Deferred.succeed(releaseTermination, undefined);
+    }),
+  );
+
+  for (const settlement of ["report", "close"] as const)
+    it.effect(`guidance settled by ${settlement} before the caller deadline is not pending`, () =>
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<void>();
+        let terminations = 0;
+        const inputs = makeLocalClaudeInputDelivery(
+          {
+            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
+            terminate: () =>
+              Effect.sync(() => {
+                terminations++;
+              }),
+          },
+          yield* Scope.Scope,
+          () => Effect.void,
+        );
+        const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
+        yield* Deferred.await(sent);
+        if (settlement === "report") expect(yield* inputs.acceptReport(1)).toBe(true);
+        else
+          inputs.cancel(
+            processError("close", "local_claude_closed", "Local Claude Code backend closed."),
+          );
+        const failure = yield* Effect.flip(Fiber.join(caller));
+        // Once guidance is no longer tracked, the caller never receives pending evidence.
+        expect(failure).not.toMatchObject({ pendingDelivery: true });
+        expect(failure).toMatchObject(
+          settlement === "report"
+            ? { operation: "steer", code: "steer_outcome_uncertain" }
+            : { code: "local_claude_closed" },
+        );
+        expect(inputs.pending).toBeUndefined();
+        expect(Exit.isFailure(yield* Effect.exit(inputs.send("No resend", 1, "steer")))).toBe(true);
+        // An accepted report ends watchdog ownership instead of terminating a finished worker.
+        yield* TestClock.adjust("5 minutes");
+        if (settlement === "report") expect(terminations).toBe(0);
+      }),
+    );
   it.effect("closed scope rejects new input and releases admission racing preparation", () =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();

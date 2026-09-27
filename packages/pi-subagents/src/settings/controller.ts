@@ -36,7 +36,7 @@ import {
   type SessionProfilePatch,
   type SessionProfileSetPatch,
 } from "../profiles/session-overrides.ts";
-import { SubagentFleetComponent } from "../ui/fleet.ts";
+import { SubagentFleetComponent, type FleetMessageDelivery } from "../ui/fleet.ts";
 import { subagentUiRefreshCadence } from "../ui/refresh.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { openProfileDashboard } from "./profile-dashboard.ts";
@@ -61,7 +61,8 @@ export interface FleetManagerActions {
   readonly stop: (id: string) => Promise<void>;
   readonly interrupt: (id: string) => Promise<void>;
   readonly resume: (id: string, message?: string) => Promise<void>;
-  readonly send: (id: string, message: string) => Promise<void>;
+  /** Pending native delivery resolves as `pending`; every other typed failure still rejects. */
+  readonly send: (id: string, message: string) => Promise<FleetMessageDelivery>;
   readonly reply: (id: string, message: string) => Promise<void>;
   readonly rename: (id: string, name: string) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
@@ -112,6 +113,7 @@ function openFleetManager(
     closedValue: undefined,
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
       let unsubscribe = () => {};
+      let refreshTicker: AdaptiveHostRefreshTicker | undefined;
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,
@@ -120,16 +122,21 @@ function openFleetManager(
         ...fullScreenKeybindingOptions(keybindings),
         requestRender: () => tui.requestRender(),
         close: () => finish(undefined),
+        onDispose: () => {
+          refreshTicker?.dispose();
+          unsubscribe();
+        },
         actions: {
           stop: actions.stop,
           interrupt: actions.interrupt,
           resume: actions.resume,
           message: (id, mode, message) =>
-            mode === "reply" ? actions.reply(id, message) : actions.send(id, message),
+            mode === "reply"
+              ? actions.reply(id, message).then(() => "delivered" as const)
+              : actions.send(id, message),
           rename: actions.rename,
         },
       });
-      let refreshTicker: AdaptiveHostRefreshTicker | undefined;
       unsubscribe = bridge.subscribe(() => {
         manager.invalidate();
         refreshTicker?.sync();
@@ -141,21 +148,7 @@ function openFleetManager(
         startTicker: startHostUiTicker,
         requestRender: () => tui.requestRender(),
       });
-      return {
-        get focused() {
-          return manager.focused;
-        },
-        set focused(value: boolean) {
-          manager.focused = value;
-        },
-        render: (width) => manager.render(width),
-        handleInput: (data) => manager.handleInput(data),
-        invalidate: () => manager.invalidate(),
-        dispose: () => {
-          refreshTicker?.dispose();
-          unsubscribe();
-        },
-      };
+      return manager;
     },
   }).then((outcome) => {
     // A failed opening rejects the command, as Pi's own custom Promise does.

@@ -318,10 +318,18 @@ export const SubagentProfileRouteCardSchema = Schema.Struct({
   candidates: boundedArray(ProfileCandidateCardSchema, MAX_PROFILE_CANDIDATES),
 });
 
+/** The only typed backend failure code that can carry pending guidance delivery. */
+export const PENDING_DELIVERY_FAILURE_CODE = "steer_outcome_uncertain";
+
 export const CompactToolActionFailureSchema = Schema.Struct({
   id: boundedString(MAX_ACTION_FAILURE_ID_CHARS, 1),
   code: Schema.optionalKey(boundedString(MAX_ACTION_FAILURE_CODE_CHARS, 1)),
   message: boundedString(MAX_ACTION_FAILURE_MESSAGE_CHARS, 1),
+  /**
+   * Additive version-2 backend evidence. Structural only: `actionFailureDisposition` decides
+   * whether it means pending delivery, so a wrong action/code keeps its error semantics.
+   */
+  pendingDelivery: Schema.optionalKey(Schema.Literal(true)),
 });
 
 export const SubagentStartDetailsSchema = Schema.Struct({

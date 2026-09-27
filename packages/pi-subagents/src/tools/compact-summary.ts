@@ -3,15 +3,20 @@ import * as Predicate from "effect/Predicate";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import {
+  type CompactToolActionFailure,
   type SubagentRunCard,
   type SubagentStartDetails,
   type SubagentAwaitDetails,
   type CompactSubagentToolDetails,
 } from "./details-schema.ts";
 import {
+  actionFailureDisposition,
+  countActionFailures,
   decodeSubagentOutcomeDetails,
   hasSubagentToolFailure,
-  isUncertainToolFailure,
+  pendingDeliveryEvidence,
+  unconfirmedActionRecovery,
+  type ActionFailureDisposition,
 } from "./outcome.ts";
 import { compactRunIssues } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
@@ -143,13 +148,20 @@ function applyArgumentLanes(
   if (details.action === "claims")
     summary.counters = claimCounters(details) ?? summary.counters ?? [];
   if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
-    // runCount counts accepted operations, not failures or only the bounded visible cards.
+    // runCount counts confirmed operations, not failures or only the bounded visible cards.
     const receipt = details.action === "send" ? "sent" : "replied";
-    const count = details.actionFailures?.some(isUncertainToolFailure)
-      ? `${details.runCount} confirmed ${receipt}`
-      : details.runCount === 1
-        ? receipt
-        : `${details.runCount} ${receipt}`;
+    const failures = countActionFailures(details.action, details.actionFailures);
+    const exceptional = [
+      failures.pending > 0 && `${failures.pending} awaiting confirmation`,
+      failures.unconfirmed > 0 && `${failures.unconfirmed} unconfirmed`,
+      failures.failed > 0 && `${failures.failed} failed`,
+    ].filter(Predicate.isString);
+    const count =
+      exceptional.length > 0
+        ? [`${details.runCount} confirmed ${receipt}`, ...exceptional].join(", ")
+        : details.runCount === 1
+          ? receipt
+          : `${details.runCount} ${receipt}`;
     summary.counters = [
       details.runCount > details.cards.length
         ? `${count}, ${details.cards.length}/${details.runCount} shown`
@@ -271,6 +283,44 @@ function awaitIssues(
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }
 
+type ActionFailureIssue = (failure: CompactToolActionFailure) => {
+  readonly code: string;
+  readonly message: string;
+  readonly recovery: { readonly message: string; readonly detail: string };
+};
+
+/** Human messages stay short; codes, IDs, and recovery procedures stay expanded-only. */
+const ACTION_FAILURE_ISSUES = {
+  pending: () => ({
+    code: "delivery-pending",
+    message: pendingDeliveryEvidence.message,
+    recovery: {
+      message: "Delivery is still being tracked",
+      detail: pendingDeliveryEvidence.detail,
+    },
+  }),
+  unconfirmed: () => ({
+    code: "action-failed",
+    message: "The action could not be confirmed",
+    recovery: {
+      message: "The action may already have taken effect",
+      detail: unconfirmedActionRecovery,
+    },
+  }),
+  failed: (failure) => ({
+    code: "action-failed",
+    message:
+      failure.code === "SubagentNotFoundError"
+        ? "A requested worker was not found"
+        : firstLineMessage(failure.message, "The action failed"),
+    recovery: {
+      message: "Recovery details are available",
+      detail:
+        "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
+    },
+  }),
+} satisfies Record<ActionFailureDisposition, ActionFailureIssue>;
+
 function runIssues(
   details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
   summary: CompactSummary,
@@ -292,30 +342,18 @@ function runIssues(
   for (const failure of details.actionFailures ?? []) {
     // Failed targets are usually absent from the visible cards; raw text keeps their identity.
     const name = details.cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
-    const uncertain = isUncertainToolFailure(failure);
-    if (uncertain) summary.outcome = "uncertain";
-    const message = uncertain
-      ? "The action could not be confirmed"
-      : failure.code === "SubagentNotFoundError"
-        ? "A requested worker was not found"
-        : firstLineMessage(failure.message, "The action failed");
+    const disposition = actionFailureDisposition(details.action, failure);
+    // Pending delivery and unconfirmed outcomes are uncertainty warnings, never failures.
+    if (disposition !== "failed") summary.outcome = "uncertain";
+    const { code, message, recovery } = ACTION_FAILURE_ISSUES[disposition](failure);
     issues.push(
       {
-        severity: uncertain ? "warning" : "error",
-        code: `run:${failure.id}:action-failed`,
+        severity: disposition === "failed" ? "error" : "warning",
+        code: `run:${failure.id}:${code}`,
         message: name ? `${name}: ${message}` : message,
         detail: `${failure.id}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
       },
-      {
-        severity: "info",
-        code: `run:${failure.id}:action-recovery`,
-        message: uncertain
-          ? "The action may already have taken effect"
-          : "Recovery details are available",
-        detail: uncertain
-          ? "Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed. Inspect expanded failure details and full subagent_status before recovery."
-          : "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
-      },
+      { severity: "info", code: `run:${failure.id}:action-recovery`, ...recovery },
     );
   }
 }

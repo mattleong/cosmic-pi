@@ -1,9 +1,13 @@
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentToolName } from "../run/tool-policy.ts";
-import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "../tools/outcome.ts";
+import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../tools/outcome.ts";
 
-/** Pi marks resolved execute results as successful; receipts preserve their full evidence. */
+/**
+ * Pi marks resolved execute results as successful; receipts preserve their full evidence. Typed
+ * pending guidance delivery is not an error, but any other target-operation failure in the same
+ * result still marks the call.
+ */
 export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
   let activation: symbol | undefined;
   const receipts = new Map<
@@ -39,7 +43,7 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     ): void => {
       if (owner !== activation || callId.length > 1_024) return;
       const decoded = decodeSubagentOutcomeDetails(action, details);
-      if (!decoded || !hasSubagentToolFailure(decoded)) return;
+      if (!decoded || !marksSubagentToolError(decoded)) return;
       // Bound the original identity too: decoders intentionally ignore unknown fields.
       try {
         if (JSON.stringify(details).length > MAX_TOOL_OUTPUT_CHARS) return;

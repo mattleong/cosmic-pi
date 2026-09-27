@@ -532,11 +532,16 @@ describe("local Claude steering acknowledgement lifecycle", () => {
           yield* harness.guidanceSent;
           expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "pending" });
           yield* TestClock.adjust("11 seconds");
-          expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true);
-          expect(harness.terminations()).toBe(0);
-          expect(yield* Effect.flip(backend.controls.steer("Another guidance"))).toMatchObject({
-            code: "steer_not_sent",
+          // Typed pending evidence reaches the caller only while the backend still tracks guidance.
+          expect(yield* Effect.flip(Fiber.join(caller))).toMatchObject({
+            operation: "steer",
+            code: "steer_outcome_uncertain",
+            pendingDelivery: true,
           });
+          expect(harness.terminations()).toBe(0);
+          const rejected = yield* Effect.flip(backend.controls.steer("Another guidance"));
+          expect(rejected).toMatchObject({ code: "steer_not_sent" });
+          expect(rejected).not.toMatchObject({ pendingDelivery: true });
           expect(yield* Effect.flip(backend.controls.interrupt)).toMatchObject({
             code: "interrupt_not_sent",
           });
@@ -598,6 +603,8 @@ describe("local Claude steering acknowledgement lifecycle", () => {
           yield* yieldUntil(() => harness.terminations() > 0);
           const exit = yield* backend.awaitExit;
           expect(exit.failure).toMatchObject({ code: "steer_outcome_uncertain" });
+          // Watchdog closure is terminal uncertainty, never pending delivery.
+          expect(exit.failure).not.toMatchObject({ pendingDelivery: true });
           expect(exit.failure?.message).toContain('"terminationReason":"steering-watchdog"');
           expect(exit.failure?.message).toContain('"activeToolCategory":"shell"');
           expect(exit.failure?.message).toContain('"lastInboundAgeMillis":1000');
@@ -639,6 +646,26 @@ describe("local Claude steering acknowledgement lifecycle", () => {
             expect(harness.terminations()).toBe(0);
           }),
         ),
+    );
+
+  for (const settlement of ["report", "transport-close"] as const)
+    it.effect(`${settlement} before the caller deadline never reports guidance pending`, () =>
+      withStartedBackend("steering", 12, (backend, harness) =>
+        Effect.gen(function* () {
+          yield* take(backend);
+          yield* take(backend);
+          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
+          yield* harness.guidanceSent;
+          yield* take(backend);
+          if (settlement === "report") yield* harness.acceptReport(12);
+          else yield* harness.close;
+          const failure = yield* Effect.flip(Fiber.join(caller));
+          expect(failure._tag).toBe("SubagentProcessError");
+          expect(failure).not.toMatchObject({ pendingDelivery: true });
+          if (settlement === "report")
+            expect(failure).toMatchObject({ operation: "steer", code: "steer_outcome_uncertain" });
+        }),
+      ),
     );
 
   it.effect("a report for another assignment cannot suppress the steering watchdog", () =>

@@ -15,10 +15,20 @@ import {
   makeSessionProfileSnapshot,
   SessionProfileConflictError,
 } from "../src/profiles/session-overrides.ts";
-import { registerSubagentManagerCommand } from "../src/settings/controller.ts";
+import type { SubagentRunView } from "../src/run/model.ts";
+import {
+  registerSubagentManagerCommand,
+  type FleetManagerActions,
+} from "../src/settings/controller.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
+import {
+  SubagentFleetComponent,
+  type FleetMessageDelivery,
+  type FleetNoticeKind,
+} from "../src/ui/fleet.ts";
 import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
+import { projectionOf, view } from "./fixtures/run-view.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
@@ -733,4 +743,93 @@ describe("profile settings controller", () => {
       );
     });
   }
+});
+
+describe("root /subagents fleet actions", () => {
+  const question = { requestId: "q", message: "Which file?", createdAt: 1 };
+  const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
+    view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
+
+  /** Opens the registered root fleet over a fixed projection and the supplied manager actions. */
+  const openFleet = function* (run: SubagentRunView, overrides: Partial<FleetManagerActions>) {
+    let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    const pi = extensionApiFixture({
+      registerCommand: (
+        _name: string,
+        definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
+      ) => {
+        command = definition.handler;
+      },
+    });
+    const managerActions = fleetManagerActionsFixture(overrides);
+    const bridge = opaqueFixture({
+      get: () => projectionOf([run]),
+      subscribe: () => () => undefined,
+    });
+    registerSubagentManagerCommand(pi, bridge, managerActions);
+    const overlays: Component[] = [];
+    const { custom } = mountingCustomUi(plainTheme, (created) => overlays.push(created), {
+      columns: 120,
+      rows: 30,
+    });
+    const ctx = extensionContextFixture({
+      cwd: "/repo",
+      signal: undefined,
+      hasUI: true,
+      mode: "tui",
+      ui: { notify: vi.fn(), custom },
+    });
+    const running = command?.("", ctx) ?? Promise.resolve();
+    yield* step(() => vi.waitFor(() => expect(overlays).toHaveLength(1)));
+    const fleet = overlays[0];
+    if (!(fleet instanceof SubagentFleetComponent)) throw new Error("Expected the root fleet.");
+    const settled = function* () {
+      yield* step(() =>
+        vi.waitFor(() => {
+          expect(fleet.noticeKind).toBeDefined();
+          expect(fleet.noticeKind).not.toBe("info");
+        }),
+      );
+      return fleet.noticeKind;
+    };
+    const close = function* () {
+      fleet.handleInput("\u001b");
+      yield* step(() => running);
+    };
+    return { fleet, settled, close };
+  };
+
+  const sendOutcomes: ReadonlyArray<
+    readonly [string, () => Promise<FleetMessageDelivery>, FleetNoticeKind]
+  > = [
+    ["delivered guidance as success", () => Promise.resolve("delivered"), "success"],
+    ["pending guidance as pending, not failure", () => Promise.resolve("pending"), "warning"],
+    ["a rejected send as an error", () => Promise.reject(new Error("rejected")), "error"],
+  ];
+  for (const [label, outcome, expected] of sendOutcomes)
+    effectTest(`routes guidance to send and shows ${label}`, function* () {
+      const send = vi.fn((_id: string, _message: string) => outcome());
+      const reply = vi.fn((): Promise<void> => Promise.resolve());
+      const { fleet, settled, close } = yield* openFleet(topLevel(), { send, reply });
+      for (const key of ["m", "h", "i", "\r"]) fleet.handleInput(key);
+      expect(yield* settled()).toBe(expected);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith("child", "hi");
+      expect(reply).not.toHaveBeenCalled();
+      yield* close();
+    });
+
+  effectTest("routes a parent-question reply to reply and reports its success", function* () {
+    const send = vi.fn((): Promise<FleetMessageDelivery> => Promise.resolve("pending"));
+    const reply = vi.fn((_id: string, _message: string): Promise<void> => Promise.resolve());
+    const { fleet, settled, close } = yield* openFleet(
+      topLevel({ state: "waiting_for_parent", question }),
+      { send, reply },
+    );
+    for (const key of ["m", "o", "k", "\r"]) fleet.handleInput(key);
+    expect(yield* settled()).toBe("success");
+    expect(reply).toHaveBeenCalledWith("child", "ok");
+    expect(send).not.toHaveBeenCalled();
+    yield* close();
+  });
 });
