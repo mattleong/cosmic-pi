@@ -67,31 +67,29 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
 });
 
 /**
- * A details snapshot: the frozen v1 member plus `failureLine`, the one exception to metadata-only
- * details. It is the first line of a failed task's output that names the failure, captured once at
- * exit, redacted and bounded, so the transcript can say why without storing output. It never
- * enters the Code Mode contract, whose decoder drops it.
+ * Where a failed task's cause appears in the result text: producer-computed UTF-16 offsets,
+ * never parsed. Details stay metadata only; the cause itself lives in the text.
  */
-export const BackgroundTaskDetailsSnapshotSchema = Schema.Struct({
-  ...BackgroundTaskSnapshotSchema.fields,
-  failureLine: Schema.optionalKey(MaxChars(BOUNDS.maxFailureLineChars)),
-});
+const CauseSpans = Schema.optionalKey(
+  Schema.Array(Schema.Struct({ id: TaskId, start: Schema.Natural, end: Schema.Natural })).check(
+    Schema.isMaxLength(BOUNDS.maxSnapshots),
+  ),
+);
 
 /**
- * Persisted `background_task` result details: metadata only, never command output, apart from a
- * snapshot's bounded `failureLine`. Older `logs` details also carried `events: []` and Pi's full
- * TruncationResult; decoding ignores those extras.
+ * Persisted `background_task` result details: metadata only, never command output. Older `logs`
+ * details also carried `events: []` and Pi's full TruncationResult; decoding ignores those extras.
  */
 export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literals(["start", "status", "stop"]),
-    snapshot: BackgroundTaskDetailsSnapshotSchema,
+    snapshot: BackgroundTaskSnapshotSchema,
+    causes: CauseSpans,
   }),
   Schema.Struct({
     action: Schema.Literals(["list", "stop_all"]),
-    tasks: Schema.Array(BackgroundTaskDetailsSnapshotSchema).check(
-      Schema.isMaxLength(BOUNDS.maxSnapshots),
-    ),
+    tasks: BackgroundTaskSnapshotsSchema,
+    causes: CauseSpans,
   }),
   Schema.Struct({
     action: Schema.Literal("logs"),
@@ -108,10 +106,8 @@ export const BackgroundTaskDetailsSchema = Schema.Union([
   }),
   Schema.Struct({
     action: Schema.Literal("wait"),
-    wait: Schema.Struct({
-      ...BackgroundTaskWaitResultSchema.fields,
-      snapshot: BackgroundTaskDetailsSnapshotSchema,
-    }),
+    wait: BackgroundTaskWaitResultSchema,
+    causes: CauseSpans,
   }),
   Schema.Struct({ action: Schema.Literal("clear"), removed: Schema.Natural }),
 ]);

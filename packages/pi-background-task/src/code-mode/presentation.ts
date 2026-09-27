@@ -81,7 +81,7 @@ export const normalizeBackgroundTaskPresentation = <Value>(
 
 export const projectBackgroundTaskPresentation = (
   args: BackgroundTaskCodeModeInput,
-  result: { details?: unknown },
+  result: { details?: unknown; text?: string },
 ): BackgroundTaskPresentation => {
   try {
     const summary = projectBackgroundTaskCompactSummary({

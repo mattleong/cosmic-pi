@@ -34,7 +34,8 @@ import { LogBuffer, readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveTaskState,
   sortTasksByActivity,
-  type BackgroundTaskDetailsSnapshot,
+  type BackgroundTaskStatus,
+  type BackgroundTaskStatusWait,
   type BackgroundTaskSnapshot,
   type BackgroundTaskState,
   type BackgroundLogSlice,
@@ -54,10 +55,10 @@ const recentOutputLines = (record: TaskRecord): string[] =>
     .split(/\r?\n/u);
 
 interface TaskRecord {
-  snapshot: BackgroundTaskDetailsSnapshot;
+  snapshot: BackgroundTaskStatus;
   readonly logs: LogBuffer;
   wake: Deferred.Deferred<void>;
-  completion: Deferred.Deferred<BackgroundTaskSnapshot>;
+  completion: Deferred.Deferred<BackgroundTaskStatus>;
   handleReady: Deferred.Deferred<LocalProcessHandle, LocalProcessError>;
   terminalOutcome?: "stopped" | "timed_out";
   ingressDroppedObserved: number;
@@ -65,11 +66,11 @@ interface TaskRecord {
 }
 
 type WaitInspection =
-  | { readonly _tag: "result"; readonly result: BackgroundTaskWaitResult }
+  | { readonly _tag: "result"; readonly result: BackgroundTaskStatusWait }
   | {
       readonly _tag: "pending";
       readonly awaitChange: Effect.Effect<void>;
-      readonly snapshot: BackgroundTaskSnapshot;
+      readonly snapshot: BackgroundTaskStatus;
       readonly slice: BackgroundLogSlice;
     };
 
@@ -78,29 +79,27 @@ export type BackgroundTaskFilter = "active" | "completed" | "all";
 export interface BackgroundTaskServiceContract {
   readonly start: (
     request: StartBackgroundTask,
-  ) => Effect.Effect<BackgroundTaskSnapshot, BackgroundTaskError>;
+  ) => Effect.Effect<BackgroundTaskStatus, BackgroundTaskError>;
   readonly list: (
     filter?: BackgroundTaskFilter,
-  ) => Effect.Effect<ReadonlyArray<BackgroundTaskSnapshot>>;
-  readonly status: (
-    id: string,
-  ) => Effect.Effect<BackgroundTaskSnapshot, BackgroundTaskNotFoundError>;
+  ) => Effect.Effect<ReadonlyArray<BackgroundTaskStatus>>;
+  readonly status: (id: string) => Effect.Effect<BackgroundTaskStatus, BackgroundTaskNotFoundError>;
   readonly logs: (
     request: ReadBackgroundLogs,
   ) => Effect.Effect<BackgroundLogSlice, BackgroundTaskNotFoundError>;
   readonly wait: (
     request: WaitForBackgroundTask,
   ) => Effect.Effect<
-    BackgroundTaskWaitResult,
+    BackgroundTaskStatusWait,
     BackgroundTaskNotFoundError | InvalidBackgroundCommandError
   >;
   readonly stop: (
     id: string,
     force?: boolean,
-  ) => Effect.Effect<BackgroundTaskSnapshot, BackgroundTaskError>;
+  ) => Effect.Effect<BackgroundTaskStatus, BackgroundTaskError>;
   readonly stopAll: (
     force?: boolean,
-  ) => Effect.Effect<ReadonlyArray<BackgroundTaskSnapshot>, BackgroundTaskError>;
+  ) => Effect.Effect<ReadonlyArray<BackgroundTaskStatus>, BackgroundTaskError>;
   readonly clear: Effect.Effect<number>;
 }
 
@@ -113,11 +112,11 @@ const notFound = (id: string) =>
 const invalidCommand = (message: string) => new InvalidBackgroundCommandError({ message });
 
 const waitResult = (
-  snapshot: BackgroundTaskSnapshot,
+  snapshot: BackgroundTaskStatus,
   slice: BackgroundLogSlice,
   outcome: BackgroundTaskWaitResult["outcome"],
   matchCursor?: number,
-): BackgroundTaskWaitResult => ({
+): BackgroundTaskStatusWait => ({
   id: snapshot.id,
   outcome,
   snapshot,
@@ -233,8 +232,8 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       : exit.exitCode !== 0
         ? "failed"
         : "exited";
-    // The output that says why is only here now; keep one redacted, bounded line of it.
-    const failureLine =
+    // The output that says why is only here now; keep one redacted, bounded line of it in memory.
+    const failureCause =
       state === "failed" ? outputFailureLine(recentOutputLines(record)) : undefined;
     record.snapshot = {
       ...record.snapshot,
@@ -242,9 +241,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       endedAt,
       exitCode: exit.exitCode,
       ...(exit.signal && { signal: exit.signal }),
-      ...(failureLine && {
-        failureLine: failureLine.slice(0, BACKGROUND_TASK_FIELD_BOUNDS.maxFailureLineChars),
-      }),
+      ...(failureCause && { failureCause }),
       logCursor: record.logs.nextCursor - 1,
       droppedLogBytes: record.logs.droppedBytes,
     };

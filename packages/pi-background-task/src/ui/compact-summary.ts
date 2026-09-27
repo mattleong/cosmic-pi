@@ -12,7 +12,6 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type {
   BackgroundLogMetadata,
-  BackgroundTaskDetailsSnapshot,
   BackgroundTaskSnapshot,
   BackgroundTaskState,
 } from "../task/model.ts";
@@ -68,7 +67,7 @@ type TaskSummary = CompactSummary & {
   readonly issues: readonly CompactIssue[];
 };
 
-function taskSummary(value: BackgroundTaskDetailsSnapshot): TaskSummary {
+function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary {
   const issues: CompactIssue[] = [];
   const nonZeroExit = value.exitCode != null && value.exitCode !== 0;
   let outcome: CompactOutcome = "success";
@@ -82,7 +81,7 @@ function taskSummary(value: BackgroundTaskDetailsSnapshot): TaskSummary {
   if (value.state === "timed_out") issues.push(runtimeTimeoutIssue(value.id));
   if (outcome === "error") {
     // The captured output line says why; a conventional exit status stands in when none did.
-    const exitCause = value.failureLine ?? exitStatusMeaning(value.exitCode);
+    const exitCause = cause ?? exitStatusMeaning(value.exitCode);
     if (nonZeroExit)
       issues.push(
         issue(
@@ -113,9 +112,7 @@ function taskSummary(value: BackgroundTaskDetailsSnapshot): TaskSummary {
         issue(
           "error",
           `${value.id}:failed`,
-          value.failureLine
-            ? `The task failed: ${value.failureLine}`
-            : "The task failed without reporting a cause",
+          cause ? `The task failed: ${cause}` : "The task failed without reporting a cause",
         ),
       );
   }
@@ -192,9 +189,24 @@ function taskLabels(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
 export interface BackgroundTaskCompactSummaryInput {
   readonly phase: CompactPhase;
   readonly args: Partial<BackgroundTaskToolInput>;
-  readonly result: { details?: unknown } | undefined;
+  /** `text` is the result text that the details' cause spans point into. */
+  readonly result: { details?: unknown; text?: string } | undefined;
   readonly isError: boolean;
 }
+
+/** Each failed task's cause, read from the result text at its producer-recorded span. */
+const causesById = (
+  spans: ReadonlyArray<{ readonly id: string; readonly start: number; readonly end: number }>,
+  text: string | undefined,
+): ReadonlyMap<string, string> =>
+  new Map(
+    text === undefined
+      ? []
+      : spans.flatMap(({ id, start, end }) => {
+          const cause = end <= text.length && start < end ? text.slice(start, end).trim() : "";
+          return cause && !cause.includes("\n") ? [[id, cause] as const] : [];
+        }),
+  );
 
 /** Display-only projection. Unknown errors keep their original text on expansion. */
 export const projectBackgroundTaskCompactSummary = ({
@@ -217,11 +229,15 @@ export const projectBackgroundTaskCompactSummary = ({
   if (Option.isNone(decoded)) return undefined;
   const details = decoded.value;
   if (details.action !== args.action) return undefined;
+  const causes = causesById(
+    "causes" in details ? (details.causes ?? []) : [],
+    Predicate.isString(result?.text) ? result.text : undefined,
+  );
   switch (details.action) {
     case "start":
     case "status":
     case "stop":
-      return { ...taskSummary(details.snapshot), action };
+      return { ...taskSummary(details.snapshot, causes.get(details.snapshot.id)), action };
     case "clear":
       return {
         action,
@@ -232,7 +248,7 @@ export const projectBackgroundTaskCompactSummary = ({
       };
     case "list":
     case "stop_all": {
-      const tasks = details.tasks.map(taskSummary);
+      const tasks = details.tasks.map((value) => taskSummary(value, causes.get(value.id)));
       const labels = taskLabels(details.tasks);
       const counters: string[] = [`${tasks.length} tasks`];
       const issues: CompactIssue[] = [];
@@ -257,7 +273,7 @@ export const projectBackgroundTaskCompactSummary = ({
       return { action, subject, counters: [counters.join(", ")], issues, outcome };
     }
     case "wait": {
-      const task = taskSummary(details.wait.snapshot);
+      const task = taskSummary(details.wait.snapshot, causes.get(details.wait.snapshot.id));
       if (details.wait.id !== details.wait.snapshot.id) return undefined;
       const issues = [...task.issues, ...cursorIssues(details.wait)];
       const timeout = details.wait.outcome === "timeout";
@@ -347,4 +363,12 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
   unknown,
   unknown
 > = ({ phase, args, result, context }) =>
-  projectBackgroundTaskCompactSummary({ phase, args, result, isError: context.isError });
+  projectBackgroundTaskCompactSummary({
+    phase,
+    args,
+    result: result && {
+      details: result.details,
+      text: result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(""),
+    },
+    isError: context.isError,
+  });

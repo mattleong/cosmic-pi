@@ -15,7 +15,8 @@ import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import type {
   BackgroundLogSlice,
   BackgroundTaskSnapshot,
-  BackgroundTaskWaitResult,
+  BackgroundTaskStatus,
+  BackgroundTaskStatusWait,
   StartBackgroundTask,
 } from "../task/model.ts";
 import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
@@ -55,13 +56,57 @@ export const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
 const boundedText = (text: string, maxBytes: number): string =>
   truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes }).content;
 
-const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskSnapshot>, maxBytes: number): string => {
-  if (tasks.length === 0) return boundedText("No background tasks.", maxBytes);
+/** A failed task's cause as it appears in the composed text, before truncation. */
+interface CauseText {
+  readonly id: string;
+  readonly start: number;
+  readonly end: number;
+  readonly cause: string;
+}
+/** Composed result text and where each failed task's cause sits in it. */
+interface TaskText {
+  readonly text: string;
+  readonly causes: ReadonlyArray<CauseText>;
+}
+
+const CAUSE_PREFIX = "\n  cause: ";
+
+/** The persisted v1 snapshot. The in-memory cause travels only in the result text. */
+const detailsSnapshot = ({
+  failureCause: _cause,
+  ...snapshot
+}: BackgroundTaskStatus): BackgroundTaskSnapshot => snapshot;
+
+/** `line`, then the task's cause beneath it when the task failed. */
+const withCause = (line: string, task: BackgroundTaskStatus): TaskText => {
+  if (!task.failureCause) return { text: line, causes: [] };
+  const cause = sanitizeTerminalLine(task.failureCause);
+  const start = line.length + CAUSE_PREFIX.length;
+  return {
+    text: `${line}${CAUSE_PREFIX}${cause}`,
+    causes: [{ id: task.id, start, end: start + cause.length, cause }],
+  };
+};
+
+/** Spans for the causes the final, possibly truncated, text still holds whole. */
+const causeSpans = (text: string, causes: ReadonlyArray<CauseText>) => {
+  const kept = causes
+    .filter((span) => text.slice(span.start, span.end) === span.cause)
+    .map(({ id, start, end }) => ({ id, start, end }));
+  return kept.length > 0 ? { causes: kept } : {};
+};
+
+const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskStatus>, maxBytes: number): TaskText => {
+  if (tasks.length === 0)
+    return { text: boundedText("No background tasks.", maxBytes), causes: [] };
   const lines: string[] = [];
+  const causes: CauseText[] = [];
   let used = 0;
+  let length = 0;
   for (const [index, task] of tasks.entries()) {
     const separatorBytes = lines.length === 0 ? 0 : 1;
-    const line = formatBackgroundTask(task);
+    const block = withCause(formatBackgroundTask(task), task);
+    const line = block.text;
     const lineBytes = utf8ByteLength(line);
     const omittedAfter = tasks.length - index - 1;
     const markerAfter = `[${omittedAfter} background task${omittedAfter === 1 ? "" : "s"} omitted]`;
@@ -73,13 +118,22 @@ const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskSnapshot>, maxBytes: 
       if (used + separatorBytes + markerBytes <= maxBytes) lines.push(marker);
       break;
     }
+    const offset = length + separatorBytes;
+    causes.push(
+      ...block.causes.map((span) => ({
+        ...span,
+        start: span.start + offset,
+        end: span.end + offset,
+      })),
+    );
     lines.push(line);
     used += separatorBytes + lineBytes;
+    length = offset + line.length;
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), causes };
 };
 
-const formatWait = (result: BackgroundTaskWaitResult): string => {
+const formatWait = (result: BackgroundTaskStatusWait): string => {
   const cursor = result.matchCursor ?? result.nextCursor;
   return sanitizeTerminalLine(
     `${result.id} ${result.outcome} state=${result.snapshot.state} cursor=${cursor}`,
@@ -112,13 +166,25 @@ const reply = (text: string, details: BackgroundTaskToolDetails): BackgroundTask
 
 /** The exact successful-start formatter used by execution and Code Mode admission. */
 export const backgroundTaskStartCommandResult = (
-  snapshot: BackgroundTaskSnapshot,
+  snapshot: BackgroundTaskStatus,
   maxTextBytes: number,
 ): BackgroundTaskCommandResult =>
   reply(boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes), {
     action: "start",
-    snapshot,
+    snapshot: detailsSnapshot(snapshot),
   });
+
+/** One task's result: its line (with any cause) bounded, and the details pointing at the cause. */
+const taskReply = (
+  line: string,
+  task: BackgroundTaskStatus,
+  maxTextBytes: number,
+  details: (snapshot: BackgroundTaskSnapshot) => BackgroundTaskToolDetails,
+): BackgroundTaskCommandResult => {
+  const composed = withCause(line, task);
+  const text = boundedText(composed.text, maxTextBytes);
+  return reply(text, { ...details(detailsSnapshot(task)), ...causeSpans(text, composed.causes) });
+};
 
 export interface BackgroundTaskCommandOptions {
   readonly maxTextBytes?: number;
@@ -162,14 +228,19 @@ export const executeBackgroundTaskCommand = (
       }
       case "list": {
         const tasks = yield* service.list(input.state ?? "all");
-        return reply(formatTaskList(tasks, maxTextBytes), { action: input.action, tasks });
+        const listed = formatTaskList(tasks, maxTextBytes);
+        return reply(listed.text, {
+          action: input.action,
+          tasks: tasks.map(detailsSnapshot),
+          ...causeSpans(listed.text, listed.causes),
+        });
       }
       case "status": {
-        const snapshot = yield* service.status(yield* required(input.id, "id"));
-        return reply(boundedText(formatBackgroundTask(snapshot), maxTextBytes), {
-          action: input.action,
+        const task = yield* service.status(yield* required(input.id, "id"));
+        return taskReply(formatBackgroundTask(task), task, maxTextBytes, (snapshot) => ({
+          action: "status",
           snapshot,
-        });
+        }));
       }
       case "logs": {
         const slice = yield* service.logs({
@@ -199,17 +270,22 @@ export const executeBackgroundTaskCommand = (
           ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
         });
-        return reply(boundedText(formatWait(wait), maxTextBytes), {
-          action: input.action,
-          wait,
-        });
+        return taskReply(formatWait(wait), wait.snapshot, maxTextBytes, (snapshot) => ({
+          action: "wait",
+          wait: { ...wait, snapshot },
+        }));
       }
       case "stop": {
-        const snapshot = yield* service.stop(yield* required(input.id, "id"), input.force);
-        return reply(boundedText(`Stopped ${formatBackgroundTask(snapshot)}`, maxTextBytes), {
-          action: input.action,
-          snapshot,
-        });
+        const task = yield* service.stop(yield* required(input.id, "id"), input.force);
+        return taskReply(
+          `Stopped ${formatBackgroundTask(task)}`,
+          task,
+          maxTextBytes,
+          (snapshot) => ({
+            action: "stop",
+            snapshot,
+          }),
+        );
       }
       case "stop_all": {
         const tasks = yield* service.stopAll(input.force);
@@ -218,7 +294,7 @@ export const executeBackgroundTaskCommand = (
             `Stopped ${tasks.length} background task${tasks.length === 1 ? "" : "s"}.`,
             maxTextBytes,
           ),
-          { action: input.action, tasks },
+          { action: input.action, tasks: tasks.map(detailsSnapshot) },
         );
       }
       case "clear": {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { BackgroundTaskService } from "../src/task/service.ts";
 import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
+import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 
 const unexpected = () => Effect.die("Invalid wait reached the task service");
 const service = {
@@ -57,6 +59,84 @@ describe("shared background task command", () => {
           totalLines: expect.any(Number),
         },
       });
+    }),
+  );
+
+  it.effect("puts a failed task's cause in the text and only its span in details", () =>
+    Effect.gen(function* () {
+      const failed = {
+        id: "bg-2",
+        name: "tests",
+        command: "pnpm test",
+        cwd: "/",
+        state: "failed" as const,
+        startedAt: 1,
+        endedAt: 2,
+        exitCode: 1,
+        logCursor: 3,
+        droppedLogBytes: 0,
+        failureCause: "FAIL tests/auth.test.ts > adds",
+      };
+      const { failureCause: _cause, ...persisted } = failed;
+      const { exitCode: _exit, endedAt: _ended, ...base } = persisted;
+      const running = { ...base, id: "bg-3", state: "running" as const };
+      const statusService = {
+        ...service,
+        status: () => Effect.succeed(failed),
+        list: () => Effect.succeed([running, failed]),
+      };
+      const run = (
+        input: Parameters<typeof executeBackgroundTaskCommand>[0],
+        maxTextBytes?: number,
+      ) =>
+        executeBackgroundTaskCommand(
+          input,
+          "/",
+          maxTextBytes === undefined ? {} : { maxTextBytes },
+        ).pipe(
+          Effect.provideService(BackgroundTaskService, statusService),
+          Effect.provide(Path.layer),
+        );
+      for (const input of [{ action: "status", id: "bg-2" }, { action: "list" }] as const) {
+        const result = yield* run(input);
+        expect(result.text).toContain("cause: FAIL tests/auth.test.ts > adds");
+        // Details keep metadata only: the v1 snapshot and where the cause sits in the text.
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          result.details,
+        );
+        expect(encoded).not.toContain("FAIL tests");
+        const snapshots =
+          "snapshot" in result.details
+            ? [result.details.snapshot]
+            : "tasks" in result.details
+              ? result.details.tasks
+              : [];
+        expect(snapshots).toContainEqual(persisted);
+        const spans = "causes" in result.details ? (result.details.causes ?? []) : [];
+        expect(spans.map(({ id, start, end }) => [id, result.text.slice(start, end)])).toEqual([
+          ["bg-2", "FAIL tests/auth.test.ts > adds"],
+        ]);
+        const summary = projectBackgroundTaskCompactSummary({
+          phase: "settled",
+          args: input,
+          result: { details: result.details, text: result.text },
+          isError: false,
+        });
+        expect(summary?.issues?.map((issue) => issue.message).join("\n")).toContain(
+          "exited with code 1: FAIL tests/auth.test.ts > adds",
+        );
+      }
+      // Text truncated before the cause drops its span; the row keeps the bare exit status.
+      const cut = yield* run({ action: "status", id: "bg-2" }, 30);
+      expect("causes" in cut.details && cut.details.causes).toBeFalsy();
+      expect(
+        projectBackgroundTaskCompactSummary({
+          phase: "settled",
+          args: { action: "status", id: "bg-2" },
+          result: { details: cut.details, text: cut.text },
+          isError: false,
+        })?.issues?.[0]?.message,
+      ).toBe("The task exited with code 1");
     }),
   );
 });

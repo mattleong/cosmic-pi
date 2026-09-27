@@ -20,16 +20,21 @@ Custom screens use the shared live viewport: centered at 90% of terminal width a
 - `src/tools/` owns the shared action executor and schema plus `background_task` registration and
   pure collapsed or expanded log rendering over the shared Cosmic UI tool header and expansion hint. Command details are the
   shared action-discriminated union and carry metadata only: `logs` details keep cursors and five truncation fields, never
-  log events or truncated text. The one exception is a details snapshot's `failureLine`: when a task fails, the service
-  keeps the first line of its recent output that names the failure, redacted and at most 64 characters, so the row can say
-  why. It lives in the details snapshot schema only; the frozen v1 Code Mode contract never carries it. The public `pi-code-previews` cooperative shell decorates the registered tool with an explicit
+  log events or truncated text. When a task fails, the service keeps the first line of its recent output that
+  names the failure, redacted and bounded, as the in-memory, domain-only `failureCause`. Status, wait, stop, and list
+  results write it into their text on a `cause:` line beneath the task, so the agent learns why without a `logs` call,
+  and details record only where it sits: producer-computed UTF-16 `causes` spans, never parsed. A span the final,
+  possibly truncated, text no longer holds is dropped. The command layer strips `failureCause` before building details,
+  and the frozen v1 Code Mode contract never carries it; programs see the cause through `text`.
+  The public `pi-code-previews` cooperative shell decorates the registered tool with an explicit
   `src/ui/compact-summary.ts` provider. This pure projection decodes the details with the shared task schema,
   distinguishes management completion from task state, and reports failure, cleanup, timeout,
   and output-loss problems as shared `CompactIssue`s with task-scoped codes (`<taskId>:<code>`).
   Each issue has one short human message; agent-facing recovery, cursors, and byte counts live
   only in its expanded `detail`, and retrieval hints are expanded-only `info` issues. Unclassified
-  task errors use their first line as the message and keep the full text as detail. A non-zero exit adds its
-  `failureLine`, else the meaning of a conventional exit code or signal (127 command not found, 137 killed). Aggregate
+  task errors use their first line as the message and keep the full text as detail. A non-zero exit adds the cause
+  read from the result text at its span, else the meaning of a conventional exit code or signal (127 command not
+  found, 137 killed). Aggregate
   `list`/`stop_all` messages name each task by its unique name, else its ID. Compact expansion uses a content-only callback that preserves fetched text and cursors without parsing log words; the shell owns status and issue rendering. Preview style keeps the original callbacks. Status and failure causes belong in the subject or
   issues, not optional metadata; stopped signals remain cancellation rather than failure.
   Clean exited log slices report successful retrieval, not verified process success; their

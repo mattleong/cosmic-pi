@@ -10,6 +10,5 @@ export const BACKGROUND_TASK_FIELD_BOUNDS = Object.freeze({
   maxWaitSeconds: 120,
   maxSignalChars: 256,
   maxErrorChars: 2_048,
-  maxFailureLineChars: 64,
   maxSnapshots: 600,
 });

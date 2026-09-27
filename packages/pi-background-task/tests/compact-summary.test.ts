@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
-import type { BackgroundTaskDetailsSnapshot } from "../src/task/model.ts";
+import type { BackgroundTaskSnapshot } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Input = Parameters<typeof projectBackgroundTaskCompactSummary>[0];
@@ -341,28 +341,50 @@ describe("background task compact semantics", () => {
     expect(result?.issues?.some((issue) => issue.code.endsWith("exit-code"))).toBe(false);
   });
 
-  it("says why a task failed from its captured line or its exit status", () => {
-    const message = (fields: Partial<BackgroundTaskDetailsSnapshot>) =>
-      project({ action: "status", snapshot: { ...snapshot, state: "failed", ...fields } })
+  it("says why a task failed from its cause span or its exit status", () => {
+    // The cause lives in the result text; details only record where.
+    const message = (fields: Partial<BackgroundTaskSnapshot>, cause?: string) => {
+      const line = `task-1 failed — test${cause ? `\n  cause: ${cause}` : ""}`;
+      const start = line.indexOf("cause: ") + "cause: ".length;
+      return projectBackgroundTaskCompactSummary({
+        phase: "settled",
+        args: { action: "status" },
+        result: {
+          details: {
+            action: "status",
+            snapshot: { ...snapshot, state: "failed", ...fields },
+            ...(cause && { causes: [{ id: "task-1", start, end: start + cause.length }] }),
+          },
+          text: line,
+        },
+        isError: false,
+      })
         ?.issues?.map((issue) => issue.message)
         .join("\n");
-    expect(message({ exitCode: 1, failureLine: "FAIL tests/a.test.ts" })).toBe(
+    };
+    expect(message({ exitCode: 1 }, "FAIL tests/a.test.ts")).toBe(
       "The task exited with code 1: FAIL tests/a.test.ts",
     );
     expect(message({ exitCode: 137 })).toMatch(/code 137: killed/u);
     expect(message({ exitCode: null, signal: "SIGSEGV" })).toMatch(/SIGSEGV: crashed/u);
-    expect(message({ failureLine: "fatal: no such ref" })).toBe(
-      "The task failed: fatal: no such ref",
-    );
-    // Results written before the field existed keep the bare exit status.
+    expect(message({}, "fatal: no such ref")).toBe("The task failed: fatal: no such ref");
+    // Results without spans, or with spans the text does not hold, keep the bare exit status.
     expect(message({ exitCode: 1 })).toBe("The task exited with code 1");
-    // An oversized line fails the details bound, leaving the generic row.
     expect(
-      project({
-        action: "status",
-        snapshot: { ...snapshot, state: "failed", exitCode: 1, failureLine: "x".repeat(65) },
-      }),
-    ).toBeUndefined();
+      projectBackgroundTaskCompactSummary({
+        phase: "settled",
+        args: { action: "status" },
+        result: {
+          details: {
+            action: "status",
+            snapshot: { ...snapshot, state: "failed", exitCode: 1 },
+            causes: [{ id: "task-1", start: 5, end: 500 }],
+          },
+          text: "short",
+        },
+        isError: false,
+      })?.issues?.[0]?.message,
+    ).toBe("The task exited with code 1");
   });
 
   it("writes every issue message in the shared style, without task IDs", () => {
@@ -370,7 +392,6 @@ describe("background task compact semantics", () => {
       { ...snapshot, state: "failed", error: "Error: spawn ENOENT\n  at spawn" },
       { ...snapshot, state: "failed" },
       { ...snapshot, state: "exited", exitCode: 2 },
-      { ...snapshot, state: "failed", exitCode: 1, failureLine: "FAIL tests/a.test.ts > adds" },
       { ...snapshot, state: "failed", exitCode: 127 },
       { ...snapshot, state: "exited", exitCode: null },
       { ...snapshot, state: "stopped", signal: "SIGTERM" },

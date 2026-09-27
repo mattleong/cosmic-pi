@@ -1,6 +1,5 @@
 import type {
   BackgroundLogMetadataSchema,
-  BackgroundTaskDetailsSnapshotSchema,
   BackgroundTaskSnapshotSchema,
   BackgroundTaskStateSchema,
   BackgroundTaskWaitResultSchema,
@@ -8,8 +7,15 @@ import type {
 
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
-/** The service's snapshot: the v1 member plus the details-only `failureLine`. */
-export type BackgroundTaskDetailsSnapshot = typeof BackgroundTaskDetailsSnapshotSchema.Type;
+/**
+ * The service's in-memory snapshot: the v1 member plus the domain-only `failureCause`, the first
+ * line of a failed task's output that names the failure, redacted and bounded. It is never
+ * persisted: tool results carry it in their text, and details only point at it.
+ */
+export type BackgroundTaskStatus = BackgroundTaskSnapshot & { readonly failureCause?: string };
+export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot"> & {
+  readonly snapshot: BackgroundTaskStatus;
+};
 export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
 export type BackgroundTaskWaitResult = typeof BackgroundTaskWaitResultSchema.Type;
 
