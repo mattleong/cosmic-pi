@@ -8,7 +8,7 @@ This is a pnpm workspace. Shared configuration lives at the root; package source
 - `packages/pi-background-task/`: session-scoped background tasks.
 - `packages/pi-better-openai/`: Better OpenAI extension.
 - `packages/pi-better-xai/`: Better xAI subscription usage.
-- `packages/pi-code-mode/`: confined interpreted programs over Pi built-ins and explicit Background Tasks and MCP adapters.
+- `packages/pi-code-mode/`: Node.js programs over Pi built-ins and explicit Background Tasks and MCP adapters.
 - `packages/pi-code-previews/`: code previews and the cooperative tool-rendering shell.
 - `packages/pi-cosmic-core/`: shared Effect runtime and platform code.
 - `packages/pi-cosmic-ui/`: shared UI components and responsive footer.
@@ -17,7 +17,7 @@ This is a pnpm workspace. Shared configuration lives at the root; package source
 - `packages/pi-mcp/`: one MCP gateway, trusted session connections, user-only OAuth, retained results, and a fixed Code Mode capability.
 - `packages/pi-subagents/`: session-scoped background subagents.
 
-Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. The private Code Mode runtime ships inside `packages/pi-code-mode/runtime/` and loads only through `src/boundary/codemode-runtime.ts`. Preserve its vendored-code rules in `runtime/PROVENANCE.md`.
+Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Code Mode runs programs in a fresh Node.js process through `packages/pi-code-mode/src/engine/`; its child runner is plain ESM because Node does not strip types under `node_modules`. Keep `packages/pi-code-mode/THIRD_PARTY_NOTICES.md` accurate for engine code derived from OpenCode.
 
 ## Package layout
 

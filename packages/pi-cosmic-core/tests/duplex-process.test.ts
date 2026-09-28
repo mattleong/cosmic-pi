@@ -123,6 +123,21 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
     ),
   );
 
+  it.live("carries the channel on fd 3 and retains stdout with stderr in side-channel mode", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const handle = yield* openDuplexProcess(options("side-channel", { sideChannel: true }));
+        yield* handle.write(encode("ping"));
+        expect(yield* collectUntil(handle.stdout, 4)).toBe("ping");
+        const output = yield* collectUntil(handle.stderr, "out:stdin\nerr\n".length);
+        expect(output).toContain("out:");
+        expect(output).toContain("err");
+        yield* handle.close;
+        expect(yield* handle.cleanupState).toBe("confirmed");
+      }),
+    ),
+  );
+
   it.live("settles concurrent writes without interleaving or losing data", () =>
     Effect.scoped(
       Effect.gen(function* () {

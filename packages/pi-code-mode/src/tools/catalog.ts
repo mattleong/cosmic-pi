@@ -1,6 +1,6 @@
 /**
  * The reviewed guest catalog: Pi built-ins under `tools.pi`, the explicit session-scoped
- * Background Tasks adapter under `tools.session`, MCP under `tools.mcp`, and runtime discovery.
+ * Background Tasks adapter under `tools.session`, MCP under `tools.mcp`, and Code Mode discovery.
  * Pi definitions dispatch directly; companion adapters use versioned current-session protocols.
  */
 import * as Effect from "effect/Effect";
@@ -19,7 +19,8 @@ import {
   mcpCodeModeInputError,
 } from "pi-mcp/code-mode";
 import type { McpDispatch } from "../boundary/host-mcp.ts";
-import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-runtime.ts";
+import { catalogInstructions } from "../engine/instructions.ts";
+import { makeTool, toolError, type ToolError } from "../engine/tool.ts";
 import type { BackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
@@ -31,7 +32,7 @@ import {
 } from "./read-result.ts";
 
 /**
- * Input contracts validated by the runtime before any nested dispatch happens. Every root is
+ * Input contracts validated by Pi before any nested dispatch happens. Every root is
  * closed, so an unknown key (including one inside an `edits` entry) is a catchable refusal.
  */
 const SafeInteger = Schema.Number.check(Schema.isFinite(), Schema.isInt());
@@ -101,8 +102,11 @@ const GUEST_TOOL_DESCRIPTIONS = {
     "parent directories. The write runs immediately without nested approval or preview middleware.",
   grep:
     "Search file contents with ripgrep (respects .gitignore). Use literal: true for literal text, " +
-    "otherwise pattern is a regex. Optional path, glob, ignoreCase, context lines, and match limit.",
-  find: "Find files by glob pattern (respects .gitignore). Optional search path and result limit.",
+    "otherwise pattern is a regex. Optional path, glob, ignoreCase, context lines, and match limit. " +
+    "Output paths are relative to path; join them with it before reading.",
+  find:
+    "Find files by glob pattern (respects .gitignore). Optional search path and result limit. " +
+    "Returned paths are relative to path; join them with it before reading.",
   ls: "List directory contents. Optional path (defaults to the session cwd) and entry limit.",
 } satisfies Readonly<Record<PiGuestToolName, string>>;
 
@@ -129,7 +133,7 @@ const stringPiOutput = (
   );
 
 const readTool = (invoke: NestedPiToolDispatch) =>
-  Tool.make({
+  makeTool({
     description: GUEST_TOOL_DESCRIPTIONS.read,
     input: ReadGuestInputSchema,
     output: Schema.Union([Schema.String, StructuredReadResultSchema]),
@@ -137,7 +141,7 @@ const readTool = (invoke: NestedPiToolDispatch) =>
   });
 
 const guestTool = (name: StringPiGuestToolName, invoke: NestedPiToolDispatch) =>
-  Tool.make({
+  makeTool({
     description: GUEST_TOOL_DESCRIPTIONS[name],
     input: GUEST_TOOL_INPUTS[name],
     output: Schema.String,
@@ -149,7 +153,7 @@ const guestTool = (name: StringPiGuestToolName, invoke: NestedPiToolDispatch) =>
 const BackgroundTaskGuestInput = BackgroundTaskCodeModeInputSchema.annotate(CLOSED_GUEST_INPUT);
 
 const backgroundTaskTool = (invoke: BackgroundTaskDispatch) =>
-  Tool.make({
+  makeTool({
     description:
       "Start and manage session-scoped local background commands through the explicit " +
       "pi-background-task adapter. Tasks may outlive this Code Mode call but are terminated " +
@@ -174,7 +178,7 @@ const McpGuestInput = McpCodeModeInputSchema.annotate({
 );
 
 const mcpTool = (invoke: McpDispatch) =>
-  Tool.make({
+  makeTool({
     description:
       "Request status, bounded discovery, exact tool calls, resources, prompts, or retained " +
       "result.read through the active pi-mcp session. server.instructions requires a server and " +
@@ -201,7 +205,7 @@ const mcpTool = (invoke: McpDispatch) =>
 export interface CodeModeCatalogOptions {
   readonly observationId?: (fiber: number) => number | undefined;
   readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
-  /** Adapter output still needs the interpreter's schema and data-boundary decoding. */
+  /** Adapter output still needs output-schema decoding and delivery to the program. */
   readonly onOutputReturned?: (invocationId: number | undefined) => void;
   /** True only when the current platform supplied a native PowerShell definition. */
   readonly includePowerShell: boolean;
@@ -313,8 +317,8 @@ export const describeCodeModeCatalog = (
   includePowerShell: boolean,
 ): string => {
   const preview = () => Effect.fail(toolError("Tool preview is not executable."));
-  return CodeMode.make({
-    tools: makeCodeModeGuestTools(preview, preview, preview, includePowerShell),
-    discovery: { catalogBudget },
-  }).instructions();
+  return catalogInstructions(
+    makeCodeModeGuestTools(preview, preview, preview, includePowerShell),
+    catalogBudget,
+  );
 };

@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { toolError, type ToolError } from "../boundary/codemode-runtime.ts";
+import { toolError, type ToolError } from "../engine/tool.ts";
 import { decodeOption } from "./format.ts";
 
 const SafeNatural = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));

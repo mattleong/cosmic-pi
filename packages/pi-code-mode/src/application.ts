@@ -187,6 +187,7 @@ export function registerCodeModeApplication(
               isCurrent: () => isCurrent() && input.executionOwner.current(),
               getState: () => MutableRef.get(stateRef),
               runInSession: (effect, signal) => input.executionOwner.run(effect, signal, slot.run),
+              cwd: input.cwd,
               definitions,
               events: pi.events,
               sessionId: input.sessionId,

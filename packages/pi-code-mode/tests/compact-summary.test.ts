@@ -45,19 +45,19 @@ describe("Code Mode program issues", () => {
       for (const [code, config, facts] of [
         ["return (", {}, [/syntax/iu, /line 1\b/u]],
         ["const a = 1;\nconst b = ;", {}, [/syntax/iu, /line 2\b/u]],
-        ["class A {}", {}, [/class declaration/u, /line 1\b/u]],
+        ["const x = 1;\nx();", {}, [/not a function/u, /line 2\b/u]],
         ["const x = 1;\nnull.foo;", {}, [/'foo'/u, /null/u, /line 2\b/u]],
-        ['throw new Error("boom");', {}, [/^boom$/u]],
-        ["await tools.pi.nope({});", {}, [/no such tool/u]],
+        ['throw new Error("boom");', {}, [/^boom \(line 1\)$/u]],
+        ["await tools.pi.nope({});", {}, [/No tool named pi\.nope/u]],
         ["await tools.pi.read({});", {}, [/"path"/u]],
         ["await tools.pi.read({path:'a', file:'b'});", {}, [/"file"/u]],
-        ["return () => 1;", {}, [/plain data/u]],
+        ["return 1n;", {}, [/plain data/u]],
         [
           "await tools.pi.read({path:'a'}); await tools.pi.read({path:'b'});",
           { maxToolCalls: 1 },
           [/\b1-call\b/u],
         ],
-        ["while (true) {}", { timeoutMs: 100 }, [/100ms/u, /line 1\b/u]],
+        ["while (true) {}", { timeoutMs: 100 }, [/100ms/u]],
         [
           "await Promise.allSettled([tools.pi.bash({command:'a'}), tools.pi.bash({command:'b'})]); await tools.pi.bash({command:'c'});",
           {},
@@ -109,22 +109,6 @@ describe("Code Mode program issues", () => {
       const row = summary?.children?.entries[0]?.issues?.[0]?.message ?? "";
       expect(row).toMatch(/code 1.*stopped the program/u);
       expect(issueMessageStyleProblems(row)).toEqual([]);
-    }),
-  );
-
-  it.effect("keeps the supported-syntax summary out of the message but in the agent text", () =>
-    Effect.gen(function* () {
-      const h = executeHarness({ cwd: "/project", retainFailureDetails: true });
-      const text = yield* Effect.promise(() =>
-        h.run("class A {}").then(
-          () => expect.unreachable(),
-          (error: Error) => error.message,
-        ),
-      );
-      expect(text).toMatch(/\nSupported orchestration syntax: /u);
-      expect(text).not.toMatch(/\(line 1, col 1\)/u);
-      const summary = summarize(h.retention.consume("call"), { isError: true, text });
-      expect(summary?.issues?.[0]?.message).not.toMatch(/Supported/u);
     }),
   );
 

@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import type { CodeModeResult } from "../boundary/codemode-runtime.ts";
+import type { CodeModeResult } from "../engine/diagnostic.ts";
 import { commitPreparedResult } from "../boundary/host-result-commit.ts";
 import type { ResultCapture, ExecutionOutcome } from "../results/model.ts";
 import { projectResultPage } from "../results/projection.ts";
@@ -42,7 +42,7 @@ export function makeResultResponse(input: {
     const nestedOutputLost = input.nestedOutputLost();
     const needsSafetyBackstop = nestedOutputLost || receipts.unknown > 0;
     const initiallyCancelled = input.aborted() || !input.current();
-    // A settled interpreter result remains known even if delivery is later cancelled.
+    // A settled program result remains known even if delivery is later cancelled.
     const outcome: ExecutionOutcome = result
       ? result.ok
         ? "succeeded"

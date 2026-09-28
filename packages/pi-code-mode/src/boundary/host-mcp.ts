@@ -22,7 +22,7 @@ import {
   type McpPresentation,
 } from "pi-mcp/code-mode";
 import { invokeHostCallback, querySessionCapability } from "pi-cosmic-core";
-import { toolError, type ToolError } from "./codemode-runtime.ts";
+import { toolError, type ToolError } from "../engine/tool.ts";
 
 const decodeInput = Schema.decodeUnknownEffect(McpCodeModeInputSchema);
 const decodeOutput = Schema.decodeUnknownEffect(Schema.fromJsonString(McpCodeModeOutputSchema));

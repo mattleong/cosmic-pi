@@ -13,7 +13,12 @@ import type {
 } from "../results/read-presentation.ts";
 import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
 import type { FailureEvidence } from "./failure-evidence.ts";
-import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
+import type {
+  CodeModeCompletedCall,
+  CodeModeFailure,
+  CodeModeSuccess,
+} from "../engine/diagnostic.ts";
+import { completedCallHeading } from "../engine/output.ts";
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
 export const MAX_INTENT_LENGTH = 160;
@@ -153,6 +158,22 @@ const withLogs = (text: string, logs: ReadonlyArray<string> | undefined): string
   return text.length > 0 ? `${text}\n\n${rendered}` : rendered;
 };
 
+/** Heading for the output of calls that completed before a program failed. */
+export const COMPLETED_CALLS_HEADING =
+  "Completed calls (the program failed before returning these results):";
+
+const withCompleted = (
+  text: string,
+  completed: ReadonlyArray<CodeModeCompletedCall> | undefined,
+): string => {
+  if (completed === undefined || completed.length === 0) return text;
+  const section = [
+    COMPLETED_CALLS_HEADING,
+    ...completed.flatMap((call) => [completedCallHeading(call), call.text]),
+  ].join("\n");
+  return `${text}\n\n${section}`;
+};
+
 const STATUS_SYMBOLS = {
   queued: " ◌",
   running: " ⠋",
@@ -194,11 +215,11 @@ export const progressResult = (
 
 /**
  * Return strings verbatim and serialize structured values without indentation. This preserves
- * every JSON value without expanding the compact representation already bounded by the runtime.
+ * every JSON value without expanding the compact representation already bounded by execution.
  * Execution applies the final UTF-8 byte clamp after logs are appended.
  */
 export const formatCodeModeSuccess = (result: CodeModeSuccess): string => {
-  // The runtime validates returned values as plain JSON data. Never parse or reformat strings,
+  // Returned values crossed a JSON boundary. Never parse or reformat strings,
   // even when they contain JSON, source code, or whitespace-sensitive document contents.
   const output = Predicate.isString(result.value)
     ? result.value
@@ -207,7 +228,7 @@ export const formatCodeModeSuccess = (result: CodeModeSuccess): string => {
 };
 
 /**
- * The runtime also appends `(line L, col C)` to located messages; the envelope already states the
+ * Older results appended `(line L, col C)` to located messages; the envelope already states the
  * location once, so the repeat is dropped.
  */
 export const codeModeDiagnosticMessage = (error: CodeModeFailure["error"]): string =>
@@ -217,13 +238,16 @@ export const codeModeDiagnosticMessage = (error: CodeModeFailure["error"]): stri
 
 /**
  * Normalized diagnostic rendering: stable kind, message, source location, and any
- * suggestions the runtime attached, with runtime logs preserved.
+ * suggestions, then the program's logs and the output of calls that completed.
  */
 export const formatCodeModeFailure = (result: CodeModeFailure): string => {
   const { error } = result;
   const message = codeModeDiagnosticMessage(error);
   const hints = (error.suggestions ?? []).filter((hint) => !message.includes(hint));
-  return withLogs([`${diagnosticPrefix(error)}${message}`, ...hints].join("\n"), result.logs);
+  return withCompleted(
+    withLogs([`${diagnosticPrefix(error)}${message}`, ...hints].join("\n"), result.logs),
+    result.completed,
+  );
 };
 
 /** `[Kind] (line L, column C) `, the envelope before a diagnostic's message. */

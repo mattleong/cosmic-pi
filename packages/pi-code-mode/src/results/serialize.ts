@@ -1,6 +1,7 @@
 import * as Predicate from "effect/Predicate";
-import type { CodeModeResult } from "../boundary/codemode-runtime.ts";
-import { codeModeDiagnosticMessage } from "../tools/format.ts";
+import type { CodeModeResult } from "../engine/diagnostic.ts";
+import { completedCallHeading } from "../engine/output.ts";
+import { codeModeDiagnosticMessage, COMPLETED_CALLS_HEADING } from "../tools/format.ts";
 import { RESULT_MAX_BYTES, RESULT_MAX_VISITS, type ResultCapture } from "./model.ts";
 
 /** Bounded traversal over validated plain data. Never keeps the guest graph or invokes toJSON. */
@@ -76,6 +77,15 @@ export function captureResult(result: CodeModeResult): ResultCapture {
         if (++visits > RESULT_MAX_VISITS) throw new RangeError("capture-limit");
         if (index > 0) append("\n");
         append(result.logs[index]!);
+      }
+    }
+    if (!result.ok && result.completed?.length) {
+      if (bytes > 0) append("\n\n");
+      append(COMPLETED_CALLS_HEADING);
+      for (const call of result.completed) {
+        if (++visits > RESULT_MAX_VISITS) throw new RangeError("capture-limit");
+        append(`\n${completedCallHeading(call)}\n`);
+        append(call.text);
       }
     }
     return { status: "captured", text: parts.join("") };

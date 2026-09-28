@@ -1,8 +1,5 @@
 packages:
   - packages/*
-  # The private Code Mode runtime is nested inside the public pi-code-mode package so its
-  # TypeScript source ships inside the pi-code-mode tarball.
-  - packages/pi-code-mode/runtime
 
 catalog:
   "@earendil-works/pi-ai": 0.86.0
@@ -21,7 +18,6 @@ catalog:
   oxlint: 1.78.0
   typebox: 1.1.38
   typescript: 7.0.2
-  typescript-compiler-api: npm:typescript@6.0.3
   vitest: ^4.1.5
 
 engineStrict: true

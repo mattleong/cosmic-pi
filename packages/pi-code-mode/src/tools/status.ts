@@ -44,7 +44,7 @@ const statusBudgetRefusal = (maxOutputBytes: number): string =>
   );
 
 /**
- * Projects the live in-memory limits without entering the interpreter, session runner, result
+ * Projects the live in-memory limits without starting a program, session runner, result
  * store, or any execution budget. The final response still obeys the live output-byte limit.
  */
 export const codeModeStatusResult = (config: CodeModeConfig): AgentToolResult<StatusDetails> => {

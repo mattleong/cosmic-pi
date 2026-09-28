@@ -1,9 +1,9 @@
 /**
- * Human messages for runtime diagnostics, built from the facts the runtime records rather than
+ * Human messages for execution diagnostics, built from the facts execution records rather than
  * its wording. The raw diagnostic stays in the result.
  */
 import * as Predicate from "effect/Predicate";
-import type { CodeModeDiagnosticFacts } from "../boundary/codemode-runtime.ts";
+import type { CodeModeDiagnosticFacts } from "../engine/diagnostic.ts";
 import { nestedToolLabel } from "./compact-subject.ts";
 import { failureMessage, type FailureEvidence } from "./failure-evidence.ts";
 import { formatDuration, firstLineMessage } from "pi-cosmic-core";

@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-herdr-btw` and `pi-mcp` remain local-only, and the nested private `pi-code-mode-runtime` is never published on its own (its TypeScript source ships inside the `pi-code-mode` tarball and loads through Pi/Jiti). A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
+All workspace packages use the same version. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-herdr-btw` and `pi-mcp` remain local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
 
 ## One-time setup
 
@@ -52,14 +52,14 @@ pnpm validate
 Review the changes. The root and all package manifests should have the same version:
 
 ```bash
-git diff -- package.json packages/*/package.json packages/pi-code-mode/runtime/package.json
+git diff -- package.json packages/*/package.json
 git status --short
 ```
 
 Commit and push the release version:
 
 ```bash
-git add package.json packages/*/package.json packages/pi-code-mode/runtime/package.json
+git add package.json packages/*/package.json
 git commit -m "chore(release): v0.2.1"
 git push origin main
 ```

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import { captureBuiltinCompactPolicy, projectBuiltinCompactSummary } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { MCP_CODE_MODE_MAX_OUTPUT_BYTES, projectMcpCompactSummary } from "pi-mcp/code-mode";
-import { CodeMode } from "../boundary/codemode-runtime.ts";
+import { executeProgram } from "../engine/execute.ts";
 import { makeMcpDispatch } from "../boundary/host-mcp.ts";
 import type { ResultCapture } from "../results/model.ts";
 import { captureResult } from "../results/serialize.ts";
@@ -77,8 +77,8 @@ export function runCodeModeExecution(
     const call = calls.get(id);
     if (call !== undefined) call.compact = receipt;
   });
-  // Adapter completion is not guest delivery. Only the terminal runtime hook observes
-  // output-schema decoding and the interpreter's stricter data boundary.
+  // Adapter completion is not guest delivery. Only the terminal lifecycle event observes
+  // output-schema decoding and delivery to the program.
   const returnedOutputs = new Set<number>();
   const recordDeliveryFailure = (id: number | undefined) => {
     receipts.recordOutputLoss();
@@ -135,7 +135,7 @@ export function runCodeModeExecution(
   }
 
   const attempt = (): Promise<AgentToolResult<CodeModeToolDetails>> => {
-    // Give the host one leading-edge snapshot before interpreter work begins. Row admission
+    // Give the host one leading-edge snapshot before program work begins. Row admission
     // and enriched running labels publish synchronously into Pi's next frame; status-only
     // snapshots are frame-coalesced, with the newest state flushed on settlement.
     // The leading snapshot carries the (empty) attention ledger, so the compact row keeps its
@@ -226,8 +226,9 @@ export function runCodeModeExecution(
         },
       });
 
-      return (environment.executeCodeMode ?? CodeMode.execute)({
+      return (environment.executeCodeMode ?? executeProgram)({
         code: params.code,
+        cwd: environment.cwd,
         onResult: (result) => {
           if (acceptingCapture && environment.isCurrent()) capture = captureResult(result);
         },

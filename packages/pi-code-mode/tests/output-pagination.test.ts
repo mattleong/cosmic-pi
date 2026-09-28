@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { CodeModeSuccess } from "../src/boundary/codemode-runtime.ts";
+import type { CodeModeSuccess } from "../src/engine/diagnostic.ts";
 import type { ResultArtifact } from "../src/results/model.ts";
 import { projectResultPage } from "../src/results/projection.ts";
 import {

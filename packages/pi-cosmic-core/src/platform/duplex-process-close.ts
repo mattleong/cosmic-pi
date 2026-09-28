@@ -42,15 +42,25 @@ export interface DuplexProcessCloseOptions {
   readonly nativeClosed: Effect.Effect<void>;
 }
 
-type CleanupChild = Pick<
-  DuplexProcessChild,
-  "pid" | "exitCode" | "signalCode" | "stdin" | "stdout" | "stderr"
->;
+interface CleanupStream {
+  readonly destroy: () => void;
+}
+
+interface CleanupChild extends Pick<DuplexProcessChild, "pid" | "exitCode" | "signalCode"> {
+  readonly stdin: { readonly end: () => void; readonly destroy: () => void } | null;
+  readonly stdout: CleanupStream | null;
+  readonly stderr: CleanupStream | null;
+  /** Every native pipe, including extra descriptors beyond stdin/stdout/stderr. */
+  readonly stdio?: ReadonlyArray<CleanupStream | null | undefined>;
+  /** Writable end to close first when input does not travel over stdin. */
+  readonly input?: { readonly end: () => void } | undefined;
+}
 
 const destroyStreams = (child: CleanupChild): void => {
-  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+  const streams = new Set([child.stdin, child.stdout, child.stderr, ...(child.stdio ?? [])]);
+  for (const stream of streams) {
     try {
-      stream.destroy();
+      stream?.destroy();
     } catch {
       // Native close and process-group evidence, not destroy(), confirm cleanup.
     }
@@ -112,7 +122,7 @@ export const closeDuplexProcess = (
           if (!Number.isSafeInteger(pid) || pid <= 0) return yield* closeFailure("failed");
           yield* Effect.try({
             try: () => {
-              child.stdin.end();
+              (child.input ?? child.stdin)?.end();
             },
             catch: () =>
               duplexProcessError("close", "failed", "Unable to close child process input."),

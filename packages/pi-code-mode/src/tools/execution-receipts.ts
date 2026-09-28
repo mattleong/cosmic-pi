@@ -105,7 +105,7 @@ export function makeExecutionReceipts() {
       active.add(id);
       if (calls.has(id)) return;
       // Queued calls own no host operation. Reclaim a queued or settled display slot for
-      // each admitted dispatch; only eight runtime calls can hold dispatch slots at once.
+      // each admitted dispatch; only eight calls can hold dispatch slots at once.
       if (calls.size >= 256) {
         const evict = [...calls].find(([key]) => !active.has(key));
         if (evict) calls.delete(evict[0]);

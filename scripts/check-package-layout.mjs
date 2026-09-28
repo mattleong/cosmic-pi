@@ -28,7 +28,7 @@ const hasOwnManifest = async (directory) => {
 
 /**
  * Walk one package's own files. A subdirectory with its own `package.json` must be a declared
- * nested workspace package (for example `pi-code-mode/runtime`); it is then validated as its
+ * nested workspace package (see `NESTED_PACKAGE_DIRECTORIES`); it is then validated as its
  * own package entry instead of leaking into its parent's layout rules. An undeclared nested
  * manifest is a violation, so nesting can never silently exempt files from these rules.
  */

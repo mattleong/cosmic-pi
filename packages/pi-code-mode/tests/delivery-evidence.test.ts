@@ -1,48 +1,45 @@
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
-import type { McpCodeModeOutput } from "pi-mcp/code-mode";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { renderCompactChildren } from "pi-code-previews";
 import { COMPLETE_LEDGER, deliveryIssues, ledgerDetails, summarize } from "./support/compact.ts";
 import { executeHarness } from "./support/execute.ts";
 import { mcpProvider } from "./support/providers.ts";
 
-describe("interpreter delivery evidence", () => {
+describe("program delivery evidence", () => {
   it.effect(
-    "records protocol-valid output rejected at the interpreter depth boundary without changing operation outcome",
+    "records a completed call whose result the exited program never received without changing its outcome",
     () =>
       Effect.gen(function* () {
-        let data: McpCodeModeOutput["data"] = null;
-        for (let depth = 0; depth < 40; depth++) data = { child: data };
+        // The provider settles after the program has already exited.
         const events = mcpProvider(() =>
-          Promise.resolve({
-            action: "status",
-            outcome: "completed",
-            isError: false,
-            data,
-            notices: [],
-          }),
-        );
-        const completed = yield* Effect.promise(() =>
-          executeHarness({ events, config: { maxCumulativeChildOutputBytes: 1000000 } }).run(
-            'let message=""; try { await tools.mcp.request({action:"status"}); } catch(e) { message=e.message; } return message;',
+          Effect.runPromise(
+            Effect.as(Effect.sleep("300 millis"), {
+              action: "status" as const,
+              outcome: "completed" as const,
+              isError: false,
+              data: null,
+              notices: [],
+            }),
           ),
         );
-        // The refusal names the limit the output hit, not only that it was invalid.
-        expect(completed.content[0]).toMatchObject({
-          text: expect.stringContaining("maximum value depth"),
-        });
-        expect(completed.content[0]).toMatchObject({
-          text: expect.stringContaining("Do not replay completed or uncertain operations"),
-        });
-        const receipt = completed.details!.toolCalls[0]!.compact!;
+        const h = executeHarness({ events, retainFailureDetails: true });
+        const exited = yield* Effect.promise(() =>
+          h
+            .run(
+              'tools.mcp.request({action:"status"}).catch(() => {}); await new Promise((r) => setTimeout(r, 50)); process.exit(0);',
+            )
+            .then(
+              () => expect.unreachable(),
+              (error: Error) => error.message,
+            ),
+        );
+        expect(exited).toContain("exited before returning a result");
+        expect(exited).toContain("Do not replay completed or uncertain operations");
+        const details = h.retention.consume("call")!;
+        const receipt = details.toolCalls[0]!.compact!;
         expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
         expect(deliveryIssues(receipt.issues)).toHaveLength(1);
-        expect(completed.details!.compactAttention).toEqual(COMPLETE_LEDGER);
-        expect(summarize(completed.details!)?.children?.entries[0]).toMatchObject({
-          label: "mcp",
-          status: "error",
-        });
       }),
   );
 

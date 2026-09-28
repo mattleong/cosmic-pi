@@ -50,14 +50,14 @@ const expandKeys = (): string[] => {
 };
 
 // Keep the provider-facing root an object. The alternatives still reject mixed forms;
-// admission repeats those exclusions before either interpreter execution or registry reads.
+// admission repeats those exclusions before either program execution or registry reads.
 const parameters = Type.Unsafe<CodeModeInput>(
   Type.Object(
     {
       code: Type.Optional(
         Type.String({
           description:
-            "Program source for the confined Code Mode interpreter (restricted JavaScript subset).",
+            "Body of an async JavaScript (or erasable TypeScript) function, run in a fresh Node.js process. Use return for the result.",
         }),
       ),
       intent: Type.Optional(
@@ -117,17 +117,19 @@ const descriptionHeader = (
   catalogBudget: number,
   registrationSnapshot?: CodeModeConfig,
 ) =>
-  "Run one confined JavaScript program that orchestrates Pi's seven core built-ins " +
+  "Run one JavaScript program in a fresh Node.js process that orchestrates Pi's seven core built-ins " +
   "(tools.pi.read, tools.pi.bash, tools.pi.edit, tools.pi.write, tools.pi.grep, " +
   `tools.pi.find, tools.pi.ls)${includePowerShell ? ", the Windows-only tools.pi.powershell built-in," : ""} ` +
   "and the explicit tools.session.backgroundTask and tools.mcp.request adapters in one call. Sequence, " +
   "transform, filter, branch, and parallelize nested calls, then return only the data you " +
-  "need. The tree-walk interpreter itself has no ambient filesystem, network, process, module, " +
-  "or timer APIs; authority comes from supplied tools. Shell, edit, write, and background-task " +
-  "start operations grant full local-user process, network, environment, and unrestricted " +
-  "filesystem authority. Session-configured limits bound interpreter time, call count, and " +
-  "model-visible bytes but cannot prevent or undo tool side effects. A started background task " +
-  "may outlive the Code Mode call and is owned until Pi session shutdown.\n" +
+  "need. The program uses Node.js for computation and the network: reading or writing files, " +
+  "importing project modules, and starting processes directly are refused, so file and process " +
+  "work goes through the recorded tools.pi.* calls. Direct network use is allowed and not " +
+  "recorded. This routes work through tools; it is not a sandbox. " +
+  "Session-configured limits bound time, call count, and model-visible bytes but cannot prevent or " +
+  "undo side effects. When the program ends, calls it already started finish and are reported; only " +
+  "the timeout or cancellation stops them. A started background task may outlive the Code Mode call " +
+  "and is owned until Pi session shutdown.\n" +
   "\n" +
   "Nested Pi calls are dispatched directly against fresh built-in definitions. They BYPASS " +
   "Pi tool_call/tool_result middleware, approval and preview extensions, registered tool " +
@@ -138,7 +140,7 @@ const descriptionHeader = (
   "Nested shells use Pi's default local implementations. Paths may be relative, absolute, or " +
   "home-relative; code_mode does not confine tool effects to the project directory.\n\n" +
   'Use {action:"status"} alone to inspect the effective execution limits. Status uses the live ' +
-  "in-memory session snapshot at invocation and spends no interpreter, nested-call, retained-result, " +
+  "in-memory session snapshot at invocation and spends no execution, nested-call, retained-result, " +
   "source, child-output, call-count, or timeout budget; its final text still obeys maxOutputBytes. " +
   `Package numeric defaults are ${describeNumericConfig(DEFAULT_CODE_MODE_CONFIG)}. ` +
   (registrationSnapshot === undefined
@@ -147,7 +149,7 @@ const descriptionHeader = (
   `This catalog captured catalogBudget=${catalogBudget} at registration and does not change until reload. ` +
   "Status is authoritative only for its invocation because settings can change later.\n\n" +
   'Recover retained output with {action:"result.read",id,offset?,limit?}, never by rerunning code. ' +
-  "Reads run no interpreter or nested operation. Offsets count UTF-16 units; follow next until null. " +
+  "Reads run no program or nested operation. Offsets count UTF-16 units; follow next until null. " +
   "Read success is not original execution success; inspect outcome. Artifacts are bounded, session-only, " +
   "and revoked on tree navigation, replacement, or shutdown. Capture can be unavailable; no replay is authorized.";
 
@@ -221,12 +223,17 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       input.configSnapshot,
     )}\n\n${describeCodeModeCatalog(input.catalogBudget, input.includePowerShell)}`,
     promptSnippet:
-      "Run one confined script over Pi built-ins, background tasks, and bounded MCP requests",
+      "Run one Node.js program over Pi built-ins, background tasks, and bounded MCP requests",
     promptGuidelines: [
       "Use code_mode to batch already-known independent work and mechanical dependent steps " +
         "in one bounded program. Parallelize only independent calls. Stop for judgment, new " +
         "authorization, worker coordination, or required top-level middleware and previews. " +
         "Ordinary concurrent tool calls are also valid.",
+      "Inside code_mode, read, search and change files and run commands only with tools.pi.*: " +
+        "Node's fs, child_process and imports of project files or packages are refused. Node is for " +
+        "computation and the network. For files over read's 2,000-line/50 KB limit, page with " +
+        "offset/limit or filter with tools.pi.bash (rg, jq, head). tools.pi.grep and tools.pi.find " +
+        "return paths relative to their path argument; join them with it before reading.",
       "For executions, always pass the optional code_mode intent parameter: a short " +
         'human-readable phrase describing what the program is for (e.g. "Inspect the extension"); ' +
         "the UI shows it in place of the raw program source. Status and result.read forbid code and intent.",
@@ -252,8 +259,8 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
         "remaining, they inspect immediately. Shorter requested waits and provider limits still " +
         "apply. A wait timeout does not stop the task; the reserve does not guarantee delivery " +
         "if scheduling or subsequent guest work exhausts the outer deadline.",
-      "Prefer literal searches and string predicates when they express the task. Do not weaken the " +
-        "runtime's conservative regular-expression guards to force a rejected pattern through.",
+      "A failed program's result includes the output of calls that completed before the failure. " +
+        "Use it instead of rerunning those calls, and fix only the part that failed.",
       "Batch independent, already-formed MCP requests with Promise.all(requests.map(input => tools.mcp.request(input))). " +
         "Use bounded discovery before exact server/tool calls, and result.read for retained output. " +
         "Check outcome and isError. Never replay an unknown or completed operation to recover its output. " +

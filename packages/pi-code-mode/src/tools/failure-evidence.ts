@@ -1,7 +1,7 @@
-/** Why a program failed, as bounded display evidence from the runtime's structured diagnostic. */
+/** Why a program failed, as bounded display evidence from execution's structured diagnostic. */
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import type { CodeModeDiagnostic, CodeModeDiagnosticFacts } from "../boundary/codemode-runtime.ts";
+import type { CodeModeDiagnostic, CodeModeDiagnosticFacts } from "../engine/diagnostic.ts";
 import { codeModeDiagnosticMessage, codeModeMessageSpan, decodeOption } from "./format.ts";
 import { cleanDiagnosticText } from "./issue-evidence.ts";
 import { clipText } from "pi-cosmic-core";
@@ -61,7 +61,7 @@ const boundedFacts = (facts: CodeModeDiagnosticFacts) => ({
 });
 
 /**
- * The runtime diagnostic as bounded evidence for the returned `text`: redacted facts, and a
+ * The execution diagnostic as bounded evidence for the returned `text`: redacted facts, and a
  * span for the message only while the text still holds that line whole.
  */
 export const failureEvidence = (

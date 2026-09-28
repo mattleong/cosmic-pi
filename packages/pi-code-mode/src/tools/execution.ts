@@ -6,7 +6,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback } from "pi-cosmic-core";
-import { CodeMode } from "../boundary/codemode-runtime.ts";
+import type { CodeModeResult } from "../engine/diagnostic.ts";
+import type { ExecuteProgramOptions } from "../engine/execute.ts";
 import { type NestedPiToolDefinitions } from "../boundary/host-builtin-tools.ts";
 import type { CodeModeState } from "../config/store.ts";
 import { resultReadFailure } from "../results/read-presentation.ts";
@@ -42,14 +43,18 @@ export interface CodeModeExecutionEnvironment {
   readonly getState: () => CodeModeState | undefined;
   /** Runs one effect on the current session runtime; the signal interrupts the fiber. */
   readonly runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) => Promise<A>;
+  /** Session directory captured at activation; nested built-ins and programs run there. */
+  readonly cwd: string;
   /** Pi built-in definitions captured for this registration's cwd and platform. */
   readonly definitions: NestedPiToolDefinitions;
   /** Shared event bus used only for the explicit Background Tasks and MCP protocols. */
   readonly events: ExtensionAPI["events"];
   /** Stable Pi session id captured at activation; absence makes the adapter fail closed. */
   readonly sessionId: string | undefined;
-  /** Runtime execution boundary; injectable for compatibility tests. */
-  readonly executeCodeMode?: typeof CodeMode.execute;
+  /** Program execution boundary; injectable for tests. */
+  readonly executeCodeMode?: (
+    options: ExecuteProgramOptions<never>,
+  ) => Effect.Effect<CodeModeResult>;
   /** One-shot handoff to the `tool_result` hook for failures Pi converts to details `{}`. */
   readonly retainFailureDetails?: (toolCallId: string, details: CodeModeToolDetails) => void;
 }

@@ -7,7 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import type { CodeModeResult } from "../src/boundary/codemode-runtime.ts";
+import type { CodeModeResult } from "../src/engine/diagnostic.ts";
 import { RESULT_MAX_BYTES, RESULT_MAX_ENTRIES } from "../src/results/model.ts";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
 import type { CodeModeToolDetails } from "../src/tools/format.ts";

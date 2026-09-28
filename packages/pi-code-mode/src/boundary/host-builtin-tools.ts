@@ -33,7 +33,7 @@ import {
   type ReadGuestData,
   type ReadGuestInput,
 } from "../tools/read-result.ts";
-import { toolError, type ToolError } from "./codemode-runtime.ts";
+import { toolError, type ToolError } from "../engine/tool.ts";
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 export type PiGuestToolInput = Parameters<AnyToolDefinition["execute"]>[1];
@@ -87,8 +87,7 @@ const decodeNestedToolResult = Schema.decodeUnknownEffect(NestedToolResultSchema
 /**
  * Deterministically converts a nested built-in `AgentToolResult` into the plain string that
  * enters the guest program. Text blocks join with a newline; any non-text block (for example
- * an image from `read`) is refused model-safely so non-JSON authority never leaks into the
- * confined program.
+ * an image from `read`) is refused model-safely so only text crosses into the program.
  */
 export const nestedResultToGuestData = (
   name: PiGuestToolName,
@@ -158,7 +157,7 @@ const toNativeReadInput = (input: ReadGuestInput): NativeReadInput => {
  *
  * The nested tool receives the interrupt signal owned by `Effect.tryPromise`. Outer execute
  * cancellation, runtime timeout, and session replacement all interrupt that Effect fiber.
- * Failures surface as model-safe `ToolError` refusals, which the runtime reports as
+ * Failures surface as model-safe `ToolError` refusals, which execution reports as
  * `ToolFailure` diagnostics.
  */
 export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): NestedPiToolDispatch => {

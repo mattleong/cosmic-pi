@@ -12,7 +12,8 @@ import {
   type McpCodeModeInput,
 } from "pi-mcp/code-mode";
 import { makeMcpDispatch } from "../src/boundary/host-mcp.ts";
-import { CodeMode, toolError } from "../src/boundary/codemode-runtime.ts";
+import { executeProgram } from "../src/engine/execute.ts";
+import { toolError } from "../src/engine/tool.ts";
 import { makeExecutionGuestTools } from "../src/tools/catalog.ts";
 import { makeCumulativeOutputBudget } from "../src/tools/limits.ts";
 
@@ -74,15 +75,19 @@ describe("fixed MCP request adapter", () => {
           { includePowerShell: false },
         );
         expect(
-          yield* CodeMode.execute({
+          yield* executeProgram({
             code: 'return await tools.mcp.request({action:"server.instructions",server:"one"})',
+            cwd: process.cwd(),
             tools,
+            limits: { timeoutMs: 10_000, maxToolCalls: 32, maxOutputBytes: 50_000 },
           }),
         ).toMatchObject({ ok: true, value: output });
         expect(
-          yield* CodeMode.execute({
+          yield* executeProgram({
             code: 'return await tools.mcp.request({action:"server.instructions"})',
+            cwd: process.cwd(),
             tools,
+            limits: { timeoutMs: 10_000, maxToolCalls: 32, maxOutputBytes: 50_000 },
           }),
         ).toMatchObject({ ok: false });
         expect(received).toEqual([{ action: "server.instructions", server: "one" }]);

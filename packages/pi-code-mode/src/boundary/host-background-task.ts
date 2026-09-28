@@ -17,7 +17,7 @@ import {
 } from "pi-background-task/code-mode";
 import { invokeHostCallback, querySessionCapability } from "pi-cosmic-core";
 import { formatForeignRejection } from "../tools/format.ts";
-import { toolError, type ToolError } from "./codemode-runtime.ts";
+import { toolError, type ToolError } from "../engine/tool.ts";
 
 const decodeOutput = Schema.decodeUnknownEffect(BackgroundTaskCodeModeOutputSchema);
 const unrecognized = () =>

@@ -7,7 +7,8 @@ import { McpCodeModeOutputSchema, mcpCodeModeError } from "pi-mcp/code-mode";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { CodeMode, type CodeModeToolCallLifecycleEvent } from "../src/boundary/codemode-runtime.ts";
+import type { ToolCallLifecycleEvent } from "../src/engine/dispatch.ts";
+import { executeProgram } from "../src/engine/execute.ts";
 import {
   type NestedPiToolDefinitions,
   type PiGuestToolInput,
@@ -120,8 +121,8 @@ interface HarnessOptions extends ExecuteHarnessOptions {
   readonly noState?: boolean;
 }
 
-type LifecycleEmit = (event: CodeModeToolCallLifecycleEvent) => Effect.Effect<void>;
-/** Runtime stand-in that emits scripted lifecycle events, then returns successfully. */
+type LifecycleEmit = (event: ToolCallLifecycleEvent) => Effect.Effect<void>;
+/** Execution stand-in that emits scripted lifecycle events, then returns successfully. */
 const scriptedRuntime =
   (
     script: (emit: LifecycleEmit) => Effect.Effect<void>,
@@ -377,7 +378,7 @@ describe("early-path clamp wiring", () => {
           executeCodeMode: (runtimeOptions) =>
             Effect.suspend(() => {
               runtimeCalls += 1;
-              return CodeMode.execute(runtimeOptions);
+              return executeProgram(runtimeOptions);
             }),
         });
         const controller = new AbortController();
@@ -433,15 +434,15 @@ describe("host limits", () => {
     }),
   );
 
-  it.effect("applies timeoutMs as the runtime deadline and aborts in-flight nested calls", () =>
+  it.effect("applies timeoutMs as the program deadline and aborts in-flight nested calls", () =>
     Effect.gen(function* () {
       const calls: FakeCall[] = [];
       const definitions = fakeDefinitions({ read: () => blockingCall() }, calls);
-      const execute = makeHarness({ config: { timeoutMs: 50 }, definitions });
+      const execute = makeHarness({ config: { timeoutMs: 1_000 }, definitions });
       yield* Effect.promise(() =>
         expect(
           execute("call-timeout", "return await tools.pi.read({ path: 'hang' });"),
-        ).rejects.toThrow(/\[TimeoutExceeded\].*50ms/s),
+        ).rejects.toThrow(/\[TimeoutExceeded\].*1000ms/s),
       );
       expect(calls).toHaveLength(1);
       expect(calls[0]?.signal?.aborted).toBe(true);
@@ -485,7 +486,7 @@ describe("final model-visible byte bound", () => {
           "console.log('a log line that is fairly long'); return 'result value here';",
           "returned",
         ],
-        [40, "class Oops {}\nreturn 1;", "thrown"],
+        [40, "const x = ;\nreturn 1;", "thrown"],
       ] as const) {
         const settled = yield* Effect.promise(() =>
           makeHarness({ config: { maxOutputBytes: budget } })("call-final-bound", code).then(

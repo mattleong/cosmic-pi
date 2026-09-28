@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
+import type { Duplex, Readable, Writable } from "node:stream";
 import { nodeSpawn } from "./node-builtins.ts";
 import { signalProcessGroup } from "./process-tree.ts";
 import {
@@ -13,7 +14,11 @@ import {
   DuplexProcessError,
   type DuplexProcessExit,
 } from "./duplex-process-close.ts";
-import { makeDuplexProcessIo, type DuplexProcessIo } from "./duplex-process-io.ts";
+import {
+  makeDuplexProcessIo,
+  type DuplexProcessIo,
+  type DuplexProcessStreams,
+} from "./duplex-process-io.ts";
 
 export { DuplexProcessError, duplexProcessError } from "./duplex-process-close.ts";
 export type { DuplexProcessExit } from "./duplex-process-close.ts";
@@ -43,6 +48,13 @@ export interface DuplexProcessOptions extends Partial<DuplexProcessLimits> {
   readonly environment: Readonly<Record<string, string>>;
   /** Called once when process-group cleanup is either confirmed or unconfirmed. */
   readonly onCleanup?: (confirmed: boolean) => void;
+  /**
+   * Moves the duplex channel to a full-duplex socket on fd 3 and leaves stdin closed. The
+   * handle's `stdout` and `write` then carry fd 3, and `stderr` retains the child's stdout and
+   * stderr together. fd 4 is a lifetime lease the child may watch: it reaches EOF once this
+   * process exits, even abruptly.
+   */
+  readonly sideChannel?: boolean;
 }
 
 export type DuplexProcessCleanupState = "pending" | "confirmed" | "unconfirmed";
@@ -64,6 +76,7 @@ interface NormalizedDuplexProcessOptions extends DuplexProcessLimits {
   readonly cwd: string | undefined;
   readonly environment: Readonly<Record<string, string>>;
   readonly onCleanup: ((confirmed: boolean) => void) | undefined;
+  readonly sideChannel: boolean;
 }
 
 interface AcquiredDuplexProcess extends DuplexProcessHandle {
@@ -105,6 +118,9 @@ const snapshotOptions = (
       if (input.onCleanup !== undefined && !Predicate.isFunction(input.onCleanup)) {
         throw invalidOptions();
       }
+      if (input.sideChannel !== undefined && !Predicate.isBoolean(input.sideChannel)) {
+        throw invalidOptions();
+      }
 
       const limit = (
         key: keyof DuplexProcessLimits,
@@ -132,6 +148,7 @@ const snapshotOptions = (
         cleanupTimeoutMs: limit("cleanupTimeoutMs"),
         pollIntervalMs: limit("pollIntervalMs"),
         onCleanup: input.onCleanup,
+        sideChannel: input.sideChannel === true,
       } satisfies NormalizedDuplexProcessOptions;
     },
     catch: (error) => (error instanceof DuplexProcessError ? error : invalidOptions()),
@@ -141,7 +158,11 @@ const startFailure = (): DuplexProcessError =>
   duplexProcessError("start", "failed", "Unable to start child process.");
 
 const unsupportedPlatform = (): DuplexProcessError =>
-  duplexProcessError("spawn", "unsupported-platform", "Duplex child processes require macOS.");
+  duplexProcessError(
+    "spawn",
+    "unsupported-platform",
+    "Duplex child processes require macOS or Linux.",
+  );
 
 const unexpectedExit = (): DuplexProcessError =>
   duplexProcessError("start", "failed", "Child process exited before startup completed.");
@@ -165,7 +186,9 @@ const callCleanupObserver = (
 
 const createAcquired = (options: NormalizedDuplexProcessOptions) =>
   Effect.gen(function* () {
-    if (process.platform !== "darwin") return yield* unsupportedPlatform();
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return yield* unsupportedPlatform();
+    }
 
     const started = Deferred.makeUnsafe<void, DuplexProcessError>();
     const exited = Deferred.makeUnsafe<DuplexProcessExit>();
@@ -201,11 +224,14 @@ const createAcquired = (options: NormalizedDuplexProcessOptions) =>
           detached: true,
           shell: false,
           windowsHide: true,
-          stdio: ["pipe", "pipe", "pipe"],
+          stdio: options.sideChannel
+            ? ["ignore", "pipe", "pipe", "pipe", "pipe"]
+            : ["pipe", "pipe", "pipe"],
         });
         // Even ENOENT returns a child before emitting error. Install handlers in
         // the same synchronous operation as spawn, before inspecting its pid.
-        for (const stream of [child.stdin, child.stdout, child.stderr]) {
+        for (const stream of child.stdio) {
+          if (stream === null || stream === undefined) continue;
           const guard = (): void => undefined;
           stream.on("error", guard);
           stream.once("close", () => stream.off("error", guard));
@@ -225,12 +251,46 @@ const createAcquired = (options: NormalizedDuplexProcessOptions) =>
       catch: () => startFailure(),
     });
 
+    // Every stdio entry configured as "pipe" is a Node stream once spawn returns, even when the
+    // spawn later fails.
+    // SAFETY: stdout is a pipe in both modes.
+    const stdout = child.stdout as Readable;
+    // SAFETY: stderr is a pipe in both modes.
+    const stderr = child.stderr as Readable;
+    const streams: DuplexProcessStreams = options.sideChannel
+      ? {
+          // SAFETY: in side-channel mode fd 3 is a pipe, which Node opens as a duplex socket.
+          input: child.stdio[3] as Duplex,
+          // SAFETY: the same fd 3 socket.
+          output: child.stdio[3] as Duplex,
+          diagnostics: [stdout, stderr],
+        }
+      : // SAFETY: without the side channel, stdin is a pipe.
+        { input: child.stdin as Writable, output: stdout, diagnostics: [stderr] };
+    const cleanupChild = {
+      pid: child.pid,
+      get exitCode() {
+        return child.exitCode;
+      },
+      get signalCode() {
+        return child.signalCode;
+      },
+      stdin: child.stdin,
+      stdout: child.stdout,
+      stderr: child.stderr,
+      stdio: child.stdio,
+      input: streams.input,
+    };
+
     let cleanupState: DuplexProcessCleanupState = "pending";
     const cachedClose = yield* Effect.cached(
       Effect.uninterruptible(
         Effect.suspend(() => io?.stop ?? Effect.void).pipe(
           Effect.andThen(
-            closeDuplexProcess(child, { ...options, nativeClosed: Deferred.await(nativeClosed) }),
+            closeDuplexProcess(cleanupChild, {
+              ...options,
+              nativeClosed: Deferred.await(nativeClosed),
+            }),
           ),
           Effect.matchEffect({
             onFailure: (error) =>
@@ -254,7 +314,7 @@ const createAcquired = (options: NormalizedDuplexProcessOptions) =>
     // One finalizer owns both partial acquisition and the returned handle.
     yield* Effect.addFinalizer(() => close.pipe(Effect.ignore));
 
-    io = yield* makeDuplexProcessIo(child, {
+    io = yield* makeDuplexProcessIo(streams, {
       ...options,
       // closeDuplexProcess performs the authoritative signal and group confirmation.
       onProcessFailure: () => void signalProcessGroup(child.pid, "SIGTERM"),
@@ -295,7 +355,10 @@ const createAcquired = (options: NormalizedDuplexProcessOptions) =>
     } satisfies AcquiredDuplexProcess;
   });
 
-/** Opens an Effect-scoped detached macOS process with duplex stdin/stdout. */
+/**
+ * Opens an Effect-scoped detached macOS or Linux process with a duplex channel: stdin/stdout by
+ * default, or fd 3 in side-channel mode.
+ */
 export const openDuplexProcess = (
   request: DuplexProcessOptions,
 ): Effect.Effect<DuplexProcessHandle, DuplexProcessError, Scope.Scope> =>

@@ -6,12 +6,9 @@ import * as Queue from "effect/Queue";
 import * as Predicate from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import type { Readable, Writable } from "node:stream";
 import { invokeHostCallback } from "../host-session.ts";
-import {
-  duplexProcessError,
-  type DuplexProcessChild,
-  type DuplexProcessError,
-} from "./duplex-process-close.ts";
+import { duplexProcessError, type DuplexProcessError } from "./duplex-process-close.ts";
 
 const MAX_QUEUE_CHUNK_BYTES = 64 * 1024;
 
@@ -30,6 +27,16 @@ export interface DuplexProcessIoOptions {
   readonly maxWriteQueueBytes: number;
   readonly writeTimeoutMs: number;
   readonly onProcessFailure: (error: DuplexProcessError) => void;
+}
+
+/** The native streams one IO owner reads and writes. */
+export interface DuplexProcessStreams {
+  /** Writable end of the duplex channel. */
+  readonly input: Writable;
+  /** Readable end of the duplex channel. */
+  readonly output: Readable;
+  /** Retained diagnostic output; chunks from every stream share one queue in arrival order. */
+  readonly diagnostics: ReadonlyArray<Readable>;
 }
 
 export interface DuplexProcessIo {
@@ -51,12 +58,13 @@ const writeFailure = (): DuplexProcessError =>
 const overflowError = (): DuplexProcessError =>
   duplexProcessError("write", "overflow", "Child process input queue exceeded its byte limit.");
 
-/** One scope owns native ingress, a byte budget, and exactly one stdin writer. */
+/** One scope owns native ingress, a byte budget, and exactly one channel writer. */
 export const makeDuplexProcessIo = (
-  child: DuplexProcessChild,
+  streams: DuplexProcessStreams,
   options: DuplexProcessIoOptions,
 ): Effect.Effect<DuplexProcessIo, never, Scope.Scope> =>
   Effect.gen(function* () {
+    const { input, output, diagnostics } = streams;
     // Count capacity cannot reject a byte-admissible sequence of tiny chunks.
     const stdoutQueue = yield* Queue.bounded<Uint8Array, DuplexProcessError | Cause.Done>(
       options.maxReadQueueBytes,
@@ -139,46 +147,56 @@ export const makeDuplexProcessIo = (
       retainedStderrBytes += retained.byteLength;
       Queue.offerUnsafe(stderrQueue, retained);
     };
-    const onStderrEnd = (): void => {
-      Queue.endUnsafe(stderrQueue);
+    // The diagnostic queue ends once every diagnostic stream has ended, errored or closed.
+    const endedDiagnostics = new Set<Readable>();
+    const diagnosticEnd = (stream: Readable) => (): void => {
+      endedDiagnostics.add(stream);
+      if (endedDiagnostics.size === diagnostics.length) Queue.endUnsafe(stderrQueue);
     };
+    const diagnosticListeners = diagnostics.map((stream) => {
+      const end = diagnosticEnd(stream);
+      const close = (): void => {
+        end();
+        stream.off("error", end);
+      };
+      return { stream, end, close };
+    });
     const onStdinError = (): void => failInput(writeFailure());
     const onStdinClose = (): void => {
       failPendingWrites(closedError());
       for (const item of pendingWrites) releaseWrite(item);
-      child.stdin.off("error", onStdinError);
+      input.off("error", onStdinError);
     };
     const onStdoutClose = (): void => {
       onStdoutEnd();
-      child.stdout.off("error", onStdoutError);
-    };
-    const onStderrClose = (): void => {
-      onStderrEnd();
-      child.stderr.off("error", onStderrEnd);
+      output.off("error", onStdoutError);
     };
 
-    child.stdout.on("data", onStdoutData);
-    child.stdout.on("error", onStdoutError);
-    child.stdout.once("end", onStdoutEnd);
-    child.stdout.once("close", onStdoutClose);
-    child.stderr.on("data", onStderrData);
-    child.stderr.on("error", onStderrEnd);
-    child.stderr.once("end", onStderrEnd);
-    child.stderr.once("close", onStderrClose);
-    child.stdin.on("error", onStdinError);
-    child.stdin.once("close", onStdinClose);
+    output.on("data", onStdoutData);
+    output.on("error", onStdoutError);
+    output.once("end", onStdoutEnd);
+    output.once("close", onStdoutClose);
+    for (const { stream, end, close } of diagnosticListeners) {
+      stream.on("data", onStderrData);
+      stream.on("error", end);
+      stream.once("end", end);
+      stream.once("close", close);
+    }
+    if (diagnostics.length === 0) Queue.endUnsafe(stderrQueue);
+    input.on("error", onStdinError);
+    input.once("close", onStdinClose);
 
     const nativeWrite = (item: WriteItem): Effect.Effect<void, DuplexProcessError> =>
       Effect.callback<void, DuplexProcessError>((resume) => {
         const bytes = item.bytes;
-        if (!bytes || closed || processExited || inputFailure || child.stdin.destroyed) {
+        if (!bytes || closed || processExited || inputFailure || input.destroyed) {
           releaseWrite(item);
           resume(Effect.fail(inputFailure ?? closedError()));
           return;
         }
         item.active = true;
         try {
-          child.stdin.write(bytes, (error) => {
+          input.write(bytes, (error) => {
             // A write callback, unlike write()'s boolean, confirms native release.
             releaseWrite(item);
             resume(error ? Effect.fail(writeFailure()) : Effect.void);
@@ -233,14 +251,16 @@ export const makeDuplexProcessIo = (
         Effect.gen(function* () {
           yield* Queue.shutdown(stdoutQueue);
           yield* Queue.shutdown(stderrQueue);
-          child.stdout.off("data", onStdoutData);
-          child.stdout.off("end", onStdoutEnd);
-          child.stderr.off("data", onStderrData);
-          child.stderr.off("end", onStderrEnd);
+          output.off("data", onStdoutData);
+          output.off("end", onStdoutEnd);
+          for (const { stream, end } of diagnosticListeners) {
+            stream.off("data", onStderrData);
+            stream.off("end", end);
+          }
           // Error listeners stay until each native stream's close, including late EPIPE.
-          if (child.stdin.closed) onStdinClose();
-          if (child.stdout.closed) onStdoutClose();
-          if (child.stderr.closed) onStderrClose();
+          if (input.closed) onStdinClose();
+          if (output.closed) onStdoutClose();
+          for (const { stream, close } of diagnosticListeners) if (stream.closed) close();
           queuedStdoutBytes = 0;
           queuedStderrBytes = 0;
         }),

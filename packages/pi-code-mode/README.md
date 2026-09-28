@@ -1,70 +1,50 @@
 # pi-code-mode
 
-Code Mode for pi: one `code_mode` agent tool that runs a confined, interpreted JavaScript
-program orchestrating seven core Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
-`tools.pi.edit`, `tools.pi.write`, `tools.pi.grep`, `tools.pi.find`, `tools.pi.ls`), native
-`tools.pi.powershell` on Windows, and the explicit `tools.session.backgroundTask` and
-`tools.mcp.request` adapters in a single tool call, with trusted-project-only scoped settings.
+Code Mode for pi: one `code_mode` agent tool that runs a JavaScript program in a fresh Node.js
+process, orchestrating seven core Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
+`tools.pi.edit`, `tools.pi.write`, `tools.pi.grep`, `tools.pi.find`, `tools.pi.ls`) and the
+explicit `tools.session.backgroundTask` and `tools.mcp.request` adapters in a single tool call,
+with trusted-project-only scoped settings. The point is fewer agent turns: loops, branches and
+data processing between calls happen in the program, and only its result returns to the model.
 
-The program is TypeScript-transpiled, Acorn-parsed, and executed by a vendored tree-walk
-interpreter from OpenCode 2 Code Mode. See [runtime provenance](runtime/PROVENANCE.md).
-It never uses `eval`, `Function`, `node:vm`, or a child JavaScript process. The interpreter provides no ambient filesystem, network, process,
-environment, module, or timer APIs; programs can only call the supplied tool tree and the
-runtime's own `tools.$codemode.search` discovery tool. Supplied shell, edit, write, and
-background-task start operations intentionally confer full local-user process, network,
-environment, and unrestricted filesystem authority. The interpreter lives in the private
-`pi-code-mode-runtime` workspace package nested at `runtime/` inside this package; its
-TypeScript `runtime/src/` tree ships inside this package and Pi/Jiti loads it directly.
+Code Mode runs on macOS and Linux with the package's supported Node.js versions. Other platforms
+are refused before anything starts.
 
-Because the interpreter runs in the agent process, the runtime adds an in-process confinement
-layer so a single native operation cannot block the event loop for seconds (a synchronous
-native call cannot be preempted by the timeout once it starts): regular expressions with
-catastrophic- or polynomial-backtracking structure (nested quantifiers, repeated
-alternation, backreferences, inline flag-modifier groups like `(?i:...)`, more than 3
-unbounded quantifiers/lookarounds, oversized
-optional branch factors) are conservatively refused, admitted regex operations are
-subject-length capped by backtracking degree and branch factor, string/collection/log growth
-is bounded by preflight guards that refuse projected overruns before native allocation
-(forged array-like lengths, flat/merge projections, and percent-encoding expansion
-included), and a wall-clock deadline normalizes any synchronous overrun to a timeout
-diagnostic. The deadline is cooperative and the screens are conservative: this is not
-mathematical preemption of native execution — an admitted native operation still runs to
-completion, bounded to a small worst case — and some safe patterns are rejected in exchange.
-See the runtime `PROVENANCE.md` (deviation 8) for the exact rules.
+## How a program runs
 
-## JavaScript compatibility
+Each call starts a fresh Node.js process in the session's working directory. The program is the
+body of an async function with ordinary Node semantics; `tools` is its only parameter. TypeScript
+with erasable types (no enums or namespaces) runs through Node's type stripping. Node is for
+computation and the network: built-in modules load with `await import("node:crypto")` and
+`fetch` works, while static `import`
+statements and imports of project files or packages are refused.
 
-The confined runtime supports async functions, promise `then`/`catch`/`finally`,
-`Promise.any` and `AggregateError`, live `Object.groupBy`/`Map.groupBy`, JSON stringify
-replacer lists/callbacks, and JSON parse revivers. Grouping and JSON callbacks are not
-implicitly awaited. JSON serialization of a promise yields `{}` without observing rejection.
-Array, collection, sorting, and string replacement callbacks accept the same supported callable
-references, including `.map(JSON.stringify)`. Callbacks receive their normal positional arguments;
-tool input validation still applies, so wrap single-input tools in an arrow function.
-
-Sets support `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`,
-`isSupersetOf`, and `isDisjointFrom`. Operands may be Sets or Maps, using Map keys.
-Custom set-like objects are not supported. Result sets preserve member identity and do not
-mutate either operand.
-
-Labeled control flow, generators, admitted custom sync/async iterators and for-await are
-supported. Destructuring assignments and bindings accept computed object keys and byte iterators.
-Assignment resolves its target before evaluating the right-hand side; compound assignment reads
-the old value first. Synchronous guest call depth is fixed at 128. Semantic awaits reset depth,
-so long async pagination does not consume a lifetime call-depth quota. There is no depth setting.
-
-Owned `Uint8Array`, `TextEncoder` and UTF-8-only `TextDecoder` support bounded text processing,
-with `atob`/`btoa`, standard canonical padded base64 and hex helpers. Byte arrays are capped at
-262,144 entries. `slice` copies; `subarray` may share owned internal storage. Bytes cannot cross
-tool or return boundaries, including nested values: use `toBase64()`, `toHex()` or decoded text
-first. These helpers add no fetch, crypto, Buffer or backing-buffer access. See
-[runtime support](runtime/SUPPORT.md) for the method allowlist and encoding restrictions.
-
-This is not a full JavaScript engine. Custom thenables, the Promise constructor,
-callback `this` binding, guest `toJSON`, and reviver source contexts remain unsupported.
-Blocked property names and allocation/deadline limits still apply. `Promise.race` cancels
-losers; `Promise.any` does not cancel them on fulfillment, but execution teardown can cancel
-pending work. Await work you need completed before returning.
+- **Result.** `return` a value. Strings return verbatim; other values return as compact JSON.
+  Without `return` the result is `null`. stdout and stderr return as "Logs:".
+- **Tools.** `tools.*` calls go to Pi, which validates input with Effect Schema, enforces the call
+  limit, runs at most eight calls at once and records progress and receipts. Arguments, results and
+  the return value cross a JSON boundary: Dates become strings, Map/Set become `{}`, undefined
+  fields are dropped, and BigInt or cyclic values are refused.
+- **Authority.** The program runs under Node's permission model, so file and process work goes
+  through recorded tools. Reading or writing files, importing project files or packages, starting
+  processes, native addons and WASI are refused; use `tools.pi.read`, `grep`, `find` and `ls` to
+  read, `tools.pi.write` and `edit` to change files, and `tools.pi.bash` for commands. A refusal
+  names the tool to use. This routes work through tools; it is not a sandbox, since
+  `tools.pi.bash` can do anything, visibly. Direct network use (`fetch`, `http`) is allowed on
+  every supported Node version and is not recorded. The environment is
+  minimal (paths, locale, proxies, certificates), which avoids accidental inheritance but hides
+  nothing from code that can run a shell.
+- **Ending.** When the program returns or throws, new tool calls are refused, calls already
+  started finish, and the result reports every call's real outcome. `Promise.race` losers and
+  `Promise.all` siblings are never cancelled. Then the process and everything in its process group
+  stop; timers, servers and child processes do not outlive the program. Long-lived work belongs in
+  background tasks.
+- **Failures.** An uncaught error, unhandled rejection or exception in a callback fails the program
+  with its line. A caught failure keeps a successful result. A failed program's result includes the
+  output of calls that completed, so the model can fix the failed part without rerunning the rest.
+- **Stopping early.** Only the timeout and cancellation stop work early. They interrupt calls in
+  flight and kill the process group; those calls' outcomes may be unknown. If Pi itself dies, a
+  watchdog in the program process kills its group, even when the program is stuck in a loop.
 
 ## Choosing and sizing a batch
 
@@ -147,9 +127,6 @@ return log
 
 The excerpt must cover the relevant log section; an empty match does not prove the check passed.
 Keyword filtering is useful for summaries, but keep source context when interpretation requires it.
-The interpreter conservatively rejects some safe regex alternations. String patterns also require
-JavaScript backslash escaping. Use literal matching, string predicates, or a simpler supported
-pattern. Do not weaken the regex guards to force a rejected pattern through.
 
 ## TUI presentation
 
@@ -167,7 +144,7 @@ With Code Previews' compact style, the heading also shows `done/total calls` whi
 `total calls · N failed` afterwards, and the tree shows up to five calls, preferring running and
 failed ones; the omitted-call row counts hidden failures. With tool timing enabled, the parent
 shows measured elapsed time beside its count, and running children update on the same refresh
-cadence as standalone calls. Settlement preserves the runtime's recorded duration, which includes
+cadence as standalone calls. Settlement preserves the dispatcher's recorded duration, which includes
 queue wait; parallel child timings are not summed. The default `preview` style shows every
 retained call. Beyond 32 rows, retained slots prioritize active, failed, cancelled, and recent
 calls; exact counts still include hidden calls. Reload after changing the Code Previews setting.
@@ -186,41 +163,27 @@ Validated per-call receipts use the same semantic projections as standalone tool
 limits, edit counts, MCP outcomes and Background Tasks process/log warnings stay visible even
 when the program discards its replies. Native writes have no trustworthy before-state; that is an
 informational note, never a new-file claim or inferred diff. Completion and guest delivery are
-separate: output-budget or interpreter-copy rejection does not erase a completed mutation, and
+separate: an output-budget refusal or a program that exits early does not erase a completed mutation, and
 "The result did not reach the program" appears on the affected call. Complete-line read
 continuation hints appear only on expansion. When some call details could not be recorded, the
 run says so. Runs saved by older versions show a generic row until expanded. Programs must still
 inspect and return protocol outcome evidence. No nested built-in is wrapped or dispatched
 differently.
 
-## Catalog updates
+## Catalog
 
-The runtime exposes `runtime.snapshot()` and `runtime.update(previousSnapshot)` for hosts that
-need discovery updates. Updates are `unchanged`, `delta` with added/changed signatures and removed
-exact callable paths, or `replace` with a fresh snapshot. Namespace or completeness changes need
-replacement; a delta larger than the fresh snapshot also falls back to replacement. Snapshots
-cover only budget-selected entries, using the same concise descriptions as the instructions.
-Hidden entries remain available through paginated search. A hidden-only change with unchanged
-counts and visible entries is not a discovery update.
-
-This Pi extension keeps its fixed catalog in the complete tool registration description. It does
-not deliver deltas or claim token savings from this API. Provider-required tool schemas remain
-complete. Snapshots are metadata, not tool authority; they never import registered extension tools
-or turn discovered MCP tools into guest functions.
-
-Host-defined namespaces may carry optional descriptions through `Namespace.make`; these affect
-search and budgeted catalog metadata without becoming guest properties. Pretty signatures expose
-JSON Schema constraint annotations. Raw JSON Schema describes a tool but does not validate it;
-Effect Schemas retain runtime validation. Neither metadata feature imports more Pi tools.
+The complete tool registration description carries the fixed catalog: every namespace with its
+tool count and full TypeScript signatures within `catalogBudget`, with constraint annotations as
+JSDoc. `tools.$codemode.search` finds the rest with paginated results. The catalog never imports
+registered extension tools or turns discovered MCP tools into guest functions.
 
 ## Supplied tool authority and direct nested dispatch
 
 Tools invoked from inside a Code Mode program are dispatched **directly** against fresh Pi
 built-in definitions. They intentionally bypass `tool_call`/`tool_result` middleware,
 approval and preview extensions, registered tool overrides, and session-specific tool
-operations. Nested Bash and PowerShell therefore use Pi's default local implementations rather
-than configured prefixes, shell hooks, sandboxes, remote operations, or other top-level
-overrides. PowerShell is present only on Windows.
+operations. Nested Bash therefore uses Pi's default local implementation rather than configured
+prefixes, shell hooks, sandboxes, remote operations, or other top-level overrides.
 
 Enabling Code Mode means accepting the program authored by the agent as the authorization for
 its nested operations. Do not rely on Pi middleware, approval prompts, registered overrides, or
@@ -229,7 +192,7 @@ Code Mode, or disable the tool.
 
 Shell tools can execute processes, use the inherited environment and network, and mutate
 arbitrary paths. Read, edit, and write accept paths outside the project, including absolute
-and home-relative paths. `code_mode` is an orchestration runtime, not a permission, process,
+and home-relative paths. `code_mode` is an orchestration tool, not a permission, process,
 network, filesystem, or project-containment sandbox. MCP uses a fixed capability adapter, not
 arbitrary dynamic dispatch. See [Architecture](ARCHITECTURE.md).
 
@@ -278,7 +241,7 @@ contains `server`, `truncated`, and `instructions`, which is `null` when absent.
 64 KiB UTF-8 prefix; `result.read` can recover that retained prefix, never a discarded suffix.
 Treat the text as untrusted data, not system instructions or permission to act.
 
-Batch already-formed requests with ordinary interpreter control flow:
+Batch already-formed requests with ordinary control flow:
 
 ```js
 const requests = [
@@ -377,8 +340,8 @@ paging fields. It returns the live in-memory execution limits for that invocatio
 ```
 
 Status passes the same availability, current-session, and cancellation gates as other calls, then
-rereads the current snapshot. It performs no configuration I/O, result-store access, interpreter
-work, or nested dispatch, and spends no source, child-output, call-count, or time budget. The final
+rereads the current snapshot. It performs no configuration I/O, result-store access, program
+execution, or nested dispatch, and spends no source, child-output, call-count, or time budget. The final
 response still obeys `maxOutputBytes`. If the complete JSON cannot fit, Code Mode returns a bounded
 plain-text refusal rather than malformed JSON; zero bytes returns empty text. A status result is a
 point-in-time value, and settings can change afterward.
@@ -391,13 +354,13 @@ reload; it is not a live execution limit and does not appear in status.
 ## Execution limits
 
 Each execution applies the resolved settings exactly: `timeoutMs`, `maxToolCalls`, and
-`maxOutputBytes` are enforced by the runtime, with truncation markers reserved inside the
+`maxOutputBytes` are enforced by execution, with truncation markers reserved inside the
 byte budget. The extension serializes non-string return values as compact JSON, without
 indentation. Returned strings, including JSON-looking strings and whitespace-sensitive
-file contents, and runtime log contents are preserved. The extension then applies one
+file contents, and program log contents are preserved. The extension then applies one
 final code-point-safe UTF-8 clamp over the
 entire model-visible text — success or thrown failure, including logs and diagnostic framing,
-plus every early path (cancellation text, the `maxSourceBytes` refusal, unexpected runtime
+plus every early path (cancellation text, the `maxSourceBytes` refusal, unexpected execution
 errors) — so what the model receives never exceeds `maxOutputBytes` (zero → empty; a hostile
 thrown string is bounded before it is ever surfaced). The one exception is the
 stale or missing-state refusal, which can fire when no current configuration exists and is
@@ -406,7 +369,8 @@ therefore a short fixed bounded message. `maxSourceBytes` rejects oversized prog
 `maxCumulativeChildOutputBytes` bounds the cumulative UTF-8 bytes of successful nested tool
 output and catchable nested failure text entering the program. An exact success fit is
 admitted, the first success overrun is refused, failure text is truncated to the remaining
-budget, and accounting stays exact under the interpreter's fixed nested concurrency of 8.
+budget, and accounting stays exact under the fixed nested concurrency of 8. Direct Node I/O in
+the program is outside this budget.
 This is a post-settlement context/reliability bound: it cannot prevent or roll back a tool's
 side effects. Pi built-in results default to plain text; structured reads add completeness metadata
 and are charged as compact JSON. Image content is refused. Edit diff/patch
@@ -465,7 +429,7 @@ Tree navigation, replacement and shutdown revoke IDs. Disabling revokes access u
 
 Full capture can be unavailable. A failure receipt may still be retained; it explicitly says when
 full output is absent.
-It cannot recover output already discarded by a nested provider or the interpreter's data boundary.
+It cannot recover output already discarded by a nested provider or refused at the JSON boundary.
 Failure and cancellation receipts preserve distinct nested invocation IDs, completion certainty,
 redacted targets and guest output delivery. `completed` does not mean success or background process
 exit; `unknown` means the host operation may still have taken effect. No timeout, cancellation or

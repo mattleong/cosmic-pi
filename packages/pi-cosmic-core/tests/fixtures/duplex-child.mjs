@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Socket } from "node:net";
 
 const mode = process.argv[2] ?? "echo";
 const ready = () => process.stdout.write("ready\n");
@@ -43,6 +44,14 @@ if (mode === "echo") {
     stream.write(Buffer.alloc(Number.isFinite(size) ? size : 0, 97), () => process.exit(0));
   });
   ready();
+} else if (mode === "side-channel") {
+  const channel = new Socket({ fd: 3, readable: true, writable: true });
+  const lease = new Socket({ fd: 4, readable: true, writable: false });
+  lease.resume();
+  process.stdout.write("out:" + (process.stdin === null ? "none" : "stdin") + "\n");
+  process.stderr.write("err\n");
+  channel.on("data", (chunk) => channel.write(chunk));
+  channel.on("end", () => process.exit(0));
 } else {
   process.stderr.write("unknown mode\n");
   process.exit(2);

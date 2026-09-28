@@ -10,7 +10,6 @@ import type {
   BackgroundTaskCodeModeInput,
   BackgroundTaskCodeModeOutput,
 } from "pi-background-task/code-mode";
-import { yieldUntil } from "pi-cosmic-core/testing";
 import { makeBackgroundTaskDispatch } from "../src/boundary/host-background-task.ts";
 import { executeHarness } from "./support/execute.ts";
 import { backgroundTaskProvider, TEST_SESSION_ID } from "./support/providers.ts";
@@ -65,27 +64,19 @@ const waitExecute = (provide: WaitProvider) =>
     return (code: string) => Effect.tryPromise((signal) => run(code, { signal }));
   });
 
-/** Forks one execution and reports whether it has settled. */
+/** Forks one execution; joining it waits for the program process in real time. */
 const forkExecute = (provide: WaitProvider, code: string) =>
   Effect.gen(function* () {
     const execute = yield* waitExecute(provide);
-    let settled = false;
-    const fiber = yield* execute(code).pipe(
-      Effect.onExit(() =>
-        Effect.sync(() => {
-          settled = true;
-        }),
-      ),
-      Effect.forkChild,
-    );
-    return { fiber, settled: () => settled };
+    const fiber = yield* execute(code).pipe(Effect.forkChild);
+    return { fiber };
   });
 
 describe("nested background wait deadlines", () => {
   it.effect("returns a default wait timeout before the outer execution times out", () =>
     Effect.gen(function* () {
       const started = Deferred.makeUnsafe<void>();
-      const { fiber, settled } = yield* forkExecute(
+      const { fiber } = yield* forkExecute(
         (input) =>
           Effect.gen(function* () {
             yield* Deferred.succeed(started, undefined);
@@ -97,7 +88,6 @@ describe("nested background wait deadlines", () => {
       );
       yield* Effect.raceFirst(Deferred.await(started), Fiber.join(fiber));
       yield* TestClock.adjust("29 seconds");
-      yield* yieldUntil(settled);
       const result = yield* Fiber.join(fiber);
       expect(result.content).toEqual([
         {
@@ -116,7 +106,7 @@ describe("nested background wait deadlines", () => {
       const firstStarted = Deferred.makeUnsafe<void>();
       const secondStarted = Deferred.makeUnsafe<void>();
       const requested: number[] = [];
-      const { fiber, settled } = yield* forkExecute(
+      const { fiber } = yield* forkExecute(
         (input) =>
           Effect.gen(function* () {
             requested.push(input.waitSeconds ?? 30);
@@ -136,7 +126,6 @@ describe("nested background wait deadlines", () => {
       yield* Effect.raceFirst(Deferred.await(secondStarted), Fiber.join(fiber));
       expect(requested).toEqual([10, 19]);
       yield* TestClock.adjust("19 seconds");
-      yield* yieldUntil(settled);
       expect((yield* Fiber.join(fiber)).content).toEqual([{ type: "text", text: "timeout" }]);
     }),
   );
@@ -146,7 +135,7 @@ describe("nested background wait deadlines", () => {
       const occupied = Deferred.makeUnsafe<void>();
       const queuedStarted = Deferred.makeUnsafe<void>();
       const requested: number[] = [];
-      const { fiber, settled } = yield* forkExecute(
+      const { fiber } = yield* forkExecute(
         (input) =>
           Effect.gen(function* () {
             requested.push(input.waitSeconds ?? 30);
@@ -166,7 +155,6 @@ describe("nested background wait deadlines", () => {
       yield* Effect.raceFirst(Deferred.await(queuedStarted), Fiber.join(fiber));
       expect(requested[8]).toBe(19);
       yield* TestClock.adjust("19 seconds");
-      yield* yieldUntil(settled);
       expect((yield* Fiber.join(fiber)).content).toEqual([
         {
           type: "text",

@@ -705,7 +705,7 @@ describe("compact semantic evidence through the real runtime", () => {
       const summary = summarize(h.retention.consume("call")!, { isError: true, text });
       expect(summary?.outcome).toBe("error");
       expect(summary?.issues).toEqual([
-        expect.objectContaining({ severity: "error", message: "outer failure" }),
+        expect.objectContaining({ severity: "error", message: "outer failure (line 1)" }),
       ]);
       const childIssues = summary?.children?.entries.flatMap((child) => child.issues ?? []) ?? [];
       expect(

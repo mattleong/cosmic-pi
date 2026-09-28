@@ -179,11 +179,30 @@ try {
     const manager = await load("pi-cosmic-ui/manager");
     const fastModels = await load("pi-better-openai/fast-models");
     const previews = await load("pi-code-previews");
-    const runtime = await load(join(process.cwd(), "node_modules/pi-code-mode/runtime/src/index.ts"));
+    const codeModeRoot = join(process.cwd(), "node_modules/pi-code-mode/src/engine");
+    const { executeProgram } = await load(join(codeModeRoot, "execute.ts"));
+    const { makeTool } = await load(join(codeModeRoot, "tool.ts"));
     if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
     if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
     if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");
-    if (typeof runtime.CodeMode?.make !== "function" || typeof runtime.Tool?.make !== "function") throw new Error("missing source-loaded Code Mode runtime exports");
+    {
+      // The installed package starts a real program process, calls a tool, and stops a loop.
+      const Effect = await load("effect/Effect");
+      const EffectSchema = await load("effect/Schema");
+      const echo = makeTool({
+        description: "Echo",
+        input: EffectSchema.Struct({ text: EffectSchema.String }),
+        output: EffectSchema.String,
+        run: ({ text }) => Effect.succeed("echo:" + text),
+      });
+      const limits = { timeoutMs: 10_000, maxToolCalls: 4, maxOutputBytes: 10_000 };
+      const run = (code, overrides = {}) =>
+        Effect.runPromise(executeProgram({ code, cwd: process.cwd(), tools: { demo: { echo } }, limits: { ...limits, ...overrides } }));
+      const called = await run('return await tools.demo.echo({ text: "packed" });');
+      if (!called.ok || called.value !== "echo:packed") throw new Error("packed Code Mode program failed: " + JSON.stringify(called));
+      const looped = await run("while (true) {}", { timeoutMs: 500 });
+      if (looped.ok || looped.error.kind !== "TimeoutExceeded") throw new Error("packed Code Mode program did not stop at its deadline");
+    }
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");
     if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
     if (typeof manager.renderResponsiveManagerFooter !== "function") throw new Error("missing Cosmic UI manager export");
@@ -300,8 +319,10 @@ try {
     "pi-cosmic-core/src/runtime/runtime.ts",
     "pi-code-previews/index.ts",
     "pi-code-previews/src/extension.ts",
-    "pi-code-mode/runtime/src/index.ts",
-    "pi-code-mode/runtime/src/codemode.ts",
+    "pi-code-mode/src/engine/execute.ts",
+    "pi-code-mode/src/boundary/code-mode-child.mjs",
+    "pi-code-mode/src/boundary/code-mode-watchdog.mjs",
+    "pi-code-mode/THIRD_PARTY_NOTICES.md",
     "pi-mcp/index.ts",
     "pi-mcp/src/extension.ts",
     "pi-mcp/src/layer.ts",
@@ -313,11 +334,8 @@ try {
   ]) {
     await readFile(join(temporaryDirectory, "node_modules", source));
   }
-  for (const notice of ["LICENSE", "THIRD_PARTY_NOTICES.md", "PROVENANCE.md"]) {
-    await readFile(join(temporaryDirectory, "node_modules/pi-code-mode/runtime", notice));
-  }
-  // Runtime source ships by value, but its workspace manifest, tests, and build tooling remain
-  // repository-only. No source-hosted package may regain a generated dist dependency.
+  // Tests and build tooling remain repository-only. No source-hosted package may regain a
+  // generated dist dependency.
   for (const excluded of [
     "pi-mcp/dist",
     "pi-mcp/tests",
@@ -327,12 +345,8 @@ try {
     "pi-cosmic-core/tsdown.config.ts",
     "pi-code-previews/dist",
     "pi-code-previews/tsdown.config.ts",
-    "pi-code-mode/runtime/dist",
-    "pi-code-mode/runtime/tests",
-    "pi-code-mode/runtime/node_modules",
-    "pi-code-mode/runtime/package.json",
-    "pi-code-mode/runtime/tsconfig.json",
-    "pi-code-mode/runtime/tsdown.config.ts",
+    "pi-code-mode/runtime",
+    "pi-code-mode/tests",
   ]) {
     const excludedPath = join(temporaryDirectory, "node_modules", excluded);
     const present = await stat(excludedPath).then(
@@ -395,7 +409,7 @@ try {
   }
 
   console.log(
-    "Packed TypeScript source for core, extensions, previews, and Code Mode runtime installs and imports through Jiti in a clean consumer.",
+    "Packed TypeScript source for core, extensions and previews installs and imports through Jiti in a clean consumer, and Code Mode runs a real program process.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

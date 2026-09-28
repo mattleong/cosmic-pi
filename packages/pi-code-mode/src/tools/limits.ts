@@ -3,7 +3,7 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8");
 
-/** Exact UTF-8 byte length of one string, matching the runtime's own output accounting. */
+/** Exact UTF-8 byte length of one string, matching execution's own output accounting. */
 export const utf8ByteLength = (value: string): number => encoder.encode(value).byteLength;
 
 /**
@@ -22,7 +22,7 @@ const utf8Truncate = (value: string, maxBytes: number): string => {
 /**
  * The single final clamp over the entire model-visible `code_mode` text, applied to both the
  * success string and the thrown-failure string after all extension composition (diagnostic
- * kind/location/suggestions, logs, separators, and any runtime truncation markers) has
+ * kind/location/suggestions, logs, separators, and any execution truncation markers) has
  * happened. It is the last bound the model sees:
  *
  * - the returned byte length is always `<= maxOutputBytes`;
@@ -31,9 +31,9 @@ const utf8Truncate = (value: string, maxBytes: number): string => {
  * - oversized text is truncated code-point-safely, with a byte-accounted marker reserved
  *   *inside* the budget (and omitted when even the bare marker cannot fit).
  *
- * This runs on top of the runtime's own `maxOutputBytes` bound: the runtime keeps the guest
- * result/logs within budget, and this clamp additionally bounds the extension chrome the
- * runtime never sees, so a hostile program cannot leak an oversized message through the
+ * This runs on top of execution's own `maxOutputBytes` bound: execution keeps the program's
+ * result/logs within budget, and this clamp additionally bounds the extension chrome
+ * execution never sees, so a hostile program cannot leak an oversized message through the
  * `[kind] … Logs:` framing or a large thrown Error.
  */
 export const clampModelVisibleText = (text: string, maxOutputBytes: number): string => {
@@ -53,7 +53,7 @@ type CumulativeOutputAdmission =
 export interface CumulativeOutputBudget {
   /**
    * Admits or refuses one nested tool result. The check and the consumption are one
-   * synchronous step, so parallel nested calls (fixed runtime concurrency 8) can never
+   * synchronous step, so parallel nested calls (fixed concurrency 8) can never
    * interleave between them. An exact fit is admitted; the first overrun is refused with a
    * deterministic, model-safe message and consumes nothing.
    */

@@ -2,23 +2,18 @@
 
 `pi-code-mode` owns one Effect-managed Pi extension. It provides trusted-project configuration,
 the session lifecycle, `/code-mode settings` (through core's `registerExtensionCommand` and Cosmic UI's settings shell), and one `code_mode` tool. A `{code,intent?}` call runs one
-confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
+JavaScript program in a fresh Node.js process over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
 `write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
 versioned session protocol. The fixed `tools.mcp.request` leaf queries `pi-mcp` through its own
-versioned session protocol. The private runtime supplies `tools.$codemode.search`. A mutually
-exclusive `{action:"status"}` call projects the current five execution limits without constructing
-that runtime or touching nested capabilities.
-
-The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/`. Its TypeScript source ships in this package and loads through one computed relative import
-in `src/boundary/codemode-runtime.ts`. The nested package name is never resolved at runtime, so a
-packed install needs no private registry package and uses the extension's single Effect instance.
-Only runtime source plus its README, legal, and provenance documents ship.
+versioned session protocol. `src/engine/` supplies `tools.$codemode.search`. A mutually
+exclusive `{action:"status"}` call projects the current five execution limits without starting a
+program or touching nested capabilities.
 
 ## Output retention and receipts
 
 The same tool accepts `{action:"result.read",id,offset?,limit?}`. This branch checks session
-availability and reads a retained text artifact without building an interpreter or guest tools.
+availability and reads a retained text artifact without starting a program or building guest tools.
 It rejects `code`, invalid offsets, split surrogate offsets and invalid limits. Paging uses UTF-16
 offsets, preserves code points and checks the complete JSON envelope against `maxOutputBytes`.
 A page that cannot fit metadata and one code point has no continuation cursor. Reads recheck
@@ -44,7 +39,7 @@ removes the oldest published entries; reads do not refresh order. There is no pe
 `session_tree`, and shutdown close the old store. Disabling also revokes the activation's execution
 and result-access owner until reload. Late callbacks cannot advertise old artifacts.
 
-`results/serialize.ts` captures only bounded text from the runtime's optional pre-bound `onResult`
+`results/serialize.ts` captures only bounded text from execution's optional pre-bound `onResult`
 hook, with at most 100,000 visits and depth 32. It uses own data descriptors, never guest getters
 or `toJSON`, and retains no guest graph. Small successful responses without host loss or unknown
 nested outcomes remain unchanged. A successful response that needs saved paging publishes valid JSON with the original `id`, `outcome`, `kind`,
@@ -56,7 +51,7 @@ read receipts may compact to `{total,completed}`; risky and failed operations re
 use bounded prose without a fake cursor. Successful retained artifacts contain output only, never
 execution receipts. Failure artifacts are marked `failure-receipt` and contain receipt text plus
 the normalized diagnostic when captured.
-Missing old-runtime hooks, capture limits, interruption and store refusal are explicit unavailable
+Missing capture hooks, capture limits, interruption and store refusal are explicit unavailable
 states, not claims that truncated output can be recovered.
 
 `tools/execution-receipts.ts` keeps bounded operation facts, not UI outcome colors. It reuses the
@@ -67,7 +62,7 @@ evicted. Receipts contain IDs, names, bounded redacted targets, certainty, deliv
 provider recovery IDs, never argument objects, write bodies or raw errors. Settlement freezes
 receipts and rejects late observations. Completed writes survive later throws, timeouts and output
 refusal. An execution-local sticky host-loss flag survives row eviction and does not depend on UI
-projection. Builtin, Background Tasks, MCP, catalog, and interpreter conversion failures record
+projection. Builtin, Background Tasks, MCP, catalog, and delivery failures record
 loss before settlement closes the collector. Fully delivered native errors do not set this flag.
 Background capability completion does not mean its process exited.
 
@@ -120,7 +115,7 @@ evidence remain separate.
   operation status. `program-issues.ts` owns the run's own issues and outcome: cancellation, the
   program failure, saved-output continuation (info), output truncation, and unrecorded call
   details. `tools/diagnostic-messages.ts` writes one human line per diagnostic kind from the
-  runtime's structured facts, never its wording (`No tool named pi.x`, `Timed out after 100 ms
+  engine's structured facts, never its wording (`No tool named pi.x`, `Timed out after 100 ms
   (line 1)`). Failed results keep `tools/failure-evidence.ts` evidence in their details: the kind,
   line, bounded redacted facts, and a span to the message's first line in the result text, which
   may hold tool output and is therefore never copied into details. Results without that evidence
@@ -139,7 +134,7 @@ code 1; stopped the program`) when it is the only matching row and the collapsed
   a nested-only override. `boundary/host-child-timing.ts` records process-local clock tokens at
   decoded call start and projects live elapsed time on the shared shell's existing refresh
   cadence, without per-child timers. Execution revokes tokens on child settlement and every outer
-  exit; serialization cannot recreate timing authority. Settled rows retain the runtime's measured
+  exit; serialization cannot recreate timing authority. Settled rows retain the dispatcher's measured
   admission-to-settlement duration, including queue wait. No child durations are inferred or summed.
   `tools/compact-subject.ts` owns the built-in `pi.*` nested tool names that rows and ledgers
   classify. It captures allowlisted paths, read ranges, commands and search targets at decoded
@@ -163,21 +158,25 @@ code 1; stopped the program`) when it is the only matching row and the collapsed
   model-visible content. The shared shell owns compact animation and expansion; nested dispatch
   remains direct. MCP and Background Tasks outcomes and issues come from their producers'
   versioned, schema-validated evidence, never guest return values or Promise fulfillment.
-- `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
+- `src/engine/` owns execution: tool definitions and schema rendering, the budgeted catalog and
+  search, Pi-side dispatch, the process protocol, failure diagnostics and output bounding. See
+  "Program execution" below.
+- `src/boundary/` contains the program process adapter and its plain-ESM child runner and watchdog,
+  fresh Pi built-in adapters including conditional
   Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
   publisher, the synchronous retained-output commit runner, the hostile renderer-ticker adapter,
   Pi dialog adapters, and the process-memory deactivation handoff. Foreign Promise
   adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
   the hostile-safe rejection formatter before returning a model-visible tool failure.
 - `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,
-  interpreter integration, progress, retention, and fail-soft rendering. Execution suites share
+  real program processes, progress, retention, and fail-soft rendering. Execution suites share
   `tests/support/execute.ts` over the real `makeCodeModeToolExecute`, provider discovery goes
   through `tests/support/providers.ts`, and presentation suites render the registered definition
   through `pi-code-previews/testing`, never `pi-code-previews/src`; the shared shell view in
   `tests/support/presentation.ts` serves the shell conformance suites. Host casts, deferred
   promises and the plain theme come from `pi-cosmic-core/testing`; `tests/support/host.ts` keeps
   only the Code Mode state fixture, and behavior-specific fixtures stay in each suite.
-  `runtime/tests/` remains owned by the private runtime package.
+  `tests/engine/` exercises the engine against real processes.
 
 ## Trust and configuration
 
@@ -210,7 +209,7 @@ publisher writes `stateRef` only while that owner is true.
 
 Each activation also owns `boundary/host-execution-owner.ts`, a native cancellation bridge into
 the existing session runner. Effective unavailability and deactivation synchronously revoke it,
-interrupting interpreter fibers and queued guest calls without disposing the settings runtime.
+interrupting the program process and its nested calls without disposing the settings runtime.
 Re-enabling settings cannot restore that owner; reload creates a new one. Per-run caller and
 activation listeners are released on settlement. A pre-run Effect gate and lazy dispatch gates
 refuse revoked work even before the pinned runner installs its abort listener. Cancellation cannot
@@ -220,7 +219,7 @@ no guest continuation or publication authority.
 `tools/execution.ts` owns mutually exclusive execution, status, and retained-read admission plus
 retained-read publication. Status passes current-session, availability, and cancellation gates,
 then rereads `stateRef` synchronously. It performs no config I/O, session-runner work, retained
-artifact access, interpreter work, or budget admission. `execution-run.ts` assembles one interpreter
+artifact access, program execution, or budget admission. `execution-run.ts` assembles one program
 run, its guest adapters, progress and settlement. `result-response.ts`
 continues to own retention and receipts; these modules add no runtime or lifecycle authority.
 
@@ -269,38 +268,70 @@ once, a normal PromptInteger remains authoritative, a stale factory receives an 
 and a failed opening maps to `Failed`. Preset writes use the list signal, ignore stale callbacks,
 and restore the persisted row after an active failure.
 
-## Discovery snapshots
+## Program execution
 
-The private runtime's `snapshot()` and `update(previous)` compare discovery metadata without
-changing the callable tool tree. `runtime/src/catalog.ts` owns replacement/delta/no-op decisions.
-Snapshots retain only budget-selected signatures, concise descriptions, namespace counts, and
-complete instructions. Canonical callable paths preserve literal property segments. Search still
-indexes every described tool and keeps round-robin catalog selection across namespaces.
+`engine/execute.ts` runs each program in a fresh Node.js process started by
+`boundary/host-program-process.ts` through core's duplex process in side-channel mode: stdin is
+closed, stdout and stderr are retained together as the program's logs (256 KiB), fd 3 carries the
+control protocol, and fd 4 is a lifetime lease. The process gets the activation's captured cwd, a
+minimal environment (paths, locale, proxies and certificates, never `NODE_OPTIONS` or Pi's own
+variables), a 1 GiB V8 heap and its own process group. It runs under Node's permission model: only
+the runner's two files are readable, workers are allowed, and so is the network (with
+`--allow-net` on Node 25+, which otherwise denies it); file reads and writes, project imports,
+child processes, addons and WASI are refused, so file and process work goes through
+recorded `tools.pi.*` calls. The allowlist uses the modules' real paths, because Node resolves the
+entry's real path under the same permissions. `engine/failure.ts` turns Node's
+`ERR_ACCESS_DENIED` into guidance naming the tool to use. macOS and Linux only; other platforms
+are refused before anything starts.
 
-Pi continues to register complete `code_mode` parameters and instructions at session activation.
-The description generates package numeric defaults from `DEFAULT_CODE_MODE_CONFIG`; the optional
-configuration snapshot is labeled as registration-time data rather than live state. The catalog
-uses the registration's captured `catalogBudget` until reload. Live status is authoritative only
-for its invocation and intentionally omits that registration-only catalog budget. Its guest catalog
-is fixed; it does not send catalog deltas, import arbitrary registered tools, or treat MCP discovery
-as permission to add guest leaves. The runtime API allows other host
-consumers to deliver discovery updates, but is not a provider-schema replacement or a Pi token
-savings mechanism. Snapshot data carries no execution authority. Runtime `namespace.ts` owns
-optional host-only descriptions; ancestor descriptions affect search, and bounded namespace
-metadata participates in catalog replacement. `tool-schema.ts` owns constraint documentation,
-not a JSON Schema validator. Pi's supplied tools continue to use Effect Schema decoding.
+`boundary/code-mode-child.mjs` is plain ESM because Node does not strip types from packages under
+`node_modules`. It compiles the program as an async function body with `vm.Script` in the main
+context, so native semantics apply, and dynamic `import()` loads Node built-ins through the main
+loader. A JavaScript syntax error retries once through Node's TypeScript type
+stripping. `code-mode-watchdog.mjs` runs in a worker thread and SIGKILLs the process group when the
+lease reaches EOF, even while the program is stuck in a loop; the program starts only after it is
+ready. It reads the lease as a socket, because a thread-pool read would block the process's own
+exit.
 
-The runtime also owns assignment ordering and iterator-aware destructuring, a fixed synchronous
-guest call-depth cap of 128 with semantic-await resets, and bounded owned bytes/UTF-8/base64/hex.
-These add no extension setting or ambient authority. `runtime/src/stdlib/bytes.ts` and
-`encoding.ts` implement the encoding subset; the runtime data boundary rejects bytes and
-encoder/decoder objects even when nested. Programs must encode bytes to strings before invoking
-tools or returning them. `subarray` may share owned storage, while `slice` copies.
+`engine/protocol.ts` owns the frames: a 4-byte length and UTF-8 JSON, capped at 17 MiB from the
+child before any body is buffered, and Effect Schema decoding of every child message. The child
+sends `call` and one `result`; Pi sends `start`, `reply` and `finish`. `engine/dispatch.ts`
+admits each call on its own fiber: resolve, decode input, reserve the call limit, wait for one of
+eight permits, run, decode output, then deliver the reply before the terminal lifecycle event. A
+reply that cannot be encoded or written is a delivery failure; the operation's own outcome is
+unchanged. Pi holds at most 64 MiB of queued and running inputs.
+
+When the program returns or throws, the child refuses new calls, waits for every started call's
+reply, serializes the result, lets Node report unhandled rejections, flushes its output and sends
+`result`. Pi never cancels started calls for that; `Promise.race` losers and `Promise.all`
+siblings finish. After `result`, Pi sends `finish`, gives the process 250 ms to exit and close its
+output, then sweeps the group. Only the deadline and interruption stop work early: the scope
+interrupts in-flight calls and kills the process group. Unconfirmed cleanup adds a log line.
+
+`engine/failure.ts` turns what the child reports into diagnostics. A tool failure that escaped
+keeps the diagnostic Pi recorded for that request plus the call site's line; a `tools.x is not a
+function` TypeError becomes `UnknownTool` with suggestions; other throws carry their name, message
+and line. A failed result includes the output of calls that completed (at most 8 MiB kept), which
+`tools/format.ts` renders after the logs. `engine/output.ts` bounds the value or diagnostic, logs,
+and completed calls to `maxOutputBytes` in that priority.
+
+## Discovery
+
+`engine/instructions.ts` renders the catalog from the guest tool tree: every namespace with its
+tool count, and full signatures inlined round-robin against the registration's `catalogBudget`.
+`tools.$codemode.search` indexes every tool. Pi registers complete `code_mode` parameters and
+instructions at session activation. The description generates package numeric defaults from
+`DEFAULT_CODE_MODE_CONFIG`; the optional configuration snapshot is labeled as registration-time
+data rather than live state. Live status is authoritative only for its invocation and omits the
+registration-only catalog budget. The guest catalog is fixed: it does not import arbitrary
+registered tools or treat MCP discovery as permission to add guest leaves. `engine/tool-schema.ts`
+renders signatures and owns input/output decoding; guest inputs that the plain schema rejects get a
+second chance through its JSON codec.
 
 ## Tool execution and limits
 
 The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
-`tools.session.backgroundTask` and `tools.mcp.request` adapters, and runtime-owned search. Inputs pass Effect Schema before
+`tools.session.backgroundTask` and `tools.mcp.request` adapters, and engine-owned search. Inputs pass Effect Schema before
 dispatch. Built-in, read and Background Tasks guest inputs are closed: an unknown key at any depth
 is a catchable input failure before native dispatch or provider discovery, never stripped. MCP
 keeps its own closed request union. Read offsets and limits are positive safe integers, as are grep, find, and ls limits.
@@ -316,17 +347,15 @@ Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and
 middleware, approvals, previews, registered overrides, and session-specific operations.
 Background Tasks calls query one stable-session, token-checked Promise capability on each
 invocation. They never dispatch the registered top-level definition. The execution Effect captures
-one Clock-based deadline before starting the interpreter. After queue admission and provider
+one Clock-based deadline before starting the program process. After queue admission and provider
 discovery, the Background Tasks adapter caps `wait` and explicit log long polls to the remaining
 time minus a one-second settlement reserve, clamped at zero. Shorter requested waits and the
 provider's configured maximum still apply; omitted log waits stay nonblocking. This is a
 best-effort delivery margin, not a replacement for outer timeout or cancellation, and it never
-changes the background process lifetime or the versioned provider protocol. Independently, the
-runtime rechecks its execution deadline when a queued call acquires a concurrency permit, so a
-call that waited past the deadline fails unstarted without any host dispatch.
+changes the background process lifetime or the versioned provider protocol.
 
 `boundary/host-mcp.ts` queries exactly one active stable-session provider per request through
-`pi-mcp/code-mode`. That import loads codecs, not an extension or runtime. The provider owns
+`pi-mcp/code-mode`. That import loads codecs, not an extension. The provider owns
 connections, authentication, policy, validation, and result retention. The guest can request
 status, server instructions, bounded discovery, exact tool calls, resources/templates, prompts,
 and retained result reads, but not explicit connection management, authentication, configuration
@@ -340,11 +369,12 @@ catchable failures to the remaining child-output budget. Native images never cro
 A post-settlement projection failure retains known completion and does not authorize replay.
 Resource/prompt content stays untrusted data; the adapter does not follow links, install commands,
 or inject messages. MCP servers retain their own local-user or remote authority and are not
-sandboxed by the interpreter. Nested MCP operations bypass Pi middleware and unrelated approvals,
+sandboxed. Nested MCP operations bypass Pi middleware and unrelated approvals,
 just like the Background Tasks capability; only the outer Code Mode call uses that middleware.
 
-Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
-process, environment, network, and filesystem authority. Read, edit, and write accept relative,
+There is no sandbox. Bash has full local-user process, environment, network, and filesystem
+authority. The program itself must read and change files and run commands through tools; only
+its direct network use is unrecorded. Read, edit, and write accept relative,
 absolute, and home-relative paths. Mutations happen immediately and cancellation cannot roll them
 back. Pi built-in results default to text; opt-in structured reads add only validated completeness
 metadata. Images are refused and arbitrary built-in details never enter the guest. Background Tasks
@@ -387,10 +417,10 @@ MCP validated replies and typed failures use producer projections; Background Ta
 presentation callbacks preserve pre-projection log truncation. Operation outcome is captured
 before cumulative-output admission. Delivery refusal adds a "result did not reach the program"
 issue and marks the receipt without rewriting known completion. A received, budget-admitted native
-exception is not delivery loss. Guest conversion refusal, diagnostic clipping, output admission
-refusal, defects, and interruption still preserve loss evidence. Adapter-returned output remains
-provisional until the interpreter's terminal hook, which also covers later schema/data copy
-rejection without changing the interpreter.
+exception is not delivery loss. Unencodable output, a reply the exited program never read,
+diagnostic clipping, output admission refusal, defects, and interruption still preserve loss
+evidence. Adapter-returned output remains provisional until the dispatcher's terminal lifecycle
+event, which follows output-schema decoding and delivery.
 
 Receipts retain only bounded sanitized presentation fields: subject, action, counters, metadata,
 outcome, and at most 16 issues (messages clipped to 240 and details to 1024 UTF-16 units after
@@ -412,10 +442,11 @@ with `{}`. Text and `isError` semantics are unchanged.
 
 ## Shipping and validation
 
-The package runs from TypeScript source under Pi/Jiti. `package.json` ships `runtime/src/` and the
-runtime's legal or provenance files, but not its workspace manifest or tests. Package gates include
-typecheck, Effect diagnostics, lint, format, tests, and a dry pack. Workspace validation also
-checks layout, versions, source loading, and packed runtime contents.
+The package runs from TypeScript source under Pi/Jiti; the child runner and watchdog are plain ESM
+under `src/boundary/`. `THIRD_PARTY_NOTICES.md` carries the MIT notice for engine code derived from
+OpenCode's Code Mode. Package gates include typecheck, Effect diagnostics, lint, format, tests, and
+a dry pack. Workspace validation also checks layout, versions and source loading, and the packed
+install runs a real program process.
 
 Completed efficiency experiments are archived in Git, not maintained as package code.
 [Historical results](https://github.com/mattleong/cosmic-pi/blob/main/docs/code-mode-efficiency.md)

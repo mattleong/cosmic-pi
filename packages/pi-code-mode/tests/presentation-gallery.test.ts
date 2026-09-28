@@ -103,7 +103,8 @@ const failures: ReadonlyArray<ProgramScenario> = [
   ["caught invalid tool input", "try { await tools.pi.read({file:'a.ts'}); } catch {}\nreturn 1;"],
   ["unknown tool", "await tools.pi.grepp({pattern:'x'});"],
   ["syntax error", "const a = 1;\nconst b = ;"],
-  ["unsupported syntax", "class A {}"],
+  ["unhandled rejection", "tools.pi.bash({command:'pnpm test'});\nreturn 'started';"],
+  ["process exits early", "await tools.pi.read({path:'package.json'});\nprocess.exit(2);"],
   ["timeout", "while (true) {}", { timeoutMs: 100 }],
   [
     "call limit",
@@ -111,7 +112,15 @@ const failures: ReadonlyArray<ProgramScenario> = [
     { maxToolCalls: 2 },
   ],
   ["thrown message", "throw new Error('No matching config found in 3 packages');"],
-  ["non-data result", "return () => 1;"],
+  ["non-data result", "return { size: 1n };"],
+  [
+    "direct file read refused",
+    "const { readFile } = await import('node:fs/promises');\nreturn await readFile('package.json', 'utf8');",
+  ],
+  [
+    "direct file write refused",
+    "const { writeFile } = await import('node:fs/promises');\nawait writeFile('notes.txt', 'draft');",
+  ],
 ];
 
 interface Settled {

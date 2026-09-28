@@ -1,7 +1,7 @@
 {
   "name": "pi-code-mode",
   "version": "0.2.0",
-  "description": "Code Mode for pi: a confined code_mode agent tool that orchestrates Pi built-ins and an explicit session-scoped background-task adapter from one interpreted program.",
+  "description": "Code Mode for pi: a code_mode agent tool that orchestrates Pi built-ins, background tasks and MCP from one JavaScript program run in a fresh Node.js process.",
   "keywords": [
     "code-mode",
     "pi",
@@ -23,15 +23,10 @@
   "files": [
     "index.ts",
     "src/",
-    "runtime/src/",
-    "runtime/LICENSE",
-    "runtime/THIRD_PARTY_NOTICES.md",
-    "runtime/PROVENANCE.md",
-    "runtime/README.md",
-    "runtime/SUPPORT.md",
     "README.md",
     "ARCHITECTURE.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "type": "module",
   "exports": {
@@ -61,8 +56,7 @@
     "pi-cosmic-core": "workspace:*",
     "pi-cosmic-ui": "workspace:*",
     "pi-mcp": "workspace:*",
-    "typebox": "catalog:",
-    "typescript-compiler-api": "catalog:"
+    "typebox": "catalog:"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",
