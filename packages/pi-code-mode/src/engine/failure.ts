@@ -85,8 +85,10 @@ const refusal = (failure: ChildFailure, cwd: string): string => {
       return `Programs can't write ${target ?? "files"} directly. Use tools.pi.write or tools.pi.edit so the change is recorded.`;
     case "ChildProcess":
       return "Programs can't start processes directly. Use tools.pi.bash so the command is recorded.";
+    case "Net":
+      return "Programs can't use the network directly. Use tools.pi.bash, for example with curl, so the request is recorded.";
     default:
-      return "Programs can't use this Node.js API directly. Use tools.pi.* for files and processes so the work is recorded.";
+      return "Programs can't use this Node.js API directly. Use tools.pi.* so the work is recorded.";
   }
 };
 

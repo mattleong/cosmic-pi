@@ -172,18 +172,27 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
       }).pipe(Effect.scoped),
     );
 
-    it.live("allows direct network use on every Node version", () =>
+    it.live("routes network requests through tools", () =>
       Effect.gen(function* () {
-        const { result } = yield* run(
-          `const http = await import("node:http");
-          const server = http.createServer((_request, response) => response.end("pong"));
-          await new Promise((listening) => server.listen(0, "127.0.0.1", listening));
-          const response = await fetch("http://127.0.0.1:" + server.address().port);
-          const text = await response.text();
-          server.close();
-          return text;`,
-        );
-        expect(result).toEqual({ ok: true, value: "pong" });
+        const refused = (code: string) =>
+          run(code).pipe(Effect.map(({ result }) => failed(result).error));
+        const requests = [
+          `await fetch("http://127.0.0.1:9");`,
+          `new WebSocket("ws://127.0.0.1:9");`,
+          // Only Node 25+ can refuse sockets and DNS; it knows the flag that would allow them.
+          ...(process.allowedNodeEnvironmentFlags.has("--allow-net")
+            ? [
+                `const net = await import("node:net");\nawait new Promise((connected, failed) => net.connect(9, "127.0.0.1").on("connect", connected).on("error", failed));`,
+                `const http = await import("node:http");\nhttp.createServer().listen(0);`,
+                `const dns = await import("node:dns/promises");\nawait dns.lookup("localhost");`,
+              ]
+            : []),
+        ];
+        for (const request of requests) {
+          const error = yield* refused(request);
+          expect(error.message).toContain("tools.pi.bash");
+          expect(error.message).toContain("network");
+        }
       }),
     );
 

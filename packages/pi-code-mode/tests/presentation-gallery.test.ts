@@ -122,6 +122,7 @@ const failures: ReadonlyArray<ProgramScenario> = [
     "direct file write refused",
     "const { writeFile } = await import('node:fs/promises');\nawait writeFile('notes.txt', 'draft');",
   ],
+  ["direct network request refused", "const response = await fetch('https://example.com');"],
 ];
 
 interface Settled {

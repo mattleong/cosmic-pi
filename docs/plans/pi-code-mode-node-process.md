@@ -30,9 +30,9 @@ From 1,139 `code_mode` programs in local Pi sessions (2026-08-12 to 2026-09-27):
 - No sandbox, but file and process work is routed through tools: the program runs under Node's
   permission model with only the runner's own files readable and workers allowed. File reads and
   writes, project imports, child processes, addons and WASI are refused, so that work goes through
-  recorded `tools.pi.*` calls. Node is for computation, built-in modules and the network. Node 25+
-  denies the network under `--permission`, so Pi passes `--allow-net` where Node knows the flag;
-  direct network use is allowed on every version and is not recorded (bash can `curl` anyway).
+  recorded `tools.pi.*` calls. Node is for computation and built-in modules. Node 25+ refuses the
+  network under `--permission` too; Node 22 and 24 cannot, so the runner refuses `fetch`,
+  `WebSocket` and `EventSource` itself and network requests go through `tools.pi.bash`.
 - Source is JavaScript, or TypeScript through Node's type stripping (enums unsupported). The
   TypeScript compiler and Acorn are removed.
 - The result is the explicit `return` value (none gives `null`) plus captured stdout and stderr,

@@ -118,10 +118,9 @@ const descriptionHeader = (catalogBudget: number, registrationSnapshot?: CodeMod
   "tools.pi.find, tools.pi.ls) " +
   "and the explicit tools.session.backgroundTask and tools.mcp.request adapters in one call. Sequence, " +
   "transform, filter, branch, and parallelize nested calls, then return only the data you " +
-  "need. The program uses Node.js for computation and the network: reading or writing files, " +
-  "importing project modules, and starting processes directly are refused, so file and process " +
-  "work goes through the recorded tools.pi.* calls. Direct network use is allowed and not " +
-  "recorded. This routes work through tools; it is not a sandbox. " +
+  "need. The program uses Node.js for computation: reading or writing files, importing project " +
+  "modules, starting processes and network requests directly are refused, so that work goes " +
+  "through the recorded tools.pi.* calls. This routes work through tools; it is not a sandbox. " +
   "Session-configured limits bound time, call count, and model-visible bytes but cannot prevent or " +
   "undo side effects. When the program ends, calls it already started finish and are reported; only " +
   "the timeout or cancellation stops them. A started background task may outlive the Code Mode call " +
@@ -222,9 +221,9 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
         "in one bounded program. Parallelize only independent calls. Stop for judgment, new " +
         "authorization, worker coordination, or required top-level middleware and previews. " +
         "Ordinary concurrent tool calls are also valid.",
-      "Inside code_mode, read, search and change files and run commands only with tools.pi.*: " +
-        "Node's fs, child_process and imports of project files or packages are refused. Node is for " +
-        "computation and the network. For files over read's 2,000-line/50 KB limit, page with " +
+      "Inside code_mode, read, search and change files, run commands and make network requests " +
+        "only with tools.pi.*: Node's fs, child_process, fetch and imports of project files or " +
+        "packages are refused. Node is for computation. For files over read's 2,000-line/50 KB limit, page with " +
         "offset/limit or filter with tools.pi.bash (rg, jq, head). tools.pi.grep and tools.pi.find " +
         "return paths relative to their path argument; join them with it before reading.",
       "For executions, always pass the optional code_mode intent parameter: a short " +

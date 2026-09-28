@@ -137,8 +137,11 @@ const describe = (error, via) => {
       const name = read(error, "name");
       const code = read(error, "code");
       const stack = read(error, "stack");
-      // Node's permission refusals name what was refused and the path it applied to.
-      const permission = read(error, "permission");
+      // Node's permission refusals name what was refused and the path it applied to. A refused
+      // socket or DNS call names only its syscall; the network is what it was denied.
+      const permission =
+        read(error, "permission") ??
+        (code === "ERR_ACCESS_DENIED" && isString(read(error, "syscall")) ? "Net" : undefined);
       const resource = read(error, "resource");
       return {
         kind: "thrown",
@@ -297,6 +300,34 @@ process.on("uncaughtException", (error) => {
 process.on("beforeExit", () => {
   if (running) void complete({ ok: false, failure: { kind: "stalled" } });
 });
+
+// ---- network
+
+// Node 25+ refuses the network under --permission, but earlier versions cannot. Refusing the
+// usual entry points here gives every version the same answer; the rest is Node's to refuse.
+const networkRefused = () =>
+  Object.assign(
+    new Error(
+      "Code Mode programs can't use the network directly. Use tools.pi.bash, for example with curl, so the request is recorded.",
+    ),
+    { code: "ERR_ACCESS_DENIED", permission: "Net" },
+  );
+const refusedNetworkApis = {
+  fetch: async () => {
+    throw networkRefused();
+  },
+  WebSocket: function WebSocket() {
+    throw networkRefused();
+  },
+  EventSource: function EventSource() {
+    throw networkRefused();
+  },
+};
+for (const [name, value] of Object.entries(refusedNetworkApis)) {
+  if (name in globalThis) {
+    Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
+  }
+}
 
 // ---- compile and run
 

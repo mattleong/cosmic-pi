@@ -275,10 +275,10 @@ closed, stdout and stderr are retained together as the program's logs (256 KiB),
 control protocol, and fd 4 is a lifetime lease. The process gets the activation's captured cwd, a
 minimal environment (paths, locale, proxies and certificates, never `NODE_OPTIONS` or Pi's own
 variables), a 1 GiB V8 heap and its own process group. It runs under Node's permission model: only
-the runner's two files are readable, workers are allowed, and so is the network (with
-`--allow-net` on Node 25+, which otherwise denies it); file reads and writes, project imports,
-child processes, addons and WASI are refused, so file and process work goes through
-recorded `tools.pi.*` calls. The allowlist uses the modules' real paths, because Node resolves the
+the runner's two files are readable and workers are allowed; file reads and writes, project
+imports, child processes, addons, WASI and, on Node 25+, the network are refused, so that work
+goes through recorded `tools.pi.*` calls. Node 22 and 24 cannot refuse the network, so the runner
+replaces `fetch`, `WebSocket` and `EventSource` with refusals on every version. The allowlist uses the modules' real paths, because Node resolves the
 entry's real path under the same permissions. `engine/failure.ts` turns Node's
 `ERR_ACCESS_DENIED` into guidance naming the refused file or package, from the error's
 `permission` and `resource`, and the tool to use instead. macOS and Linux only; other platforms
@@ -376,8 +376,9 @@ sandboxed. Nested MCP operations bypass Pi middleware and unrelated approvals,
 just like the Background Tasks capability; only the outer Code Mode call uses that middleware.
 
 There is no sandbox. Bash has full local-user process, environment, network, and filesystem
-authority. The program itself must read and change files and run commands through tools; only
-its direct network use is unrecorded. Read, edit, and write accept relative,
+authority. The program itself must read and change files, run commands and make network requests through
+tools; on Node 22 and 24 it can still reach the network through `node:http` or `node:net`
+unrecorded. Read, edit, and write accept relative,
 absolute, and home-relative paths. Mutations happen immediately and cancellation cannot roll them
 back. Pi built-in results default to text; opt-in structured reads add only validated completeness
 metadata. Images are refused and arbitrary built-in details never enter the guest. Background Tasks

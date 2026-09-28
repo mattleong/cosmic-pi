@@ -15,8 +15,7 @@ are refused before anything starts.
 Each call starts a fresh Node.js process in the session's working directory. The program is the
 body of an async function with ordinary Node semantics; `tools` is its only parameter. TypeScript
 with erasable types (no enums or namespaces) runs through Node's type stripping. Node is for
-computation and the network: built-in modules load with `await import("node:crypto")` and
-`fetch` works, while static `import`
+computation: built-in modules load with `await import("node:crypto")`, while static `import`
 statements and imports of project files or packages are refused.
 
 - **Result.** `return` a value. Strings return verbatim; other values return as compact JSON.
@@ -25,13 +24,14 @@ statements and imports of project files or packages are refused.
   limit, runs at most eight calls at once and records progress and receipts. Arguments, results and
   the return value cross a JSON boundary: Dates become strings, Map/Set become `{}`, undefined
   fields are dropped, and BigInt or cyclic values are refused.
-- **Authority.** The program runs under Node's permission model, so file and process work goes
-  through recorded tools. Reading or writing files, importing project files or packages, starting
-  processes, native addons and WASI are refused; use `tools.pi.read`, `grep`, `find` and `ls` to
-  read, `tools.pi.write` and `edit` to change files, and `tools.pi.bash` for commands. A refusal
-  names the tool to use. This routes work through tools; it is not a sandbox, since
-  `tools.pi.bash` can do anything, visibly. Direct network use (`fetch`, `http`) is allowed on
-  every supported Node version and is not recorded. The environment is
+- **Authority.** The program runs under Node's permission model, so file, process and network
+  work goes through recorded tools. Reading or writing files, importing project files or
+  packages, starting processes, network requests, native addons and WASI are refused; use
+  `tools.pi.read`, `grep`, `find` and `ls` to read, `tools.pi.write` and `edit` to change files,
+  and `tools.pi.bash` for commands and network requests. A refusal names the tool to use. Node
+  22 and 24 cannot refuse the network, so there only `fetch`, `WebSocket` and `EventSource` are
+  refused; Node 25+ refuses every socket and DNS lookup. This routes work through tools; it is
+  not a sandbox, since `tools.pi.bash` can do anything, visibly. The environment is
   minimal (paths, locale, proxies, certificates), which avoids accidental inheritance but hides
   nothing from code that can run a shell.
 - **Ending.** When the program returns or throws, new tool calls are refused, calls already

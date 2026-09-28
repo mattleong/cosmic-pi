@@ -27,22 +27,18 @@ export const PROGRAM_OUTPUT_BYTES = 256 * 1024;
 const MAX_OLD_SPACE_MB = 1024;
 
 /**
- * Node's permission model: the program may compute, use built-in modules and the network, but
- * reading or writing files, importing project modules, starting processes, native addons and
- * WASI are refused, so file and process work goes through the recorded `tools.pi.*` calls. Only
+ * Node's permission model: the program may compute and use built-in modules, but reading or
+ * writing files, importing project modules, starting processes, native addons and WASI are
+ * refused, so that work goes through the recorded `tools.pi.*` calls. Node 25+ also refuses the
+ * network; earlier versions cannot, so the runner refuses `fetch` and `WebSocket` itself. Only
  * the runner's own two files are readable, and the watchdog needs a worker thread. This routes
  * effects; it is not a sandbox, since `tools.pi.bash` can do anything.
- *
- * Node 25+ also denies the network under `--permission`; earlier versions cannot, and reject
- * `--allow-net` as unknown. Allowing it where Node knows the flag keeps one rule on every version.
- * The program runs on Pi's own Node, so this process's flags describe the child's.
  */
 const PERMISSIONS = [
   "--permission",
   `--allow-fs-read=${CHILD_PATH}`,
   `--allow-fs-read=${WATCHDOG_PATH}`,
   "--allow-worker",
-  ...(process.allowedNodeEnvironmentFlags.has("--allow-net") ? ["--allow-net"] : []),
   "--disable-warning=ExperimentalWarning",
   "--disable-warning=SecurityWarning",
 ];
