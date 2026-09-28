@@ -230,7 +230,7 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
       Effect.gen(function* () {
         const started = yield* Clock.currentTimeMillis;
         const { result } = yield* run(`console.log("spinning"); while (true) {}`, {
-          timeoutMs: 300,
+          timeoutMs: 2_000,
         });
         const failure = failed(result);
         expect(failure.error.kind).toBe("TimeoutExceeded");
@@ -242,7 +242,7 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     it.live("cancels calls still running at the deadline", () =>
       Effect.gen(function* () {
         const { result, events } = yield* run(`await tools.demo.slow({ ms: 5_000, text: "x" });`, {
-          timeoutMs: 300,
+          timeoutMs: 2_000,
         });
         expect(failed(result).error.kind).toBe("TimeoutExceeded");
         expect(terminal(events)).toEqual(["demo.slow:cancelled"]);

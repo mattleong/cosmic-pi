@@ -326,7 +326,8 @@ describe("output recovery without replay", () => {
       const results = yield* CodeModeResults;
       const pending = yield* Deferred.make<string>();
       const h = harness(results, {
-        config: { timeoutMs: 100, maxOutputBytes: 3000 },
+        // The deadline also covers starting Node; bash never settles, so it still expires.
+        config: { timeoutMs: 2_000, maxOutputBytes: 3000 },
         bash: () => Effect.runPromise(Deferred.await(pending)),
       });
       yield* Effect.promise(() =>

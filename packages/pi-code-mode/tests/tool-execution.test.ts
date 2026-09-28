@@ -412,11 +412,11 @@ describe("host limits", () => {
     Effect.gen(function* () {
       const calls: FakeCall[] = [];
       const definitions = fakeDefinitions({ read: () => blockingCall() }, calls);
-      const execute = makeHarness({ config: { timeoutMs: 1_000 }, definitions });
+      const execute = makeHarness({ config: { timeoutMs: 2_000 }, definitions });
       yield* Effect.promise(() =>
         expect(
           execute("call-timeout", "return await tools.pi.read({ path: 'hang' });"),
-        ).rejects.toThrow(/\[TimeoutExceeded\].*1000ms/s),
+        ).rejects.toThrow(/\[TimeoutExceeded\].*2000ms/s),
       );
       expect(calls).toHaveLength(1);
       expect(calls[0]?.signal?.aborted).toBe(true);
