@@ -206,7 +206,8 @@ it.live.each(["cancel", "deadline", "credential"])(
         {
           interaction: host,
           auth: Effect.sync(() => token),
-          settings: { requestTimeoutMs: mode === "deadline" ? 150 : 60_000 },
+          // Long enough to reach user input on a slow runner; the prompt itself never answers.
+          settings: { requestTimeoutMs: mode === "deadline" ? 2_000 : 60_000 },
         },
       );
       yield* Effect.gen(function* () {
@@ -214,7 +215,8 @@ it.live.each(["cancel", "deadline", "credential"])(
         const running = yield* Effect.forkScoped(
           execution.execute(input, projection).pipe(Effect.result),
         );
-        yield* Deferred.await(entered);
+        // A request that ends before prompting fails the assertions below instead of hanging.
+        yield* Effect.raceFirst(Deferred.await(entered), Fiber.await(running));
         if (mode === "cancel") yield* Fiber.interrupt(running);
         else {
           const result = yield* Fiber.join(running);
