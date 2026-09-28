@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { CodeMode } from "../src/index.js";
-import { ToolRuntime } from "../src/tool-runtime.js";
+import { copyOut } from "../src/tool-runtime-data.js";
 
 // Runs a CodeMode program with no host tools and returns the CodeMode.Result. These tests pin the
 // JS-parity behaviors for the "99% of ordinary defensive JavaScript just works" goal: cases where
@@ -185,11 +185,11 @@ describe("H1: NaN/Infinity flow as intermediates and normalize to null at the bo
     () =>
       Effect.sync(() => {
         // Tool-call arguments funnel through copyOut too, so this one function pins both boundaries.
-        expect(ToolRuntime.copyOut(NaN)).toBeNull();
-        expect(ToolRuntime.copyOut(Infinity)).toBeNull();
-        expect(ToolRuntime.copyOut(-Infinity)).toBeNull();
-        expect(ToolRuntime.copyOut(42)).toBe(42);
-        expect(ToolRuntime.copyOut({ a: NaN, b: [Infinity, 1] })).toEqual({
+        expect(copyOut(NaN)).toBeNull();
+        expect(copyOut(Infinity)).toBeNull();
+        expect(copyOut(-Infinity)).toBeNull();
+        expect(copyOut(42)).toBe(42);
+        expect(copyOut({ a: NaN, b: [Infinity, 1] })).toEqual({
           a: null,
           b: [null, 1],
         });
@@ -433,10 +433,10 @@ describe("array methods: splice, fill, copyWithin, keys/values/entries", () => {
     }),
   );
 
-  it.effect("keys/values/entries return arrays usable with for...of and spread", () =>
+  it.effect("keys/values/entries return iterators usable with for...of and spread", () =>
     Effect.gen(function* () {
       expect(yield* value(`return [...["x","y","z"].keys()]`)).toEqual([0, 1, 2]);
-      expect(yield* value(`return ["x","y"].values()`)).toEqual(["x", "y"]);
+      expect(yield* value(`return [...["x","y"].values()]`)).toEqual(["x", "y"]);
       expect(
         yield* value(`
       const out = []

@@ -2,17 +2,13 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { DataValue, ExecuteOptions, ResolvedExecutionLimits, Result } from "../codemode.js";
-import {
-  copyIn,
-  copyOut,
-  type HostTools,
-  type Services,
-  type ToolCallHooks,
-  ToolRuntime,
-} from "../tool-runtime.js";
-import { ExecutionDeadline } from "./confinement.js";
+import type { SearchEntry } from "../tool-search.js";
+import { type Services, type ToolCallHooks, ToolRuntime } from "../tool-runtime.js";
+import type { HostTools } from "../tool-tree.js";
+import { ExecutionDeadline } from "./deadline.js";
 import { normalizeError, parseProgram } from "./diagnostics.js";
-import { Interpreter } from "./runtime.js";
+import { runProgram } from "./execution.js";
+import { exportData } from "../tool-runtime-data.js";
 
 /**
  * Executes one Effect-native CodeMode program without constructing a reusable runtime.
@@ -28,7 +24,7 @@ import { Interpreter } from "./runtime.js";
 export const executeWithLimits = <const Tools extends object>(
   options: ExecuteOptions<Tools>,
   limits: ResolvedExecutionLimits,
-  searchIndex: ToolRuntime.DiscoveryPlan["searchIndex"],
+  searchIndex: ReadonlyArray<SearchEntry>,
 ): Effect.Effect<Result, never, Services<Tools>> =>
   Effect.suspend(() => {
     let hooks: ToolCallHooks<Services<Tools>> = {};
@@ -69,19 +65,21 @@ export const executeWithLimits = <const Tools extends object>(
     const deadline = new ExecutionDeadline(limits.timeoutMs);
     const operation = Effect.gen(function* () {
       const program = parseProgram(options.code);
-      const interpreter = new Interpreter<Services<Tools>>(
-        tools.invoke,
-        tools.keys,
+      const value = yield* runProgram<Services<Tools>>(program, {
+        admitTool: tools.admit,
+        toolKeys: tools.keys,
+        toolKind: tools.kind,
         logs,
         deadline,
-        options.onToolCallLifecycle,
-      );
-      const value = yield* interpreter.run(program);
+        ...(options.onToolCallLifecycle !== undefined && {
+          onToolCallLifecycle: options.onToolCallLifecycle,
+        }),
+      });
       // A program whose final synchronous operation ran past the deadline must not race the
       // (event-loop-starved) Effect timer into an ok result.
       deadline.check();
       // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      const result = copyOut(copyIn(value, "Execution result"), true) as DataValue;
+      const result = (exportData(value, "Execution result") ?? null) as DataValue;
       deadline.check();
       return {
         ok: true,
@@ -159,9 +157,9 @@ export const utf8Truncate = (value: string, maxBytes: number): string => {
 
 /**
  * Bounds the model-facing output content (a verbatim string or serialized structured value,
- * or a diagnostic message, plus logs) to `maxOutputBytes`. Truncation markers are reserved
- * *inside* the budget, so value bytes + diagnostic-message bytes + log bytes (markers included)
- * never exceed `maxOutputBytes`. Oversized values are replaced by their truncated rendered text
+ * or a diagnostic message and its suggestions, plus logs) to `maxOutputBytes`. Truncation
+ * markers are reserved *inside* the budget, so value bytes + diagnostic bytes + log bytes
+ * (markers included) never exceed `maxOutputBytes`. Oversized values are replaced by their truncated rendered text
  * with an explanatory marker, oversized diagnostic messages are truncated code-point-safely,
  * and logs are kept from the start until the remaining budget is exhausted. Truncation never
  * fails the execution; `truncated: true` marks affected results. Only runs when the host set
@@ -200,6 +198,22 @@ export const boundOutput = (result: Result, maxOutputBytes: number): Result => {
       error = { ...error, message: utf8Truncate(error.message, maxOutputBytes) };
     }
     usedBytes = utf8ByteLength(error.message);
+    // Hosts show suggestions beside the message, so they share its budget; each is kept whole
+    // or dropped.
+    if (error.suggestions !== undefined) {
+      const suggestions: Array<string> = [];
+      for (const suggestion of error.suggestions) {
+        const suggestionBytes = utf8ByteLength(suggestion) + 1;
+        if (usedBytes + suggestionBytes > maxOutputBytes) break;
+        usedBytes += suggestionBytes;
+        suggestions.push(suggestion);
+      }
+      if (suggestions.length < error.suggestions.length) {
+        truncated = true;
+        const { suggestions: _dropped, ...rest } = error;
+        error = suggestions.length > 0 ? { ...rest, suggestions } : rest;
+      }
+    }
   }
 
   const logs = result.logs ?? [];

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -63,6 +64,89 @@ describe("promise scheduling and cleanup", () => {
         async function g() { await 0; return await Promise.race([p, 2]); }
         p = f(); q = g(); return await Promise.race([p, q, 3]);`),
       ).toMatchObject({ ok: true, value: 3 });
+    }),
+  );
+
+  it.live("long reaction chains and async recursion finish without exhausting the host stack", () =>
+    Effect.gen(function* () {
+      const cases = [
+        [
+          `let p = Promise.resolve(0);
+          for (let i = 0; i < 5000; i++) p = p.then((x) => x + 1);
+          return await p;`,
+          5000,
+        ],
+        [
+          `async function f(n) { if (n === 0) return 0; await null; return f(n - 1); }
+          return await f(2000);`,
+          0,
+        ],
+        [
+          `const rows = Array.from({ length: 2000 }, (_, id) => ({ id }));
+          const out = await Promise.all(rows.map(async (row) => ({ ...row, v: await row.id })));
+          return out.length;`,
+          2000,
+        ],
+      ] as const;
+      for (const [code, value] of cases)
+        expect(yield* CodeMode.execute({ code, limits: { timeoutMs: 10_000 } })).toMatchObject({
+          ok: true,
+          value,
+        });
+    }),
+  );
+
+  it.live("refuses more live async work than one execution may hold", () =>
+    Effect.gen(function* () {
+      const result = yield* CodeMode.execute({
+        code: `const items = Array.from({ length: 20_000 }, (_, i) => i);
+          return (await Promise.all(items.map(async (i) => { await null; return i; }))).length;`,
+        limits: { timeoutMs: 10_000 },
+      });
+      expect(result).toMatchObject({ ok: false, error: { kind: "InvalidDataValue" } });
+    }),
+  );
+
+  it.live("a runaway async loop still ends at the execution timeout", () =>
+    Effect.gen(function* () {
+      const result = yield* CodeMode.execute({
+        code: "async function f() { await null; f(); } f(); return 1;",
+        limits: { timeoutMs: 200 },
+      });
+      expect(result).toMatchObject({ ok: false, error: { kind: "TimeoutExceeded" } });
+    }),
+  );
+
+  it.live("timeout teardown interrupts live calls together rather than one by one", () =>
+    Effect.gen(function* () {
+      const slowCleanup = Tool.make({
+        description: "Wait, then clean up slowly when interrupted",
+        input: Schema.Number,
+        output: Schema.Number,
+        run: () => Effect.never.pipe(Effect.onInterrupt(() => Effect.sleep("300 millis"))),
+      });
+      const startedAt = yield* Clock.currentTimeMillis;
+      const result = yield* CodeMode.execute({
+        tools: { slowCleanup },
+        code: "return await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((n) => tools.slowCleanup(n)));",
+        limits: { timeoutMs: 100 },
+      });
+      expect(result).toMatchObject({ ok: false, error: { kind: "TimeoutExceeded" } });
+      // Sequential cleanup would take 8 x 300ms.
+      expect((yield* Clock.currentTimeMillis) - startedAt).toBeLessThan(1_500);
+    }),
+  );
+
+  it.effect("an await resumes after one queued reaction, as in native promises", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* run(`const log = [];
+        const p = Promise.resolve();
+        p.then(() => log.push("t1")).then(() => log.push("t2")).then(() => log.push("t3"));
+        await null; log.push("main");
+        await null; await null; await null;
+        return log;`),
+      ).toMatchObject({ ok: true, value: ["t1", "main", "t2", "t3"] });
     }),
   );
 

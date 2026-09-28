@@ -1,15 +1,13 @@
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { DiagnosticFacts } from "./diagnostic-facts.js";
-import { executeWithLimits } from "./interpreter/runtime.js";
-import {
-  type HostTools,
-  type Services,
-  type ToolDescription,
-  ToolRuntime,
-} from "./tool-runtime.js";
+import { prepare } from "./tool-catalog.js";
+import { type Services, ToolRuntime } from "./tool-runtime.js";
+import { searchIndex } from "./tool-search.js";
+import { assertValidTools, type HostTools, type ToolDescription } from "./tool-tree.js";
 import type { Definition } from "./tool.js";
 import { catalogUpdate, type CatalogSnapshot, type CatalogUpdate } from "./catalog.js";
+import { executeWithLimits } from "./interpreter/host-execution.js";
 export type { CatalogEntry, CatalogSnapshot, CatalogUpdate } from "./catalog.js";
 
 /** A tool call admitted during an execution. */
@@ -19,8 +17,8 @@ export type {
   ToolCallHooks,
   ToolCallLifecycleEvent,
   ToolCallStarted,
-  ToolDescription,
 } from "./tool-runtime.js";
+export type { ToolDescription } from "./tool-tree.js";
 
 /** Resource budgets enforced independently during each CodeMode program execution. */
 export type ExecutionLimits = {
@@ -169,12 +167,8 @@ export const execute = <const Tools extends object>(
 ): Effect.Effect<Result, never, Services<Tools>> => {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const tools = (options.tools ?? {}) as HostTools<Services<Tools>>;
-  ToolRuntime.assertValidTools(tools);
-  return executeWithLimits(
-    options,
-    resolveExecutionLimits(options.limits),
-    ToolRuntime.searchIndex(tools),
-  );
+  assertValidTools(tools);
+  return executeWithLimits(options, resolveExecutionLimits(options.limits), searchIndex(tools));
 };
 
 /** Creates an Effect-native runtime over explicit, schema-described tools. */
@@ -184,9 +178,9 @@ export const make = <const Tools extends object = {}>(
 ): Runtime<Services<Tools>> => {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const tools = (options.tools ?? {}) as HostTools<Services<Tools>>;
-  ToolRuntime.assertValidTools(tools);
+  assertValidTools(tools);
   const limits = resolveExecutionLimits(options.limits);
-  const prepared = ToolRuntime.prepare(tools, options.discovery?.catalogBudget);
+  const prepared = prepare(tools, options.discovery?.catalogBudget);
 
   return {
     catalog: () => prepared.catalog,

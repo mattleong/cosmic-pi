@@ -590,12 +590,12 @@ describe("Map", () => {
     }),
   );
 
-  it.effect("keys/values/entries return arrays", () =>
+  it.effect("keys/values/entries return live iterators", () =>
     Effect.gen(function* () {
       expect(
         yield* value(`
       const m = new Map([["a", 1], ["b", 2]])
-      return { keys: m.keys(), values: m.values(), entries: m.entries() }
+      return { keys: [...m.keys()], values: Array.from(m.values()), entries: m.entries().toArray() }
     `),
       ).toEqual({
         keys: ["a", "b"],

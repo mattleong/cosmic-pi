@@ -1,7 +1,5 @@
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType, runtimeTypeName } from "../runtime-values.js";
-import { errorBrandName } from "../stdlib/value.js";
-import { ToolReference } from "../tool-runtime.js";
 import {
   isSandboxValue,
   SandboxBytes,
@@ -14,6 +12,7 @@ import {
   SandboxSet,
   SandboxURL,
   SandboxURLSearchParams,
+  errorBrandName,
 } from "../values.js";
 import {
   type AstNode,
@@ -29,6 +28,7 @@ import {
   PromiseMethodReference,
   PromiseNamespace,
   UriFunction,
+  ToolReference,
 } from "./model.js";
 
 export const isRuntimeReference = (value: InterpreterValue): boolean =>

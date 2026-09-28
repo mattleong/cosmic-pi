@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { CodeMode, Tool } from "../src/index.js";
-import { setDeadlineClockForTesting } from "../src/interpreter/confinement.js";
+import { setDeadlineClockForTesting } from "../src/interpreter/deadline.js";
 
 // The runtime's fixed tool-call concurrency: call `permits` is the first to queue.
 const permits = 8;
@@ -175,5 +175,48 @@ describe("queued tool calls and the cooperative deadline", () => {
         ]);
       }),
     ),
+  );
+
+  it.effect("refuses a call over the limit at once, without waiting for a permit", () =>
+    Effect.gen(function* () {
+      const gate = Deferred.makeUnsafe<void>();
+      const refused = Deferred.makeUnsafe<CodeMode.ToolCallLifecycleEvent>();
+      const events: Array<CodeMode.ToolCallLifecycleEvent> = [];
+      const work = Tool.make({
+        description: "Hold a permit until released",
+        input: Schema.Struct({ id: Schema.Finite }),
+        output: Schema.Finite,
+        run: ({ id }) => Effect.as(Deferred.await(gate), id),
+      });
+      const fiber = yield* Effect.forkChild(
+        CodeMode.execute({
+          tools: { work },
+          code: `const held = [${ids(0, permits).join(", ")}].map((id) => tools.work({ id }));
+            let refusal; try { await tools.work({ id: ${permits} }); } catch (error) { refusal = error.message; }
+            await Promise.all(held); return refusal;`,
+          limits: { maxToolCalls: permits, timeoutMs },
+          onToolCallLifecycle: (event) =>
+            Effect.suspend(() => {
+              events.push(event);
+              return event.id === permits && event.status === "failed"
+                ? Effect.asVoid(Deferred.succeed(refused, event))
+                : Effect.void;
+            }),
+        }),
+      );
+      // Every permit is still held here, so the refusal cannot have waited for one.
+      expect(yield* Deferred.await(refused)).toMatchObject({
+        started: false,
+        failure: { kind: "ToolCallLimitExceeded" },
+      });
+      expect(events.filter((event) => event.id === permits).map((event) => event.status)).toEqual([
+        "queued",
+        "failed",
+      ]);
+      yield* Deferred.succeed(gate, undefined);
+      const result = yield* Fiber.join(fiber);
+      expect(result).toMatchObject({ ok: true });
+      expect(result.toolCalls).toHaveLength(permits);
+    }),
   );
 });

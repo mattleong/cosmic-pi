@@ -1,8 +1,8 @@
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "../runtime-values.js";
 import { consoleMethods, MAX_CONSOLE_DEPTH } from "../stdlib/console.js";
-import { boundedData, coerceToString } from "../stdlib/value.js";
-import { copyIn, copyOut, ToolReference } from "../tool-runtime.js";
+import { boundedData } from "../stdlib/value.js";
+import { coerceToString } from "./conversions.js";
 import {
   isSandboxValue,
   SandboxBytes,
@@ -15,19 +15,22 @@ import {
   SandboxURLSearchParams,
 } from "../values.js";
 import { appendBoundedLog, MAX_LOG_ENTRY_LENGTH } from "./confinement.js";
-import { publicErrorMessage } from "./diagnostics.js";
 import {
   type AstNode,
   type InterpreterArray,
   type InterpreterObject,
   InterpreterRuntimeError,
   type InterpreterValue,
+  ToolReference,
 } from "./model.js";
 import {
   containsOpaqueReference,
   containsRuntimeReference,
   isRuntimeReference,
 } from "./references.js";
+import { enumerableKeys } from "./statements.js";
+import { type Activation } from "./activation.js";
+import { exportData } from "../tool-runtime-data.js";
 export interface ConsoleHost<_R> {
   enumerableKeys<ValueInput>(value: ValueInput): Array<string> | undefined;
   logs: Array<string>;
@@ -53,13 +56,13 @@ export interface ConsoleHost<_R> {
   ): { [k: string]: InterpreterValue };
 }
 export function invokeObjectMethodOnTools<R>(
-  this: ConsoleHost<R>,
+  act: Activation<R>,
   name: string,
   ref: ToolReference,
   node: AstNode,
 ) {
   if (name === "keys") {
-    return boundedData(this.enumerableKeys(ref)!, "Object.keys result");
+    return boundedData(enumerableKeys(act, ref)!, "Object.keys result");
   }
   throw new InterpreterRuntimeError(
     `Object.${name}(...) cannot read tool references: they are not plain data. Use Object.keys(tools) for names, or tools.$codemode.search({ query }) for signatures.`,
@@ -68,7 +71,7 @@ export function invokeObjectMethodOnTools<R>(
   );
 }
 export function invokeConsole<R>(
-  this: ConsoleHost<R>,
+  act: Activation<R>,
   name: string,
   args: InterpreterArray,
   node: AstNode,
@@ -77,16 +80,12 @@ export function invokeConsole<R>(
     throw new InterpreterRuntimeError(`console.${name} is not available in CodeMode.`, node);
   // Confinement: entries are truncated and capped during the run, so console output can
   // never grow host memory unboundedly before the post-run output bound applies.
-  appendBoundedLog(this.logs, publicErrorMessage(this.formatConsoleMessage(name, args)));
+  appendBoundedLog(act.execution.logs, formatConsoleMessage(name, args));
   return undefined;
 }
-export function formatConsoleMessage<R>(
-  this: ConsoleHost<R>,
-  name: string,
-  args: InterpreterArray,
-): string {
-  if (name === "dir") return args.length === 0 ? "undefined" : this.formatConsoleArgument(args[0]);
-  if (name === "table") return this.formatConsoleTable(args[0], args[1]);
+export function formatConsoleMessage(name: string, args: InterpreterArray): string {
+  if (name === "dir") return args.length === 0 ? "undefined" : formatConsoleArgument(args[0]);
+  if (name === "table") return formatConsoleTable(args[0], args[1]);
   const prefix =
     name === "warn"
       ? "[warn] "
@@ -95,22 +94,18 @@ export function formatConsoleMessage<R>(
         : name === "debug"
           ? "[debug] "
           : "";
-  return `${prefix}${args.map((arg) => this.formatConsoleArgument(arg)).join(" ")}`;
+  return `${prefix}${args.map((arg) => formatConsoleArgument(arg)).join(" ")}`;
 }
-export function formatConsoleArgument<R, ValueInput>(
-  this: ConsoleHost<R>,
-  value: ValueInput,
-): string {
+export function formatConsoleArgument<ValueInput>(value: ValueInput): string {
   if (value === undefined) return "undefined";
   // A top-level string prints bare; nested strings are JSON-quoted (see formatConsoleValue).
   if (Predicate.isString(value)) return value;
-  return this.formatConsoleValue(value, new Set(), 0, this.consoleBudget());
+  return formatConsoleValue(value, new Set(), 0, consoleBudget());
 }
-export function consoleBudget<R>(this: ConsoleHost<R>) {
+export function consoleBudget() {
   return { remaining: MAX_LOG_ENTRY_LENGTH + 64 };
 }
-export function formatConsoleValue<R, ValueInput>(
-  this: ConsoleHost<R>,
+export function formatConsoleValue<ValueInput>(
   value: ValueInput,
   seen: Set<object>,
   depth: number,
@@ -152,7 +147,7 @@ export function formatConsoleValue<R, ValueInput>(
         value.map.entries(),
         ([key, item]): InterpreterArray => [key, item],
       );
-      return `Map(${value.map.size}) ${this.formatConsoleValue(entries, seen, depth + 1, budget)}`;
+      return `Map(${value.map.size}) ${formatConsoleValue(entries, seen, depth + 1, budget)}`;
     } finally {
       seen.delete(value);
     }
@@ -160,7 +155,7 @@ export function formatConsoleValue<R, ValueInput>(
   if (value instanceof SandboxSet) {
     seen.add(value);
     try {
-      return `Set(${value.set.size}) ${this.formatConsoleValue(Array.from(value.set.values()), seen, depth + 1, budget)}`;
+      return `Set(${value.set.size}) ${formatConsoleValue(Array.from(value.set.values()), seen, depth + 1, budget)}`;
     } finally {
       seen.delete(value);
     }
@@ -175,7 +170,7 @@ export function formatConsoleValue<R, ValueInput>(
           parts.push("...");
           break;
         }
-        parts.push(this.formatConsoleValue(item, seen, depth + 1, budget));
+        parts.push(formatConsoleValue(item, seen, depth + 1, budget));
         budget.remaining -= 1;
       }
       return `[${parts.join(",")}]`;
@@ -187,7 +182,7 @@ export function formatConsoleValue<R, ValueInput>(
         break;
       }
       parts.push(
-        `${spend(JSON.stringify(key))}:${this.formatConsoleValue(item, seen, depth + 1, budget)}`,
+        `${spend(JSON.stringify(key))}:${formatConsoleValue(item, seen, depth + 1, budget)}`,
       );
       budget.remaining -= 1;
     }
@@ -196,8 +191,7 @@ export function formatConsoleValue<R, ValueInput>(
     seen.delete(value);
   }
 }
-export function formatConsoleTable<R>(
-  this: ConsoleHost<R>,
+export function formatConsoleTable(
   value: InterpreterValue,
   columnsArgument: InterpreterValue,
 ): string {
@@ -206,8 +200,8 @@ export function formatConsoleTable<R>(
   // truly opaque references (functions, tools, promises) collapse to the marker.
   if (containsOpaqueReference(value)) return "[CodeMode reference]";
   const data = boundedData(value, "console.table argument");
-  const columns = this.consoleTableColumns(columnsArgument);
-  const rows = this.consoleTableRows(data, columns);
+  const columns = consoleTableColumns(columnsArgument);
+  const rows = consoleTableRows(data, columns);
   const keys = columns ?? Array.from(new Set(rows.flatMap((row) => Object.keys(row.values))));
   // Confinement: stop rendering once the entry budget is spent; appendBoundedLog
   // truncates the final entry either way.
@@ -218,45 +212,39 @@ export function formatConsoleTable<R>(
       lines.push(`[table truncated: showing ${lines.length - 1} of ${rows.length} rows]`);
       break;
     }
-    const line = [
-      row.index,
-      ...keys.map((key) => this.formatConsoleTableCell(row.values[key])),
-    ].join("\t");
+    const line = [row.index, ...keys.map((key) => formatConsoleTableCell(row.values[key]))].join(
+      "\t",
+    );
     rendered += line.length + 1;
     lines.push(line);
   }
   return lines.join("\n");
 }
-export function consoleTableColumns<R>(
-  this: ConsoleHost<R>,
-  value: InterpreterValue,
-): ReadonlyArray<string> | undefined {
+export function consoleTableColumns(value: InterpreterValue): ReadonlyArray<string> | undefined {
   if (value === undefined) return undefined;
   if (containsRuntimeReference(value)) return undefined;
-  const columns = copyOut(copyIn(value, "console.table columns"), true);
+  const columns = exportData(value, "console.table columns");
   return Array.isArray(columns) ? columns.map((column) => String(column)) : undefined;
 }
-export function consoleTableRows<R>(
-  this: ConsoleHost<R>,
+export function consoleTableRows(
   data: InterpreterValue,
   columns: ReadonlyArray<string> | undefined,
 ): Array<{ readonly index: string; readonly values: InterpreterObject }> {
   if (Array.isArray(data)) {
     return data.map((item, index) => ({
       index: String(index),
-      values: this.consoleTableValues(item, columns),
+      values: consoleTableValues(item, columns),
     }));
   }
   if (data !== null && hasObjectRuntimeType(data) && !isSandboxValue(data)) {
     return Object.entries(data).map(([index, item]) => ({
       index,
-      values: this.consoleTableValues(item, columns),
+      values: consoleTableValues(item, columns),
     }));
   }
   return [{ index: "0", values: { Value: data } }];
 }
-export function consoleTableValues<R>(
-  this: ConsoleHost<R>,
+export function consoleTableValues(
   value: InterpreterValue,
   columns: ReadonlyArray<string> | undefined,
 ) {
@@ -274,8 +262,8 @@ export function consoleTableValues<R>(
   }
   return { Value: value };
 }
-export function formatConsoleTableCell<R>(this: ConsoleHost<R>, value: InterpreterValue): string {
+export function formatConsoleTableCell(value: InterpreterValue): string {
   if (value === undefined) return "";
   if (Predicate.isString(value)) return value;
-  return this.formatConsoleValue(value, new Set(), 0, this.consoleBudget());
+  return formatConsoleValue(value, new Set(), 0, consoleBudget());
 }

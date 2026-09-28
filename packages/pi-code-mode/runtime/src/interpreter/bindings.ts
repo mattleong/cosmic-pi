@@ -2,12 +2,9 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { RuntimeFailure } from "../failure.js";
 import { hasObjectRuntimeType } from "../runtime-values.js";
-import { isBlockedMember } from "../tool-runtime.js";
 import {
   asNode,
   type AstNode,
-  type Binding,
-  type GuestPropertyKey,
   getArray,
   getBoolean,
   getNode,
@@ -18,41 +15,27 @@ import {
   type InterpreterValue,
   makeInterpreterObject,
 } from "./model.js";
-import { isRuntimeReference } from "./runtime.js";
 import {
   acquireIterator,
   iteratorStep,
   iteratorClose,
   closeOnAbrupt,
-  type IteratorHost,
 } from "./iterator-protocol.js";
 import { assertBoundedCollectionSize } from "./confinement.js";
-export interface PatternHost<R> extends IteratorHost<R> {
-  evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  toPropertyKey(value: InterpreterValue, node: AstNode): GuestPropertyKey;
-}
-
-export interface BindingsHost<R> extends PatternHost<R> {
-  variableScope(): Map<string, Binding>;
-  resolveBinding(name: string): Binding | undefined;
-  declare(name: string, value: InterpreterValue, mutable: boolean, node: AstNode): void;
-  declarePattern(
-    pattern: AstNode,
-    value: InterpreterValue,
-    mutable: boolean,
-    node: AstNode,
-    kind?: "var",
-  ): Effect.Effect<void, RuntimeFailure, R>;
-  evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-}
+import { readProperty } from "./members.js";
+import { evaluateExpression } from "./expressions.js";
+import { toPropertyKey } from "./conversions.js";
+import { declare, resolveBinding, variableScope } from "./scope.js";
+import { type Activation } from "./activation.js";
+import { isRuntimeReference } from "./references.js";
 
 export function evaluateVariableDeclaration<R>(
-  this: BindingsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<void, RuntimeFailure, R> {
   const kind = getString(node, "kind");
   const declarations = getArray(node, "declarations");
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     for (const declarationValue of declarations) {
       const declaration = asNode(declarationValue, "declarations");
 
@@ -62,8 +45,9 @@ export function evaluateVariableDeclaration<R>(
 
       const init = getOptionalNode(declaration, "init");
       if (kind === "var" && !init) continue;
-      const value = init ? yield* this.evaluateExpression(init) : undefined;
-      yield* this.declarePattern(
+      const value = init ? yield* evaluateExpression(act, init) : undefined;
+      yield* declarePattern(
+        act,
         getNode(declaration, "id"),
         value,
         kind !== "const",
@@ -75,14 +59,14 @@ export function evaluateVariableDeclaration<R>(
 }
 
 export function declarePattern<R>(
-  this: BindingsHost<R>,
+  act: Activation<R>,
   pattern: AstNode,
   value: InterpreterValue,
   mutable: boolean,
   node: AstNode,
   kind?: "var",
 ): Effect.Effect<void, RuntimeFailure, R> {
-  return destructurePattern(this, pattern, value, (target) =>
+  return destructurePattern(act, pattern, value, (target) =>
     Effect.succeed((incoming) =>
       Effect.sync(() => {
         if (target.type !== "Identifier")
@@ -92,11 +76,10 @@ export function declarePattern<R>(
           );
         const name = getString(target, "name");
         if (kind === "var") {
-          const binding = this.resolveBinding(name);
+          const binding = resolveBinding(act, name);
           if (binding) binding.value = incoming;
-          else
-            this.variableScope().set(name, { value: incoming, mutable: true, initialized: true });
-        } else this.declare(name, incoming, mutable, node);
+          else variableScope(act).set(name, { value: incoming, mutable: true, initialized: true });
+        } else declare(act, name, incoming, mutable, node);
       }),
     ),
   );
@@ -109,7 +92,7 @@ export type PreparePatternTarget<R> = (
 
 /** Prepare leaf references before fetching their values, without declaring or reading bindings. */
 function preparePattern<R>(
-  host: PatternHost<R>,
+  host: Activation<R>,
   pattern: AstNode,
   prepare: PreparePatternTarget<R>,
 ): Effect.Effect<PatternConsumer<R>, RuntimeFailure, R> {
@@ -119,7 +102,9 @@ function preparePattern<R>(
       return (value: InterpreterValue) =>
         Effect.gen(function* () {
           const resolved =
-            value === undefined ? yield* host.evaluateExpression(getNode(pattern, "right")) : value;
+            value === undefined
+              ? yield* evaluateExpression(host, getNode(pattern, "right"))
+              : value;
           yield* consume(resolved);
         });
     }
@@ -129,43 +114,54 @@ function preparePattern<R>(
   });
 }
 
+/** The own enumerable data members an object rest pattern collects, minus the named ones. */
+const restOf = (
+  value: InterpreterValue,
+  consumed: ReadonlySet<PropertyKey>,
+  node: AstNode,
+): InterpreterObject => {
+  const rest = makeInterpreterObject();
+  if (Predicate.isString(value))
+    assertBoundedCollectionSize(value.length, "Destructuring rest", node);
+  const source = Predicate.isString(value)
+    ? Array.from(value.split(""))
+    : value === null || !hasObjectRuntimeType(value) || isRuntimeReference(value)
+      ? undefined
+      : value;
+  if (source === undefined) return rest;
+  let count = 0;
+  for (const key of Reflect.ownKeys(source)) {
+    if (consumed.has(key)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (!descriptor?.enumerable) continue;
+    assertBoundedCollectionSize(++count, "Destructuring rest", node);
+    // SAFETY: Own data members of guest arrays and objects belong to InterpreterValue.
+    rest[key] = descriptor.value as InterpreterValue;
+  }
+  return rest;
+};
+
 /** Shared traversal only. Declaration initialization and assignment retain separate leaf operations. */
 export function destructurePattern<R>(
-  host: PatternHost<R>,
+  host: Activation<R>,
   pattern: AstNode,
   value: InterpreterValue,
   prepare: PreparePatternTarget<R>,
 ): Effect.Effect<void, RuntimeFailure, R> {
   return Effect.gen(function* () {
     if (pattern.type === "ObjectPattern") {
-      if (
-        value === null ||
-        !hasObjectRuntimeType(value) ||
-        Array.isArray(value) ||
-        isRuntimeReference(value)
-      )
-        throw new InterpreterRuntimeError(
-          "Object destructuring requires a data object value.",
-          pattern,
-          "InvalidDataValue",
+      // Properties are read like member expressions, so arrays, strings, collections and
+      // namespaces destructure as in JS (`const { length } = list`, `const { max } = Math`).
+      if (value === null || value === undefined)
+        throw new InterpreterRuntimeError(`Cannot destructure ${String(value)}.`, pattern).as(
+          "TypeError",
         );
-      // SAFETY: Only confined data objects pass the preceding checks.
-      const object = value as InterpreterObject;
       const consumed = new Set<PropertyKey>();
       for (const raw of getArray(pattern, "properties")) {
         const property = asNode(raw, "properties");
         if (property.type === "RestElement") {
           const consume = yield* preparePattern(host, getNode(property, "argument"), prepare);
-          const rest = makeInterpreterObject();
-          let count = 0;
-          for (const key of Reflect.ownKeys(object)) {
-            if (consumed.has(key) || (Predicate.isString(key) && isBlockedMember(key))) continue;
-            const descriptor = Object.getOwnPropertyDescriptor(object, key);
-            if (!descriptor?.enumerable) continue;
-            assertBoundedCollectionSize(++count, "Destructuring rest", property);
-            rest[key] = descriptor.value;
-          }
-          yield* consume(rest);
+          yield* consume(restOf(value, consumed, property));
           continue;
         }
         if (property.type !== "Property" || getString(property, "kind") !== "init")
@@ -175,19 +171,14 @@ export function destructurePattern<R>(
           );
         const keyNode = getNode(property, "key");
         const rawKey = getBoolean(property, "computed")
-          ? host.toPropertyKey(yield* host.evaluateExpression(keyNode), keyNode)
+          ? toPropertyKey(yield* evaluateExpression(host, keyNode), keyNode)
           : keyNode.type === "Identifier"
             ? getString(keyNode, "name")
-            : host.toPropertyKey(keyNode.value, keyNode);
+            : toPropertyKey(keyNode.value, keyNode);
         const key = Predicate.isSymbol(rawKey) ? rawKey : String(rawKey);
-        if (Predicate.isString(key) && isBlockedMember(key))
-          throw new InterpreterRuntimeError(
-            `Property '${key}' is not available in CodeMode.`,
-            keyNode,
-          );
         consumed.add(key);
         const consume = yield* preparePattern(host, getNode(property, "value"), prepare);
-        yield* consume(Object.hasOwn(object, key) ? object[key] : undefined);
+        yield* consume(readProperty(value, key, keyNode));
       }
       return;
     }

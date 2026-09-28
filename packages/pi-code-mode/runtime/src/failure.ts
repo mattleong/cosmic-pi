@@ -4,7 +4,7 @@ import type {
   ProgramThrow,
 } from "./interpreter/model.js";
 import type { ToolError } from "./tool-error.js";
-import type { ToolRuntimeError } from "./tool-runtime.js";
+import { type ToolRuntimeError } from "./tool-runtime-error.js";
 
 /**
  * Closed failure channel for the confined runtime.

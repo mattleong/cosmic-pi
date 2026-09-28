@@ -138,3 +138,24 @@ describe("schema constraint discovery", () => {
     expect(signature).toContain("Promise<unknown>");
   });
 });
+
+describe("tuple and union rendering", () => {
+  it("renders tuples with their positions and rest, and an empty union as never", () => {
+    expect(
+      jsonSchemaToTypeScript({
+        type: "array",
+        prefixItems: [{ type: "string" }, { type: "number" }],
+        minItems: 2,
+        maxItems: 2,
+      }),
+    ).toBe("[string, number]");
+    expect(
+      jsonSchemaToTypeScript({
+        type: "array",
+        prefixItems: [{ type: "string" }],
+        items: { type: "number" },
+      }),
+    ).toBe("[string, ...number[]]");
+    expect(jsonSchemaToTypeScript({ anyOf: [] })).toBe("never");
+  });
+});

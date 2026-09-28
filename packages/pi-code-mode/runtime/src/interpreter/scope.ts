@@ -11,6 +11,7 @@ import {
   InterpreterRuntimeError,
   type InterpreterValue,
 } from "./model.js";
+import { type Activation } from "./activation.js";
 export interface ScopeHost<_R> {
   currentScope(): Map<string, Binding>;
   resolveBinding(name: string): Binding | undefined;
@@ -18,13 +19,13 @@ export interface ScopeHost<_R> {
 }
 
 export function declare<R>(
-  this: ScopeHost<R>,
+  act: Activation<R>,
   name: string,
   value: InterpreterValue,
   mutable: boolean,
   node: AstNode,
 ): void {
-  const scope = this.currentScope();
+  const scope = currentScope(act);
 
   // A pre-seeded parameter slot (initialized === false) is being bound for the first time;
   // anything else already present is a genuine duplicate declaration.
@@ -36,8 +37,8 @@ export function declare<R>(
   scope.set(name, { mutable, value, initialized: true });
 }
 
-export function getIdentifierValue<R>(this: ScopeHost<R>, name: string, node: AstNode) {
-  const binding = this.resolveBinding(name);
+export function getIdentifierValue<R>(act: Activation<R>, name: string, node: AstNode) {
+  const binding = resolveBinding(act, name);
 
   if (!binding) {
     throw new InterpreterRuntimeError(`Unknown identifier '${name}'.`, node).as("ReferenceError");
@@ -54,12 +55,12 @@ export function getIdentifierValue<R>(this: ScopeHost<R>, name: string, node: As
 }
 
 export function setIdentifierValue<R>(
-  this: ScopeHost<R>,
+  act: Activation<R>,
   name: string,
   value: InterpreterValue,
   node: AstNode,
 ) {
-  const binding = this.resolveBinding(name);
+  const binding = resolveBinding(act, name);
 
   if (!binding) {
     throw new InterpreterRuntimeError(`Unknown identifier '${name}'.`, node).as("ReferenceError");
@@ -79,9 +80,9 @@ export function setIdentifierValue<R>(
   return value;
 }
 
-export function resolveBinding<R>(this: ScopeHost<R>, name: string): Binding | undefined {
-  for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
-    const scope = this.scopes[index];
+export function resolveBinding<R>(act: Activation<R>, name: string): Binding | undefined {
+  for (let index = act.scopes.length - 1; index >= 0; index -= 1) {
+    const scope = act.scopes[index];
     const binding = scope?.get(name);
 
     if (binding) {
@@ -92,8 +93,8 @@ export function resolveBinding<R>(this: ScopeHost<R>, name: string): Binding | u
   return undefined;
 }
 
-export function currentScope<R>(this: ScopeHost<R>): Map<string, Binding> {
-  const scope = this.scopes[this.scopes.length - 1];
+export function currentScope<R>(act: Activation<R>): Map<string, Binding> {
+  const scope = act.scopes[act.scopes.length - 1];
 
   if (!scope) {
     throw new InterpreterRuntimeError("Interpreter scope stack is empty.");
@@ -102,12 +103,12 @@ export function currentScope<R>(this: ScopeHost<R>): Map<string, Binding> {
   return scope;
 }
 
-export function pushScope<R>(this: ScopeHost<R>): void {
-  this.scopes.push(new Map());
+export function pushScope<R>(act: Activation<R>): void {
+  act.scopes.push(new Map());
 }
 
-export function popScope<R>(this: ScopeHost<R>): void {
-  this.scopes.pop();
+export function popScope<R>(act: Activation<R>): void {
+  act.scopes.pop();
 }
 
 /** Binding names only; defaults and computed expressions are not declarations. */
@@ -189,4 +190,11 @@ export function hoistVarDeclarations(
     for (const key of Object.keys(value)) visit(astProperty(value, key));
   };
   for (const statement of statements) visit(statement);
+}
+
+/** The scope `var` declarations bind in: the function's own, or the program's top level. */
+export function variableScope<R>(act: Activation<R>): Map<string, Binding> {
+  const scope = act.functionScope ?? act.scopes[1];
+  if (scope === undefined) throw new InterpreterRuntimeError("Missing function environment.");
+  return scope;
 }

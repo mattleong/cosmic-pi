@@ -184,3 +184,22 @@ describe("generator resumptions", () => {
     }),
   );
 });
+
+describe("generator result confinement", () => {
+  it.effect("iterator results expose no host prototype methods", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* CodeMode.execute({
+          code: `function* g() { yield 1; return 2; }
+          async function* a() { yield 1; }
+          const it = g();
+          const results = [it.next(), it.next(), it.next(), it.return(3), await a().next()];
+          return results.map((r) => [typeof r.valueOf, typeof r.isPrototypeOf, typeof r.__lookupGetter__]);`,
+        }),
+      ).toMatchObject({
+        ok: true,
+        value: Array.from({ length: 5 }, () => ["undefined", "undefined", "undefined"]),
+      });
+    }),
+  );
+});

@@ -4,19 +4,28 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type { RuntimeFailure } from "../failure.js";
 import { SandboxPromise } from "../values.js";
-import { assertBoundedCollectionSize } from "./confinement.js";
+import { assertBoundedCollectionSize, assertBoundedPendingWork } from "./confinement.js";
 import {
   CodeModeFunction,
   GeneratorReference,
   GeneratorReturn,
   InterpreterRuntimeError,
+  makeIteratorResult,
   ProgramThrow,
   type AstNode,
   type InterpreterArray,
   type InterpreterValue,
 } from "./model.js";
-import type { Interpreter } from "./runtime.js";
 import { acquireIterator, iteratorRequest } from "./iterator-protocol.js";
+import {
+  releaseTurn,
+  settlePromise,
+  startPromise,
+  suspendAtAwait,
+  takeTurn,
+  endSynchronousPrefix,
+} from "./execution.js";
+import { type Activation, forkActivation } from "./activation.js";
 
 type RequestKind = "next" | "return" | "throw";
 interface Request {
@@ -34,7 +43,7 @@ interface QueuedRequest {
 // The body fiber is scope-owned but deliberately absent from the promise drain.
 // Its ownership handle remains in activation descendant sets while suspended.
 export class SandboxGenerator<R> extends GeneratorReference {
-  readonly activation: Interpreter<R>;
+  readonly activation: Activation<R>;
   readonly body: Effect.Effect<InterpreterValue, RuntimeFailure, R>;
   resume = Deferred.makeUnsafe<Request>();
   current: Request | undefined;
@@ -46,7 +55,7 @@ export class SandboxGenerator<R> extends GeneratorReference {
   queued = 0;
   tail: QueuedRequest | undefined;
   constructor(
-    activation: Interpreter<R>,
+    activation: Activation<R>,
     fn: CodeModeFunction,
     body: Effect.Effect<InterpreterValue, RuntimeFailure, R>,
   ) {
@@ -57,7 +66,7 @@ export class SandboxGenerator<R> extends GeneratorReference {
 }
 
 export function createGenerator<R>(
-  activation: Interpreter<R>,
+  activation: Activation<R>,
   fn: CodeModeFunction,
   body: Effect.Effect<InterpreterValue, RuntimeFailure, R>,
 ): GeneratorReference {
@@ -70,15 +79,6 @@ function resumeValue(request: Request): Effect.Effect<InterpreterValue, RuntimeF
   return Effect.succeed(request.value);
 }
 
-function endPrefix<R>(activation: Interpreter<R>): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    yield* activation.releaseTurn();
-    const boundary = activation.firstBoundary;
-    activation.firstBoundary = undefined;
-    if (boundary !== undefined) yield* Deferred.succeed(boundary, undefined);
-  });
-}
-
 function suspendYield<R>(
   generator: SandboxGenerator<R>,
   value: InterpreterValue,
@@ -88,30 +88,26 @@ function suspendYield<R>(
     if (current === undefined)
       throw new InterpreterRuntimeError("Generator has no active request.");
     if (generator.async) {
-      yield* endPrefix(generator.activation);
-      const settled =
+      // An async generator awaits each yielded value before handing it to the consumer.
+      value = yield* suspendAtAwait(
+        generator.activation,
         value instanceof SandboxPromise
-          ? yield* Effect.exit(generator.activation.settlePromise(value))
-          : Exit.succeed(value);
-      yield* generator.activation.execution.turns.take(generator.activation.turn);
-      generator.activation.callDepth = 0;
-      value = yield* settled;
-      yield* generator.activation.releaseTurn();
+          ? settlePromise(generator.activation, value)
+          : Effect.succeed(value),
+      );
+      yield* releaseTurn(generator.activation);
     }
-    yield* Deferred.succeed(current.reply, { value, done: false });
+    yield* Deferred.succeed(current.reply, makeIteratorResult(value, false));
     const next = yield* Deferred.await(generator.resume);
     generator.resume = Deferred.makeUnsafe<Request>();
     generator.current = next;
     if (generator.async) {
-      if (next.kind === "return") yield* endPrefix(generator.activation);
+      if (next.kind === "return") yield* endSynchronousPrefix(generator.activation);
       const settled =
         next.kind === "return" && next.value instanceof SandboxPromise
-          ? yield* Effect.exit(generator.activation.settlePromise(next.value))
+          ? yield* Effect.exit(settlePromise(generator.activation, next.value))
           : Exit.succeed(next.value);
-      if (generator.activation.firstBoundary === undefined) {
-        yield* generator.activation.execution.turns.take(generator.activation.turn);
-        generator.activation.callDepth = 0;
-      }
+      if (generator.activation.firstBoundary === undefined) yield* takeTurn(generator.activation);
       next.value = yield* settled;
     }
     return yield* resumeValue(next);
@@ -119,7 +115,7 @@ function suspendYield<R>(
 }
 
 function request<R>(
-  caller: Interpreter<R>,
+  caller: Activation<R>,
   generator: SandboxGenerator<R>,
   kind: RequestKind,
   value: InterpreterValue,
@@ -130,16 +126,18 @@ function request<R>(
     if (generator.completed) {
       if (kind === "throw") return yield* Effect.fail(new ProgramThrow(value));
       if (kind === "return" && generator.async) {
-        yield* endPrefix(generator.activation);
-        if (value instanceof SandboxPromise) value = yield* caller.settlePromise(value);
+        yield* endSynchronousPrefix(generator.activation);
+        if (value instanceof SandboxPromise) value = yield* settlePromise(caller, value);
       }
-      return { value: kind === "return" ? value : undefined, done: true };
+      return makeIteratorResult(kind === "return" ? value : undefined, true);
     }
     if (generator.running)
       throw new InterpreterRuntimeError("Generator is already executing.").as("TypeError");
     // Queued async requests start on a later turn, not on the enqueueing stack.
     const depth =
-      generator.async && boundary === undefined ? 0 : caller.recursion.next(caller.callDepth);
+      generator.async && boundary === undefined
+        ? 0
+        : caller.execution.recursion.next(caller.callDepth);
     generator.running = true;
     for (const owner of caller.owners) {
       generator.ownerSets.add(owner);
@@ -155,38 +153,32 @@ function request<R>(
         if (kind !== "next") {
           generator.completed = true;
           if (generator.async && kind === "return") {
-            yield* endPrefix(activation);
+            yield* endSynchronousPrefix(activation);
             if (incoming.value instanceof SandboxPromise)
-              incoming.value = yield* activation.settlePromise(incoming.value);
+              incoming.value = yield* settlePromise(activation, incoming.value);
           }
           return yield* resumeValue(incoming).pipe(
             Effect.catch((error) =>
               error instanceof GeneratorReturn
-                ? Effect.succeed({ value: error.value, done: true })
+                ? Effect.succeed(makeIteratorResult(error.value, true))
                 : Effect.fail(error),
             ),
           );
         }
         generator.started = true;
         generator.current = incoming;
-        assertBoundedCollectionSize(
-          activation.execution.activePromises + 1,
-          "Suspended generators",
-        );
+        assertBoundedPendingWork(activation.execution.activePromises + 1, "Suspended generators");
         activation.execution.activePromises++;
         const descendants = new Set<SandboxPromise>();
         activation.owners = [...caller.owners, descendants];
         activation.generatorAsync = generator.async;
         activation.generatorYield = (yielded) => suspendYield(generator, yielded);
         const body = Effect.gen(function* () {
-          if (generator.async && boundary === undefined) {
-            yield* activation.execution.turns.take(activation.turn);
-            activation.callDepth = 0;
-          }
+          if (generator.async && boundary === undefined) yield* takeTurn(activation);
           let result = yield* generator.body;
-          if (generator.async) yield* endPrefix(activation);
+          if (generator.async) yield* endSynchronousPrefix(activation);
           if (generator.async && result instanceof SandboxPromise)
-            result = yield* activation.settlePromise(result);
+            result = yield* settlePromise(activation, result);
           return result;
         }).pipe(
           Effect.catch((error) =>
@@ -196,11 +188,11 @@ function request<R>(
             Effect.gen(function* () {
               generator.completed = true;
               activation.execution.activePromises--;
-              if (generator.async) yield* endPrefix(activation);
+              if (generator.async) yield* endSynchronousPrefix(activation);
               const current = generator.current;
               if (current !== undefined) {
                 if (Exit.isSuccess(exit))
-                  yield* Deferred.succeed(current.reply, { value: exit.value, done: true });
+                  yield* Deferred.succeed(current.reply, makeIteratorResult(exit.value, true));
                 else yield* Deferred.failCause(current.reply, exit.cause);
               }
             }),
@@ -209,7 +201,9 @@ function request<R>(
         const fiber = yield* Effect.forkIn(body, activation.execution.scope, {
           startImmediately: true,
         });
-        const handle = new SandboxPromise(fiber, undefined, descendants);
+        const handle = new SandboxPromise(descendants);
+        handle.fiber = fiber;
+        fiber.addObserver((exit) => handle.settle(exit));
         generator.handle = handle;
         for (const owner of generator.ownerSets) owner.add(handle);
         fiber.addObserver(() => {
@@ -236,7 +230,7 @@ function request<R>(
 }
 
 export function invokeGenerator<R>(
-  caller: Interpreter<R>,
+  caller: Activation<R>,
   receiver: GeneratorReference,
   name: string,
   args: InterpreterArray,
@@ -262,7 +256,7 @@ export function invokeGenerator<R>(
     if (queued.previous === undefined) Deferred.doneUnsafe(queued.ready, Exit.void);
     else queued.previous.next = queued;
     generator.tail = queued;
-    const driver = caller.fork();
+    const driver = forkActivation(caller);
     const descendants = new Set<SandboxPromise>();
     driver.owners = [...caller.owners, descendants];
     driver.turn = { held: false };
@@ -287,7 +281,7 @@ export function invokeGenerator<R>(
       ),
     );
     return Effect.gen(function* () {
-      const promise = yield* caller.startPromise(work, descendants);
+      const promise = yield* startPromise(caller, work, descendants);
       if (boundary !== undefined) yield* Deferred.await(boundary);
       return promise;
     });
@@ -295,7 +289,7 @@ export function invokeGenerator<R>(
 }
 
 export function yieldDelegated<R>(
-  activation: Interpreter<R>,
+  activation: Activation<R>,
   value: InterpreterValue,
   node: AstNode,
   async = false,
@@ -305,7 +299,7 @@ export function yieldDelegated<R>(
     let kind: RequestKind = "next";
     let input: InterpreterValue = undefined;
     while (true) {
-      activation.deadline.check(node);
+      activation.execution.deadline.check(node);
       const result: { done: boolean; value: InterpreterValue } = yield* iteratorRequest(
         activation,
         iterator,
@@ -339,11 +333,22 @@ export function yieldDelegated<R>(
 }
 
 export function yieldGenerator<R>(
-  activation: Interpreter<R>,
+  activation: Activation<R>,
   value: InterpreterValue,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   if (activation.generatorYield === undefined)
     return Effect.fail(new InterpreterRuntimeError("yield outside generator.", node));
   return activation.generatorYield(value);
+}
+
+export function yieldValue<R>(
+  act: Activation<R>,
+  value: InterpreterValue,
+  node: AstNode,
+  delegate: boolean,
+): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+  return delegate
+    ? yieldDelegated(act, value, node, act.generatorAsync)
+    : yieldGenerator(act, value, node);
 }

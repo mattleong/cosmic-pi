@@ -150,7 +150,7 @@ describe("destructuring assignments and computed bindings", () => {
     Effect.gen(function* () {
       const result = yield* CodeMode.execute({
         code: `
-          const trace = [], box = {};
+          const trace = [], box = [];
           const values = {[Symbol.iterator]: () => ({
             next: () => { trace.push('next'); return {done: false, value: 1}; },
             return: () => { trace.push('close'); return {done: true}; }
@@ -181,11 +181,11 @@ describe("destructuring assignments and computed bindings", () => {
   for (const code of [
     "const x = 1; [x] = [2];",
     "[x] = [2]; let x;",
-    "let x; ({['constructor']: x} = {});",
-    "const {['__proto__']: x} = {};",
+    "const a = []; ({ v: a['constructor'] } = { v: 1 });",
+    "const a = []; [a['__proto__']] = [1];",
     "let {[x]: y} = {}; let x = 'a';",
   ])
-    it.effect(`retains binding and blocked-key guards: ${code}`, () =>
+    it.effect(`retains binding and prototype-key guards: ${code}`, () =>
       Effect.gen(function* () {
         const result = yield* CodeMode.execute({ tools: {}, code });
         expect(result.ok).toBe(false);

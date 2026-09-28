@@ -1,5 +1,7 @@
 import { parse } from "acorn";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import {
   DiagnosticCategory,
   flattenDiagnosticMessageText,
@@ -9,9 +11,8 @@ import {
 } from "typescript-compiler-api";
 import type { Diagnostic } from "../codemode.js";
 import { hasObjectRuntimeType } from "../runtime-values.js";
-import { createErrorValue, errorConstructors } from "../stdlib/value.js";
+import { errorConstructors } from "../stdlib/value.js";
 import { ToolError } from "../tool-error.js";
-import { copyOut, ToolRuntimeError } from "../tool-runtime.js";
 import {
   formatLocation,
   InterpreterRuntimeError,
@@ -19,8 +20,17 @@ import {
   type ProgramNode,
   ProgramThrow,
   sourceLocation,
+  type AstNode,
+  getString,
+  getNode,
+  getBoolean,
+  type SourcePosition,
 } from "./model.js";
 import { containsRuntimeReference } from "./references.js";
+import { createErrorValue } from "../values.js";
+import { makePositionMapper, remapLocations } from "./source-map.js";
+import { copyOut } from "../tool-runtime-data.js";
+import { ToolRuntimeError } from "../tool-runtime-error.js";
 
 /**
  * A wrapper offset as a program position. The wrapper adds one header line, so its line index is
@@ -37,6 +47,12 @@ const programPosition = (wrapped: string, offset: number, code: string) => {
       : { line, column: before.at(-1)!.length + 1 };
 };
 
+/**
+ * Parses a program. It is wrapped in an async function and transpiled so TypeScript syntax is
+ * erased, then the function body is parsed by Acorn. The transpiler reprints the code, so every
+ * node location is mapped back through the transpiler's source map to the model's own lines
+ * and columns.
+ */
 export const parseProgram = (code: string): ProgramNode => {
   const wrapped = `async function __codemode__() {\n${code}\n}`;
   const transpiled = transpileModule(wrapped, {
@@ -44,6 +60,7 @@ export const parseProgram = (code: string): ProgramNode => {
     compilerOptions: {
       target: ScriptTarget.ESNext,
       module: ModuleKind.ESNext,
+      sourceMap: true,
     },
   });
   const diagnostic = transpiled.diagnostics?.find(
@@ -61,35 +78,93 @@ export const parseProgram = (code: string): ProgramNode => {
     ).withFacts({ reason });
   }
 
-  const bodyStart = transpiled.outputText.indexOf("{") + 1;
-  const bodyEnd = transpiled.outputText.lastIndexOf("}");
-  const executableCode = transpiled.outputText.slice(bodyStart, bodyEnd);
-  const parsed = parse(executableCode, {
-    ecmaVersion: "latest",
-    sourceType: "script",
-    allowReturnOutsideFunction: true,
-    allowAwaitOutsideFunction: true,
-    locations: true,
-  });
+  const output = transpiled.outputText;
+  const bodyStart = output.indexOf("{") + 1;
+  const bodyEnd = output.lastIndexOf("}");
+  const lineStart = output.lastIndexOf("\n", bodyStart - 1) + 1;
+  const toProgram = makePositionMapper(
+    transpiled.sourceMapText ?? "{}",
+    output.slice(0, bodyStart).split("\n").length - 1,
+    bodyStart - lineStart,
+    code.split("\n"),
+  );
+  let parsed: ReturnType<typeof parse>;
+  try {
+    parsed = parse(output.slice(bodyStart, bodyEnd), {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      allowReturnOutsideFunction: true,
+      allowAwaitOutsideFunction: true,
+      locations: true,
+    });
+  } catch (error) {
+    throw syntaxFailure(error, toProgram);
+  }
 
   if (parsed.type !== "Program" || !Array.isArray(parsed.body)) {
     throw new InterpreterRuntimeError("Failed to parse script as a Program node.");
   }
 
   // SAFETY: Acorn owns this Program AST and locations were requested for every emitted node.
-  return parsed as typeof parsed & ProgramNode;
+  const program = parsed as typeof parsed & ProgramNode;
+  remapLocations(program, toProgram);
+  return program;
 };
 
+const AcornPosition = Schema.Struct({ line: Schema.Number, column: Schema.Number });
+const acornPosition = Schema.decodeUnknownOption(AcornPosition);
+
+/** An Acorn syntax error, reported at the program position it maps to. */
+const syntaxFailure = <ErrorInput>(
+  error: ErrorInput,
+  toProgram: (position: SourcePosition) => SourcePosition,
+): InterpreterRuntimeError => {
+  if (!(error instanceof SyntaxError)) return new InterpreterRuntimeError(String(error));
+  const reason = error.message.replace(/\s*\(\d+:\d+\)$/u, "");
+  const position = Option.getOrUndefined(
+    acornPosition(Object.getOwnPropertyDescriptor(error, "loc")?.value),
+  );
+  const location = position === undefined ? undefined : toProgram(position);
+  return new InterpreterRuntimeError(
+    `Failed to parse JavaScript: ${reason}`,
+    undefined,
+    "ParseError",
+    undefined,
+    location === undefined ? undefined : { line: location.line, column: location.column + 1 },
+  ).withFacts({ reason });
+};
+
+/**
+ * Redacts filesystem paths from messages of unknown host errors, the one place a host-internal
+ * path could surface. Tool refusals and guest data are shown as written: a ToolError message is
+ * safe by contract, and guest values came from tools the program already called.
+ */
 export const publicErrorMessage = (message: string): string =>
   message.replace(/\/(?:Users|home|private|tmp|var\/folders)\/[^\s"'`]+/g, "<redacted-path>");
 
+// Tool failures are values raised inside the tool runtime; the interpreter records where the
+// program made the call so the diagnostic can point there.
+const errorSites = new WeakMap<object, AstNode>();
+
+export const attachErrorSite = <ErrorInput>(error: ErrorInput, node: AstNode): void => {
+  if ((error instanceof ToolRuntimeError || error instanceof ToolError) && !errorSites.has(error))
+    errorSites.set(error, node);
+};
+
+const siteOf = (error: ToolRuntimeError | ToolError) => {
+  const site = errorSites.get(error);
+  return site?.loc === undefined
+    ? { suffix: "", location: {} }
+    : { suffix: formatLocation(site), location: { location: sourceLocation(site) } };
+};
+
 export const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
   if (error instanceof InterpreterRuntimeError) {
+    const location = error.node?.loc !== undefined ? sourceLocation(error.node) : error.location;
     const base = {
       kind: error.kind,
-      message: `${error.message}${formatLocation(error.node)}`,
+      message: `${error.message}${location === undefined ? "" : ` (line ${location.line}, col ${location.column})`}`,
     };
-    const location = error.node?.loc !== undefined ? sourceLocation(error.node) : error.location;
     const withLocation = location !== undefined ? { ...base, location } : base;
     return {
       ...withLocation,
@@ -99,18 +174,22 @@ export const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
   }
 
   if (error instanceof ToolRuntimeError) {
+    const site = siteOf(error);
     return {
       kind: error.kind,
-      message: error.message,
+      message: `${error.message}${site.suffix}`,
+      ...site.location,
       ...(error.suggestions.length > 0 && { suggestions: error.suggestions }),
       ...(error.facts !== undefined && { facts: error.facts }),
     };
   }
 
   if (error instanceof ToolError) {
+    const site = siteOf(error);
     return {
       kind: "ToolFailure",
-      message: publicErrorMessage(error.message),
+      message: `${error.message}${site.suffix}`,
+      ...site.location,
       ...(error.tool !== undefined && { facts: { tool: error.tool } }),
     };
   }
@@ -168,7 +247,34 @@ export const caughtErrorValue = <Thrown>(thrown: Thrown): InterpreterValue => {
   if (thrown instanceof ProgramThrow) return thrown.value;
   if (thrown instanceof InterpreterRuntimeError)
     return createErrorValue(thrown.errorName, thrown.message);
+  // The program sees the refusal itself; the call-site location is for the final diagnostic.
+  if (thrown instanceof ToolRuntimeError || thrown instanceof ToolError)
+    return createErrorValue("Error", thrown.message);
   const name =
     thrown instanceof Error && errorConstructors.has(thrown.name) ? thrown.name : "Error";
   return createErrorValue(name, normalizeError(thrown).message);
+};
+
+/** Source-like text for a callee expression, for "x.y is not a function" diagnostics. */
+export const calleeText = (node: AstNode, depth = 0): string => {
+  if (depth > 4) return "…";
+  switch (node.type) {
+    case "Identifier":
+      return getString(node, "name");
+    case "ThisExpression":
+      return "this";
+    case "MemberExpression": {
+      const object = calleeText(getNode(node, "object"), depth + 1);
+      const property = getNode(node, "property");
+      if (!getBoolean(node, "computed") && property.type === "Identifier")
+        return `${object}${node.optional === true ? "?." : "."}${getString(property, "name")}`;
+      return property.type === "Literal" && Predicate.isString(property.value)
+        ? `${object}[${JSON.stringify(property.value)}]`
+        : `${object}[…]`;
+    }
+    case "CallExpression":
+      return `${calleeText(getNode(node, "callee"), depth + 1)}(…)`;
+    default:
+      return "The called value";
+  }
 };

@@ -1,11 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { CodeMode } from "../src/index.js";
-import {
-  ExecutionDeadline,
-  MAX_GUEST_COLLECTION_ENTRIES,
-  setDeadlineClockForTesting,
-} from "../src/interpreter/confinement.js";
+import { MAX_GUEST_COLLECTION_ENTRIES } from "../src/interpreter/confinement.js";
+import { ExecutionDeadline, setDeadlineClockForTesting } from "../src/interpreter/deadline.js";
 import { invokeSetOperation } from "../src/interpreter/set-operations.js";
 import type { SetOperation } from "../src/interpreter/set-operations.js";
 import type { InterpreterValue } from "../src/interpreter/model.js";

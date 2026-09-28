@@ -7,75 +7,40 @@ import {
   iteratorStep,
   iteratorClose,
   closeOnAbrupt,
-  type IteratorHost,
 } from "./iterator-protocol.js";
 import { patternNames, predeclareLexicals } from "./scope.js";
-import { ToolReference } from "../tool-runtime.js";
-import { ExecutionDeadline } from "./confinement.js";
 import {
   asNode,
   type AstNode,
   astProperty,
   type AstPropertyValue,
-  type Binding,
-  CodeModeFunction,
   getArray,
   getBoolean,
   getNode,
   getOptionalNode,
   getString,
   InterpreterRuntimeError,
-  type InterpreterValue,
   isRecord,
   ProgramThrow,
   GeneratorReturn,
   type StatementResult,
   unsupportedSyntax,
+  ToolReference,
 } from "./model.js";
-import { caughtErrorValue, containsOpaqueReference, isRuntimeReference } from "./runtime.js";
-export interface StatementsHost<R> extends IteratorHost<R> {
-  createFunction(node: AstNode): CodeModeFunction;
-  currentScope(): Map<string, Binding>;
-  deadline: ExecutionDeadline;
-  declare(name: string, value: InterpreterValue, mutable: boolean, node: AstNode): void;
-  declarePattern(
-    pattern: AstNode,
-    value: InterpreterValue,
-    mutable: boolean,
-    node: AstNode,
-    kind?: "var",
-  ): Effect.Effect<void, RuntimeFailure, R>;
-  enumerableKeys<ValueInput>(value: ValueInput): Array<string> | undefined;
-  evaluateBlock(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateBreakStatement(node: AstNode): StatementResult;
-  evaluateContinueStatement(node: AstNode): StatementResult;
-  evaluateDoWhileStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateForInStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateForOfStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateForStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateIfStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateSwitchStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateThrowStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateTryStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  evaluateVariableDeclaration(node: AstNode): Effect.Effect<void, RuntimeFailure, R>;
-  evaluateWhileStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  hoistFunctions(statements: Array<AstPropertyValue>): void;
-  lastValue: InterpreterValue;
-  popScope(): void;
-  pushScope(): void;
-  scopes: Array<Map<string, Binding>>;
-  setIdentifierValue(name: string, value: InterpreterValue, node: AstNode): InterpreterValue;
-  toolKeys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
-}
+import { declarePattern, evaluateVariableDeclaration } from "./bindings.js";
+import { createFunction } from "./callable.js";
+import { evaluateExpression } from "./expressions.js";
+import { currentScope, declare, popScope, pushScope, setIdentifierValue } from "./scope.js";
+import { type Activation } from "./activation.js";
+import { caughtErrorValue } from "./diagnostics.js";
+import { containsOpaqueReference, isRuntimeReference } from "./references.js";
 
 export function evaluateStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   // Wall-clock confinement: normalizes deadline expiry between synchronous steps.
-  this.deadline.check(node);
+  act.execution.deadline.check(node);
   switch (node.type) {
     case "LabeledStatement": {
       const labels: Array<string> = [];
@@ -84,52 +49,52 @@ export function evaluateStatement<R>(
         labels.push(getString(getNode(body, "label"), "name"));
         body = getNode(body, "body");
       }
-      return Effect.map(this.evaluateStatement({ ...body, controlLabels: labels }), (result) =>
+      return Effect.map(evaluateStatement(act, { ...body, controlLabels: labels }), (result) =>
         result.kind === "break" && result.label !== undefined && labels.includes(result.label)
           ? { kind: "none" }
           : result,
       );
     }
     case "ExpressionStatement":
-      return Effect.map(this.evaluateExpression(getNode(node, "expression")), (value) => ({
+      return Effect.map(evaluateExpression(act, getNode(node, "expression")), (value) => ({
         kind: "value",
         value,
       }));
     case "VariableDeclaration":
-      return Effect.map(this.evaluateVariableDeclaration(node), () => ({ kind: "none" }));
+      return Effect.map(evaluateVariableDeclaration(act, node), () => ({ kind: "none" }));
     case "ReturnStatement": {
       const argumentNode = getOptionalNode(node, "argument");
       return argumentNode
-        ? Effect.map(this.evaluateExpression(argumentNode), (value) => ({
+        ? Effect.map(evaluateExpression(act, argumentNode), (value) => ({
             kind: "return",
             value,
           }))
         : Effect.succeed({ kind: "return", value: undefined });
     }
     case "BlockStatement":
-      return this.evaluateBlock(node);
+      return evaluateBlock(act, node);
     case "IfStatement":
-      return this.evaluateIfStatement(node);
+      return evaluateIfStatement(act, node);
     case "SwitchStatement":
-      return this.evaluateSwitchStatement(node);
+      return evaluateSwitchStatement(act, node);
     case "WhileStatement":
-      return this.evaluateWhileStatement(node);
+      return evaluateWhileStatement(act, node);
     case "DoWhileStatement":
-      return this.evaluateDoWhileStatement(node);
+      return evaluateDoWhileStatement(act, node);
     case "ForStatement":
-      return this.evaluateForStatement(node);
+      return evaluateForStatement(act, node);
     case "ForOfStatement":
-      return this.evaluateForOfStatement(node);
+      return evaluateForOfStatement(act, node);
     case "ForInStatement":
-      return this.evaluateForInStatement(node);
+      return evaluateForInStatement(act, node);
     case "BreakStatement":
-      return Effect.succeed(this.evaluateBreakStatement(node));
+      return Effect.succeed(evaluateBreakStatement(node));
     case "ContinueStatement":
-      return Effect.succeed(this.evaluateContinueStatement(node));
+      return Effect.succeed(evaluateContinueStatement(node));
     case "ThrowStatement":
-      return this.evaluateThrowStatement(node);
+      return evaluateThrowStatement(act, node);
     case "TryStatement":
-      return this.evaluateTryStatement(node);
+      return evaluateTryStatement(act, node);
     case "EmptyStatement":
       return Effect.succeed({ kind: "none" });
     case "FunctionDeclaration":
@@ -140,20 +105,20 @@ export function evaluateStatement<R>(
 }
 
 export function evaluateBlock<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
-  const bodyEffect = Effect.gen({ self: this }, function* () {
+  const bodyEffect = Effect.gen(function* () {
     const body = getArray(node, "body");
-    predeclareLexicals(this.currentScope(), body);
-    this.hoistFunctions(body);
+    predeclareLexicals(currentScope(act), body);
+    hoistFunctions(act, body);
 
     for (const statementValue of body) {
       const statement = asNode(statementValue, "body");
-      const result = yield* this.evaluateStatement(statement);
+      const result = yield* evaluateStatement(act, statement);
 
       if (result.kind === "value") {
-        this.lastValue = result.value;
+        act.lastValue = result.value;
         continue;
       }
 
@@ -164,62 +129,59 @@ export function evaluateBlock<R>(
 
     return { kind: "none" } satisfies StatementResult;
   });
-  return node.functionBody === true ? bodyEffect : withScope(this, bodyEffect);
+  return node.functionBody === true ? bodyEffect : withScope(act, bodyEffect);
 }
 
 function withScope<A, R>(
-  host: StatementsHost<R>,
+  host: Activation<R>,
   body: Effect.Effect<A, RuntimeFailure, R>,
 ): Effect.Effect<A, RuntimeFailure, R> {
   return Effect.acquireUseRelease(
-    Effect.sync(() => host.pushScope()),
+    Effect.sync(() => pushScope(host)),
     () => body,
-    () => Effect.sync(() => host.popScope()),
+    () => Effect.sync(() => popScope(host)),
   );
 }
 
-export function hoistFunctions<R>(
-  this: StatementsHost<R>,
-  statements: Array<AstPropertyValue>,
-): void {
+export function hoistFunctions<R>(act: Activation<R>, statements: Array<AstPropertyValue>): void {
   for (const statementValue of statements) {
     if (!isRecord(statementValue) || astProperty(statementValue, "type") !== "FunctionDeclaration")
       continue;
     // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
     const node = statementValue as AstNode;
     const name = getString(getNode(node, "id"), "name");
-    const existing = this.currentScope().get(name);
+    const existing = currentScope(act).get(name);
     if (existing?.initialized === true && existing.mutable)
-      existing.value = this.createFunction(node);
-    else this.declare(name, this.createFunction(node), true, node);
+      existing.value = createFunction(act, node);
+    else declare(act, name, createFunction(act, node), true, node);
   }
 }
 
 export function evaluateIfStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   const testNode = getNode(node, "test");
   const consequentNode = getNode(node, "consequent");
   const alternateNode = getOptionalNode(node, "alternate");
 
-  return Effect.flatMap(this.evaluateExpression(testNode), (test) =>
+  return Effect.flatMap(evaluateExpression(act, testNode), (test) =>
     test
-      ? this.evaluateStatement(consequentNode)
+      ? evaluateStatement(act, consequentNode)
       : alternateNode
-        ? this.evaluateStatement(alternateNode)
+        ? evaluateStatement(act, alternateNode)
         : Effect.succeed({ kind: "none" }),
   );
 }
 
 export function evaluateSwitchStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
-  return Effect.flatMap(this.evaluateExpression(getNode(node, "discriminant")), (discriminant) => {
+  return Effect.flatMap(evaluateExpression(act, getNode(node, "discriminant")), (discriminant) => {
     return withScope(
-      this,
-      Effect.gen({ self: this }, function* () {
+      act,
+      Effect.gen(function* () {
         if (containsOpaqueReference(discriminant)) {
           throw new InterpreterRuntimeError(
             "Switch discriminants must be data values in CodeMode.",
@@ -231,8 +193,8 @@ export function evaluateSwitchStatement<R>(
           asNode(value, `cases[${index}]`),
         );
         const statements = cases.flatMap((branch) => getArray(branch, "consequent"));
-        predeclareLexicals(this.currentScope(), statements);
-        this.hoistFunctions(statements);
+        predeclareLexicals(currentScope(act), statements);
+        hoistFunctions(act, statements);
         let defaultIndex: number | undefined;
         let selected: number | undefined;
         for (const [index, branch] of cases.entries()) {
@@ -241,7 +203,7 @@ export function evaluateSwitchStatement<R>(
             defaultIndex = index;
             continue;
           }
-          const candidate = yield* this.evaluateExpression(test);
+          const candidate = yield* evaluateExpression(act, test);
           if (containsOpaqueReference(candidate)) {
             throw new InterpreterRuntimeError(
               "Switch case values must be data values in CodeMode.",
@@ -258,13 +220,13 @@ export function evaluateSwitchStatement<R>(
         if (start === undefined) return { kind: "none" } satisfies StatementResult;
         for (let index = start; index < cases.length; index += 1) {
           for (const statementValue of getArray(cases[index]!, "consequent")) {
-            const result = yield* this.evaluateStatement(asNode(statementValue, "consequent"));
+            const result = yield* evaluateStatement(act, asNode(statementValue, "consequent"));
             if (result.kind === "break")
               return result.label === undefined
                 ? ({ kind: "none" } satisfies StatementResult)
                 : result;
             if (result.kind === "return" || result.kind === "continue") return result;
-            if (result.kind === "value") this.lastValue = result.value;
+            if (result.kind === "value") act.lastValue = result.value;
           }
         }
         return { kind: "none" } satisfies StatementResult;
@@ -274,15 +236,15 @@ export function evaluateSwitchStatement<R>(
 }
 
 export function evaluateWhileStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   const testNode = getNode(node, "test");
   const bodyNode = getNode(node, "body");
 
-  return Effect.gen({ self: this }, function* () {
-    while (yield* this.evaluateExpression(testNode)) {
-      const result = yield* this.evaluateStatement(bodyNode);
+  return Effect.gen(function* () {
+    while (yield* evaluateExpression(act, testNode)) {
+      const result = yield* evaluateStatement(act, bodyNode);
 
       if (result.kind === "continue" && targetsLoop(result, node)) {
         continue;
@@ -300,7 +262,7 @@ export function evaluateWhileStatement<R>(
       }
 
       if (result.kind === "value") {
-        this.lastValue = result.value;
+        act.lastValue = result.value;
       }
     }
 
@@ -309,15 +271,15 @@ export function evaluateWhileStatement<R>(
 }
 
 export function evaluateDoWhileStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   const bodyNode = getNode(node, "body");
   const testNode = getNode(node, "test");
 
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     do {
-      const result = yield* this.evaluateStatement(bodyNode);
+      const result = yield* evaluateStatement(act, bodyNode);
 
       if (result.kind === "continue" && targetsLoop(result, node)) {
         continue;
@@ -335,21 +297,21 @@ export function evaluateDoWhileStatement<R>(
       }
 
       if (result.kind === "value") {
-        this.lastValue = result.value;
+        act.lastValue = result.value;
       }
-    } while (yield* this.evaluateExpression(testNode));
+    } while (yield* evaluateExpression(act, testNode));
 
     return { kind: "none" } satisfies StatementResult;
   });
 }
 
 export function evaluateForStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   return withScope(
-    this,
-    Effect.gen({ self: this }, function* () {
+    act,
+    Effect.gen(function* () {
       const initNode = getOptionalNode(node, "init");
       const testNode = getOptionalNode(node, "test");
       const updateNode = getOptionalNode(node, "update");
@@ -357,32 +319,32 @@ export function evaluateForStatement<R>(
 
       if (initNode) {
         if (initNode.type === "VariableDeclaration") {
-          predeclareLexicals(this.currentScope(), [initNode]);
-          yield* this.evaluateVariableDeclaration(initNode);
+          predeclareLexicals(currentScope(act), [initNode]);
+          yield* evaluateVariableDeclaration(act, initNode);
         } else {
-          yield* this.evaluateExpression(initNode);
+          yield* evaluateExpression(act, initNode);
         }
       }
 
       const perIterationBindings =
         initNode?.type === "VariableDeclaration" && getString(initNode, "kind") !== "var"
-          ? Array.from(this.currentScope().keys())
+          ? Array.from(currentScope(act).keys())
           : [];
 
       const nextIteration = () => {
         if (perIterationBindings.length === 0) return;
-        const previous = this.currentScope();
+        const previous = currentScope(act);
         const next = new Map(
           perIterationBindings.map((name) => [name, { ...previous.get(name)! }]),
         );
-        this.popScope();
-        this.scopes.push(next);
+        popScope(act);
+        act.scopes.push(next);
       };
       // Initializer closures retain the initialization environment. Each test and body
       // share their iteration environment; the update runs in the following one.
       nextIteration();
-      while (testNode ? yield* this.evaluateExpression(testNode) : true) {
-        const result = yield* this.evaluateStatement(bodyNode);
+      while (testNode ? yield* evaluateExpression(act, testNode) : true) {
+        const result = yield* evaluateStatement(act, bodyNode);
 
         if (
           result.kind === "return" ||
@@ -396,13 +358,13 @@ export function evaluateForStatement<R>(
         }
 
         if (result.kind === "value") {
-          this.lastValue = result.value;
+          act.lastValue = result.value;
         }
 
         nextIteration();
 
         if (updateNode) {
-          yield* this.evaluateExpression(updateNode);
+          yield* evaluateExpression(act, updateNode);
         }
 
         if (result.kind === "continue" && targetsLoop(result, node)) {
@@ -416,49 +378,50 @@ export function evaluateForStatement<R>(
 }
 
 export function evaluateForOfStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
-  return evaluateEnumeration<R>(this, node, true);
+  return evaluateEnumeration<R>(act, node, true);
 }
 
 function evaluateEnumeration<R>(
-  host: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
   iterable: boolean,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
-  return Effect.gen({ self: host }, function* () {
+  return Effect.gen(function* () {
     const left = getNode(node, "left");
     const lexical = left.type === "VariableDeclaration" && getString(left, "kind") !== "var";
     // The RHS sees uninitialized lexical loop bindings, not an outer namesake.
     const right = yield* withScope(
-      this,
-      Effect.gen({ self: this }, function* () {
-        if (lexical) predeclareLexicals(this.currentScope(), [left]);
-        return yield* this.evaluateExpression(getNode(node, "right"));
+      act,
+      Effect.gen(function* () {
+        if (lexical) predeclareLexicals(currentScope(act), [left]);
+        return yield* evaluateExpression(act, getNode(node, "right"));
       }),
     );
-    const keys = iterable ? undefined : this.enumerableKeys(right);
+    const keys = iterable ? undefined : enumerableKeys(act, right);
     if (!iterable && keys === undefined)
       throw new InterpreterRuntimeError(
         "for...in requires a plain object, array, or tools reference in CodeMode.",
         node,
       );
     const iterator = yield* acquireIterator(
-      this,
+      act,
       iterable ? right : keys!,
       node,
       iterable && getBoolean(node, "await"),
     );
     while (true) {
-      const step = yield* iteratorStep(this, iterator, node);
+      const step = yield* iteratorStep(act, iterator, node);
       if (step.done) return { kind: "none" } satisfies StatementResult;
-      const iteration = Effect.gen({ self: this }, function* () {
+      const iteration = Effect.gen(function* () {
         if (left.type === "VariableDeclaration") {
-          if (lexical) predeclareLexicals(this.currentScope(), [left]);
+          if (lexical) predeclareLexicals(currentScope(act), [left]);
           const declarations = getArray(left, "declarations");
           const pattern = getNode(asNode(declarations[0], "declarations[0]"), "id");
-          yield* this.declarePattern(
+          yield* declarePattern(
+            act,
             pattern,
             step.value,
             getString(left, "kind") !== "const",
@@ -466,30 +429,30 @@ function evaluateEnumeration<R>(
             lexical ? undefined : "var",
           );
         } else if (left.type === "Identifier")
-          this.setIdentifierValue(getString(left, "name"), step.value, left);
+          setIdentifierValue(act, getString(left, "name"), step.value, left);
         else throw new InterpreterRuntimeError("Unsupported loop binding.", left);
-        return yield* this.evaluateStatement(getNode(node, "body"));
+        return yield* evaluateStatement(act, getNode(node, "body"));
       });
-      const result = yield* closeOnAbrupt(this, iterator, node, withScope(this, iteration));
-      if (result.kind === "value") this.lastValue = result.value;
+      const result = yield* closeOnAbrupt(act, iterator, node, withScope(act, iteration));
+      if (result.kind === "value") act.lastValue = result.value;
       if (
         result.kind === "none" ||
         result.kind === "value" ||
         (result.kind === "continue" && targetsLoop(result, node))
       )
         continue;
-      yield* iteratorClose(this, iterator, node);
+      yield* iteratorClose(act, iterator, node);
       return result.kind === "break" && targetsLoop(result, node) ? { kind: "none" } : result;
     }
   });
 }
 
 export function enumerableKeys<R, ValueInput>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   value: ValueInput,
 ): Array<string> | undefined {
   if (value instanceof ToolReference) {
-    return [...this.toolKeys(value.path)];
+    return [...act.execution.toolKeys(value.path)];
   }
   if (Array.isArray(value)) {
     return Object.keys(value);
@@ -501,10 +464,10 @@ export function enumerableKeys<R, ValueInput>(
 }
 
 export function evaluateForInStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
-  return evaluateEnumeration<R>(this, node, false);
+  return evaluateEnumeration<R>(act, node, false);
 }
 
 function targetsLoop(result: StatementResult, node: AstNode): boolean {
@@ -515,38 +478,35 @@ function targetsLoop(result: StatementResult, node: AstNode): boolean {
   );
 }
 
-export function evaluateBreakStatement<R>(this: StatementsHost<R>, node: AstNode): StatementResult {
+export function evaluateBreakStatement(node: AstNode): StatementResult {
   const label = getOptionalNode(node, "label");
   return label ? { kind: "break", label: getString(label, "name") } : { kind: "break" };
 }
 
-export function evaluateContinueStatement<R>(
-  this: StatementsHost<R>,
-  node: AstNode,
-): StatementResult {
+export function evaluateContinueStatement(node: AstNode): StatementResult {
   const label = getOptionalNode(node, "label");
   return label ? { kind: "continue", label: getString(label, "name") } : { kind: "continue" };
 }
 
 export function evaluateThrowStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   const argument = getNode(node, "argument");
-  return Effect.flatMap(this.evaluateExpression(argument), (value) =>
+  return Effect.flatMap(evaluateExpression(act, argument), (value) =>
     Effect.fail(new ProgramThrow(value)),
   );
 }
 
 export function evaluateTryStatement<R>(
-  this: StatementsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<StatementResult, RuntimeFailure, R> {
   const body = getNode(node, "block");
   const handler = getOptionalNode(node, "handler");
   const finalizer = getOptionalNode(node, "finalizer");
 
-  const attempted = Effect.matchCauseEffect(this.evaluateStatement(body), {
+  const attempted = Effect.matchCauseEffect(evaluateStatement(act, body), {
     onFailure: (cause) => {
       if (hostTermination(cause) || Cause.squash(cause) instanceof GeneratorReturn || !handler) {
         return Effect.failCause(cause);
@@ -557,19 +517,19 @@ export function evaluateTryStatement<R>(
       const caught = caughtErrorValue(Cause.squash(cause));
       const parameter = getOptionalNode(handler, "param");
       return withScope(
-        this,
-        Effect.gen({ self: this }, function* () {
+        act,
+        Effect.gen(function* () {
           if (parameter) {
             for (const name of patternNames(parameter)) {
-              this.currentScope().set(name, {
+              currentScope(act).set(name, {
                 value: undefined,
                 mutable: true,
                 initialized: false,
               });
             }
-            yield* this.declarePattern(parameter, caught, true, handler);
+            yield* declarePattern(act, parameter, caught, true, handler);
           }
-          return yield* this.evaluateStatement(getNode(handler, "body"));
+          return yield* evaluateStatement(act, getNode(handler, "body"));
         }),
       );
     },
@@ -585,11 +545,11 @@ export function evaluateTryStatement<R>(
     onFailure: (cause) =>
       hostTermination(cause)
         ? Effect.failCause(cause)
-        : Effect.flatMap(this.evaluateStatement(finalizer), (final) =>
+        : Effect.flatMap(evaluateStatement(act, finalizer), (final) =>
             isAbrupt(final) ? Effect.succeed(final) : Effect.failCause(cause),
           ),
     onSuccess: (result) =>
-      Effect.flatMap(this.evaluateStatement(finalizer), (final) =>
+      Effect.flatMap(evaluateStatement(act, finalizer), (final) =>
         isAbrupt(final) ? Effect.succeed(final) : Effect.succeed(result),
       ),
   });

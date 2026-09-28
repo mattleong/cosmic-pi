@@ -95,7 +95,7 @@ describe("shared callable callbacks", () => {
           one: "ab".replace(/a/, (...args) => String(Array.of(...args))),
           all: "ab".replaceAll(/./g, (...args) => String(Array.of(...args))),
           errors: ["a", "b"],
-          errorText: "[object Object]",
+          errorText: "a".replace("a", (match) => String(Error(match))),
         },
       });
     }),

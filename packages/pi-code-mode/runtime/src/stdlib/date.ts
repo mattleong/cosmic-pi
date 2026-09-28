@@ -1,27 +1,53 @@
-export const dateMethods = new Set([
-  "getTime",
-  "valueOf",
-  "toISOString",
-  "toJSON",
-  "toString",
-  "getFullYear",
-  "getMonth",
-  "getDate",
-  "getDay",
-  "getHours",
-  "getMinutes",
-  "getSeconds",
-  "getMilliseconds",
-  "getUTCFullYear",
-  "getUTCMonth",
-  "getUTCDate",
-  "getUTCDay",
-  "getUTCHours",
-  "getUTCMinutes",
-  "getUTCSeconds",
-  "getUTCMilliseconds",
-  "getTimezoneOffset",
-]);
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+  type InterpreterValue,
+} from "../interpreter/model.js";
+import { MethodTable } from "./method-table.js";
+import { SandboxDate } from "../values.js";
+import { epochNow, hostDate } from "./epoch.js";
+import { coerceToNumber, coerceToString } from "../interpreter/conversions.js";
+
+type DateMethod = (value: SandboxDate, node: AstNode) => InterpreterValue;
+
+/** A component getter: invalid dates answer NaN, as in JS. */
+const component =
+  (read: (date: Date) => number): DateMethod =>
+  (value) =>
+    Number.isFinite(value.time) ? read(hostDate(value.time)) : Number.NaN;
+
+const time: DateMethod = (value) => value.time;
+
+export const dateMethods = new MethodTable<DateMethod>({
+  getTime: time,
+  valueOf: time,
+  toISOString: (value, node) => {
+    if (!Number.isFinite(value.time))
+      throw new InterpreterRuntimeError("Invalid time value.", node);
+    return hostDate(value.time).toISOString();
+  },
+  toJSON: (value) => (Number.isFinite(value.time) ? hostDate(value.time).toISOString() : null),
+  // `toString` is typed explicitly: object literals type that key from Object.prototype.
+  toString: (value: SandboxDate) => coerceToString(value),
+  getFullYear: component((date) => date.getFullYear()),
+  getMonth: component((date) => date.getMonth()),
+  getDate: component((date) => date.getDate()),
+  getDay: component((date) => date.getDay()),
+  getHours: component((date) => date.getHours()),
+  getMinutes: component((date) => date.getMinutes()),
+  getSeconds: component((date) => date.getSeconds()),
+  getMilliseconds: component((date) => date.getMilliseconds()),
+  getUTCFullYear: component((date) => date.getUTCFullYear()),
+  getUTCMonth: component((date) => date.getUTCMonth()),
+  getUTCDate: component((date) => date.getUTCDate()),
+  getUTCDay: component((date) => date.getUTCDay()),
+  getUTCHours: component((date) => date.getUTCHours()),
+  getUTCMinutes: component((date) => date.getUTCMinutes()),
+  getUTCSeconds: component((date) => date.getUTCSeconds()),
+  getUTCMilliseconds: component((date) => date.getUTCMilliseconds()),
+  getTimezoneOffset: component((date) => date.getTimezoneOffset()),
+});
 
 export const dateStatics = new Set(["now", "parse", "UTC"]);
 
@@ -40,85 +66,8 @@ export const invokeDateStatic = (name: string, args: InterpreterArray, node: Ast
 };
 
 export const invokeDateMethod = (value: SandboxDate, name: string, node: AstNode) => {
-  if (!Number.isFinite(value.time)) return invokeInvalidDateMethod(value, name, node);
-  const hosted = hostDate(value.time);
-  switch (name) {
-    case "getTime":
-    case "valueOf":
-      return value.time;
-    case "toISOString":
-      return hosted.toISOString();
-    case "toJSON":
-      return hosted.toISOString();
-    case "toString":
-      return coerceToString(value);
-    case "getFullYear":
-      return hosted.getFullYear();
-    case "getMonth":
-      return hosted.getMonth();
-    case "getDate":
-      return hosted.getDate();
-    case "getDay":
-      return hosted.getDay();
-    case "getHours":
-      return hosted.getHours();
-    case "getMinutes":
-      return hosted.getMinutes();
-    case "getSeconds":
-      return hosted.getSeconds();
-    case "getMilliseconds":
-      return hosted.getMilliseconds();
-    case "getUTCFullYear":
-      return hosted.getUTCFullYear();
-    case "getUTCMonth":
-      return hosted.getUTCMonth();
-    case "getUTCDate":
-      return hosted.getUTCDate();
-    case "getUTCDay":
-      return hosted.getUTCDay();
-    case "getUTCHours":
-      return hosted.getUTCHours();
-    case "getUTCMinutes":
-      return hosted.getUTCMinutes();
-    case "getUTCSeconds":
-      return hosted.getUTCSeconds();
-    case "getUTCMilliseconds":
-      return hosted.getUTCMilliseconds();
-    case "getTimezoneOffset":
-      return hosted.getTimezoneOffset();
-    default:
-      throw new InterpreterRuntimeError(
-        `Date method '${name}' is not available in CodeMode.`,
-        node,
-      );
-  }
+  const method = dateMethods.get(name);
+  if (method === undefined)
+    throw new InterpreterRuntimeError(`Date method '${name}' is not available in CodeMode.`, node);
+  return method(value, node);
 };
-
-/** Invalid Date semantics: every component getter is NaN; ISO conversion refuses. */
-const invokeInvalidDateMethod = (value: SandboxDate, name: string, node: AstNode) => {
-  switch (name) {
-    case "getTime":
-    case "valueOf":
-      return value.time;
-    case "toISOString":
-      throw new InterpreterRuntimeError("Invalid time value.", node);
-    case "toJSON":
-      return null;
-    case "toString":
-      return coerceToString(value);
-    default:
-      if (dateMethods.has(name)) return Number.NaN;
-      throw new InterpreterRuntimeError(
-        `Date method '${name}' is not available in CodeMode.`,
-        node,
-      );
-  }
-};
-import {
-  type AstNode,
-  type InterpreterArray,
-  InterpreterRuntimeError,
-} from "../interpreter/model.js";
-import { SandboxDate } from "../values.js";
-import { epochNow, hostDate } from "./epoch.js";
-import { coerceToNumber, coerceToString } from "./value.js";

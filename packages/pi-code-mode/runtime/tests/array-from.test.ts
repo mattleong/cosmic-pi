@@ -6,10 +6,8 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { CodeMode, Tool } from "../src/index.js";
-import {
-  MAX_GUEST_COLLECTION_ENTRIES,
-  setDeadlineClockForTesting,
-} from "../src/interpreter/confinement.js";
+import { MAX_GUEST_COLLECTION_ENTRIES } from "../src/interpreter/confinement.js";
+import { setDeadlineClockForTesting } from "../src/interpreter/deadline.js";
 
 const run = (code: string) => CodeMode.execute({ code });
 

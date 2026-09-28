@@ -1,3 +1,10 @@
+import * as Predicate from "effect/Predicate";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+} from "../interpreter/model.js";
+
 export const mathConstants = new Set([
   "PI",
   "E",
@@ -102,10 +109,3 @@ export const invokeMathMethod = (name: string, args: InterpreterArray, node: Ast
   }
   throw new InterpreterRuntimeError(`Math.${name} is not available in CodeMode.`, node);
 };
-import * as Predicate from "effect/Predicate";
-
-import {
-  type AstNode,
-  type InterpreterArray,
-  InterpreterRuntimeError,
-} from "../interpreter/model.js";

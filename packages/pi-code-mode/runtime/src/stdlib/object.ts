@@ -8,9 +8,11 @@ import {
   InterpreterRuntimeError,
   makeInterpreterObject,
 } from "../interpreter/model.js";
-import { isBlockedMember } from "../tool-runtime.js";
 import { isSandboxValue, SandboxMap, SandboxURLSearchParams } from "../values.js";
-import { boundedData, coerceToString } from "./value.js";
+import { boundedData } from "./value.js";
+import { coerceToString } from "../interpreter/conversions.js";
+import { isDataKeyOf } from "../tool-runtime-data.js";
+import { isNativeIterator } from "../interpreter/iterator-protocol.js";
 
 export const objectStatics = new Set([
   "keys",
@@ -22,13 +24,13 @@ export const objectStatics = new Set([
   "groupBy",
 ]);
 
-// Validate the original graph without replacing its members with checkpoint copies.
+// Object helpers are shallow, as in JS: they check the container and take members by identity,
+// so objects holding promises, functions, or nested collections work like any object literal.
 const requireDataContainer = (
   value: InterpreterValue,
   label: string,
   node: AstNode,
 ): InterpreterObject | InterpreterArray => {
-  boundedData(value, label);
   if (
     value === null ||
     !hasObjectRuntimeType(value) ||
@@ -55,14 +57,11 @@ const ownDataEntries = (
   label: string,
   node: AstNode,
 ): string[] => {
-  const keys = Object.keys(value);
+  // Arrays list index keys only, omitting match-result metadata such as index and groups.
+  const keys = Array.isArray(value)
+    ? Object.keys(value).filter((key) => /^(?:0|[1-9]\d*)$/.test(key))
+    : Object.keys(value);
   assertBoundedCollectionSize(keys.length, label, node);
-  for (const key of keys) {
-    if (isBlockedMember(key))
-      throw new InterpreterRuntimeError(`Property '${key}' is not available in CodeMode.`, node);
-    // Array checkpoints omit non-index properties, including match-result metadata.
-    boundedData(ownDataMember(value, key), label);
-  }
   return keys;
 };
 
@@ -89,6 +88,8 @@ export const invokeObjectAssign = (
     const value = requireDataContainer(source, "Object.assign input", node);
     const keys = ownDataEntries(value, "Object.assign input", node);
     for (const key of keys) {
+      if (!isDataKeyOf(target, key))
+        throw new InterpreterRuntimeError(`Property '${key}' is not available in CodeMode.`, node);
       if (Array.isArray(target)) {
         const index = Number(key);
         if (!Number.isInteger(index) || index < 0 || String(index) !== key) {
@@ -103,9 +104,7 @@ export const invokeObjectAssign = (
         assertBoundedCollectionSize(entries + 1, "Object.assign result", node);
         entries += 1;
       }
-      const item = ownDataMember(value, key);
-      boundedData(item, "Object.assign input");
-      write(target, key, item);
+      write(target, key, ownDataMember(value, key));
     }
   }
   return target;
@@ -130,17 +129,15 @@ export function invokeObjectMethod(
     throw new InterpreterRuntimeError(`Object.${name} is not available in CodeMode.`, node);
   const requireObject = (): InterpreterObject | InterpreterArray => {
     const value = args[0];
-    if (isSandboxValue(value)) {
-      boundedData(value, `Object.${name} input`);
-      return makeInterpreterObject();
-    }
+    // Collections and iterators have no own data members.
+    if (isSandboxValue(value) || isNativeIterator(value)) return makeInterpreterObject();
     return requireDataContainer(value, `Object.${name} input`, node);
   };
   // Confinement: merging multiple sources (each individually within the entry cap) must not
   // materialize an over-cap object; distinct-key growth is counted and refused as it happens.
   let outEntries = 0;
   const guardedSet = (out: InterpreterObject, key: string, item: InterpreterValue): void => {
-    if (isBlockedMember(key))
+    if (!isDataKeyOf(out, key))
       throw new InterpreterRuntimeError(`Property '${key}' is not available in CodeMode.`, node);
     if (!Object.hasOwn(out, key)) {
       outEntries += 1;
@@ -149,15 +146,8 @@ export function invokeObjectMethod(
     out[key] = item;
   };
   switch (name) {
-    case "keys": {
-      const value = boundedData(args[0], "Object.keys input");
-      if (isSandboxValue(value)) return [];
-      if (Array.isArray(value)) return Object.keys(value);
-      if (value === null || !hasObjectRuntimeType(value)) {
-        throw new InterpreterRuntimeError("Object.keys expects a data object or array.", node);
-      }
-      return Object.keys(value);
-    }
+    case "keys":
+      return ownDataEntries(requireObject(), "Object.keys input", node);
     case "values": {
       const value = requireObject();
       return ownDataEntries(value, "Object.values input", node).map(
@@ -183,7 +173,7 @@ export function invokeObjectMethod(
         for (const [key, value] of args[0].params.entries()) guardedSet(out, key, value);
         return out;
       }
-      const pairs = boundedData(args[0], "Object.fromEntries input");
+      const pairs = args[0];
       if (!Array.isArray(pairs)) {
         throw new InterpreterRuntimeError(
           "Object.fromEntries expects an array of [key, value] pairs.",
@@ -195,7 +185,7 @@ export function invokeObjectMethod(
         if (!Array.isArray(pair)) {
           throw new InterpreterRuntimeError("Object.fromEntries expects [key, value] pairs.", node);
         }
-        guardedSet(out, String(pair[0]), pair[1]);
+        guardedSet(out, coerceToString(pair[0]), pair[1]);
       }
       return out;
     }

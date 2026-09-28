@@ -6,22 +6,17 @@ import * as Schema from "effect/Schema";
 import { CodeMode, Tool } from "../src/index.js";
 import { parseProgram } from "../src/interpreter/diagnostics.js";
 import { RecursionBudget } from "../src/interpreter/recursion.js";
-import { Interpreter } from "../src/interpreter/runtime.js";
+import { runProgram } from "../src/interpreter/execution.js";
 
 // A smaller internal budget exercises the same entry/continuation paths without
 // retaining ten thousand async activations and their descendant ownership sets.
 const run = (code: string) =>
   Effect.suspend(() => {
-    const interpreter = new Interpreter(
-      () => Effect.die("No tools in this fixture"),
-      () => [],
-      [],
-      undefined,
-      undefined,
-      undefined,
-      new RecursionBudget(32),
-    );
-    return interpreter.run(parseProgram(code));
+    return runProgram<never>(parseProgram(code), {
+      admitTool: () => Effect.die("No tools in this fixture"),
+      toolKeys: () => [],
+      recursion: new RecursionBudget(32),
+    });
   });
 
 describe("guest call depth", () => {

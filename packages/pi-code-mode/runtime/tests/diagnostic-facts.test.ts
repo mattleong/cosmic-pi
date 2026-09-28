@@ -61,3 +61,15 @@ describe("diagnostic facts", () => {
     }),
   );
 });
+
+describe("tool call diagnostics", () => {
+  it.live("point at the failing call and suggest the tool a typo meant", () =>
+    Effect.gen(function* () {
+      const typo = yield* factsOf("const a = 1;\nawait tools.host.ecoh({ path: 'a' });");
+      expect(typo).toMatchObject({ kind: "UnknownTool", location: { line: 2 } });
+      expect(typo?.suggestions?.[0]).toContain("tools.host.echo");
+      const refused = yield* factsOf("\n\nawait tools.host.refuse({});");
+      expect(refused).toMatchObject({ kind: "ToolFailure", location: { line: 3 } });
+    }),
+  );
+});

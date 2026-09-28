@@ -79,7 +79,8 @@ const hasUnresolvedRef = (
     ...(schema.oneOf ?? []),
     ...(schema.allOf ?? []),
     ...Object.values(schema.properties ?? {}),
-    ...(schema.items === undefined ? [] : [schema.items]),
+    ...(schema.prefixItems ?? []),
+    ...(hasObjectRuntimeType(schema.items) ? [schema.items] : []),
     ...(hasObjectRuntimeType(schema.additionalProperties) ? [schema.additionalProperties] : []),
   ].some((item) => hasUnresolvedRef(item, definitions, seen, nextVisited));
 };
@@ -197,6 +198,7 @@ const renderSchemaType = (
   if (schema.const !== undefined) return renderLiteral(schema.const);
   if (schema.enum) return schema.enum.map(renderLiteral).join(" | ");
   const alternatives = schema.anyOf ?? schema.oneOf;
+  if (alternatives?.length === 0) return "never";
   if (alternatives) {
     // Effect's number schema emits a number branch plus string-enum representations for
     // NaN/Infinity/-Infinity (one enum per sentinel in older betas, one combined enum in the
@@ -238,8 +240,21 @@ const renderSchemaType = (
   if (schema.type === "number" || schema.type === "integer") return "number";
   if (schema.type === "boolean") return "boolean";
   if (schema.type === "null") return "null";
-  if (schema.type === "array")
-    return `Array<${renderSchema(schema.items ?? {}, nested, depth + 1, seen)}>`;
+  if (schema.type === "array") {
+    const items = schema.items;
+    if (schema.prefixItems !== undefined) {
+      // A tuple: fixed leading positions, then either nothing more or a typed rest.
+      const leading = schema.prefixItems.map((item) => renderSchema(item, nested, depth + 1, seen));
+      const closed = items === false || schema.maxItems === schema.prefixItems.length;
+      const rest = closed
+        ? []
+        : [
+            `...${renderSchema(hasObjectRuntimeType(items) ? items : {}, nested, depth + 1, seen)}[]`,
+          ];
+      return `[${[...leading, ...rest].join(", ")}]`;
+    }
+    return `Array<${renderSchema(hasObjectRuntimeType(items) ? items : {}, nested, depth + 1, seen)}>`;
+  }
   if (schema.type === "object" || schema.properties) {
     const required = new Set(schema.required ?? []);
     const properties = Object.entries(schema.properties ?? {});
@@ -365,12 +380,37 @@ export const outputTypeScript = <R>(definition: Definition<R>, pretty = false): 
       ? toTypeScript(definition.output, true, pretty)
       : jsonSchemaToTypeScript(definition.output, pretty);
 
+const jsonCodecs = new WeakMap<Schema.Decoder<unknown>, Schema.Decoder<unknown>>();
+
+const jsonCodec = (schema: Schema.Decoder<unknown>): Schema.Decoder<unknown> => {
+  let codec = jsonCodecs.get(schema);
+  if (codec === undefined) {
+    codec = Schema.toCodecJson(schema);
+    jsonCodecs.set(schema, codec);
+  }
+  return codec;
+};
+
 /**
- * Decodes tool input before `run` is invoked. Effect Schemas validate (throwing on failure);
- * JSON-Schema-described inputs pass through unvalidated (render-only).
+ * Decodes tool input before `run` is invoked. Guest input is JSON data and the model-visible
+ * signature is rendered from the schema's JSON form, so input the schema itself rejects gets a
+ * second chance through its JSON codec (a Date field takes an ISO string, an optional field
+ * takes null). A value both reject reports the schema's own, clearer error. JSON-Schema-
+ * described inputs pass through unvalidated (render-only).
  */
-export const decodeInput = <R, Value>(definition: Definition<R>, value: Value) =>
-  isEffectSchema(definition.input) ? Schema.decodeUnknownSync(definition.input)(value) : value;
+export const decodeInput = <R, Value>(definition: Definition<R>, value: Value) => {
+  const input = definition.input;
+  if (!isEffectSchema(input)) return value;
+  try {
+    return Schema.decodeUnknownSync(input)(value);
+  } catch (plainError) {
+    try {
+      return Schema.decodeUnknownSync(jsonCodec(input))(value);
+    } catch {
+      throw plainError;
+    }
+  }
+};
 
 /**
  * Decodes a tool result before it is exposed to the program. Effect Schemas validate and

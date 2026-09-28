@@ -4,7 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { CodeMode, Tool } from "../src/index.js";
-import { setDeadlineClockForTesting } from "../src/interpreter/confinement.js";
+import { setDeadlineClockForTesting } from "../src/interpreter/deadline.js";
 
 describe("reusable execution Effects", () => {
   for (const concurrent of [false, true]) {

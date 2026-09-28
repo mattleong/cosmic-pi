@@ -1,4 +1,35 @@
-export const numberMethods = new Set(["toFixed", "toPrecision", "toExponential", "toString"]);
+import * as Predicate from "effect/Predicate";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+} from "../interpreter/model.js";
+import { MethodTable } from "./method-table.js";
+import { boundedData } from "./value.js";
+import { coerceToString } from "../interpreter/conversions.js";
+
+type NumberMethod = (
+  value: number,
+  optNum: (index: number) => number | undefined,
+  node: AstNode,
+) => string;
+
+export const numberMethods = new MethodTable<NumberMethod>({
+  toFixed: (value, optNum) => value.toFixed(optNum(0)),
+  toExponential: (value, optNum) => value.toExponential(optNum(0)),
+  toPrecision: (value, optNum) => {
+    const digits = optNum(0);
+    return digits === undefined ? value.toString() : value.toPrecision(digits);
+  },
+  // `toString` is named explicitly: object literals type that key from Object.prototype.
+  toString: (value: number, optNum: (index: number) => number | undefined, node: AstNode) => {
+    const radix = optNum(0);
+    if (radix !== undefined && (radix < 2 || radix > 36)) {
+      throw new InterpreterRuntimeError("Number.toString radix must be between 2 and 36.", node);
+    }
+    return value.toString(radix);
+  },
+});
 
 export const numberConstants = new Set([
   "MAX_SAFE_INTEGER",
@@ -47,33 +78,13 @@ export const invokeNumberMethod = (
       throw new InterpreterRuntimeError(`Number.${name} expects a number argument.`, node);
     return arg;
   };
-  let result: string;
-  switch (name) {
-    case "toFixed":
-      result = value.toFixed(optNum(0));
-      break;
-    case "toExponential":
-      result = value.toExponential(optNum(0));
-      break;
-    case "toPrecision": {
-      const digits = optNum(0);
-      result = digits === undefined ? value.toString() : value.toPrecision(digits);
-      break;
-    }
-    case "toString": {
-      const radix = optNum(0);
-      if (radix !== undefined && (radix < 2 || radix > 36)) {
-        throw new InterpreterRuntimeError("Number.toString radix must be between 2 and 36.", node);
-      }
-      result = value.toString(radix);
-      break;
-    }
-    default:
-      throw new InterpreterRuntimeError(
-        `Number method '${name}' is not available in CodeMode.`,
-        node,
-      );
-  }
+  const method = numberMethods.get(name);
+  if (method === undefined)
+    throw new InterpreterRuntimeError(
+      `Number method '${name}' is not available in CodeMode.`,
+      node,
+    );
+  const result = method(value, optNum, node);
   return boundedData(result, `Number.${name} result`);
 };
 
@@ -101,11 +112,3 @@ export const invokeNumberStatic = (name: string, args: InterpreterArray, node: A
       throw new InterpreterRuntimeError(`Number.${name} is not available in CodeMode.`, node);
   }
 };
-import * as Predicate from "effect/Predicate";
-
-import {
-  type AstNode,
-  type InterpreterArray,
-  InterpreterRuntimeError,
-} from "../interpreter/model.js";
-import { boundedData, coerceToString } from "./value.js";

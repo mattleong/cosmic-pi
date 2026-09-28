@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { CodeMode, Namespace, Tool } from "../src/index.js";
 
+const encodeResult = Schema.encodeSync(Schema.fromJsonString(CodeMode.Result));
+
 const tool = () =>
   Tool.make({
     description: "Read",
@@ -99,4 +101,85 @@ describe("namespace metadata", () => {
     const after = CodeMode.make({ tools: { api: { read: tool(), empty: {} } } });
     expect(after.update(before.snapshot()).kind).toBe("replace");
   });
+});
+
+describe("tool tree validation", () => {
+  it("rejects trees that cannot be addressed unambiguously", () => {
+    const cyclic = { read: tool(), self: {} };
+    cyclic.self = cyclic;
+    const invalid: ReadonlyArray<object> = [
+      { ns: null },
+      { ns: "abc" },
+      { ns: [tool()] },
+      { ns: cyclic },
+      { constructor: tool() },
+      { "": tool() },
+      { "a.b": tool(), a: { b: tool() } },
+      { ["x".repeat(129)]: tool() },
+      { ns: Object.assign(Object.create({ inherited: true }), { read: tool() }) },
+    ];
+    for (const tools of invalid) {
+      // SAFETY: Each tree is deliberately malformed to exercise host validation.
+      expect(() => CodeMode.make({ tools: tools as never })).toThrow();
+    }
+    expect(() => CodeMode.make({ tools: { "a.b": tool(), a: { c: tool() } } })).not.toThrow();
+  });
+
+  it.live("refuses guest tool paths past the registered depth and name limits", () =>
+    Effect.gen(function* () {
+      const runtime = CodeMode.make({
+        tools: { ns: { read: tool() } },
+        limits: { maxOutputBytes: 2_000 },
+      });
+      for (const code of [
+        "let r = tools; for (let i = 0; i < 20; i++) r = r.ns; return typeof r;",
+        'const seg = "a".repeat(1_000_000); let r = tools; for (let i = 0; i < 10; i++) r = r[seg]; return await r({});',
+      ]) {
+        const result = yield* runtime.execute(code);
+        expect(result).toMatchObject({ ok: false, error: { kind: "UnknownTool" } });
+        expect(encodeResult(result).length).toBeLessThan(2_000);
+      }
+    }),
+  );
+});
+
+describe("search bounds", () => {
+  it.live("refuses oversized queries and filters nested namespaces by path prefix", () =>
+    Effect.gen(function* () {
+      const runtime = CodeMode.make({
+        tools: { mcp: { github: { issues: tool() }, linear: { issues: tool() } } },
+      });
+      expect(
+        yield* runtime.execute(
+          'return await tools.$codemode.search({ query: "z ".repeat(2_000_000) })',
+        ),
+      ).toMatchObject({ ok: false, error: { kind: "InvalidToolInput" } });
+      expect(
+        yield* runtime.execute(
+          'return (await tools.$codemode.search({ query: "issues", namespace: "mcp.github" })).items.map((item) => item.path)',
+        ),
+      ).toMatchObject({ ok: true, value: ["tools.mcp.github.issues"] });
+      expect(
+        yield* runtime.execute(
+          'return (await tools.$codemode.search({ query: "issues", namespace: "mcp" })).items.length',
+        ),
+      ).toMatchObject({ ok: true, value: 2 });
+    }),
+  );
+});
+
+describe("tool references", () => {
+  it.live("typeof, in, and identity describe the tool tree like an object of functions", () =>
+    Effect.gen(function* () {
+      const runtime = CodeMode.make({ tools: { ns: { read: tool() } } });
+      expect(
+        yield* runtime.execute(`return [typeof tools, typeof tools.ns, typeof tools.ns.read,
+          typeof tools.nope, typeof tools.ns.nope, "ns" in tools, "nope" in tools,
+          "read" in tools.ns, tools.ns.read === tools.ns.read];`),
+      ).toMatchObject({
+        ok: true,
+        value: ["object", "object", "function", "undefined", "undefined", true, false, true, true],
+      });
+    }),
+  );
 });

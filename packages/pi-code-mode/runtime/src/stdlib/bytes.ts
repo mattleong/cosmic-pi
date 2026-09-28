@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import { MethodTable } from "./method-table.js";
 import {
   assertBoundedCollectionSize,
   assertBoundedStringLength,
@@ -11,9 +12,8 @@ import {
   type IntrinsicReference,
 } from "../interpreter/model.js";
 import { SandboxBytes } from "../values.js";
-import { coerceToNumber, coerceToString } from "./value.js";
+import { coerceToNumber, coerceToString } from "../interpreter/conversions.js";
 
-export const byteMethods = new Set(["at", "slice", "subarray", "set", "toBase64", "toHex"]);
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const hex = "0123456789abcdef";
 export function byteNumber(value: InterpreterValue): number {
@@ -127,6 +127,45 @@ export function invokeBytesStatic(
   for (let i = 0; i < result.length; i++) result[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
   return new SandboxBytes(result);
 }
+type BytesMethod = (bytes: Uint8Array, args: InterpreterArray, node: AstNode) => InterpreterValue;
+
+export const byteMethods = new MethodTable<BytesMethod>({
+  at: (bytes, args, node) => bytes.at(optionalNumber(args[0], node) ?? 0),
+  slice: (bytes, args, node) =>
+    new SandboxBytes(bytes.slice(optionalNumber(args[0], node), optionalNumber(args[1], node))),
+  subarray: (bytes, args, node) =>
+    new SandboxBytes(bytes.subarray(optionalNumber(args[0], node), optionalNumber(args[1], node))),
+  set: (bytes, args, node) => {
+    const source = args[0];
+    if (!(source instanceof SandboxBytes) && !Array.isArray(source))
+      throw new InterpreterRuntimeError("Uint8Array.set expects a Uint8Array or array.", node).as(
+        "TypeError",
+      );
+    const offset = optionalNumber(args[1], node) ?? 0;
+    if (!Number.isInteger(offset) || offset < 0 || source.length + offset > bytes.length)
+      throw new InterpreterRuntimeError(
+        "Uint8Array.set source does not fit at that offset.",
+        node,
+      ).as("RangeError");
+    // Convert before mutation; native set preserves overlapping view semantics.
+    const input =
+      source instanceof SandboxBytes ? source.storage() : constructBytes(source, node).storage();
+    bytes.set(input, offset);
+    return undefined;
+  },
+  toBase64: (bytes, args, node) => {
+    noOptions(args, 0, node);
+    return bytesToBase64(bytes, node);
+  },
+  toHex: (bytes, args, node) => {
+    noOptions(args, 0, node);
+    assertBoundedStringLength(bytes.length * 2, "Hex result", node);
+    let text = "";
+    for (const byte of bytes) text += hex[byte >> 4]! + hex[byte & 15]!;
+    return text;
+  },
+});
+
 export function invokeBytesMethod(
   ref: IntrinsicReference,
   args: InterpreterArray,
@@ -135,48 +174,10 @@ export function invokeBytesMethod(
   const target = ref.receiver;
   if (!(target instanceof SandboxBytes))
     throw new InterpreterRuntimeError("Invalid byte receiver.", node);
+  const method = byteMethods.get(ref.name);
+  if (method === undefined)
+    throw new InterpreterRuntimeError(`Uint8Array.${ref.name} is not available.`, node);
   const bytes = target.storage();
   assertBoundedCollectionSize(bytes.length, "Byte operation", node);
-  switch (ref.name) {
-    case "at":
-      return bytes.at(optionalNumber(args[0], node) ?? 0);
-    case "slice":
-      return new SandboxBytes(
-        bytes.slice(optionalNumber(args[0], node), optionalNumber(args[1], node)),
-      );
-    case "subarray":
-      return new SandboxBytes(
-        bytes.subarray(optionalNumber(args[0], node), optionalNumber(args[1], node)),
-      );
-    case "set": {
-      const source = args[0];
-      if (!(source instanceof SandboxBytes) && !Array.isArray(source))
-        throw new InterpreterRuntimeError("Uint8Array.set expects a Uint8Array or array.", node).as(
-          "TypeError",
-        );
-      const offset = optionalNumber(args[1], node) ?? 0;
-      if (!Number.isInteger(offset) || offset < 0 || source.length + offset > bytes.length)
-        throw new InterpreterRuntimeError(
-          "Uint8Array.set source does not fit at that offset.",
-          node,
-        ).as("RangeError");
-      // Convert before mutation; native set preserves overlapping view semantics.
-      const input =
-        source instanceof SandboxBytes ? source.storage() : constructBytes(source, node).storage();
-      bytes.set(input, offset);
-      return undefined;
-    }
-    case "toBase64":
-      noOptions(args, 0, node);
-      return bytesToBase64(bytes, node);
-    case "toHex": {
-      noOptions(args, 0, node);
-      assertBoundedStringLength(bytes.length * 2, "Hex result", node);
-      let text = "";
-      for (const byte of bytes) text += hex[byte >> 4]! + hex[byte & 15]!;
-      return text;
-    }
-    default:
-      throw new InterpreterRuntimeError(`Uint8Array.${ref.name} is not available.`, node);
-  }
+  return method(bytes, args, node);
 }

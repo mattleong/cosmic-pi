@@ -11,8 +11,8 @@ import { invokeNumberMethod } from "../stdlib/number.js";
 import { invokeObjectAssign, invokeObjectMethod } from "../stdlib/object.js";
 import { invokeRegExpMethod } from "../stdlib/regexp.js";
 import { invokeUriFunction, invokeURLMethod } from "../stdlib/url.js";
-import { boundedData, coerceToString, createErrorValue, invokeCoercion } from "../stdlib/value.js";
-import { ToolReference, ToolRuntime } from "../tool-runtime.js";
+import { boundedData, invokeCoercion } from "../stdlib/value.js";
+import { coerceToString } from "./conversions.js";
 import {
   SandboxDate,
   SandboxBytes,
@@ -24,11 +24,11 @@ import {
   SandboxSet,
   SandboxURL,
   SandboxURLSearchParams,
+  createErrorValue,
+  attachErrorCause,
 } from "../values.js";
-import { assertBoundedCollectionSize, ExecutionDeadline } from "./confinement.js";
+import { assertBoundedCollectionSize } from "./confinement.js";
 import { createGenerator, invokeGenerator } from "./generators.js";
-import { GeneratorReference } from "./model.js";
-import type { RecursionBudget } from "./recursion.js";
 import {
   acquireIterator,
   closeOnAbrupt,
@@ -39,8 +39,11 @@ import {
   isNativeIterator,
   makeNativeIteratorFor,
   materializeIterable,
+  nativeIteratorHelpers,
+  drainNativeIterator,
+  makeNativeIterator,
 } from "./iterator-protocol.js";
-import { hoistVarDeclarations } from "./scope.js";
+import { hoistVarDeclarations, patternNames } from "./scope.js";
 import { invokeGroupBy } from "./group-by.js";
 import { invokeJson } from "./json.js";
 import {
@@ -48,6 +51,8 @@ import {
   type AstNode,
   type AstPropertyValue,
   type Binding,
+  GeneratorReference,
+  getString,
   CodeModeFunction,
   CoercionFunction,
   ErrorConstructorReference,
@@ -55,191 +60,101 @@ import {
   getNode,
   GlobalMethodReference,
   type InterpreterArray,
-  type InterpreterObject,
   InterpreterRuntimeError,
   type InterpreterValue,
   IntrinsicReference,
   isCallableReference,
-  type MemberReference,
   makeInterpreterObject,
   OptionalShortCircuit,
   PromiseMethodReference,
-  type StatementResult,
   UriFunction,
+  ToolReference,
 } from "./model.js";
+import { toPropertyKey } from "./conversions.js";
+import { hasObjectRuntimeType, runtimeTypeName } from "../runtime-values.js";
+import { calleeText } from "./diagnostics.js";
+import { declarePattern } from "./bindings.js";
+import { invokeArrayFrom } from "./builtins.js";
+import { invokeConsole, invokeObjectMethodOnTools } from "./console.js";
+import { createToolCallPromise, releaseTurn, startPromise, resolvePromise } from "./execution.js";
+import { evaluateExpression } from "./expressions.js";
 import {
-  collectPatternNames,
-  Interpreter,
-  invokeGlobalMethod,
-  invokeStringMethod,
-  type PromiseOwners,
-} from "./runtime.js";
-export interface CallableHost<R> {
-  callDepth: number;
-  readonly recursion: RecursionBudget;
-  rejectCircularInsertion(
-    container: InterpreterObject | InterpreterArray,
-    value: InterpreterValue,
-    label: string,
-    node: AstNode,
-  ): void;
-  assignToReference(
-    reference: MemberReference,
-    key: number | string,
-    next: InterpreterValue,
-    node: AstNode,
-  ): void;
-  constructAggregateError(args: InterpreterArray, node: AstNode): InterpreterObject;
-  createToolCallPromise(
-    path: ReadonlyArray<string>,
-    args: InterpreterArray,
-  ): Effect.Effect<SandboxPromise, never, R>;
-  currentScope(): Map<string, Binding>;
-  deadline: ExecutionDeadline;
-  declarePattern(
-    pattern: AstNode,
-    value: InterpreterValue,
-    mutable: boolean,
-    node: AstNode,
-  ): Effect.Effect<void, RuntimeFailure, R>;
-  evaluateCallArguments(
-    argNodes: Array<AstPropertyValue>,
-  ): Effect.Effect<InterpreterArray, RuntimeFailure, R>;
-  evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateStatement(node: AstNode): Effect.Effect<StatementResult, RuntimeFailure, R>;
-  fork(): Interpreter<R>;
-  invokeArrayFrom(
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeArrayMethod(
-    target: InterpreterArray,
-    name: string,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeCallable(
-    callable: InterpreterValue,
-    args: InterpreterArray,
-    node: AstNode,
-    callee?: InterpreterValue,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeConsole(name: string, args: InterpreterArray, node: AstNode): undefined;
-  invokeFunction(
-    fn: CodeModeFunction,
-    args: InterpreterArray,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeIntrinsic(
-    ref: IntrinsicReference,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeMapMethod(
-    target: SandboxMap,
-    name: string,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeObjectMethodOnTools(name: string, ref: ToolReference, node: AstNode): InterpreterValue;
-  invokePromiseChain(
-    source: SandboxPromise,
-    name: string,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<SandboxPromise, never, R>;
-  invokePromiseMethod(
-    ref: PromiseMethodReference,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeSetMethod(
-    target: SandboxSet,
-    name: string,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeStringReplacer(
-    value: string,
-    name: "replace" | "replaceAll",
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeTool: (
-    path: ReadonlyArray<string>,
-    args: InterpreterArray,
-    lifecycleId?: number,
-  ) => Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  invokeURLSearchParamsMethod(
-    target: SandboxURLSearchParams,
-    name: string,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  logs: Array<string>;
-  onToolCallLifecycle:
-    | ((event: ToolRuntime.ToolCallLifecycleEvent) => Effect.Effect<void, never, R>)
-    | undefined;
-  owners: PromiseOwners;
-  scopes: Array<Map<string, Binding>>;
-  functionScope: Map<string, Binding> | undefined;
-  startPromise(
-    work: Effect.Effect<InterpreterValue, RuntimeFailure, R>,
-    descendants?: Set<SandboxPromise>,
-    settlement?: InterpreterValue,
-  ): Effect.Effect<SandboxPromise, never, R>;
-  toolKeys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
-}
+  invokeMapMethod,
+  invokeSetMethod,
+  invokeStringReplacer,
+  invokeURLSearchParamsMethod,
+} from "./iteration.js";
+import { rejectCircularInsertion } from "./member-writes.js";
+import { constructAggregateError, invokePromiseChain, invokePromiseMethod } from "./promises.js";
+import { currentScope } from "./scope.js";
+import { evaluateStatement } from "./statements.js";
+import { type Activation, forkActivation } from "./activation.js";
+import { invokeGlobalMethod } from "./globals.js";
+import { invokeStringMethod } from "./string-operations.js";
+import { invokeArrayMethod } from "./array-methods.js";
 
-export function createFunction<R>(this: CallableHost<R>, node: AstNode): CodeModeFunction {
-  return new CodeModeFunction(
+export function createFunction<R>(act: Activation<R>, node: AstNode): CodeModeFunction {
+  const scopes = act.scopes.slice();
+  // A named function expression sees its own name in a scope of its own, as in JS.
+  const selfScope =
+    node.type === "FunctionExpression" && node.id != null ? new Map<string, Binding>() : undefined;
+  if (selfScope !== undefined) scopes.push(selfScope);
+  const fn = new CodeModeFunction(
     getArray(node, "params").map((parameter, index) => asNode(parameter, `params[${index}]`)),
     getNode(node, "body"),
-    this.scopes.slice(),
+    scopes,
     node.async === true,
     node.generator === true,
   );
+  if (selfScope !== undefined)
+    selfScope.set(getString(getNode(node, "id"), "name"), {
+      mutable: false,
+      value: fn,
+      initialized: true,
+    });
+  return fn;
 }
 
 export function evaluateCallExpression<R>(
-  this: CallableHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   const callee = getNode(node, "callee");
   const argNodes = getArray(node, "arguments");
 
-  return Effect.gen({ self: this }, function* () {
-    const callable = yield* this.evaluateExpression(callee);
+  return Effect.gen(function* () {
+    const callable = yield* evaluateExpression(act, callee);
     if (callable === OptionalShortCircuit) return OptionalShortCircuit;
     if ((callable === null || callable === undefined) && node.optional === true)
       return OptionalShortCircuit;
 
-    const args = yield* this.evaluateCallArguments(argNodes);
-    return yield* this.invokeCallable(callable, args, node, callee);
+    const args = yield* evaluateCallArguments(act, argNodes);
+    return yield* invokeCallable(act, callable, args, node, callee);
   });
 }
 
 export function invokeCallable<R>(
-  this: CallableHost<R>,
+  act: Activation<R>,
   callable: InterpreterValue,
   args: InterpreterArray,
   node: AstNode,
   callee = node,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     if (callable instanceof ToolReference) {
       if (callable.path.length === 0)
         throw new InterpreterRuntimeError("The tools root is not callable.", callee);
       // An un-awaited tool call is a first-class promise value; the call itself starts now.
-      return yield* this.createToolCallPromise(callable.path, args);
+      return yield* createToolCallPromise(act, callable.path, args, node);
     }
     if (callable instanceof PromiseMethodReference) {
-      return yield* this.invokePromiseMethod(callable, args, node);
+      return yield* invokePromiseMethod(act, callable, args, node);
     }
     if (callable instanceof CodeModeFunction) {
-      return yield* this.invokeFunction(callable, args);
+      return yield* invokeFunction(act, callable, args);
     }
     if (callable instanceof IntrinsicReference) {
-      return yield* this.invokeIntrinsic(callable, args, node);
+      return yield* invokeIntrinsic(act, callable, args, node);
     }
     if (callable instanceof GlobalMethodReference) {
       if (callable.namespace === "JSON")
@@ -248,8 +163,8 @@ export function invokeCallable<R>(
           args,
           node,
           (callback, _name, callbackNode) => (callbackArgs) =>
-            this.invokeCallable(callback, callbackArgs, callbackNode),
-          () => this.deadline.check(),
+            invokeCallable(act, callback, callbackArgs, callbackNode),
+          () => act.execution.deadline.check(),
         );
       if (
         (callable.namespace === "Object" || callable.namespace === "Map") &&
@@ -259,21 +174,22 @@ export function invokeCallable<R>(
           callable.namespace,
           args,
           node,
-          (callback, callbackArgs) => this.invokeCallable(callback, callbackArgs, node),
-          () => this.deadline.check(),
+          (callback, callbackArgs) => invokeCallable(act, callback, callbackArgs, node),
+          () => act.execution.deadline.check(),
+          act,
         );
-      if (callable.namespace === "console") return this.invokeConsole(callable.name, args, node);
+      if (callable.namespace === "console") return invokeConsole(act, callable.name, args, node);
       if (callable.namespace === "Array" && callable.name === "from")
-        return yield* this.invokeArrayFrom(args, node);
+        return yield* invokeArrayFrom(act, args, node);
       if (callable.namespace === "Object" && args[0] instanceof ToolReference) {
         // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-        return this.invokeObjectMethodOnTools(callable.name, args[0] as ToolReference, node);
+        return invokeObjectMethodOnTools(act, callable.name, args[0] as ToolReference, node);
       }
       if (callable.namespace === "Object" && callable.name === "assign") {
         return invokeObjectAssign(args, node, (target, key, value) => {
           // Object.assign already checks keys and counts growth incrementally. Re-entering
           // ordinary assignment would enumerate the growing target for every insertion.
-          this.rejectCircularInsertion(target, value, "Object.assign result", node);
+          rejectCircularInsertion(target, value, "Object.assign result", node);
           if (Array.isArray(target)) target[Number(key)] = value;
           else target[key] = value;
         });
@@ -281,9 +197,15 @@ export function invokeCallable<R>(
       if (
         callable.namespace === "Object" &&
         callable.name === "fromEntries" &&
+        isNativeIterator(args[0])
+      )
+        args[0] = drainNativeIterator(args[0], node);
+      if (
+        callable.namespace === "Object" &&
+        callable.name === "fromEntries" &&
         hasCustomSyncIterator(args[0])
       ) {
-        const host = this.fork();
+        const host = forkActivation(act);
         preflightSource(args[0], node, "Object.fromEntries input");
         const iterator = yield* acquireIterator(host, args[0], node);
         const out = makeInterpreterObject();
@@ -306,14 +228,8 @@ export function invokeCallable<R>(
           );
         }
       }
-      if (
-        callable.namespace === "Object" &&
-        (callable.name === "values" || callable.name === "entries")
-      ) {
-        const result = invokeObjectMethod(callable.name, args, node);
-        boundedData(result, `Object.${callable.name} result`);
-        return result;
-      }
+      // Object helpers are shallow and bound their own sizes; members keep their identity.
+      if (callable.namespace === "Object") return invokeObjectMethod(callable.name, args, node);
       return boundedData(
         invokeGlobalMethod(callable, args, node),
         `${callable.namespace}.${callable.name} result`,
@@ -328,30 +244,61 @@ export function invokeCallable<R>(
     // `Error("msg")` without `new` constructs an error exactly like `new Error("msg")`, as in JS.
     if (callable instanceof ErrorConstructorReference) {
       if (callable.name === "AggregateError") {
-        args[0] = yield* materializeIterable(this.fork(), args[0], node, "AggregateError errors");
-        return this.constructAggregateError(args, node);
+        args[0] = yield* materializeIterable(
+          forkActivation(act),
+          args[0],
+          node,
+          "AggregateError errors",
+        );
+        return constructAggregateError(args, node);
       }
-      return createErrorValue(callable.name, args[0] === undefined ? "" : coerceToString(args[0]));
+      const error = createErrorValue(
+        callable.name,
+        args[0] === undefined ? "" : coerceToString(args[0]),
+      );
+      attachErrorCause(error, args[1]);
+      return error;
     }
-    throw new InterpreterRuntimeError("Only tools are callable in CodeMode.", callee);
+    throw new InterpreterRuntimeError(
+      `${calleeText(callee)} is not a function${
+        callable === undefined ? "" : ` (it is ${describeValue(callable)})`
+      }. Only functions, tools, and the supported built-in methods can be called in CodeMode.`,
+      callee,
+    ).as("TypeError");
   });
 }
 
+const describeValue = (value: InterpreterValue): string => {
+  if (value === null) return "null";
+  if (Predicate.isString(value))
+    return `the string ${JSON.stringify(value.length > 40 ? `${value.slice(0, 40)}…` : value)}`;
+  if (Predicate.isNumber(value) || Predicate.isBoolean(value))
+    return `the ${runtimeTypeName(value)} ${String(value)}`;
+  return Array.isArray(value)
+    ? "an array"
+    : `a${runtimeTypeName(value) === "object" ? "n" : ""} ${runtimeTypeName(value)}`;
+};
+
 export function evaluateCallArguments<R>(
-  this: CallableHost<R>,
+  act: Activation<R>,
   argNodes: Array<AstPropertyValue>,
 ): Effect.Effect<InterpreterArray, RuntimeFailure, R> {
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     const args: InterpreterArray = [];
     for (const [index, arg] of argNodes.entries()) {
       const argNode = asNode(arg, `arguments[${index}]`);
       if (argNode.type === "SpreadElement") {
-        const spread = yield* this.evaluateExpression(getNode(argNode, "argument"));
-        const items = yield* materializeIterable(this.fork(), spread, argNode, "Spread arguments");
+        const spread = yield* evaluateExpression(act, getNode(argNode, "argument"));
+        const items = yield* materializeIterable(
+          forkActivation(act),
+          spread,
+          argNode,
+          "Spread arguments",
+        );
         assertBoundedCollectionSize(args.length + items.length, "Spread arguments", argNode);
         args.push(...items);
       } else {
-        args.push(yield* this.evaluateExpression(argNode));
+        args.push(yield* evaluateExpression(act, argNode));
       }
     }
     return args;
@@ -359,36 +306,33 @@ export function evaluateCallArguments<R>(
 }
 
 export function invokeFunction<R>(
-  this: CallableHost<R>,
+  act: Activation<R>,
   fn: CodeModeFunction,
   args: InterpreterArray,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  return Effect.gen({ self: this }, function* () {
-    const activation = this.fork();
+  return Effect.gen(function* () {
+    const activation = forkActivation(act);
     if (fn.generator) {
-      activation.callDepth = this.recursion.next(this.callDepth, fn.body);
+      activation.callDepth = act.execution.recursion.next(act.callDepth, fn.body);
       yield* prepareFunction(activation, fn, args);
       return createGenerator(activation, fn, evaluatePreparedFunction(activation, fn));
     }
-    if (!fn.async) return yield* activation.evaluateFunction(fn, args);
+    if (!fn.async) return yield* evaluateFunction(activation, fn, args);
     const boundary = Deferred.makeUnsafe<void>();
     const descendants = new Set<SandboxPromise>();
     activation.firstBoundary = boundary;
     activation.turn = { held: false };
-    activation.owners = [...this.owners, descendants];
-    let promise: SandboxPromise | undefined;
+    activation.owners = [...act.owners, descendants];
+    const promise = new SandboxPromise(descendants);
     let adopting = false;
-    const logicalSettlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>();
     const work = Effect.gen(function* () {
-      const result = yield* activation
-        .evaluateFunction(fn, args)
-        .pipe(
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit) || !(exit.value instanceof SandboxPromise)
-              ? Deferred.done(logicalSettlement, exit)
-              : Effect.void,
-          ),
-        );
+      const result = yield* evaluateFunction(activation, fn, args).pipe(
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit) || !(exit.value instanceof SandboxPromise)
+            ? Effect.sync(() => promise.settle(exit))
+            : Effect.void,
+        ),
+      );
       // Adoption is not part of the synchronous prefix and must not hold a guest turn.
       if (!(result instanceof SandboxPromise)) return result;
       if (result === promise)
@@ -396,35 +340,17 @@ export function invokeFunction<R>(
           "An async function cannot resolve to its own promise.",
         ).as("TypeError");
       adopting = true;
-      const settlement = activation.settlePromise(result);
       // Queue adoption before releasing the function's current turn. Its job likewise
       // registers the follow-up reaction before a later adoption can overtake it.
-      yield* Effect.forkChild(
-        Effect.gen(function* () {
-          yield* activation.execution.turns.withPermit(
-            Effect.asVoid(
-              Effect.forkChild(
-                activation.promiseReaction(Effect.exit(settlement), (exit) =>
-                  Deferred.done(logicalSettlement, exit),
-                ),
-                { startImmediately: true },
-              ),
-            ),
-          );
-          // Keep the reaction child alive until adoption settles; its failure belongs to
-          // the async function promise, not to this internal scheduling fiber.
-          yield* Effect.exit(Deferred.await(logicalSettlement));
-        }),
-        { startImmediately: true },
-      );
-      yield* activation.releaseTurn();
+      resolvePromise(activation, promise, Exit.succeed(result));
+      yield* releaseTurn(activation);
       yield* Deferred.succeed(boundary, undefined);
-      return yield* Deferred.await(logicalSettlement);
+      return yield* Effect.flatten(promise.outcome());
     }).pipe(
-      Effect.ensuring(activation.releaseTurn()),
+      Effect.ensuring(releaseTurn(activation)),
       Effect.ensuring(Deferred.succeed(boundary, undefined)),
     );
-    promise = yield* this.startPromise(work, descendants, logicalSettlement);
+    yield* startPromise(act, work, descendants, promise);
     yield* Deferred.await(boundary);
     // An async body with no await/adoption fulfills or rejects before returning to its
     // caller. Wait for fiber bookkeeping, but do not mark that rejection as observed.
@@ -435,22 +361,22 @@ export function invokeFunction<R>(
 }
 
 export function evaluateFunction<R>(
-  this: CallableHost<R>,
+  act: Activation<R>,
   fn: CodeModeFunction,
   args: InterpreterArray,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   return Effect.suspend(() => {
-    const savedDepth = this.callDepth;
-    this.callDepth = this.recursion.next(savedDepth, fn.body);
-    const savedScopes = this.scopes;
-    const savedFunctionScope = this.functionScope;
-    const run = Effect.andThen(prepareFunction(this, fn, args), evaluatePreparedFunction(this, fn));
+    const savedDepth = act.callDepth;
+    act.callDepth = act.execution.recursion.next(savedDepth, fn.body);
+    const savedScopes = act.scopes;
+    const savedFunctionScope = act.functionScope;
+    const run = Effect.andThen(prepareFunction(act, fn, args), evaluatePreparedFunction(act, fn));
     return run.pipe(
       Effect.ensuring(
         Effect.sync(() => {
-          this.callDepth = savedDepth;
-          this.scopes = savedScopes;
-          this.functionScope = savedFunctionScope;
+          act.callDepth = savedDepth;
+          act.scopes = savedScopes;
+          act.functionScope = savedFunctionScope;
         }),
       ),
     );
@@ -458,21 +384,22 @@ export function evaluateFunction<R>(
 }
 
 function prepareFunction<R>(
-  host: CallableHost<R>,
+  host: Activation<R>,
   fn: CodeModeFunction,
   args: InterpreterArray,
 ): Effect.Effect<void, RuntimeFailure, R> {
   return Effect.gen(function* () {
     host.scopes = [...fn.capturedScopes, new Map<string, Binding>()];
     // Default initializers see every parameter's TDZ slot, not an outer binding.
-    const paramScope = host.currentScope();
+    const paramScope = currentScope(host);
     for (const parameter of fn.parameters) {
-      for (const name of collectPatternNames(parameter))
+      for (const name of patternNames(parameter))
         paramScope.set(name, { mutable: true, value: undefined, initialized: false });
     }
     for (const [index, parameter] of fn.parameters.entries()) {
       if (parameter.type === "RestElement") {
-        yield* host.declarePattern(
+        yield* declarePattern(
+          host,
           getNode(parameter, "argument"),
           args.slice(index),
           true,
@@ -480,7 +407,7 @@ function prepareFunction<R>(
         );
         break;
       }
-      yield* host.declarePattern(parameter, args[index], true, parameter);
+      yield* declarePattern(host, parameter, args[index], true, parameter);
     }
     if (fn.body.type === "BlockStatement") {
       const bodyScope = new Map<string, Binding>();
@@ -496,38 +423,71 @@ function prepareFunction<R>(
 }
 
 function evaluatePreparedFunction<R>(
-  host: CallableHost<R>,
+  host: Activation<R>,
   fn: CodeModeFunction,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   return Effect.suspend(() =>
     fn.body.type === "BlockStatement"
-      ? Effect.map(host.evaluateStatement({ ...fn.body, functionBody: true }), (result) =>
+      ? Effect.map(evaluateStatement(host, { ...fn.body, functionBody: true }), (result) =>
           result.kind === "return" || result.kind === "value" ? result.value : undefined,
         )
-      : host.evaluateExpression(fn.body),
+      : evaluateExpression(host, fn.body),
   );
 }
 
 export function invokeIntrinsic<R>(
-  this: CallableHost<R>,
+  act: Activation<R>,
   ref: IntrinsicReference,
   args: InterpreterArray,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  if (ref.receiver instanceof SandboxBytes)
+  if (ref.receiver instanceof SandboxBytes && ref.name !== "iterator")
     return Effect.succeed(invokeBytesMethod(ref, args, node));
   if (ref.receiver instanceof SandboxTextEncoder || ref.receiver instanceof SandboxTextDecoder)
     return Effect.succeed(invokeEncodingMethod(ref, args, node));
   if (ref.receiver instanceof GeneratorReference)
-    return invokeGenerator(this.fork(), ref.receiver, ref.name, args, node);
-  if (isNativeIterator(ref.receiver))
-    return Effect.sync(() => invokeNativeIterator(ref, args, node));
+    return invokeGenerator(forkActivation(act), ref.receiver, ref.name, args, node);
+  if (isNativeIterator(ref.receiver)) {
+    if (!nativeIteratorHelpers.has(ref.name))
+      return Effect.sync(() => invokeNativeIterator(ref, args, node));
+    const receiver = ref.receiver;
+    const name = ref.name;
+    // The native sources are finite collections, so helpers drain eagerly and reuse the array
+    // methods; the ones that return iterators in JS return a fresh iterator over the result.
+    return Effect.suspend(() => {
+      const items = drainNativeIterator(receiver, node);
+      const asIterator = (values: InterpreterValue) =>
+        makeNativeIterator((Array.isArray(values) ? values : []).values(), `Iterator.${name}`);
+      switch (name) {
+        case "toArray":
+          return Effect.succeed(items);
+        case "take":
+        case "drop": {
+          const count = args[0];
+          if (!Predicate.isNumber(count) || Number.isNaN(count) || count < 0)
+            throw new InterpreterRuntimeError(
+              `Iterator.${name} expects a non-negative count.`,
+              node,
+            ).as("RangeError");
+          return Effect.succeed(
+            asIterator(name === "take" ? items.slice(0, count) : items.slice(count)),
+          );
+        }
+        case "map":
+        case "filter":
+        case "flatMap":
+          return Effect.map(invokeArrayMethod(act, items, name, args, node), asIterator);
+        default:
+          return invokeArrayMethod(act, items, name, args, node);
+      }
+    });
+  }
   if (ref.name === "iterator") return Effect.sync(() => makeNativeIteratorFor(ref.receiver, node));
   if (ref.receiver instanceof SandboxPromise)
-    return this.invokePromiseChain(ref.receiver, ref.name, args, node);
+    return invokePromiseChain(act, ref.receiver, ref.name, args, node);
   if (Predicate.isString(ref.receiver)) {
     if ((ref.name === "replace" || ref.name === "replaceAll") && isCallableReference(args[1])) {
-      return this.invokeStringReplacer(ref.receiver, ref.name, args, node);
+      return invokeStringReplacer(act, ref.receiver, ref.name, args, node);
     }
     return Effect.succeed(invokeStringMethod(ref.receiver, ref.name, args, node));
   }
@@ -535,7 +495,7 @@ export function invokeIntrinsic<R>(
     return Effect.succeed(invokeNumberMethod(ref.receiver, ref.name, args, node));
   }
   if (Array.isArray(ref.receiver)) {
-    return this.invokeArrayMethod(ref.receiver, ref.name, args, node);
+    return invokeArrayMethod(act, ref.receiver, ref.name, args, node);
   }
   if (ref.receiver instanceof SandboxDate) {
     return Effect.succeed(invokeDateMethod(ref.receiver, ref.name, node));
@@ -544,16 +504,22 @@ export function invokeIntrinsic<R>(
     return Effect.succeed(invokeRegExpMethod(ref.receiver, ref.name, args, node));
   }
   if (ref.receiver instanceof SandboxMap) {
-    return this.invokeMapMethod(ref.receiver, ref.name, args, node);
+    return invokeMapMethod(act, ref.receiver, ref.name, args, node);
   }
   if (ref.receiver instanceof SandboxSet) {
-    return this.invokeSetMethod(ref.receiver, ref.name, args, node);
+    return invokeSetMethod(act, ref.receiver, ref.name, args, node);
   }
   if (ref.receiver instanceof SandboxURL) {
     return Effect.succeed(invokeURLMethod(ref.receiver, ref.name, node));
   }
   if (ref.receiver instanceof SandboxURLSearchParams) {
-    return this.invokeURLSearchParamsMethod(ref.receiver, ref.name, args, node);
+    return invokeURLSearchParamsMethod(act, ref.receiver, ref.name, args, node);
+  }
+  if (ref.receiver !== null && hasObjectRuntimeType(ref.receiver) && !Array.isArray(ref.receiver)) {
+    const receiver = ref.receiver;
+    if (ref.name === "toString") return Effect.sync(() => coerceToString(receiver));
+    if (ref.name === "hasOwnProperty")
+      return Effect.sync(() => Object.hasOwn(receiver, toPropertyKey(args[0], node)));
   }
   throw new InterpreterRuntimeError(`Method '${ref.name}' is not available in CodeMode.`, node);
 }

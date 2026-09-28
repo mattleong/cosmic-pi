@@ -1,3 +1,20 @@
+import {
+  assertBoundedStringLength,
+  assertBoundedUrlConstructionInputs,
+  uriEncodedLengthUpperBound,
+} from "../interpreter/confinement.js";
+import {
+  type AstNode,
+  type InterpreterArray,
+  InterpreterRuntimeError,
+  type InterpreterValue,
+  UriFunction,
+} from "../interpreter/model.js";
+import { SandboxURL } from "../values.js";
+import { MethodTable } from "./method-table.js";
+import { boundedData } from "./value.js";
+import { coerceToString } from "../interpreter/conversions.js";
+
 export const urlProperties = new Set([
   "href",
   "origin",
@@ -91,22 +108,12 @@ export const writeUrlProperty = (value: SandboxURL, name: string, next: string):
   }
 };
 
-export const urlMethods = new Set(["toString", "toJSON"]);
+export const urlMethods = new MethodTable<(value: SandboxURL) => string>({
+  // `toString` is typed explicitly: object literals type that key from Object.prototype.
+  toString: (value: SandboxURL) => value.url.href,
+  toJSON: (value) => value.url.href,
+});
 export const urlStatics = new Set(["canParse", "parse"]);
-export const urlSearchParamsMethods = new Set([
-  "append",
-  "delete",
-  "get",
-  "getAll",
-  "has",
-  "set",
-  "sort",
-  "forEach",
-  "keys",
-  "values",
-  "entries",
-  "toString",
-]);
 
 export const uriArgument = (value: InterpreterValue, label: string): string =>
   coerceToString(boundedData(value, label));
@@ -163,20 +170,8 @@ export const invokeURLStatic = (name: string, args: InterpreterArray, node: AstN
 };
 
 export const invokeURLMethod = (value: SandboxURL, name: string, node: AstNode): string => {
-  if (name === "toString" || name === "toJSON") return value.url.href;
-  throw new InterpreterRuntimeError(`URL method '${name}' is not available in CodeMode.`, node);
+  const method = urlMethods.get(name);
+  if (method === undefined)
+    throw new InterpreterRuntimeError(`URL method '${name}' is not available in CodeMode.`, node);
+  return method(value);
 };
-import {
-  assertBoundedStringLength,
-  assertBoundedUrlConstructionInputs,
-  uriEncodedLengthUpperBound,
-} from "../interpreter/confinement.js";
-import {
-  type AstNode,
-  type InterpreterArray,
-  InterpreterRuntimeError,
-  type InterpreterValue,
-  UriFunction,
-} from "../interpreter/model.js";
-import { SandboxURL } from "../values.js";
-import { boundedData, coerceToString } from "./value.js";

@@ -3,13 +3,10 @@
 // normalization. Every hostile case asserts *fast* refusal - the point of the confinement
 // layer is that no admitted native operation can block the event loop for seconds.
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vitest";
-import { Interpreter } from "../src/interpreter/runtime.js";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { CodeMode, Tool } from "../src/index.js";
-import { copyIn, copyOut } from "../src/tool-runtime.js";
 import type { InterpreterValue } from "../src/interpreter/model.js";
 import { hostDate } from "../src/stdlib/epoch.js";
 import {
@@ -21,9 +18,10 @@ import {
   MAX_GUEST_STRING_LENGTH,
   MAX_LOG_ENTRIES,
   MAX_LOG_ENTRY_LENGTH,
-  regexSubjectCap,
-  setDeadlineClockForTesting,
 } from "../src/interpreter/confinement.js";
+import { regexSubjectCap } from "../src/interpreter/regex-guard.js";
+import { setDeadlineClockForTesting } from "../src/interpreter/deadline.js";
+import { copyIn, copyOut } from "../src/tool-runtime-data.js";
 
 const run = (code: string, limits?: CodeMode.ExecutionLimits) =>
   CodeMode.execute(limits ? { code, limits } : { code });
@@ -506,6 +504,37 @@ describe("string amplification limits", () => {
     }),
   );
 
+  it.live("replacement patterns that repeat the subject are charged as they expand", () =>
+    Effect.gen(function* () {
+      for (const code of [
+        'return "a".repeat(30_000).replace(/a/g, "$`").length',
+        'return "ab".repeat(15_000).replace(/a/g, "$\'").length',
+        'return "a".repeat(30_000).replaceAll("", "$`").length',
+        'return "a".repeat(3_000).replace(/(?:)/g, "$`$`$`$`").length',
+      ]) {
+        const error = yield* timed(() => failure(code));
+        expect(error.kind).toBe("InvalidDataValue");
+      }
+    }),
+  );
+
+  it.live("case mapping and normalization charge their worst-case growth for non-ASCII text", () =>
+    Effect.gen(function* () {
+      for (const code of [
+        'return "é".repeat(1_500_000).toUpperCase().length',
+        'return "é".repeat(250_000).normalize("NFKC").length',
+      ]) {
+        const error = yield* timed(() => failure(code));
+        expect(error.kind).toBe("InvalidDataValue");
+      }
+      expect(
+        yield* run(
+          'return ["a".repeat(4_000_000).toUpperCase().length, "é".repeat(1_000).normalize("NFD").length]',
+        ),
+      ).toMatchObject({ ok: true, value: [4_000_000, 2_000] });
+    }),
+  );
+
   it.live("a tool result over the string cap is refused at the data boundary", () =>
     Effect.gen(function* () {
       const oversized = Tool.make({
@@ -901,11 +930,13 @@ describe("aggregate data-boundary budgets", () => {
     const sparse: Array<InterpreterValue> = [];
     sparse.length = MAX_GUEST_COLLECTION_ENTRIES;
     sparse[1] = undefined;
-    const result = copyOut(copyIn(sparse, "Sparse"), true);
+    const result = copyOut(copyIn(sparse, "Sparse"));
     expect(Array.isArray(result)).toBe(true);
     if (!Array.isArray(result)) throw new Error("expected array");
     expect(result).toHaveLength(MAX_GUEST_COLLECTION_ENTRIES);
-    expect(0 in result).toBe(false);
+    // Holes leave the sandbox as JSON nulls.
+    expect(0 in result).toBe(true);
+    expect(result[0]).toBe(null);
     expect(result[1]).toBe(null);
     expect(
       copyOut(copyIn([NaN, Infinity, hostDate(0), new URL("https://example.com")], "Scalars")),
@@ -984,47 +1015,33 @@ describe("aggregate data-boundary budgets", () => {
     }
   });
 
+  // A DAG with 2^31 paths: a walk that revisits shared members would never finish, so the
+  // test's own timeout is the regression guard.
   it.effect("bounds shared DAG insertion walks for assignment and push without hiding cycles", () =>
     Effect.gen(function* () {
-      const original = Interpreter.prototype.rejectCircularInsertion;
-      let visits = 0;
-      const guard = vi
-        .spyOn(Interpreter.prototype, "rejectCircularInsertion")
-        .mockImplementation(function (this: Interpreter<unknown>, ...args) {
-          // Stop a regressed exponential walk deterministically, without a timing assertion.
-          if (++visits > 512) throw new Error("Insertion traversal exceeded its work budget");
-          return original.apply(this, args);
-        });
-      try {
-        for (const [container, insert] of [
-          ["{}", "y.x = x"],
-          ["[]", "y.push(x)"],
-        ]) {
-          for (const cyclic of [false, true]) {
-            visits = 0;
-            const result = yield* run(`
-              const y = ${container};
-              let x = {};
-              for (let i = 0; i < 31; i++) x = { a: x, b: x };
-              ${cyclic ? "x = { shared: x, later: y };" : ""}
-              ${insert};
-              return 1;
-            `);
-            if (cyclic) {
-              expect(result).toMatchObject({ ok: false, error: { kind: "InvalidDataValue" } });
-            } else {
-              expect(result).toMatchObject({ ok: true, value: 1 });
-            }
-            expect(visits).toBeLessThanOrEqual(512);
+      for (const [container, insert] of [
+        ["{}", "y.x = x"],
+        ["[]", "y.push(x)"],
+      ]) {
+        for (const cyclic of [false, true]) {
+          const result = yield* run(`
+            const y = ${container};
+            let x = {};
+            for (let i = 0; i < 31; i++) x = { a: x, b: x };
+            ${cyclic ? "x = { shared: x, later: y };" : ""}
+            ${insert};
+            return 1;
+          `);
+          if (cyclic) {
+            expect(result).toMatchObject({ ok: false, error: { kind: "InvalidDataValue" } });
+          } else {
+            expect(result).toMatchObject({ ok: true, value: 1 });
           }
-          visits = 0;
-          expect(yield* run(`const y = ${container}; const x = y; ${insert};`)).toMatchObject({
-            ok: false,
-            error: { kind: "InvalidDataValue" },
-          });
         }
-      } finally {
-        guard.mockRestore();
+        expect(yield* run(`const y = ${container}; const x = y; ${insert};`)).toMatchObject({
+          ok: false,
+          error: { kind: "InvalidDataValue" },
+        });
       }
     }),
   );

@@ -1,16 +1,21 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { CodeMode } from "../src/index.js";
 import {
   MAX_GUEST_COLLECTION_ENTRIES,
   MAX_GUEST_STRING_LENGTH,
 } from "../src/interpreter/confinement.js";
-import { coerceToString } from "../src/stdlib/value.js";
+import { makeRootActivation } from "../src/interpreter/activation.js";
 import { invokeGroupBy } from "../src/interpreter/group-by.js";
 import { CoercionFunction, type AstNode } from "../src/interpreter/model.js";
 import { SandboxSet, SandboxDate, SandboxPromise } from "../src/values.js";
+import { coerceToString } from "../src/interpreter/conversions.js";
 
 const run = (code: string) => CodeMode.execute({ code });
+// Grouping drives its source through a real activation; callbacks stay injected.
+const activation = () =>
+  makeRootActivation<never>({ admitTool: () => Effect.die("no tools"), toolKeys: () => [] });
 
 describe("groupBy", () => {
   it.effect("groups iterable values with value/index callbacks and shallow references", () =>
@@ -109,21 +114,21 @@ describe("groupBy", () => {
     }),
   );
 
-  it.effect(
-    "rejects array-like sources and blocked Object keys without opening member access",
-    () =>
-      Effect.gen(function* () {
-        for (const code of [
-          'return Object.groupBy({0: "a", length: 1}, String)',
-          "return Map.groupBy([1], 4)",
-          'return Object.groupBy([1], () => "__proto__")',
-          'return Object.groupBy([1], () => "constructor")',
-        ])
-          expect(yield* run(code)).toMatchObject({ ok: false });
-        expect(
-          yield* run('return Map.groupBy([1], () => "__proto__").get("__proto__")'),
-        ).toMatchObject({ ok: true, value: [1] });
-      }),
+  it.effect("rejects array-like sources and keeps prototype names as ordinary group keys", () =>
+    Effect.gen(function* () {
+      for (const code of [
+        'return Object.groupBy({0: "a", length: 1}, String)',
+        "return Map.groupBy([1], 4)",
+      ])
+        expect(yield* run(code)).toMatchObject({ ok: false });
+      expect(
+        yield* run('return Map.groupBy([1], () => "__proto__").get("__proto__")'),
+      ).toMatchObject({ ok: true, value: [1] });
+      expect(
+        yield* run(`const byName = Object.groupBy([1, 2], (n) => n === 1 ? "__proto__" : "constructor");
+          return [byName["__proto__"], byName.constructor];`),
+      ).toMatchObject({ ok: true, value: [[1], [2]] });
+    }),
   );
 
   it.effect("bounds visited entries before callbacks despite a constant-size live source", () =>
@@ -144,6 +149,7 @@ describe("groupBy", () => {
               return "same";
             }),
           () => {},
+          activation(),
         ),
       );
       expect(result._tag).toBe("Failure");
@@ -154,7 +160,7 @@ describe("groupBy", () => {
   it.effect("charges wrapped values before allocating oversized grouping keys", () =>
     Effect.gen(function* () {
       const date = new SandboxDate(0);
-      const promise = new SandboxPromise(undefined, Effect.succeed(1));
+      const promise = SandboxPromise.settled(Exit.succeed(1));
       for (const key of [
         Array.from({ length: 180_000 }, () => date),
         Array.from({ length: MAX_GUEST_COLLECTION_ENTRIES }, () => promise),
@@ -166,6 +172,7 @@ describe("groupBy", () => {
             { type: "CallExpression" },
             () => Effect.succeed(key),
             () => {},
+            activation(),
           ),
         );
         expect(result._tag).toBe("Failure");
@@ -193,17 +200,32 @@ describe("groupBy", () => {
           node,
           invoke,
           () => {},
+          activation(),
         ),
       );
       const expired = yield* Effect.exit(
-        invokeGroupBy("Object", [[1], callback], node, invoke, () => {
-          throw new Error("deadline");
-        }),
+        invokeGroupBy(
+          "Object",
+          [[1], callback],
+          node,
+          invoke,
+          () => {
+            throw new Error("deadline");
+          },
+          activation(),
+        ),
       );
       expect(oversized._tag).toBe("Failure");
       expect(expired._tag).toBe("Failure");
       expect(callbacks).toBe(0);
-      const result = yield* invokeGroupBy("Object", [[1], callback], node, invoke, () => {});
+      const result = yield* invokeGroupBy(
+        "Object",
+        [[1], callback],
+        node,
+        invoke,
+        () => {},
+        activation(),
+      );
       expect(Object.getPrototypeOf(result)).toBe(null);
     }),
   );

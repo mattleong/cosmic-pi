@@ -1,26 +1,70 @@
-import type * as Deferred from "effect/Deferred";
-import type * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
 import type * as Fiber from "effect/Fiber";
 import type { RuntimeFailure } from "./failure.js";
 import { assertBoundedCollectionSize, assertBoundedQueryPairs } from "./interpreter/confinement.js";
-import type { InterpreterValue } from "./interpreter/model.js";
+import * as Predicate from "effect/Predicate";
+import {
+  type InterpreterObject,
+  type InterpreterValue,
+  makeInterpreterObject,
+} from "./interpreter/model.js";
+import { hasObjectRuntimeType } from "./runtime-values.js";
 
+type PromiseExit = Exit.Exit<InterpreterValue, RuntimeFailure>;
+
+/**
+ * A guest promise. It settles once, from whichever source finishes first: its work fiber, an
+ * earlier logical settlement, or a value known up front. Effect code awaits `outcome()`;
+ * listeners registered with `onSettled` run synchronously when it settles, so reactions can be
+ * queued without a fiber waiting on every pending promise.
+ */
 export class SandboxPromise {
   interrupted = false;
-  readonly fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined;
-  readonly immediate: Effect.Effect<InterpreterValue, RuntimeFailure> | undefined;
+  /** The fiber running this promise's work, when it has one; assigned once it is forked. */
+  fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined = undefined;
   readonly descendants: ReadonlySet<SandboxPromise> | undefined;
-  readonly settlement: Deferred.Deferred<InterpreterValue, RuntimeFailure> | undefined;
-  constructor(
-    fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined,
-    immediate?: Effect.Effect<InterpreterValue, RuntimeFailure>,
-    descendants?: ReadonlySet<SandboxPromise>,
-    settlement?: Deferred.Deferred<InterpreterValue, RuntimeFailure>,
-  ) {
-    this.fiber = fiber;
-    this.immediate = immediate;
+  private readonly done = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>();
+  private settledExit: PromiseExit | undefined = undefined;
+  private listeners: Array<(exit: PromiseExit) => void> = [];
+
+  constructor(descendants?: ReadonlySet<SandboxPromise>) {
     this.descendants = descendants;
-    this.settlement = settlement;
+  }
+
+  /** A promise already settled with `exit`, as for `Promise.resolve(value)`. */
+  static settled(exit: PromiseExit): SandboxPromise {
+    const promise = new SandboxPromise();
+    promise.settle(exit);
+    return promise;
+  }
+
+  get exit(): PromiseExit | undefined {
+    return this.settledExit;
+  }
+
+  /** Settles the promise; the first settlement wins and later ones are ignored. */
+  settle(exit: PromiseExit): void {
+    if (this.settledExit !== undefined) return;
+    this.settledExit = exit;
+    Deferred.doneUnsafe(this.done, exit);
+    const listeners = this.listeners;
+    this.listeners = [];
+    for (const listener of listeners) listener(exit);
+  }
+
+  /** Runs `listener` with the outcome: now if settled, otherwise at settlement. */
+  onSettled(listener: (exit: PromiseExit) => void): void {
+    if (this.settledExit !== undefined) listener(this.settledExit);
+    else this.listeners.push(listener);
+  }
+
+  /** The outcome, waiting for it while the promise is pending. */
+  outcome(): Effect.Effect<PromiseExit> {
+    return this.settledExit !== undefined
+      ? Effect.succeed(this.settledExit)
+      : Effect.exit(Deferred.await(this.done));
   }
 }
 
@@ -125,3 +169,46 @@ export const isSandboxValue = <Value>(
   value instanceof SandboxSet ||
   value instanceof SandboxURL ||
   value instanceof SandboxURLSearchParams;
+
+const ErrorBrand: unique symbol = Symbol("codemode.error");
+
+/** A guest error: a plain object carrying `name` and `message`, branded as an Error. */
+export const createErrorValue = (name: string, message: string): InterpreterObject => {
+  const value = Object.assign(makeInterpreterObject(), { name, message });
+  Object.defineProperty(value, ErrorBrand, { value: name });
+  // Guest code has no host frames to show, so the stack is the error's own first line.
+  Object.defineProperty(value, "stack", {
+    value: message === "" ? name : `${name}: ${message}`,
+    writable: true,
+    configurable: true,
+  });
+  return value;
+};
+
+/** The constructor name of a guest error, or undefined for any other value. */
+export const errorBrandName = (value: InterpreterValue): string | undefined => {
+  if (value === null || !hasObjectRuntimeType(value)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, ErrorBrand);
+  return descriptor && "value" in descriptor && Predicate.isString(descriptor.value)
+    ? descriptor.value
+    : undefined;
+};
+
+/** Whether a value is a guest error created by an Error constructor or a caught failure. */
+export const isErrorValue = (value: InterpreterValue): value is InterpreterObject =>
+  errorBrandName(value) !== undefined;
+
+/** Keeps `options.cause` of `new Error(message, options)` as a nonenumerable own property. */
+export const attachErrorCause = (error: InterpreterObject, options: InterpreterValue): void => {
+  if (
+    options === null ||
+    !hasObjectRuntimeType(options) ||
+    Array.isArray(options) ||
+    Object.getPrototypeOf(options) !== null ||
+    !Object.hasOwn(options, "cause")
+  )
+    return;
+  // SAFETY: A prototype-free guest object is a record of InterpreterValue members.
+  const cause = (options as InterpreterObject)["cause"];
+  Object.defineProperty(error, "cause", { value: cause, writable: true, configurable: true });
+};

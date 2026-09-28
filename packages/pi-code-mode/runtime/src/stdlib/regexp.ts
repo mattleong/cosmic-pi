@@ -1,41 +1,33 @@
-export const regexpMethods = new Set(["test", "exec", "toString"]);
+/** The readable RegExp properties; `lastIndex` is also writable (see members). */
+import * as Predicate from "effect/Predicate";
+import { runtimeTypeName } from "../runtime-values.js";
+import { assertConfinedRegExp, assertConfinedRegExpOperation } from "../interpreter/regex-guard.js";
+import {
+  type AstNode,
+  type InterpreterArray,
+  type InterpreterObject,
+  type InterpreterValue,
+  InterpreterRuntimeError,
+  makeInterpreterObject,
+} from "../interpreter/model.js";
+import { SandboxRegExp } from "../values.js";
+import { MethodTable } from "./method-table.js";
+import { coerceToString } from "../interpreter/conversions.js";
 
-export const regexpProperties = new Set([
-  "source",
-  "flags",
-  "lastIndex",
-  "global",
-  "ignoreCase",
-  "multiline",
-  "sticky",
-  "unicode",
-  "dotAll",
-]);
+export const regexpProperties = new MethodTable<(value: SandboxRegExp) => InterpreterValue>({
+  source: (value) => value.regex.source,
+  flags: (value) => value.regex.flags,
+  lastIndex: (value) => value.regex.lastIndex,
+  global: (value) => value.regex.global,
+  ignoreCase: (value) => value.regex.ignoreCase,
+  multiline: (value) => value.regex.multiline,
+  sticky: (value) => value.regex.sticky,
+  unicode: (value) => value.regex.unicode,
+  dotAll: (value) => value.regex.dotAll,
+});
 
-export const regexpProperty = (value: SandboxRegExp, name: string): InterpreterValue => {
-  switch (name) {
-    case "source":
-      return value.regex.source;
-    case "flags":
-      return value.regex.flags;
-    case "lastIndex":
-      return value.regex.lastIndex;
-    case "global":
-      return value.regex.global;
-    case "ignoreCase":
-      return value.regex.ignoreCase;
-    case "multiline":
-      return value.regex.multiline;
-    case "sticky":
-      return value.regex.sticky;
-    case "unicode":
-      return value.regex.unicode;
-    case "dotAll":
-      return value.regex.dotAll;
-    default:
-      return undefined;
-  }
-};
+export const regexpProperty = (value: SandboxRegExp, name: string): InterpreterValue =>
+  regexpProperties.get(name)?.(value);
 
 export const regexFailureReason = <ErrorInput>(error: ErrorInput): string =>
   (error instanceof Error ? error.message : String(error)).replace(
@@ -74,21 +66,45 @@ export const toHostRegex = (
 
 interface RegExpMatchValue extends Array<InterpreterValue> {
   index?: number;
+  input?: string;
   groups?: InterpreterObject;
 }
 
 export const matchToValue = (match: RegExpMatchArray): RegExpMatchValue => {
   const result: RegExpMatchValue = Array.from(match, (group) => group);
   if (match.index !== undefined) result.index = match.index;
+  if (match.input !== undefined) result.input = match.input;
   if (match.groups) {
     const groups = makeInterpreterObject();
     for (const [key, group] of Object.entries(match.groups)) {
-      if (!isBlockedMember(key)) groups[key] = group;
+      groups[key] = group;
     }
     result.groups = groups;
   }
   return result;
 };
+
+type RegExpMethod = (
+  value: SandboxRegExp,
+  args: InterpreterArray,
+  node: AstNode,
+) => InterpreterValue;
+
+export const regexpMethods = new MethodTable<RegExpMethod>({
+  test: (value, args, node) => {
+    const subject = coerceToString(args[0]);
+    assertConfinedRegExpOperation(value.regex, subject, "RegExp.test", node);
+    return value.regex.test(subject);
+  },
+  exec: (value, args, node) => {
+    const subject = coerceToString(args[0]);
+    assertConfinedRegExpOperation(value.regex, subject, "RegExp.exec", node);
+    const matched = value.regex.exec(subject);
+    return matched === null ? null : matchToValue(matched);
+  },
+  // `toString` is typed explicitly: object literals type that key from Object.prototype.
+  toString: (value: SandboxRegExp) => coerceToString(value),
+});
 
 export const invokeRegExpMethod = (
   value: SandboxRegExp,
@@ -96,38 +112,11 @@ export const invokeRegExpMethod = (
   args: InterpreterArray,
   node: AstNode,
 ) => {
-  switch (name) {
-    case "test": {
-      const subject = coerceToString(args[0]);
-      assertConfinedRegExpOperation(value.regex, subject, "RegExp.test", node);
-      return value.regex.test(subject);
-    }
-    case "exec": {
-      const subject = coerceToString(args[0]);
-      assertConfinedRegExpOperation(value.regex, subject, "RegExp.exec", node);
-      const matched = value.regex.exec(subject);
-      return matched === null ? null : matchToValue(matched);
-    }
-    case "toString":
-      return coerceToString(value);
-    default:
-      throw new InterpreterRuntimeError(
-        `RegExp method '${name}' is not available in CodeMode.`,
-        node,
-      );
-  }
+  const method = regexpMethods.get(name);
+  if (method === undefined)
+    throw new InterpreterRuntimeError(
+      `RegExp method '${name}' is not available in CodeMode.`,
+      node,
+    );
+  return method(value, args, node);
 };
-import * as Predicate from "effect/Predicate";
-import { runtimeTypeName } from "../runtime-values.js";
-import { assertConfinedRegExp, assertConfinedRegExpOperation } from "../interpreter/confinement.js";
-import {
-  type AstNode,
-  type InterpreterArray,
-  type InterpreterObject,
-  type InterpreterValue,
-  InterpreterRuntimeError,
-  makeInterpreterObject,
-} from "../interpreter/model.js";
-import { isBlockedMember } from "../tool-runtime.js";
-import { SandboxRegExp } from "../values.js";
-import { coerceToString } from "./value.js";

@@ -12,7 +12,7 @@ import {
 } from "../interpreter/model.js";
 import { SandboxBytes, SandboxTextDecoder, SandboxTextEncoder } from "../values.js";
 import { bytesFromBase64, bytesToBase64 } from "./bytes.js";
-import { coerceToString } from "./value.js";
+import { coerceToString } from "../interpreter/conversions.js";
 
 const utf8Labels = new Set([
   "utf-8",

@@ -1,6 +1,7 @@
 // Local confined Set algebra. Only owned wrappers may supply membership and keys.
 import { SandboxMap, SandboxSet } from "../values.js";
-import { assertBoundedCollectionSize, ExecutionDeadline } from "./confinement.js";
+import { assertBoundedCollectionSize } from "./confinement.js";
+import { ExecutionDeadline } from "./deadline.js";
 import { InterpreterRuntimeError } from "./model.js";
 import type { AstNode, InterpreterValue } from "./model.js";
 

@@ -95,11 +95,11 @@ describe("assignment references", () => {
     }
   }
 
-  it.effect("intentionally refuses blocked keys before RHS evaluation", () =>
+  it.effect("refuses prototype keys on arrays before RHS evaluation", () =>
     Effect.gen(function* () {
       const result = yield* CodeMode.execute({
         code: `
-          const trace = [], box = {};
+          const trace = [], box = [];
           function key() { trace.push('key'); return 'constructor'; }
           function rhs() { trace.push('rhs'); return 1; }
           try { box[key()] = rhs(); } catch (e) { trace.push('caught'); }
@@ -107,6 +107,29 @@ describe("assignment references", () => {
         `,
       });
       expect(result).toMatchObject({ ok: true, value: ["key", "caught"] });
+    }),
+  );
+
+  it.effect("treats prototype names as ordinary data keys on plain objects", () =>
+    Effect.gen(function* () {
+      const result = yield* CodeMode.execute({
+        code: `
+          const box = { constructor: "Acme" };
+          box["__proto__"] = { admin: true };
+          box.prototype = 3;
+          const { constructor, ...rest } = box;
+          return [constructor, box.admin, JSON.stringify(rest), Object.keys(box)];
+        `,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        value: [
+          "Acme",
+          null,
+          '{"__proto__":{"admin":true},"prototype":3}',
+          ["constructor", "__proto__", "prototype"],
+        ],
+      });
     }),
   );
 

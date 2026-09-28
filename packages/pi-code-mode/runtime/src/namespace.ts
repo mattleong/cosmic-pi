@@ -1,5 +1,5 @@
 import type { Definition } from "./tool.js";
-import type { HostTools } from "./tool-runtime.js";
+import type { HostTools } from "./tool-tree.js";
 
 /** Plain tool trees remain valid; metadata never becomes a callable property. */
 export type Tools<R = never> = {

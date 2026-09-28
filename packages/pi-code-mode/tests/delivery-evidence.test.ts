@@ -28,8 +28,9 @@ describe("interpreter delivery evidence", () => {
             'let message=""; try { await tools.mcp.request({action:"status"}); } catch(e) { message=e.message; } return message;',
           ),
         );
+        // The refusal names the limit the output hit, not only that it was invalid.
         expect(completed.content[0]).toMatchObject({
-          text: expect.stringContaining("Invalid output"),
+          text: expect.stringContaining("maximum value depth"),
         });
         expect(completed.content[0]).toMatchObject({
           text: expect.stringContaining("Do not replay completed or uncertain operations"),

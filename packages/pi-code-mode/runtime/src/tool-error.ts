@@ -29,3 +29,15 @@ export const runHost = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<
       );
     }),
   );
+
+/**
+ * Runs a host observation hook. Observers see execution; they never change it. A hook that
+ * fails, dies or throws synchronously is ignored, so its message cannot reach the program and
+ * a settled call keeps its outcome. Interruption still propagates.
+ */
+export const observeHost = <R>(
+  observe: () => Effect.Effect<void, never, R>,
+): Effect.Effect<void, never, R> =>
+  Effect.suspend(observe).pipe(
+    Effect.catchCause((cause) => (Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.void)),
+  );

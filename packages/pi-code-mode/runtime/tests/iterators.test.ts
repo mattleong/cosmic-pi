@@ -10,16 +10,16 @@ const source = `
 `;
 
 describe("confined iterator protocol", () => {
-  it.effect("retains materialized collection methods beside explicit native cursors", () =>
+  it.effect("collection iterators support helpers beside explicit native cursors", () =>
     Effect.gen(function* () {
       const result = yield* CodeMode.execute({
         code: `
           const cursor = [4, 5][Symbol.iterator]();
           return [
-            [4, 5].values().map(x => x + 1),
-            new Map([["a", 1]]).entries(),
-            new Set([2]).keys(),
-            new URLSearchParams("x=3").values(),
+            [4, 5].values().map(x => x + 1).toArray(),
+            [...new Map([["a", 1]]).entries()],
+            Array.from(new Set([2]).keys()),
+            new URLSearchParams("x=3").values().toArray(),
             cursor.next(), cursor.next(), cursor.next()
           ];
         `,
@@ -31,7 +31,7 @@ describe("confined iterator protocol", () => {
         ["3"],
         { value: 4, done: false },
         { value: 5, done: false },
-        { done: true, value: null },
+        { done: true },
       ]);
     }),
   );
@@ -57,8 +57,8 @@ describe("confined iterator protocol", () => {
           function* numbers() { yield 1; yield 2; yield 1; }
           function* pairs() { yield ['a', 1]; yield ['b', 2]; }
           return [
-            Object.fromEntries(pairs()), new Map(pairs()).entries(),
-            new Set(numbers()).values(), new URLSearchParams(pairs()).toString(),
+            Object.fromEntries(pairs()), [...new Map(pairs()).entries()],
+            [...new Set(numbers()).values()], new URLSearchParams(pairs()).toString(),
             Object.groupBy(numbers(), x => String(x)),
             await Promise.all(numbers()), await Promise.allSettled(numbers()),
             await Promise.any(numbers()), await Promise.race(numbers())

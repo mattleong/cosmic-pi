@@ -40,17 +40,19 @@ describe("Object shallow helpers", () => {
     expect(invokeObjectMethod("hasOwn", [sparse, 2], node)).toBe(true);
   });
 
-  it("keeps sandbox wrappers opaque and validates original inputs", () => {
+  it("keeps sandbox wrappers opaque and takes members by identity", () => {
     const wrapper = new SandboxMap();
     expect(invokeObjectMethod("values", [wrapper], node)).toEqual([]);
     expect(invokeObjectMethod("entries", [wrapper], node)).toEqual([]);
     expect(invokeObjectMethod("hasOwn", [wrapper, "map"], node)).toBe(false);
-    const cyclic = makeInterpreterObject();
-    cyclic.self = cyclic;
-    expect(() => invokeObjectMethod("values", [cyclic], node)).toThrow();
+    const self = makeInterpreterObject();
+    self.self = self;
+    const values = invokeObjectMethod("values", [self], node);
+    expect(Array.isArray(values) && values[0]).toBe(self);
+    // Holes are not own entries, so a long sparse array has none.
     const sparse: InterpreterArray = [];
     sparse.length = MAX_GUEST_COLLECTION_ENTRIES + 1;
-    expect(() => invokeObjectMethod("entries", [sparse], node)).toThrow();
+    expect(invokeObjectMethod("entries", [sparse], node)).toEqual([]);
   });
 });
 
@@ -91,13 +93,9 @@ describe("Object.assign guarded helper", () => {
     }
     expect(() => assign({}, "abc")).toThrow();
     expect(assign({}, new SandboxMap())).toEqual({});
-    const cyclic = makeInterpreterObject();
-    cyclic.self = cyclic;
-    expect(() => assign(cyclic)).toThrow();
-    expect(() => assign({}, cyclic)).toThrow();
   });
 
-  it("blocks dangerous source keys before invoking the write seam", () => {
+  it("blocks prototype keys on a target that has a prototype before invoking the write seam", () => {
     for (const key of ["__proto__", "constructor", "prototype"]) {
       const source = makeInterpreterObject();
       source[key] = 1;

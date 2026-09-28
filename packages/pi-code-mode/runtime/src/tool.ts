@@ -19,7 +19,8 @@ export type JsonSchema = {
   readonly allOf?: ReadonlyArray<JsonSchema> | undefined;
   readonly properties?: Readonly<Record<string, JsonSchema>> | undefined;
   readonly required?: ReadonlyArray<string> | undefined;
-  readonly items?: JsonSchema | undefined;
+  readonly items?: JsonSchema | boolean | undefined;
+  readonly prefixItems?: ReadonlyArray<JsonSchema> | undefined;
   readonly additionalProperties?: boolean | JsonSchema | undefined;
   readonly description?: string | undefined;
   readonly default?: unknown;

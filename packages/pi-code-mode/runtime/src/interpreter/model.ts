@@ -2,7 +2,7 @@ import type { DiagnosticFacts } from "../diagnostic-facts.js";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "../runtime-values.js";
-import type { SandboxBytes, SandboxURL, SandboxValue } from "../values.js";
+import type { SandboxBytes, SandboxRegExp, SandboxURL, SandboxValue } from "../values.js";
 
 export type SourcePosition = {
   line: number;
@@ -80,7 +80,7 @@ export class GeneratorReturn {
 }
 
 export type MemberReference = {
-  target: InterpreterObject | InterpreterArray | SandboxURL | SandboxBytes;
+  target: InterpreterObject | InterpreterArray | SandboxURL | SandboxBytes | SandboxRegExp;
   key: GuestPropertyKey;
 };
 
@@ -166,9 +166,18 @@ export class GlobalMethodReference {
   }
 }
 
+export type CoercionFunctionName =
+  | "Number"
+  | "String"
+  | "Boolean"
+  | "parseInt"
+  | "parseFloat"
+  | "isNaN"
+  | "isFinite";
+
 export class CoercionFunction {
-  readonly name: "Number" | "String" | "Boolean" | "parseInt" | "parseFloat";
-  constructor(name: "Number" | "String" | "Boolean" | "parseInt" | "parseFloat") {
+  readonly name: CoercionFunctionName;
+  constructor(name: CoercionFunctionName) {
     this.name = name;
   }
 }
@@ -196,8 +205,22 @@ export class ErrorConstructorReference {
 
 export class ToolReference {
   readonly path: ReadonlyArray<string>;
+  private readonly children = new Map<string, ToolReference>();
   constructor(path: ReadonlyArray<string>) {
     this.path = path;
+  }
+
+  /**
+   * The reference for `this[segment]`. Repeated reads return the same instance, so
+   * `tools.a.b === tools.a.b`; the cache is capped so probing many names cannot grow it.
+   */
+  child(segment: string, path: () => ReadonlyArray<string>): ToolReference {
+    let child = this.children.get(segment);
+    if (child === undefined) {
+      child = new ToolReference(path());
+      if (this.children.size < 256) this.children.set(segment, child);
+    }
+    return child;
   }
 }
 
@@ -210,12 +233,21 @@ export interface InterpreterObject {
 
 export interface InterpreterArray extends Array<InterpreterValue> {
   index?: number;
+  input?: string;
   groups?: InterpreterObject;
 }
 
 export const makeInterpreterObject = (): InterpreterObject => {
   // SAFETY: A new null-prototype object is empty; only InterpreterValue writes populate it.
   return Object.create(null) as InterpreterObject;
+};
+
+/** A guest-visible `{ value, done }` iterator result without a host prototype. */
+export const makeIteratorResult = (value: InterpreterValue, done: boolean): InterpreterObject => {
+  const result = makeInterpreterObject();
+  result.value = value;
+  result.done = done;
+  return result;
 };
 
 /** Closed value domain owned by the confined JavaScript interpreter. */
@@ -379,9 +411,10 @@ export const getOptionalNode = (node: AstNode, key: string): AstNode | undefined
 
 export const getNode = (node: AstNode, key: string): AstNode => asNode(node[key], key);
 
+/** A node's 1-based program position; parsing maps every location back to the source. */
 export const sourceLocation = (node: AstNode): SourcePosition => ({
-  line: Math.max(1, (node.loc?.start.line ?? 2) - 1),
-  column: Math.max(1, (node.loc?.start.column ?? 4) - 3),
+  line: Math.max(1, node.loc?.start.line ?? 1),
+  column: Math.max(1, (node.loc?.start.column ?? 0) + 1),
 });
 
 export const formatLocation = (node?: AstNode): string => {

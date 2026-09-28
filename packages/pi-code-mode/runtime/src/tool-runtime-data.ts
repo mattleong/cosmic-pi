@@ -9,6 +9,7 @@ import {
   type InterpreterValue,
   makeInterpreterObject,
   ToolReference,
+  GeneratorReference,
 } from "./interpreter/model.js";
 import { isoString } from "./stdlib/epoch.js";
 import { ToolRuntimeError } from "./tool-runtime-error.js";
@@ -23,7 +24,9 @@ import {
   SandboxSet,
   SandboxURL,
   SandboxURLSearchParams,
+  isErrorValue,
 } from "./values.js";
+import { isNativeIterator } from "./interpreter/iterator-protocol.js";
 
 /**
  * Maximum nesting depth for values crossing a data boundary. Fixed (not a configurable
@@ -157,7 +160,12 @@ const expandIn = (value: InterpreterValue, budget: ProjectionBudget<never>): Int
     budget.charge(value.length - present);
     return result;
   }
-  if (value !== null && hasObjectRuntimeType(value) && Object.getPrototypeOf(value) === null) {
+  if (
+    value !== null &&
+    hasObjectRuntimeType(value) &&
+    Object.getPrototypeOf(value) === null &&
+    !isErrorValue(value)
+  ) {
     const entries = Object.entries(value);
     budget.charge(0, 0, 0, entries.length);
     const result = makeInterpreterObject();
@@ -169,7 +177,17 @@ const expandIn = (value: InterpreterValue, budget: ProjectionBudget<never>): Int
 
 const blockedMemberNames = new Set(["__proto__", "constructor", "prototype"]);
 
+/** Names that reach a prototype on any object that has one. */
 export const isBlockedMember = (name: string): boolean => blockedMemberNames.has(name);
+
+/**
+ * Whether `key` is ordinary data on `target`. Guest objects have no prototype, so every name
+ * is an own data property there; on arrays and other objects the prototype names stay blocked.
+ */
+export const isDataKeyOf = (target: InterpreterValue, key: PropertyKey): boolean =>
+  !Predicate.isString(key) ||
+  !isBlockedMember(key) ||
+  (target !== null && hasObjectRuntimeType(target) && Object.getPrototypeOf(target) === null);
 
 /**
  * Validates and copies a value against the plain-data contract (depth, circularity, plain
@@ -202,6 +220,14 @@ export const copyIn = <Value>(
   return expandIn(projected, new ProjectionBudget(label));
 };
 
+/**
+ * Guest data leaving the sandbox as JSON data: validated and bounded against the data
+ * contract, then copied out with JSON semantics (see copyOut). The final result uses this;
+ * tool arguments use the same projection with one budget across the argument list.
+ */
+export const exportData = (value: InterpreterValue, label: string): SerializableValue =>
+  copyOut(copyBounded(value, label, 0, new Set(), false, new ProjectionBudget(label)));
+
 // The argument list shares one budget; resetting it per argument permits amplification
 // through many individually valid arguments. The list itself is not a data container.
 export const copyArguments = (
@@ -210,7 +236,24 @@ export const copyArguments = (
 ): Array<SerializableValue> => {
   const budget = new ProjectionBudget<InterpreterValue>(label);
   const projected = args.map((arg) => copyBounded(arg, label, 0, new Set(), false, budget));
-  return projected.map((arg) => copyOut(arg));
+  const copied = projected.map((arg) => copyOut(arg));
+  for (const arg of copied) rejectProtoKeys(arg, label);
+  return copied;
+};
+
+// Host tools may merge their input with ordinary assignment, where a "__proto__" key would
+// replace an object's prototype. Guest data can hold the key; tool input cannot.
+const rejectProtoKeys = (value: SerializableValue, label: string): void => {
+  if (value === null || !hasObjectRuntimeType(value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) rejectProtoKeys(item, label);
+    return;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "__proto__")
+      throw new ToolRuntimeError("InvalidDataValue", `${label} contains the key "__proto__".`);
+    rejectProtoKeys(item, label);
+  }
 };
 
 const copyBounded = <Value>(
@@ -246,6 +289,14 @@ const copyBounded = <Value>(
       throw new ToolRuntimeError("InvalidDataValue", `${label} must contain data only.`);
     }
 
+    // Iterators are cursors, not data; name the conversion instead of a generic shape error.
+    if (value instanceof GeneratorReference || isNativeIterator(value)) {
+      throw new ToolRuntimeError(
+        "InvalidDataValue",
+        `${label} contains an iterator; convert it to an array first, for example [...iterator] or iterator.toArray().`,
+      );
+    }
+
     // An un-awaited promise never crosses a data checkpoint as `{}`; the diagnostic tells the
     // model exactly how to fix the program instead.
     if (value instanceof SandboxPromise) {
@@ -270,8 +321,10 @@ const copyBounded = <Value>(
     if (preserveSandboxValues) {
       // Intra-sandbox checkpoints keep sandbox value instances alive as leaves; their contents
       // are never walked here (Map/Set members are validated where mutation happens, and the
-      // real boundary still serializes them below).
+      // real boundary still serializes them below). Guest errors keep their identity so
+      // coercion and instanceof still recognize them.
       if (
+        isErrorValue(value) ||
         value instanceof SandboxDate ||
         value instanceof SandboxRegExp ||
         value instanceof SandboxMap ||
@@ -396,12 +449,6 @@ const copyBounded = <Value>(
     budget.charge(0, 0, 0, entries.length);
     const copied = makeInterpreterObject();
     for (const [key, item] of entries) {
-      if (isBlockedMember(key)) {
-        throw new ToolRuntimeError(
-          "InvalidDataValue",
-          `${label} contains blocked property '${key}'.`,
-        );
-      }
       budget.charge(0, 6 * key.length + 3);
       copied[key] = copyBounded(item, label, depth + 1, seen, preserveSandboxValues, budget);
     }
@@ -424,9 +471,14 @@ export type SerializableValue =
   | SerializableObject
   | SerializableArray;
 
-export const copyOut = (value: InterpreterValue, undefinedAsNull = false): SerializableValue => {
+/**
+ * Copies guest data out of the sandbox with JSON semantics below the top level: object keys
+ * holding `undefined` are dropped, and array holes and `undefined` elements become `null`.
+ * A top-level `undefined` is returned as is for the caller to interpret.
+ */
+export const copyOut = (value: InterpreterValue): SerializableValue => {
   const label = "Output value";
-  const projected = copyOutBounded(value, undefinedAsNull, 0, new ProjectionBudget(label));
+  const projected = copyOutBounded(value, 0, new ProjectionBudget(label));
   return expandOut(projected, new ProjectionBudget(label));
 };
 
@@ -455,7 +507,6 @@ const expandOut = (
 
 const copyOutBounded = (
   value: InterpreterValue,
-  undefinedAsNull: boolean,
   depth: number,
   budget: ProjectionBudget<SerializableValue>,
 ): SerializableValue =>
@@ -470,7 +521,6 @@ const copyOutBounded = (
         "Opaque byte values cannot cross a data boundary; encode bytes as text first.",
       );
     }
-    if (value === undefined && undefinedAsNull) return null;
     // Normalize non-finite numbers to null as the value crosses out of the sandbox (final return
     // and tool-call arguments both funnel through here), matching JSON semantics - NaN/Infinity
     // have no JSON representation, so JSON.stringify would produce null anyway.
@@ -486,13 +536,7 @@ const copyOutBounded = (
       }
       budget.charge(0, 0, 0, value.length);
       budget.inspectAccessors(value);
-      let present = 0;
-      const result = value.map((item) => {
-        present++;
-        return copyOutBounded(item, undefinedAsNull, depth + 1, budget);
-      });
-      budget.charge(value.length - present);
-      return result;
+      return Array.from(value, (item) => copyOutBounded(item, depth + 1, budget) ?? null);
     }
 
     if (value instanceof ToolReference) return undefined;
@@ -500,12 +544,13 @@ const copyOutBounded = (
       budget.inspectAccessors(value);
       const entries = Object.entries(value);
       budget.charge(0, 0, 0, entries.length);
-      return Object.fromEntries(
-        entries.map(([key, item]) => {
-          budget.charge(0, 6 * key.length + 3);
-          return [key, copyOutBounded(item, undefinedAsNull, depth + 1, budget)];
-        }),
-      );
+      const copied: Array<[string, SerializableValue]> = [];
+      for (const [key, item] of entries) {
+        budget.charge(0, 6 * key.length + 3);
+        const next = copyOutBounded(item, depth + 1, budget);
+        if (next !== undefined) copied.push([key, next]);
+      }
+      return Object.fromEntries(copied);
     }
 
     return value;

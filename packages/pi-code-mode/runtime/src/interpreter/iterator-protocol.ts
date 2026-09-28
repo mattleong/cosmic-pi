@@ -10,7 +10,7 @@ import {
   SandboxSet,
   SandboxURLSearchParams,
 } from "../values.js";
-import { assertBoundedCollectionSize, type ExecutionDeadline } from "./confinement.js";
+import { assertBoundedCollectionSize } from "./confinement.js";
 import {
   GeneratorReference,
   GuestIterator,
@@ -24,12 +24,24 @@ import {
   isCallableReference,
   makeInterpreterObject,
 } from "./model.js";
+import { invokeCallable } from "./callable.js";
+import { awaitIteratorPromise } from "./execution.js";
+import type { Activation } from "./activation.js";
+
+interface NativeIteratorState {
+  readonly iterator: Iterator<InterpreterValue>;
+  visited: number;
+  readonly label: string;
+}
 
 /** Only these owned cursors may dispatch a native iterator method. */
-const nativeIterators = new WeakMap<
-  InterpreterObject,
-  { iterator: Iterator<InterpreterValue>; visited: number; label: string }
->();
+const nativeIterators = new WeakMap<InterpreterObject, NativeIteratorState>();
+
+const nativeIteratorState = (value: InterpreterValue): NativeIteratorState | undefined =>
+  // SAFETY: WeakMap membership only tests an object identity; it does not read record members.
+  value !== null && hasObjectRuntimeType(value)
+    ? nativeIterators.get(value as InterpreterObject)
+    : undefined;
 export function makeNativeIterator(
   iterator: Iterator<InterpreterValue>,
   label = "Iterator visited entries",
@@ -40,11 +52,36 @@ export function makeNativeIterator(
   value[GuestIterator] = new IntrinsicReference(value, "iterator");
   return value;
 }
+/** ES2025 iterator helpers; on a native iterator they consume its remaining entries. */
+export const nativeIteratorHelpers = new Set([
+  "toArray",
+  "map",
+  "filter",
+  "flatMap",
+  "take",
+  "drop",
+  "forEach",
+  "some",
+  "every",
+  "find",
+  "reduce",
+]);
+
+/** Consumes the remaining entries of a native iterator, counting each against its cap. */
+export function drainNativeIterator(iterator: InterpreterObject, node: AstNode): InterpreterArray {
+  const state = nativeIteratorState(iterator);
+  if (state === undefined)
+    throw new InterpreterRuntimeError("Invalid iterator receiver.", node).as("TypeError");
+  const values: InterpreterArray = [];
+  for (let result = state.iterator.next(); !result.done; result = state.iterator.next()) {
+    assertBoundedCollectionSize(++state.visited, state.label, node);
+    values.push(result.value);
+  }
+  return values;
+}
+
 export function isNativeIterator(value: InterpreterValue): value is InterpreterObject {
-  // SAFETY: WeakMap membership only tests an object identity; it does not read record members.
-  return (
-    value !== null && hasObjectRuntimeType(value) && nativeIterators.has(value as InterpreterObject)
-  );
+  return nativeIteratorState(value) !== undefined;
 }
 export function invokeNativeIterator(
   ref: IntrinsicReference,
@@ -64,18 +101,7 @@ export function invokeNativeIterator(
   value.value = result.value;
   return value;
 }
-export interface IteratorHost<R> {
-  deadline: Pick<ExecutionDeadline, "check">;
-  invokeCallable(
-    callable: InterpreterValue,
-    args: InterpreterArray,
-    node: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  awaitIteratorPromise(
-    promise: SandboxPromise,
-    node?: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, never>;
-}
+
 export interface IteratorRecord {
   readonly iterator: InterpreterValue;
   readonly source: InterpreterValue;
@@ -112,7 +138,16 @@ export function preflightSource(
   else if (value instanceof SandboxURLSearchParams)
     assertBoundedCollectionSize(value.params.size, label, node);
 }
+function* drainLazily(state: NativeIteratorState): Generator<InterpreterValue, void, undefined> {
+  for (let result = state.iterator.next(); !result.done; result = state.iterator.next()) {
+    assertBoundedCollectionSize(++state.visited, state.label);
+    yield result.value;
+  }
+}
 function nativeSource(value: InterpreterValue): IterableIterator<InterpreterValue> | undefined {
+  // A native iterator runs no guest code, so consumers may drain it natively like its source.
+  const state = nativeIteratorState(value);
+  if (state !== undefined) return drainLazily(state);
   if (Array.isArray(value) || Predicate.isString(value)) return value[Symbol.iterator]();
   if (value instanceof SandboxBytes) return value.storage().values();
   if (value instanceof SandboxMap) return value.map.entries();
@@ -126,20 +161,20 @@ export function makeNativeIteratorFor(value: InterpreterValue, node: AstNode): I
   return makeNativeIterator(iterator);
 }
 export function hasCustomSyncIterator(value: InterpreterValue): boolean {
-  return iteratorMember(value, GuestIterator) != null;
+  return !isNativeIterator(value) && iteratorMember(value, GuestIterator) != null;
 }
 export function hasSyncIterator(value: InterpreterValue): boolean {
   return iteratorMember(value, GuestIterator) != null || nativeSource(value) !== undefined;
 }
 export function acquireIterator<R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   value: InterpreterValue,
   node: AstNode,
   async = false,
   label = "Iterator visited entries",
 ): Effect.Effect<IteratorRecord, RuntimeFailure, R> {
   return Effect.gen(function* () {
-    host.deadline.check(node);
+    host.execution.deadline.check(node);
     let method = async ? iteratorMember(value, GuestAsyncIterator) : undefined;
     const fromSync = async && method == null;
     if (method == null) method = iteratorMember(value, GuestIterator);
@@ -150,7 +185,7 @@ export function acquireIterator<R>(
       iterator =
         isNativeIterator(value) && method instanceof IntrinsicReference
           ? invokeNativeIterator(method, [], node)
-          : yield* host.invokeCallable(method, [], node);
+          : yield* invokeCallable(host, method, [], node);
     } else {
       const native = nativeSource(value);
       if (!native)
@@ -168,14 +203,14 @@ export function acquireIterator<R>(
   });
 }
 export function iteratorRequest<R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   record: IteratorRecord,
   method: "next" | "return" | "throw",
   args: InterpreterArray,
   node: AstNode,
 ): Effect.Effect<{ done: boolean; value: InterpreterValue }, RuntimeFailure, R> {
   return Effect.gen(function* () {
-    host.deadline.check(node);
+    host.execution.deadline.check(node);
     const callable = method === "next" ? record.next : iteratorMember(record.iterator, method);
     if (callable == null && method === "return") {
       record.done = true;
@@ -191,21 +226,21 @@ export function iteratorRequest<R>(
     let result =
       isNativeIterator(record.iterator) && callable instanceof IntrinsicReference
         ? invokeNativeIterator(callable, args, node)
-        : yield* host.invokeCallable(callable, args, node);
+        : yield* invokeCallable(host, callable, args, node);
     if (record.async && !record.fromSync && result instanceof SandboxPromise)
-      result = yield* host.awaitIteratorPromise(result, node);
+      result = yield* awaitIteratorPromise(host, result, node);
     if (result === null || !hasObjectRuntimeType(result))
       throw new InterpreterRuntimeError("Iterator result must be an object.", node).as("TypeError");
     const done = !!iteratorMember(result, "done");
     let value = iteratorMember(result, "value");
     if (record.fromSync && value instanceof SandboxPromise)
-      value = yield* host.awaitIteratorPromise(value, node);
+      value = yield* awaitIteratorPromise(host, value, node);
     if (done) record.done = true;
     return { done, value };
   });
 }
 export function iteratorStep<R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   record: IteratorRecord,
   node: AstNode,
   input?: InterpreterValue,
@@ -220,7 +255,7 @@ export function iteratorStep<R>(
   );
 }
 export function iteratorClose<R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   record: IteratorRecord,
   node: AstNode,
 ): Effect.Effect<void, RuntimeFailure, R> {
@@ -234,7 +269,7 @@ export function iteratorClose<R>(
 }
 /** Wrap the consumer body only: next/result failures must not close the iterator. */
 export function closeOnAbrupt<A, R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   record: IteratorRecord,
   node: AstNode,
   body: Effect.Effect<A, RuntimeFailure, R>,
@@ -252,7 +287,7 @@ export function closeOnAbrupt<A, R>(
   });
 }
 export function materializeIterable<R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   value: InterpreterValue,
   node: AstNode,
   label: string,

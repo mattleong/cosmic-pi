@@ -1,128 +1,55 @@
-import { assignExpression, type AssignmentHost } from "./assignment.js";
-import * as Deferred from "effect/Deferred";
+import { assignExpression } from "./assignment.js";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
-import * as Scope from "effect/Scope";
 import type { RuntimeFailure } from "../failure.js";
-import { hasObjectRuntimeType } from "../runtime-values.js";
-import { materializeIterable, type IteratorHost } from "./iterator-protocol.js";
-import { boundedData, coerceToString, compoundOperators } from "../stdlib/value.js";
-import { isBlockedMember } from "../tool-runtime.js";
-import { isSandboxValue, SandboxDate, SandboxPromise, SandboxRegExp } from "../values.js";
-import {
-  assertBoundedCollectionSize,
-  assertBoundedStringLength,
-  ExecutionDeadline,
-} from "./confinement.js";
-import { GuestTurns } from "./guest-turns.js";
+import { hasObjectRuntimeType, runtimeTypeName } from "../runtime-values.js";
+import { materializeIterable } from "./iterator-protocol.js";
+import { boundedData, compoundOperators } from "../stdlib/value.js";
+import { coerceToString, coerceToNumber, toPrimitive } from "./conversions.js";
+import { isSandboxValue, SandboxDate, SandboxPromise } from "../values.js";
+import { assertBoundedCollectionSize, assertBoundedStringLength } from "./confinement.js";
 import {
   asNode,
   type AstNode,
-  type GuestPropertyKey,
   astProperty,
-  type Binding,
-  CodeModeFunction,
   getArray,
   getBoolean,
   getNode,
   getString,
   type InterpreterArray,
   type InterpreterObject,
-  type InterpreterPrimitive,
   InterpreterRuntimeError,
   type InterpreterValue,
   isRecord,
   makeInterpreterObject,
   OptionalShortCircuit,
   unsupportedSyntax,
+  ToolReference,
+  type InterpreterPrimitive,
 } from "./model.js";
+import { hasProperty } from "./members.js";
+import { toPropertyKey } from "./conversions.js";
+import { createFunction, evaluateCallExpression } from "./callable.js";
+import { constructRegExp, evaluateNewExpression } from "./constructors.js";
+import { settlePromise, suspendAtAwait } from "./execution.js";
+import { yieldValue } from "./generators.js";
+import { readMember } from "./members.js";
+import { deleteMember, modifyMember } from "./member-writes.js";
+import { getIdentifierValue, resolveBinding, setIdentifierValue } from "./scope.js";
+import { type Activation } from "./activation.js";
 import {
   containsOpaqueReference,
   instanceofValue,
   isRuntimeReference,
   typeofValue,
-} from "./runtime.js";
-export interface ExpressionsHost<R> extends IteratorHost<R>, AssignmentHost<R> {
-  callDepth: number;
-  yieldValue(
-    value: InterpreterValue,
-    node: AstNode,
-    delegate: boolean,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  applyBinaryOperator(
-    operator: string,
-    lhs: InterpreterValue,
-    rhs: InterpreterValue,
-    node: AstNode,
-  ): InterpreterValue;
-  applyCompoundAssignment(
-    operator: string,
-    current: InterpreterValue,
-    incoming: InterpreterValue,
-    node: AstNode,
-  ): InterpreterValue;
-  constructRegExp(args: InterpreterArray, node: AstNode): SandboxRegExp;
-  createFunction(node: AstNode): CodeModeFunction;
-  deadline: ExecutionDeadline;
-  evaluateArrayExpression(node: AstNode): Effect.Effect<InterpreterArray, RuntimeFailure, R>;
-  evaluateAssignmentExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateBinaryExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateCallExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateConditionalExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateLogicalAssignment(
-    node: AstNode,
-    left: AstNode,
-    operator: string,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateLogicalExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateNewExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateObjectExpression(node: AstNode): Effect.Effect<InterpreterObject, RuntimeFailure, R>;
-  evaluateTemplateLiteral(node: AstNode): Effect.Effect<string, RuntimeFailure, R>;
-  evaluateUnaryExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  evaluateUpdateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  execution: {
-    nextToolCallLifecycleId: number;
-    activePromises: number;
-    scope: Scope.Scope;
-    turns: GuestTurns;
-    interrupting: Set<SandboxPromise>;
-  };
-  firstBoundary: Deferred.Deferred<void> | undefined;
-  getIdentifierValue(name: string, node: AstNode): InterpreterValue;
-  modifyMember(
-    node: AstNode,
-    compute: (
-      current: InterpreterValue,
-    ) => Effect.Effect<
-      { write: boolean; next: InterpreterValue; result: InterpreterValue },
-      RuntimeFailure,
-      R
-    >,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  readMember(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  releaseTurn(): Effect.Effect<void>;
-  resolveBinding(name: string): Binding | undefined;
-  setIdentifierValue(name: string, value: InterpreterValue, node: AstNode): InterpreterValue;
-  settlePromise(
-    promise: SandboxPromise,
-    node?: AstNode,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, never>;
-  toPropertyKey(value: InterpreterValue, node: AstNode): GuestPropertyKey;
-  turn: { held: boolean };
-  writeMember(
-    node: AstNode,
-    value: InterpreterValue,
-  ): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-}
+} from "./references.js";
 
 export function evaluateExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   // Wall-clock confinement: normalizes deadline expiry between synchronous steps.
-  this.deadline.check(node);
+  act.execution.deadline.check(node);
   switch (node.type) {
     case "Literal": {
       // A regex literal parses as a Literal node carrying { pattern, flags }; construct the
@@ -133,100 +60,97 @@ export function evaluateExpression<R>(
         const flags = astProperty(regex, "flags");
         if (Predicate.isString(pattern)) {
           return Effect.sync(() =>
-            this.constructRegExp([pattern, Predicate.isString(flags) ? flags : ""], node),
+            constructRegExp([pattern, Predicate.isString(flags) ? flags : ""], node),
           );
         }
       }
       return Effect.sync(() => boundedData(node.value, "Literal"));
     }
     case "Identifier":
-      return Effect.sync(() => this.getIdentifierValue(getString(node, "name"), node));
+      return Effect.sync(() => getIdentifierValue(act, getString(node, "name"), node));
     case "BinaryExpression":
-      return this.evaluateBinaryExpression(node);
+      return evaluateBinaryExpression(act, node);
     case "LogicalExpression":
-      return this.evaluateLogicalExpression(node);
+      return evaluateLogicalExpression(act, node);
     case "UnaryExpression":
-      return this.evaluateUnaryExpression(node);
+      return evaluateUnaryExpression(act, node);
     case "AssignmentExpression":
-      return this.evaluateAssignmentExpression(node);
+      return evaluateAssignmentExpression(act, node);
     case "CallExpression":
-      return this.evaluateCallExpression(node);
+      return evaluateCallExpression(act, node);
     case "ArrowFunctionExpression":
     case "FunctionExpression":
-      return Effect.sync(() => this.createFunction(node));
+      return Effect.sync(() => createFunction(act, node));
     case "MemberExpression":
-      return this.readMember(node);
+      return readMember(act, node);
     case "ChainExpression":
-      return Effect.map(this.evaluateExpression(getNode(node, "expression")), (value) =>
+      return Effect.map(evaluateExpression(act, getNode(node, "expression")), (value) =>
         value === OptionalShortCircuit ? undefined : value,
       );
     case "ObjectExpression":
-      return this.evaluateObjectExpression(node);
+      return evaluateObjectExpression(act, node);
     case "ArrayExpression":
-      return this.evaluateArrayExpression(node);
+      return evaluateArrayExpression(act, node);
     case "TemplateLiteral":
-      return this.evaluateTemplateLiteral(node);
+      return evaluateTemplateLiteral(act, node);
     case "ConditionalExpression":
-      return this.evaluateConditionalExpression(node);
+      return evaluateConditionalExpression(act, node);
     case "UpdateExpression":
-      return this.evaluateUpdateExpression(node);
+      return evaluateUpdateExpression(act, node);
     case "YieldExpression":
-      return Effect.gen({ self: this }, function* () {
+      return Effect.gen(function* () {
         const argument = node.argument;
         const value =
           argument == null
             ? undefined
-            : yield* this.evaluateExpression(asNode(argument, "yield argument"));
-        return yield* this.yieldValue(value, node, node.delegate === true);
+            : yield* evaluateExpression(act, asNode(argument, "yield argument"));
+        return yield* yieldValue(act, value, node, node.delegate === true);
       });
     case "AwaitExpression": {
-      return Effect.gen({ self: this }, function* () {
-        const value = yield* this.evaluateExpression(getNode(node, "argument"));
+      return Effect.gen(function* () {
+        const value = yield* evaluateExpression(act, getNode(node, "argument"));
         // Evaluate the operand before handing control back to the caller. Every await,
         // including a plain value, ends this guest turn.
-        yield* this.releaseTurn();
-        if (this.firstBoundary !== undefined) {
-          const boundary = this.firstBoundary;
-          this.firstBoundary = undefined;
-          yield* Deferred.succeed(boundary, undefined);
-        }
-        const settled =
-          value instanceof SandboxPromise
-            ? yield* Effect.exit(this.settlePromise(value, node))
-            : Exit.succeed(value);
-        yield* this.execution.turns.take(this.turn);
-        this.callDepth = 0;
-        return yield* settled;
+        return yield* suspendAtAwait(
+          act,
+          value instanceof SandboxPromise ? settlePromise(act, value, node) : Effect.succeed(value),
+        );
       });
     }
     case "NewExpression":
-      return this.evaluateNewExpression(node);
+      return evaluateNewExpression(act, node);
+    case "SequenceExpression":
+      return Effect.gen(function* () {
+        let value: InterpreterValue;
+        for (const expression of getArray(node, "expressions"))
+          value = yield* evaluateExpression(act, asNode(expression, "expressions"));
+        return value;
+      });
     default:
       throw unsupportedSyntax(node.type, node);
   }
 }
 
 export function evaluateBinaryExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   const operator = getString(node, "operator");
-  return Effect.gen({ self: this }, function* () {
-    const lhs = yield* this.evaluateExpression(getNode(node, "left"));
-    const rhs = yield* this.evaluateExpression(getNode(node, "right"));
+  return Effect.gen(function* () {
+    const lhs = yield* evaluateExpression(act, getNode(node, "left"));
+    const rhs = yield* evaluateExpression(act, getNode(node, "right"));
     // Like `typeof`, `instanceof` observes any value without coercing it (a promise or
     // function operand is a legitimate question, not an error), so it is handled before
     // the data-only operand check.
     if (operator === "instanceof") return instanceofValue(lhs, rhs, node);
-    return boundedData(
-      this.applyBinaryOperator(operator, lhs, rhs, node),
-      "Binary expression result",
-    );
+    // `name in tools.ns` asks whether the tool tree has that name.
+    if (operator === "in" && rhs instanceof ToolReference)
+      return act.execution.toolKind([...rhs.path, String(toPropertyKey(lhs, node))]) !== undefined;
+    return boundedData(applyBinaryOperator(operator, lhs, rhs, node), "Binary expression result");
   });
 }
 
-export function applyBinaryOperator<R>(
-  this: ExpressionsHost<R>,
+export function applyBinaryOperator(
   operator: string,
   lhs: InterpreterValue,
   rhs: InterpreterValue,
@@ -242,138 +166,150 @@ export function applyBinaryOperator<R>(
       "InvalidDataValue",
     );
   }
-  // Data objects/arrays are null-prototype, so JS's ToPrimitive throws an opaque host
-  // "No default value" TypeError when an operator coerces them. Coerce to their JS string
-  // form first (as String(x) / template literals do) so operators behave like JavaScript.
-  // A Date follows its ToPrimitive hints: string for `+` (concatenation), its time value
-  // for arithmetic and ordering - so `end - start` and `a < b` work as in JS.
-  // Identity (=== / !==) and the right operand of `in` keep their raw object value.
-  const coerceOperand = (operand: InterpreterValue): InterpreterPrimitive => {
-    if (operand instanceof SandboxDate)
-      return operator === "+" ? coerceToString(operand) : operand.time;
-    return operand !== null && hasObjectRuntimeType(operand) ? coerceToString(operand) : operand;
-  };
-  const bothObjects =
-    lhs !== null && hasObjectRuntimeType(lhs) && rhs !== null && hasObjectRuntimeType(rhs);
-  const l = coerceOperand(lhs);
-  const r = coerceOperand(rhs);
   switch (operator) {
-    case "+":
+    case "+": {
+      const l = toPrimitive(lhs, "default");
+      const r = toPrimitive(rhs, "default");
+      if (!Predicate.isString(l) && !Predicate.isString(r))
+        return coerceToNumber(l) + coerceToNumber(r);
       // Confinement preflight: string concatenation is the canonical doubling amplifier,
       // so the combined length is charged before the native concat allocates.
-      if (Predicate.isString(l) || Predicate.isString(r)) {
-        assertBoundedStringLength(
-          (Predicate.isString(l) ? l.length : 32) + (Predicate.isString(r) ? r.length : 32),
-          "String concatenation",
-          node,
-        );
-      }
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as string) + (r as string);
-    case "-":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) - (r as number);
-    case "*":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) * (r as number);
-    case "/":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) / (r as number);
-    case "%":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) % (r as number);
-    case "**":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) ** (r as number);
+      const left = coerceToString(l);
+      const right = coerceToString(r);
+      assertBoundedStringLength(left.length + right.length, "String concatenation", node);
+      return left + right;
+    }
     // Two objects compare by identity in JS (no ToPrimitive); only object-vs-primitive coerces.
     case "==":
-      return bothObjects ? lhs === rhs : l == r;
-    case "===":
-      return lhs === rhs;
+      return looselyEqual(lhs, rhs);
     case "!=":
-      return bothObjects ? lhs !== rhs : l != r;
-    case "!==":
-      return lhs !== rhs;
+      return !looselyEqual(lhs, rhs);
     case "<":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as string) < (r as string);
     case "<=":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as string) <= (r as string);
     case ">":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as string) > (r as string);
-    case ">=":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as string) >= (r as string);
-    case "&":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) & (r as number);
-    case "|":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) | (r as number);
-    case "^":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) ^ (r as number);
-    case "<<":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) << (r as number);
-    case ">>":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) >> (r as number);
-    case ">>>":
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return (l as number) >>> (r as number);
+    case ">=": {
+      const l = toPrimitive(lhs, "number");
+      const r = toPrimitive(rhs, "number");
+      // Two strings compare by code units; anything else compares as numbers.
+      return Predicate.isString(l) && Predicate.isString(r)
+        ? compare(operator, l, r)
+        : compare(operator, coerceToNumber(l), coerceToNumber(r));
+    }
     case "in":
-      if (rhs === null || !hasObjectRuntimeType(rhs)) {
-        throw new InterpreterRuntimeError(
-          "The 'in' operator requires a data object on the right-hand side.",
-          node,
-        );
-      }
-      // Own properties only, so arrays don't leak the host Array.prototype (map/constructor/...).
-      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-      return Object.hasOwn(rhs as object, coerceOperand(lhs) as PropertyKey);
-    default:
-      throw new InterpreterRuntimeError(`Unsupported binary operator '${operator}'.`, node);
+      return hasProperty(rhs, toPropertyKey(lhs, node), node);
+    default: {
+      const arithmetic = numericOperator(operator);
+      if (arithmetic === undefined)
+        throw new InterpreterRuntimeError(`Unsupported binary operator '${operator}'.`, node);
+      return arithmetic(coerceToNumber(lhs), coerceToNumber(rhs));
+    }
   }
 }
 
+/**
+ * Abstract equality (`==`): two objects compare by identity; otherwise both sides convert to
+ * primitives, null and undefined equal only each other, and mixed primitive types compare as
+ * numbers.
+ */
+const looselyEqual = (lhs: InterpreterValue, rhs: InterpreterValue): boolean => {
+  const lhsObject = lhs !== null && hasObjectRuntimeType(lhs);
+  const rhsObject = rhs !== null && hasObjectRuntimeType(rhs);
+  if (lhsObject && rhsObject) return lhs === rhs;
+  const l = toPrimitive(lhs, "default");
+  const r = toPrimitive(rhs, "default");
+  if (l === r) return true;
+  const nullish = (value: InterpreterPrimitive) => value === null || value === undefined;
+  if (nullish(l) || nullish(r)) return nullish(l) && nullish(r);
+  if (runtimeTypeName(l) === runtimeTypeName(r)) return false;
+  if (Predicate.isSymbol(l) || Predicate.isSymbol(r)) return false;
+  return Number(l) === Number(r);
+};
+
+const compare = <Operand extends string | number>(
+  operator: "<" | "<=" | ">" | ">=",
+  l: Operand,
+  r: Operand,
+): boolean => {
+  switch (operator) {
+    case "<":
+      return l < r;
+    case "<=":
+      return l <= r;
+    case ">":
+      return l > r;
+    case ">=":
+      return l >= r;
+  }
+};
+
+/** The numeric binary operators; each converts both operands with ToNumber first. */
+const numericOperator = (operator: string): ((l: number, r: number) => number) | undefined => {
+  switch (operator) {
+    case "-":
+      return (l, r) => l - r;
+    case "*":
+      return (l, r) => l * r;
+    case "/":
+      return (l, r) => l / r;
+    case "%":
+      return (l, r) => l % r;
+    case "**":
+      return (l, r) => l ** r;
+    case "&":
+      return (l, r) => l & r;
+    case "|":
+      return (l, r) => l | r;
+    case "^":
+      return (l, r) => l ^ r;
+    case "<<":
+      return (l, r) => l << r;
+    case ">>":
+      return (l, r) => l >> r;
+    case ">>>":
+      return (l, r) => l >>> r;
+    default:
+      return undefined;
+  }
+};
+
 export function evaluateLogicalExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   const operator = getString(node, "operator");
-  return Effect.flatMap(this.evaluateExpression(getNode(node, "left")), (left) => {
+  return Effect.flatMap(evaluateExpression(act, getNode(node, "left")), (left) => {
     if (operator === "&&")
-      return left ? this.evaluateExpression(getNode(node, "right")) : Effect.succeed(left);
+      return left ? evaluateExpression(act, getNode(node, "right")) : Effect.succeed(left);
     if (operator === "||")
-      return left ? Effect.succeed(left) : this.evaluateExpression(getNode(node, "right"));
+      return left ? Effect.succeed(left) : evaluateExpression(act, getNode(node, "right"));
     if (operator === "??")
       return left !== null && left !== undefined
         ? Effect.succeed(left)
-        : this.evaluateExpression(getNode(node, "right"));
+        : evaluateExpression(act, getNode(node, "right"));
     throw new InterpreterRuntimeError(`Unsupported logical operator '${operator}'.`, node);
   });
 }
 
-export function evaluateUnaryExpression<R>(this: ExpressionsHost<R>, node: AstNode) {
+export function evaluateUnaryExpression<R>(act: Activation<R>, node: AstNode) {
   const operator = getString(node, "operator");
   const argument = getNode(node, "argument");
+  if (operator === "void") return Effect.as(evaluateExpression(act, argument), undefined);
+  if (operator === "delete") return deleteMember(act, argument, node);
   // `typeof undeclaredIdentifier` is `"undefined"` in JS (never a ReferenceError), so
   // feature-detection guards like `typeof x !== "undefined"` don't crash. Short-circuit before
   // evaluating the argument; a declared-but-TDZ binding still falls through to the normal throw.
   if (
     operator === "typeof" &&
     argument.type === "Identifier" &&
-    !this.resolveBinding(getString(argument, "name"))
+    !resolveBinding(act, getString(argument, "name"))
   ) {
     return Effect.succeed("undefined");
   }
-  return Effect.map(this.evaluateExpression(argument), (value) => {
+  return Effect.map(evaluateExpression(act, argument), (value) => {
     // `typeof` and `!` never throw in JS - they observe any value (functions and runtime
     // references included) without coercing it, so feature detection and negation work.
-    if (operator === "typeof") return typeofValue(value);
+    if (operator === "typeof")
+      return value instanceof ToolReference ? toolTypeof(act, value) : typeofValue(value);
     if (operator === "!") return !value;
     if (containsOpaqueReference(value)) {
       throw new InterpreterRuntimeError(
@@ -382,28 +318,19 @@ export function evaluateUnaryExpression<R>(this: ExpressionsHost<R>, node: AstNo
         "InvalidDataValue",
       );
     }
-    // Numeric/bitwise unary operators ToPrimitive their operand; a Date yields its time value
-    // (`+date` is the epoch-ms idiom), other null-prototype data objects/arrays coerce to
-    // their JS string form first (see evaluateBinaryExpression).
-    const operand =
-      value instanceof SandboxDate
-        ? value.time
-        : value !== null && hasObjectRuntimeType(value)
-          ? coerceToString(value)
-          : value;
+    // Numeric/bitwise unary operators convert with ToNumber: a Date yields its time value
+    // (`+date` is the epoch-ms idiom) and data objects/arrays their string form's number.
+    const operand = coerceToNumber(value);
     let result: number;
     switch (operator) {
       case "+":
-        // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-        result = +(operand as number);
+        result = operand;
         break;
       case "-":
-        // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-        result = -(operand as number);
+        result = -operand;
         break;
       case "~":
-        // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-        result = ~(operand as number);
+        result = ~operand;
         break;
       default:
         throw new InterpreterRuntimeError(`Unsupported unary operator '${operator}'.`, node);
@@ -413,53 +340,14 @@ export function evaluateUnaryExpression<R>(this: ExpressionsHost<R>, node: AstNo
 }
 
 export function evaluateAssignmentExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  return assignExpression(this, node);
-}
-
-export function evaluateLogicalAssignment<R>(
-  this: ExpressionsHost<R>,
-  node: AstNode,
-  left: AstNode,
-  operator: string,
-): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  const shouldAssign = (current: InterpreterValue): boolean =>
-    operator === "??="
-      ? current === null || current === undefined
-      : operator === "||="
-        ? !current
-        : Boolean(current);
-  if (left.type === "Identifier") {
-    const name = getString(left, "name");
-    return Effect.gen({ self: this }, function* () {
-      const current = this.getIdentifierValue(name, left);
-      if (!shouldAssign(current)) return current;
-      const rightValue = yield* this.evaluateExpression(getNode(node, "right"));
-      return this.setIdentifierValue(name, rightValue, left);
-    });
-  }
-  if (left.type === "MemberExpression") {
-    // Resolve the member exactly once; evaluate the RHS only if we actually assign.
-    return this.modifyMember(left, (current) =>
-      shouldAssign(current)
-        ? Effect.map(this.evaluateExpression(getNode(node, "right")), (rightValue) => ({
-            write: true,
-            next: rightValue,
-            result: rightValue,
-          }))
-        : Effect.succeed({ write: false, next: current, result: current }),
-    );
-  }
-  throw new InterpreterRuntimeError(
-    "Assignment target must be an Identifier or MemberExpression.",
-    left,
-  );
+  return assignExpression(act, node);
 }
 
 export function evaluateUpdateExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   const operator = getString(node, "operator");
@@ -475,16 +363,16 @@ export function evaluateUpdateExpression<R>(
   if (argument.type === "Identifier") {
     return Effect.sync(() => {
       const name = getString(argument, "name");
-      const current = Number(this.getIdentifierValue(name, argument));
+      const current = updateOperand(getIdentifierValue(act, name, argument), node);
       const next = current + increment;
-      this.setIdentifierValue(name, next, argument);
+      setIdentifierValue(act, name, next, argument);
       return prefix ? next : current;
     });
   }
 
   if (argument.type === "MemberExpression") {
-    return this.modifyMember(argument, (current) => {
-      const value = Number(current);
+    return modifyMember(act, argument, (current) => {
+      const value = updateOperand(current, node);
       const next = value + increment;
       return Effect.succeed({ write: true, next, result: prefix ? next : value });
     });
@@ -496,8 +384,19 @@ export function evaluateUpdateExpression<R>(
   );
 }
 
+/** ToNumeric for `++`/`--`: a Date yields its time value; opaque references are refused. */
+const updateOperand = (value: InterpreterValue, node: AstNode): number => {
+  if (containsOpaqueReference(value) && !(value instanceof SandboxDate))
+    throw new InterpreterRuntimeError(
+      "Update operators require data values in CodeMode.",
+      node,
+      "InvalidDataValue",
+    );
+  return coerceToNumber(value);
+};
+
 export function evaluateObjectExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterObject, RuntimeFailure, R> {
   // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
@@ -511,12 +410,12 @@ export function evaluateObjectExpression<R>(
     entryCount += 1;
     assertBoundedCollectionSize(entryCount, "Object literal", at);
   };
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     for (const propertyValue of properties) {
       const property = asNode(propertyValue, "properties");
 
       if (property.type === "SpreadElement") {
-        const spread = yield* this.evaluateExpression(getNode(property, "argument"));
+        const spread = yield* evaluateExpression(act, getNode(property, "argument"));
         // JS treats `{ ...null }` / `{ ...undefined }` as a no-op, so the common
         // `{ ...maybeOpts, override }` merge works when the operand is absent. Sandbox values
         // have no own enumerable properties in JS, so they are no-ops too.
@@ -532,11 +431,6 @@ export function evaluateObjectExpression<R>(
           const descriptor = Object.getOwnPropertyDescriptor(spread, key);
           if (!descriptor?.enumerable) continue;
           const value = descriptor.value;
-          if (Predicate.isString(key) && isBlockedMember(key))
-            throw new InterpreterRuntimeError(
-              `Property '${key}' is not available in CodeMode.`,
-              property,
-            );
           countEntry(key, property);
           objectValue[key] = value;
         }
@@ -561,23 +455,17 @@ export function evaluateObjectExpression<R>(
       let key: PropertyKey;
 
       if (computed) {
-        key = this.toPropertyKey(yield* this.evaluateExpression(keyNode), keyNode);
+        key = toPropertyKey(yield* evaluateExpression(act, keyNode), keyNode);
       } else if (keyNode.type === "Identifier") {
         key = getString(keyNode, "name");
       } else if (keyNode.type === "Literal") {
-        key = this.toPropertyKey(keyNode.value, keyNode);
+        key = toPropertyKey(keyNode.value, keyNode);
       } else {
         throw new InterpreterRuntimeError("Unsupported object property key shape.", keyNode);
       }
 
-      if (isBlockedMember(String(key))) {
-        throw new InterpreterRuntimeError(
-          `Property '${String(key)}' is not available in CodeMode.`,
-          keyNode,
-        );
-      }
       countEntry(key, property);
-      objectValue[key] = yield* this.evaluateExpression(valueNode);
+      objectValue[key] = yield* evaluateExpression(act, valueNode);
     }
 
     return objectValue;
@@ -585,13 +473,13 @@ export function evaluateObjectExpression<R>(
 }
 
 export function evaluateArrayExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterArray, RuntimeFailure, R> {
   const elements = getArray(node, "elements");
   const values: InterpreterArray = [];
 
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     for (const elementValue of elements) {
       if (elementValue === null) {
         assertBoundedCollectionSize(values.length + 1, "Array literal", node);
@@ -600,12 +488,12 @@ export function evaluateArrayExpression<R>(
       }
       const element = asNode(elementValue, "elements");
       if (element.type === "SpreadElement") {
-        const spread = yield* this.evaluateExpression(getNode(element, "argument"));
-        const items = yield* materializeIterable(this, spread, element, "Array spread");
+        const spread = yield* evaluateExpression(act, getNode(element, "argument"));
+        const items = yield* materializeIterable(act, spread, element, "Array spread");
         assertBoundedCollectionSize(values.length + items.length, "Array spread", element);
         values.push(...items);
       } else {
-        values.push(yield* this.evaluateExpression(element));
+        values.push(yield* evaluateExpression(act, element));
       }
     }
     return values;
@@ -613,7 +501,7 @@ export function evaluateArrayExpression<R>(
 }
 
 export function evaluateTemplateLiteral<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<string, RuntimeFailure, R> {
   const quasis = getArray(node, "quasis");
@@ -621,7 +509,7 @@ export function evaluateTemplateLiteral<R>(
 
   let output = "";
 
-  return Effect.gen({ self: this }, function* () {
+  return Effect.gen(function* () {
     for (let index = 0; index < quasis.length; index += 1) {
       const quasi = asNode(quasis[index], "quasis");
       const rawValue = quasi.value;
@@ -634,7 +522,7 @@ export function evaluateTemplateLiteral<R>(
       output += cooked;
 
       if (index < expressions.length) {
-        const raw = yield* this.evaluateExpression(asNode(expressions[index], "expressions"));
+        const raw = yield* evaluateExpression(act, asNode(expressions[index], "expressions"));
         // The preserving checkpoint keeps sandbox values intact, so coerceToString renders
         // them directly (ISO date, /regex/ literal form) instead of a JSON-serialized husk.
         const rendered = coerceToString(boundedData(raw, "Template interpolation"));
@@ -649,16 +537,15 @@ export function evaluateTemplateLiteral<R>(
 }
 
 export function evaluateConditionalExpression<R>(
-  this: ExpressionsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  return Effect.flatMap(this.evaluateExpression(getNode(node, "test")), (test) =>
-    this.evaluateExpression(getNode(node, test ? "consequent" : "alternate")),
+  return Effect.flatMap(evaluateExpression(act, getNode(node, "test")), (test) =>
+    evaluateExpression(act, getNode(node, test ? "consequent" : "alternate")),
   );
 }
 
-export function applyCompoundAssignment<R>(
-  this: ExpressionsHost<R>,
+export function applyCompoundAssignment(
   operator: string,
   current: InterpreterValue,
   incoming: InterpreterValue,
@@ -671,5 +558,11 @@ export function applyCompoundAssignment<R>(
   if (!compoundOperators.has(operator)) {
     throw new InterpreterRuntimeError(`Unsupported assignment operator '${operator}'.`, node);
   }
-  return this.applyBinaryOperator(operator.slice(0, -1), current, incoming, node);
+  return applyBinaryOperator(operator.slice(0, -1), current, incoming, node);
 }
+
+/** `typeof` a tool path: a tool is a function, a namespace an object, and a missing name undefined. */
+const toolTypeof = <R>(act: Activation<R>, reference: ToolReference): string => {
+  const kind = act.execution.toolKind(reference.path);
+  return kind === "tool" ? "function" : kind === "namespace" ? "object" : "undefined";
+};

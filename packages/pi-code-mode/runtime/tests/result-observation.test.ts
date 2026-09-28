@@ -1,9 +1,10 @@
 // Local host observation deviation, not an upstream suite.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { CodeMode } from "../src/index.js";
+import * as Schema from "effect/Schema";
+import { CodeMode, Tool } from "../src/index.js";
 import { vi } from "vitest";
-import { setDeadlineClockForTesting } from "../src/interpreter/confinement.js";
+import { setDeadlineClockForTesting } from "../src/interpreter/deadline.js";
 
 describe("host result observation", () => {
   for (const phase of ["copy", "serialization"] as const) {
@@ -117,4 +118,51 @@ describe("host result observation", () => {
       expect(message).toContain("later");
     }),
   );
+});
+
+const encodeResult = Schema.encodeSync(Schema.fromJsonString(CodeMode.Result));
+
+describe("host hook isolation", () => {
+  const secret = "password=hunter2 at /opt/app/.env";
+  const failures = [
+    () => Effect.die(new Error(secret)),
+    () => {
+      throw new Error(secret);
+    },
+  ];
+  for (const [index, fail] of failures.entries()) {
+    it.effect(
+      `a failing observation hook never changes the call or reaches the program (${index})`,
+      () =>
+        Effect.gen(function* () {
+          const writes: Array<string> = [];
+          const terminal: Array<string> = [];
+          const write = Tool.make({
+            description: "Record a write",
+            input: Schema.Struct({ value: Schema.String }),
+            output: Schema.String,
+            run: ({ value }) =>
+              Effect.sync(() => {
+                writes.push(value);
+                return value;
+              }),
+          });
+          const result = yield* CodeMode.execute({
+            tools: { host: { write } },
+            code: `try { return await tools.host.write({ value: "a" }); } catch (e) { return "caught: " + e.message; }`,
+            onToolCallStart: fail,
+            onToolCallEnd: fail,
+            onToolCallLifecycle: (event) => {
+              if (event.status === "succeeded" || event.status === "failed")
+                terminal.push(event.status);
+              return fail();
+            },
+          });
+          expect(result).toMatchObject({ ok: true, value: "a" });
+          expect(encodeResult(result)).not.toContain("hunter2");
+          expect(writes).toEqual(["a"]);
+          expect(terminal).toEqual(["succeeded"]);
+        }),
+    );
+  }
 });

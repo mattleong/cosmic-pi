@@ -48,7 +48,7 @@ describe("JSON helper preflight", () => {
   it.effect("bounds property-list work on opaque empty projections", () =>
     Effect.gen(function* () {
       const keys = Array.from({ length: 2500 }, (_, i) => `k${i}`);
-      for (const opaque of [new SandboxMap(), new SandboxPromise(undefined, Effect.succeed(1))]) {
+      for (const opaque of [new SandboxMap(), SandboxPromise.settled(Exit.succeed(1))]) {
         const values = Array.from({ length: 2500 }, () => opaque);
         expect(Exit.isFailure(yield* Effect.exit(direct([values, keys])))).toBe(true);
         expect(yield* direct([[opaque], keys])).toBe("[{}]");
@@ -74,7 +74,7 @@ describe("JSON helper preflight", () => {
   );
   it.effect("keeps async reviver results opaque and deletes array slots bottom-up", () =>
     Effect.gen(function* () {
-      const promise = new SandboxPromise(undefined, Effect.succeed(7));
+      const promise = SandboxPromise.settled(Exit.succeed(7));
       const keys: InterpreterArray = [];
       const result = yield* invokeJson(
         "parse",
@@ -207,7 +207,7 @@ describe("JSON callbacks in guest programs", () => {
         ok: true,
         value: {
           keys: ["n", "a", "drop", "0", "1", "list", ""],
-          result: { a: { n: 4 }, list: [undefined, 10] },
+          result: { a: { n: 4 }, list: [null, 10] },
           hole: true,
           length: 2,
         },
@@ -235,14 +235,14 @@ describe("JSON callbacks in guest programs", () => {
       ).toMatchObject({ ok: false });
     }),
   );
-  it.effect("rejects blocked properties and escaped output amplification", () =>
+  it.effect("keeps prototype names as data and rejects escaped output amplification", () =>
     Effect.gen(function* () {
-      expect(yield* run(`return JSON.stringify({ a: 1 }, ["constructor"]);`)).toMatchObject({
-        ok: false,
-      });
-      expect(yield* run(`return JSON.parse('{"__proto__":1}', (k,v) => v);`)).toMatchObject({
-        ok: false,
-      });
+      expect(
+        yield* run(`return JSON.stringify({ a: 1, constructor: 2 }, ["constructor"]);`),
+      ).toMatchObject({ ok: true, value: '{"constructor":2}' });
+      expect(
+        yield* run(`return JSON.stringify(JSON.parse('{"__proto__":1}', (k,v) => v));`),
+      ).toMatchObject({ ok: true, value: '{"__proto__":1}' });
       expect(yield* run(`return JSON.stringify("\\u0000".repeat(800000));`)).toMatchObject({
         ok: false,
       });

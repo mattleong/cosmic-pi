@@ -1,8 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import type { RuntimeFailure } from "../failure.js";
-import { coerceToString } from "../stdlib/value.js";
-import { isBlockedMember } from "../tool-runtime.js";
+import { coerceToString } from "./conversions.js";
 import { SandboxMap } from "../values.js";
 import { assertBoundedCollectionSize } from "./confinement.js";
 import {
@@ -20,8 +18,8 @@ import {
   preflightSource,
   iteratorStep,
   closeOnAbrupt,
-  type IteratorHost,
 } from "./iterator-protocol.js";
+import type { Activation } from "./activation.js";
 
 export type GroupByCallback = CallableReference;
 
@@ -35,7 +33,8 @@ export const invokeGroupBy = <R>(
     args: InterpreterArray,
   ) => Effect.Effect<InterpreterValue, RuntimeFailure, R>,
   checkDeadline: () => void,
-  iteratorHost?: IteratorHost<R>,
+  /** The calling activation; it drives the source's iterator protocol. */
+  host: Activation<R>,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> =>
   Effect.gen(function* () {
     const label = `${namespace}.groupBy`;
@@ -43,18 +42,6 @@ export const invokeGroupBy = <R>(
     if (!isCallableReference(callback)) {
       throw new InterpreterRuntimeError(`${label} expects a function callback.`, node);
     }
-    const host: IteratorHost<R> = iteratorHost ?? {
-      deadline: { check: checkDeadline },
-      invokeCallable: (fn, items) => {
-        if (!isCallableReference(fn))
-          return Effect.fail(
-            new InterpreterRuntimeError("Iterator method is not callable.", node).as("TypeError"),
-          );
-        return invoke(fn, items);
-      },
-      awaitIteratorPromise: () =>
-        Effect.fail(new InterpreterRuntimeError("Grouping does not await promises.", node)),
-    };
     preflightSource(args[0], node, label);
     const iterator = yield* acquireIterator(host, args[0], node, false, label);
     const groups = new Map<InterpreterValue, InterpreterArray>();
@@ -75,12 +62,6 @@ export const invokeGroupBy = <R>(
         Effect.gen(function* () {
           const result = yield* invoke(callback, [next.value, index]);
           const key = namespace === "Object" ? coerceToString(result) : result;
-          if (namespace === "Object" && Predicate.isString(key) && isBlockedMember(key)) {
-            throw new InterpreterRuntimeError(
-              `Property '${key}' is not available in CodeMode.`,
-              node,
-            );
-          }
           let group = groups.get(key);
           if (group === undefined) {
             assertBoundedCollectionSize(groups.size + 1, `${label} groups`, node);

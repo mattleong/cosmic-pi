@@ -11,6 +11,7 @@ const run = (tool: Tool.Definition<never>) =>
   CodeMode.make({ tools: { host: { call: tool } } }).execute("return await tools.host.call({})");
 
 const ResultFromJsonString = Schema.fromJsonString(CodeMode.Result);
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 const encodeResult = Schema.encodeSync(ResultFromJsonString);
 const decodeResult = Schema.decodeUnknownSync(ResultFromJsonString);
 
@@ -32,9 +33,32 @@ describe("CodeMode host failure boundary", () => {
 
       expect(result.ok ? undefined : result.error).toStrictEqual({
         kind: "ToolFailure",
-        message: "Authorized request was refused",
+        message: "Authorized request was refused (line 1, col 14)",
+
+        location: { line: 1, column: 14 },
         facts: { tool: "host.call" },
       });
+    }),
+  );
+
+  it.live("shows explicit tool refusals, including file paths, as written", () =>
+    Effect.gen(function* () {
+      const message = "tsc failed at /Users/me/proj/src/a.ts:12:3";
+      const result = yield* CodeMode.execute({
+        tools: {
+          host: {
+            call: Tool.make({
+              description: "Fail with a path",
+              input: Schema.Struct({}),
+              output: Schema.String,
+              run: () => Effect.fail(toolError(message)),
+            }),
+          },
+        },
+        code: `let caught; try { await tools.host.call({}); } catch (e) { caught = e.message; }
+          console.log(caught); return caught;`,
+      });
+      expect(result).toMatchObject({ ok: true, value: message, logs: [message] });
     }),
   );
 
@@ -55,7 +79,9 @@ describe("CodeMode host failure boundary", () => {
 
         expect(result.ok ? undefined : result.error).toStrictEqual({
           kind: "ToolFailure",
-          message: "Tool execution failed",
+          message: "Tool execution failed (line 1, col 14)",
+
+          location: { line: 1, column: 14 },
           facts: { tool: "host.call" },
         });
         expect(encodeResult(result)).not.toMatch(
@@ -87,7 +113,9 @@ describe("CodeMode host failure boundary", () => {
 
       expect(result.ok ? undefined : result.error).toStrictEqual({
         kind: "InvalidToolOutput",
-        message: "Invalid output from tool 'host.call'.",
+        message: "Invalid output from tool 'host.call'. (line 1, col 14)",
+
+        location: { line: 1, column: 14 },
         facts: { tool: "host.call" },
       });
       expect(encodeResult(result)).not.toMatch(/invalid-output-secret/);
@@ -117,7 +145,9 @@ describe("CodeMode host failure boundary", () => {
 
       expect(result.ok ? undefined : result.error).toStrictEqual({
         kind: "InvalidToolOutput",
-        message: "Invalid output from tool 'host.call'.",
+        message: "Invalid output from tool 'host.call'. (line 1, col 14)",
+
+        location: { line: 1, column: 14 },
         facts: { tool: "host.call" },
       });
       expect(encodeResult(result)).not.toMatch(/host-output-secret/);
@@ -542,6 +572,30 @@ describe("CodeMode output budget", () => {
     }),
   );
 
+  it("keeps whole diagnostic suggestions only while they fit beside the message", () => {
+    const bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
+    const failure = boundOutput(
+      {
+        ok: false,
+        error: {
+          kind: "UnsupportedSyntax",
+          message: "m".repeat(20),
+          suggestions: ["a".repeat(15), "b".repeat(15), "c".repeat(15)],
+        },
+        toolCalls: [],
+      },
+      50,
+    );
+    expect(failure).toMatchObject({
+      ok: false,
+      truncated: true,
+      error: { message: "m".repeat(20), suggestions: ["a".repeat(15)] },
+    });
+    if (failure.ok) return;
+    const shown = [failure.error.message, ...(failure.error.suggestions ?? [])];
+    expect(shown.reduce((total, text) => total + bytes(text) + 1, 0)).toBeLessThanOrEqual(51);
+  });
+
   // Local deviation from upstream (see PROVENANCE.md): the truncation marker is reserved
   // INSIDE the byte budget - value bytes + marker bytes never exceed maxOutputBytes, and a
   // budget too small for the marker degrades to bare code-point-safe truncation.
@@ -723,5 +777,98 @@ describe("CodeMode schema flexibility", () => {
         expect(result.ok).toBe(true);
         if (result.ok) expect(result.value).toBe("pong");
       }),
+  );
+});
+
+describe("prototype names at the tool boundary", () => {
+  it.live(
+    "tool results may carry prototype names as data; tool input may not carry __proto__",
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const get = Tool.make({
+          description: "Return package metadata",
+          input: Schema.Struct({}),
+          output: Schema.Json,
+          run: () =>
+            Effect.sync(() => {
+              calls++;
+              return parseJson('{"name":"pkg","meta":{"constructor":"Acme","__proto__":{"x":1}}}');
+            }),
+        });
+        const echo = Tool.make({
+          description: "Echo",
+          input: Schema.Struct({ v: Schema.Json }),
+          output: Schema.Json,
+          run: ({ v }) => Effect.succeed(v),
+        });
+        const runtime = CodeMode.make({ tools: { host: { get, echo } } });
+        expect(
+          yield* runtime.execute(`const r = await tools.host.get({});
+          return [r.meta.constructor, JSON.stringify(r.meta["__proto__"]), (await tools.host.echo({ v: { constructor: 1 } })).constructor];`),
+        ).toMatchObject({ ok: true, value: ["Acme", '{"x":1}', 1] });
+        expect(calls).toBe(1);
+        expect(
+          yield* runtime.execute(
+            `const v = {}; v["__proto__"] = 1; return await tools.host.echo({ v });`,
+          ),
+        ).toMatchObject({ ok: false, error: { kind: "InvalidDataValue" } });
+      }),
+  );
+
+  it.live("a refused tool result explains the limit it hit and that the tool ran", () =>
+    Effect.gen(function* () {
+      const huge = Tool.make({
+        description: "Return too many rows",
+        input: Schema.Struct({}),
+        output: Schema.Array(Schema.Number),
+        run: () => Effect.succeed(Array.from({ length: 300_000 }, (_, i) => i)),
+      });
+      const result = yield* CodeMode.execute({
+        tools: { host: { huge } },
+        code: "return await tools.host.huge({})",
+      });
+      expect(result).toMatchObject({ ok: false, error: { kind: "InvalidToolOutput" } });
+      if (!result.ok) {
+        // The reason (the oversized count) survives, not only a generic refusal.
+        expect(result.error.message).toContain("300000");
+      }
+    }),
+  );
+});
+
+describe("JSON data at the boundary", () => {
+  it.live("tool input and results follow JSON rules for undefined, holes and JSON forms", () =>
+    Effect.gen(function* () {
+      const seen: Array<unknown> = [];
+      const read = Tool.make({
+        description: "Read a file",
+        input: Schema.Struct({
+          path: Schema.String,
+          offset: Schema.optionalKey(Schema.Number),
+          limit: Schema.optional(Schema.Number),
+          since: Schema.optionalKey(Schema.Date),
+        }),
+        output: Schema.String,
+        run: (input) =>
+          Effect.sync(() => {
+            seen.push({ ...input, since: input.since?.toISOString() });
+            return input.path;
+          }),
+      });
+      const result = yield* CodeMode.execute({
+        tools: { fs: { read } },
+        code: `const opts = {};
+          await tools.fs.read({ path: "a", offset: opts.offset });
+          await tools.fs.read({ path: "b", limit: null });
+          await tools.fs.read({ path: "c", since: "2024-01-02T00:00:00.000Z" });
+          return { dropped: undefined, list: [1, , undefined, 3] };`,
+      });
+      expect(result).toMatchObject({ ok: true, value: { list: [1, null, null, 3] } });
+      if (result.ok) expect(Object.keys(result.value ?? {})).toEqual(["list"]);
+      expect(seen).toHaveLength(3);
+      expect(seen[0]).toEqual({ path: "a" });
+      expect(seen[2]).toMatchObject({ since: "2024-01-02T00:00:00.000Z" });
+    }),
   );
 });

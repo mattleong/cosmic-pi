@@ -1,5 +1,5 @@
 import type { InterpreterValue } from "../interpreter/model.js";
-import { copyIn } from "../tool-runtime.js";
+import { copyIn } from "../tool-runtime-data.js";
 
 export const jsonStatics = new Set(["stringify", "parse"]);
 

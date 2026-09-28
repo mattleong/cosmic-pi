@@ -4,7 +4,6 @@ import {
   closeOnAbrupt,
   hasSyncIterator,
   materializeIterable,
-  type IteratorHost,
 } from "./iterator-protocol.js";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -15,14 +14,8 @@ import { constructTextDecoder } from "../stdlib/encoding.js";
 import { clipEpochMillis, epochFromLocalParts, epochNow } from "../stdlib/epoch.js";
 import { escapeRegexHint, regexFailureReason } from "../stdlib/regexp.js";
 import { uriArgument, urlArgument } from "../stdlib/url.js";
-import {
-  boundedData,
-  coerceToNumber,
-  coerceToString,
-  createErrorValue,
-  errorConstructors,
-  valueConstructors,
-} from "../stdlib/value.js";
+import { boundedData, errorConstructors } from "../stdlib/value.js";
+import { coerceToNumber, coerceToString } from "./conversions.js";
 import {
   isSandboxValue,
   SandboxBytes,
@@ -33,67 +26,68 @@ import {
   SandboxSet,
   SandboxURL,
   SandboxURLSearchParams,
+  createErrorValue,
+  attachErrorCause,
 } from "../values.js";
 import {
   assertBoundedCollectionSize,
   assertBoundedQueryPairs,
   assertBoundedUrlConstructionInputs,
-  assertConfinedRegExp,
 } from "./confinement.js";
+import { assertConfinedRegExp } from "./regex-guard.js";
 import {
-  asNode,
   type AstNode,
-  type AstPropertyValue,
   getArray,
   getNode,
-  getString,
   type InterpreterArray,
-  type InterpreterObject,
   InterpreterRuntimeError,
   type InterpreterValue,
   supportedSyntaxMessage,
-  unsupportedSyntax,
+  GlobalNamespace,
+  ErrorConstructorReference,
+  PromiseNamespace,
+  CoercionFunction,
 } from "./model.js";
-export interface ConstructorsHost<R> extends IteratorHost<R> {
-  constructAggregateError(args: InterpreterArray, node: AstNode): InterpreterObject;
-  evaluateCallArguments(
-    argNodes: Array<AstPropertyValue>,
-  ): Effect.Effect<InterpreterArray, RuntimeFailure, R>;
-  evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
-  constructDate(args: InterpreterArray): SandboxDate;
-  constructRegExp(args: InterpreterArray, node: AstNode): SandboxRegExp;
-  constructMap<InitInput>(init: InitInput, node: AstNode): SandboxMap;
-  constructSet<InitInput>(init: InitInput, node: AstNode): SandboxSet;
-  constructURL(args: InterpreterArray, node: AstNode): SandboxURL;
-  constructURLSearchParams<InitInput>(init: InitInput, node: AstNode): SandboxURLSearchParams;
-}
+import { calleeText } from "./diagnostics.js";
+import { evaluateCallArguments } from "./callable.js";
+import { evaluateExpression } from "./expressions.js";
+import { constructAggregateError } from "./promises.js";
+import { type Activation } from "./activation.js";
+
 export function evaluateNewExpression<R>(
-  this: ConstructorsHost<R>,
+  act: Activation<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  const callee = getNode(node, "callee");
-  if (callee.type !== "Identifier") {
-    throw unsupportedSyntax("NewExpression", node);
-  }
-  const name = getString(callee, "name");
+  const calleeNode = getNode(node, "callee");
   const argNodes = getArray(node, "arguments");
-  if (name === "Promise") {
-    throw new InterpreterRuntimeError(
-      "new Promise(...) is not supported in CodeMode; tool calls already return promises - call the tool and await the result.",
-      node,
-      "UnsupportedSyntax",
-      [supportedSyntaxMessage],
-    );
-  }
-  if (name === "Uint8Array" || name === "TextEncoder" || name === "TextDecoder") {
-    return Effect.gen({ self: this }, function* () {
-      const args = yield* this.evaluateCallArguments(argNodes);
-      if (name === "TextEncoder") {
-        if (args.length !== 0)
-          throw new InterpreterRuntimeError("TextEncoder takes no options.", node).as("TypeError");
-        return new SandboxTextEncoder();
-      }
-      if (name === "TextDecoder") return constructTextDecoder(args, node);
+  return Effect.gen(function* () {
+    // The constructor is the callee's value, not its spelling, so aliases (`const E = Error`)
+    // construct and shadowing bindings (`const Map = ...`) do not.
+    const callee = yield* evaluateExpression(act, calleeNode);
+    const name = constructorName(callee);
+    if (name === "Promise") {
+      throw new InterpreterRuntimeError(
+        "new Promise(...) is not supported in CodeMode; tool calls already return promises - call the tool and await the result.",
+        node,
+        "UnsupportedSyntax",
+        [supportedSyntaxMessage],
+      );
+    }
+    if (name === undefined)
+      throw new InterpreterRuntimeError(
+        callee instanceof CoercionFunction
+          ? `new ${callee.name}(...) is not supported in CodeMode; call ${callee.name}(...) without new.`
+          : `${calleeText(calleeNode)} is not a constructor. CodeMode constructs Date, RegExp, Map, Set, URL, URLSearchParams, Uint8Array, TextEncoder, TextDecoder, and Error types.`,
+        calleeNode,
+      ).as("TypeError");
+    const args = yield* evaluateCallArguments(act, argNodes);
+    if (name === "TextEncoder") {
+      if (args.length !== 0)
+        throw new InterpreterRuntimeError("TextEncoder takes no options.", node).as("TypeError");
+      return new SandboxTextEncoder();
+    }
+    if (name === "TextDecoder") return constructTextDecoder(args, node);
+    if (name === "Uint8Array") {
       if (args.length > 1)
         throw new InterpreterRuntimeError(
           "Uint8Array buffer/offset constructors are not supported.",
@@ -105,53 +99,64 @@ export function evaluateNewExpression<R>(
           !Predicate.isNumber(source) &&
           !(source instanceof SandboxBytes) &&
           !Array.isArray(source)
-          ? yield* materializeIterable(this, source, node, "Uint8Array constructor")
+          ? yield* materializeIterable(act, source, node, "Uint8Array constructor")
           : source,
         node,
       );
-    });
-  }
-  if (errorConstructors.has(name)) {
-    return Effect.gen({ self: this }, function* () {
+    }
+    if (errorConstructors.has(name)) {
       if (name === "AggregateError") {
-        const args = yield* this.evaluateCallArguments(argNodes);
-        args[0] = yield* materializeIterable(this, args[0], node, "AggregateError errors");
-        return this.constructAggregateError(args, node);
+        args[0] = yield* materializeIterable(act, args[0], node, "AggregateError errors");
+        return constructAggregateError(args, node);
       }
-      const arg =
-        argNodes.length > 0
-          ? yield* this.evaluateExpression(asNode(argNodes[0], "arguments[0]"))
-          : undefined;
-      return createErrorValue(name, arg === undefined ? "" : coerceToString(arg));
-    });
-  }
-  if (valueConstructors.has(name)) {
-    return Effect.gen({ self: this }, function* () {
-      const args = yield* this.evaluateCallArguments(argNodes);
-      switch (name) {
-        case "Date":
-          return this.constructDate(args);
-        case "RegExp":
-          return this.constructRegExp(args, node);
-        case "Map":
-          return yield* constructCollection(this, args[0], node, true);
-        case "Set":
-          return yield* constructCollection(this, args[0], node, false);
-        case "URL":
-          return this.constructURL(args, node);
-        default:
-          return this.constructURLSearchParams(
-            args[0] != null && !Predicate.isString(args[0]) && hasSyncIterator(args[0])
-              ? yield* materializeIterable(this, args[0], node, "URLSearchParams")
-              : args[0],
-            node,
-          );
-      }
-    });
-  }
-  throw unsupportedSyntax("NewExpression", node);
+      const error = createErrorValue(name, args[0] === undefined ? "" : coerceToString(args[0]));
+      attachErrorCause(error, args[1]);
+      return error;
+    }
+    switch (name) {
+      case "Date":
+        return constructDate(args);
+      case "RegExp":
+        return constructRegExp(args, node);
+      case "Map":
+        return yield* constructCollection(act, args[0], node, true);
+      case "Set":
+        return yield* constructCollection(act, args[0], node, false);
+      case "URL":
+        return constructURL(args, node);
+      default:
+        return constructURLSearchParams(
+          args[0] != null && !Predicate.isString(args[0]) && hasSyncIterator(args[0])
+            ? yield* materializeIterable(act, args[0], node, "URLSearchParams")
+            : args[0],
+          node,
+        );
+    }
+  });
 }
-export function constructDate<R>(this: ConstructorsHost<R>, args: InterpreterArray): SandboxDate {
+
+/** The global namespaces `new` constructs; everything else is refused before arguments run. */
+const constructibleNamespaces = new Set([
+  "Date",
+  "RegExp",
+  "Map",
+  "Set",
+  "URL",
+  "URLSearchParams",
+  "Uint8Array",
+  "TextEncoder",
+  "TextDecoder",
+]);
+
+/** The built-in a `new` callee value constructs, or undefined when it is not a constructor. */
+const constructorName = (callee: InterpreterValue): string | undefined => {
+  if (callee instanceof GlobalNamespace && constructibleNamespaces.has(callee.name))
+    return callee.name;
+  if (callee instanceof ErrorConstructorReference) return callee.name;
+  if (callee instanceof PromiseNamespace) return "Promise";
+  return undefined;
+};
+export function constructDate(args: InterpreterArray): SandboxDate {
   if (args.length === 0) return new SandboxDate(epochNow());
   if (args.length === 1) {
     const arg = args[0];
@@ -163,11 +168,7 @@ export function constructDate<R>(this: ConstructorsHost<R>, args: InterpreterArr
   // new Date(year, month, day?, hours?, ...) - local-time component form.
   return new SandboxDate(epochFromLocalParts(args.map((arg) => coerceToNumber(arg))));
 }
-export function constructRegExp<R>(
-  this: ConstructorsHost<R>,
-  args: InterpreterArray,
-  node: AstNode,
-): SandboxRegExp {
+export function constructRegExp(args: InterpreterArray, node: AstNode): SandboxRegExp {
   const first = args[0];
   const pattern =
     first instanceof SandboxRegExp
@@ -203,72 +204,7 @@ export function constructRegExp<R>(
     ).as("SyntaxError");
   }
 }
-export function constructMap<R, InitInput>(
-  this: ConstructorsHost<R>,
-  init: InitInput,
-  node: AstNode,
-): SandboxMap {
-  const target = new SandboxMap();
-  if (init === undefined || init === null) return target;
-  if (init instanceof SandboxMap) {
-    // Confinement preflight: charge the copy before materializing the entry array.
-    assertBoundedCollectionSize(init.map.size, "new Map(...)", node);
-  }
-  const entries = Array.isArray(init)
-    ? init
-    : init instanceof SandboxMap
-      ? Array.from(init.map.entries(), ([key, item]): InterpreterArray => [key, item])
-      : undefined;
-  if (entries === undefined) {
-    throw new InterpreterRuntimeError(
-      "new Map(...) expects an array of [key, value] pairs, a Map, or no argument.",
-      node,
-    );
-  }
-  for (const pair of entries) {
-    if (!Array.isArray(pair)) {
-      throw new InterpreterRuntimeError("new Map(...) expects [key, value] pairs.", node);
-    }
-    target.map.set(pair[0], pair[1]);
-  }
-  return target;
-}
-export function constructSet<R, InitInput>(
-  this: ConstructorsHost<R>,
-  init: InitInput,
-  node: AstNode,
-): SandboxSet {
-  const target = new SandboxSet();
-  if (init === undefined || init === null) return target;
-  // Confinement preflight: charge the projected entry count before any native
-  // materialization (a string of N code units expands to at most N entries).
-  if (init instanceof SandboxSet) {
-    assertBoundedCollectionSize(init.set.size, "new Set(...)", node);
-  } else if (Predicate.isString(init)) {
-    assertBoundedCollectionSize(init.length, "new Set(...)", node);
-  }
-  const items = Array.isArray(init)
-    ? init
-    : init instanceof SandboxSet
-      ? Array.from(init.set.values())
-      : Predicate.isString(init)
-        ? Array.from(init)
-        : undefined;
-  if (items === undefined) {
-    throw new InterpreterRuntimeError(
-      "new Set(...) expects an array, Set, string, or no argument.",
-      node,
-    );
-  }
-  for (const item of items) target.set.add(item);
-  assertBoundedCollectionSize(target.set.size, "new Set(...)", node);
-  return target;
-}
-export function constructURL<R>(
-  this: ConstructorsHost<R>,
-  args: InterpreterArray,
-  node: AstNode,
-): SandboxURL {
+export function constructURL(args: InterpreterArray, node: AstNode): SandboxURL {
   if (args.length === 0) {
     throw new InterpreterRuntimeError(
       "new URL(...) requires a URL string and an optional base URL.",
@@ -287,8 +223,7 @@ export function constructURL<R>(
     ).as("TypeError");
   }
 }
-export function constructURLSearchParams<R, InitInput>(
-  this: ConstructorsHost<R>,
+export function constructURLSearchParams<InitInput>(
   init: InitInput,
   node: AstNode,
 ): SandboxURLSearchParams {
@@ -308,7 +243,7 @@ export function constructURLSearchParams<R, InitInput>(
     return new SandboxURLSearchParams(new URLSearchParams(coerceToString(init)));
   }
   if (init instanceof SandboxMap) {
-    return this.constructURLSearchParams(
+    return constructURLSearchParams(
       Array.from(init.map.entries(), ([key, value]) => [key, value]),
       node,
     );
@@ -344,7 +279,7 @@ export function constructURLSearchParams<R, InitInput>(
   );
 }
 function constructCollection<R>(
-  host: IteratorHost<R>,
+  host: Activation<R>,
   source: InterpreterValue,
   node: AstNode,
   map: boolean,

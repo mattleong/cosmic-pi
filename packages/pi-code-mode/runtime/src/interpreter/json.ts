@@ -3,7 +3,6 @@ import * as Predicate from "effect/Predicate";
 import type { RuntimeFailure } from "../failure.js";
 import { jsonStatics, parseJsonText, stringifyJsonProjection } from "../stdlib/json.js";
 import { hasObjectRuntimeType } from "../runtime-values.js";
-import { copyIn, isBlockedMember } from "../tool-runtime.js";
 import {
   SandboxBytes,
   SandboxDate,
@@ -21,6 +20,7 @@ import {
   makeInterpreterObject,
   InterpreterRuntimeError,
 } from "./model.js";
+import { isDataKeyOf, copyIn } from "../tool-runtime-data.js";
 
 /** JSON callbacks return guest values, not awaited values or boundary copies. */
 export const invokeJson = <R>(
@@ -59,7 +59,7 @@ export const invokeJson = <R>(
       const keys = Object.keys(value);
       check(0, keys.length);
       for (const key of keys)
-        if (isBlockedMember(key)) fail(`JSON value contains blocked property '${key}'.`);
+        if (!isDataKeyOf(value, key)) fail(`JSON value contains blocked property '${key}'.`);
       return keys;
     };
     if (name === "parse") {
@@ -151,7 +151,6 @@ export const invokeJson = <R>(
         const key = String(value);
         if (key.length > MAX_GUEST_STRING_LENGTH)
           fail("JSON property name exceeds the string limit.");
-        if (isBlockedMember(key)) fail(`JSON replacer contains blocked property '${key}'.`);
         names.add(key);
       }
       propertyList = [...names];
