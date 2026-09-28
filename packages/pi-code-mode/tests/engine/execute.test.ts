@@ -226,6 +226,41 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
       }),
     );
 
+    it.live("fails at once when the program awaits something nothing can settle", () =>
+      Effect.gen(function* () {
+        const started = yield* Clock.currentTimeMillis;
+        const stalled = failed(
+          (yield* run(`await new Promise(() => {});\nreturn "unreachable";`, { timeoutMs: 20_000 }))
+            .result,
+        );
+        expect(stalled.error.kind).toBe("ExecutionFailure");
+        expect(stalled.error.message).toMatch(/stalled/u);
+        expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(10_000);
+
+        // A call still running keeps the program alive; the stall is reported once it settles.
+        const afterCall = yield* run(
+          `tools.demo.slow({ ms: 200, text: "late" });\nawait new Promise(() => {});`,
+          { timeoutMs: 20_000 },
+        );
+        expect(failed(afterCall.result).error.message).toMatch(/stalled/u);
+        expect(terminal(afterCall.events)).toEqual(["demo.slow:succeeded"]);
+      }),
+    );
+
+    it.live("does not treat pending timers as a stall", () =>
+      Effect.gen(function* () {
+        const timer = yield* run(
+          `await new Promise((resolve) => setTimeout(resolve, 200));\nreturn "waited";`,
+        );
+        expect(timer.result).toEqual({ ok: true, value: "waited" });
+        // An interval can always wake the program, so only the deadline ends it.
+        const interval = yield* run(`setInterval(() => {}, 1000);\nawait new Promise(() => {});`, {
+          timeoutMs: 2_000,
+        });
+        expect(failed(interval.result).error.kind).toBe("TimeoutExceeded");
+      }),
+    );
+
     it.live("stops a looping program at the deadline", () =>
       Effect.gen(function* () {
         const started = yield* Clock.currentTimeMillis;

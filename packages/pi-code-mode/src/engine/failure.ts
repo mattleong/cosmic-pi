@@ -143,6 +143,15 @@ export const childFailureDiagnostic = <R>(
       };
     case "closed":
       return { kind: "ExecutionFailure", message, ...location };
+    case "stalled":
+      return {
+        kind: "ExecutionFailure",
+        message:
+          "The program stalled waiting on a promise that nothing can settle; no tool call, timer or I/O was pending.",
+        suggestions: [
+          "Look for a Promise that is never resolved, or a callback API that never calls back.",
+        ],
+      };
     case "return":
       return {
         kind: "InvalidDataValue",

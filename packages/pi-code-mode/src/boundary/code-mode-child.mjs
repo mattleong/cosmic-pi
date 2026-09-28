@@ -164,6 +164,15 @@ let nextSeq = 0;
 const pending = new Map();
 let drainWaiters = [];
 
+// While the program runs, only pending tool calls hold the process open. If it then awaits
+// something nothing can settle (no tool call, timer or I/O), Node's event loop empties and
+// `beforeExit` reports the stall instead of the program waiting out its deadline.
+let running = false;
+const holdChannel = () => {
+  if (running && pending.size === 0) channel.unref();
+  else channel.ref();
+};
+
 const localError = (kind, message, site, tool) => {
   const error = new Error(message);
   error.name = "CodeModeError";
@@ -212,6 +221,7 @@ const callTool = (path, label, args) => {
   nextSeq += 1;
   return new Promise((resolve, reject) => {
     pending.set(seq, { resolve, reject, site, label });
+    holdChannel();
     channel.write(frame);
   });
 };
@@ -220,6 +230,7 @@ const settle = (message) => {
   const entry = pending.get(message.seq);
   if (entry === undefined) return;
   pending.delete(message.seq);
+  holdChannel();
   if (message.ok) entry.resolve(message.value);
   else {
     const error = new Error(message.message);
@@ -282,6 +293,9 @@ let uncaught;
 process.on("uncaughtException", (error) => {
   if (uncaught === undefined) uncaught = { error };
   void complete({ ok: false, failure: describe(error, "uncaught") });
+});
+process.on("beforeExit", () => {
+  if (running) void complete({ ok: false, failure: { kind: "stalled" } });
 });
 
 // ---- compile and run
@@ -372,6 +386,9 @@ let completing = false;
 const complete = async (outcome) => {
   if (completing) return;
   completing = true;
+  // The channel holds the process open again until Pi has the result.
+  running = false;
+  holdChannel();
   // New calls are refused from here; calls already sent still finish and are delivered.
   sealed = true;
   await drained();
@@ -414,6 +431,8 @@ const run = async (message) => {
   }
   let outcome;
   try {
+    running = true;
+    holdChannel();
     outcome = { ok: true, value: await compiled.run(tools) };
   } catch (error) {
     outcome = { ok: false, failure: describe(error, "body") };

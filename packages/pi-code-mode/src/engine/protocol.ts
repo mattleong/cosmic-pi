@@ -115,7 +115,8 @@ const Text = (maximum: number) => Schema.String.check(Schema.isMaxLength(maximum
 
 /** Why the program failed, as the child observed it. Pi owns every diagnostic's wording. */
 export const ChildFailure = Schema.Struct({
-  kind: Schema.Literals(["syntax", "tool", "thrown", "arguments", "closed", "return"]),
+  /** `stalled`: the program awaited something nothing could settle. */
+  kind: Schema.Literals(["syntax", "tool", "thrown", "arguments", "closed", "return", "stalled"]),
   /** How a thrown value escaped: from the program body, an unhandled rejection, or a callback. */
   via: Schema.optionalKey(Schema.Literals(["body", "unhandled", "uncaught"])),
   /** Absent for tool failures, whose diagnostic Pi already recorded. */

@@ -291,7 +291,10 @@ loader. A JavaScript syntax error retries once through Node's TypeScript type
 stripping. `code-mode-watchdog.mjs` runs in a worker thread and SIGKILLs the process group when the
 lease reaches EOF, even while the program is stuck in a loop; the program starts only after it is
 ready. It reads the lease as a socket, because a thread-pool read would block the process's own
-exit.
+exit. While the program runs, the fd 3 channel holds the process open only while tool calls are
+pending; every other runner handle is unreferenced. A program awaiting something nothing can
+settle therefore empties Node's event loop, and `beforeExit` reports a stall at once instead of
+the program waiting out its deadline. Timers, sockets and file operations keep it alive as usual.
 
 `engine/protocol.ts` owns the frames: a 4-byte length and UTF-8 JSON, capped at 17 MiB from the
 child before any body is buffered, and Effect Schema decoding of every child message. The child

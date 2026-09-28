@@ -42,6 +42,8 @@ statements and imports of project files or packages are refused.
 - **Failures.** An uncaught error, unhandled rejection or exception in a callback fails the program
   with its line. A caught failure keeps a successful result. A failed program's result includes the
   output of calls that completed, so the model can fix the failed part without rerunning the rest.
+- **Stalls.** A program that awaits something nothing can settle (no tool call, timer or I/O
+  pending) fails at once instead of waiting out the timeout.
 - **Stopping early.** Only the timeout and cancellation stop work early. They interrupt calls in
   flight and kill the process group; those calls' outcomes may be unknown. If Pi itself dies, a
   watchdog in the program process kills its group, even when the program is stuck in a loop.

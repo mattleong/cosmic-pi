@@ -106,6 +106,7 @@ const failures: ReadonlyArray<ProgramScenario> = [
   ["unhandled rejection", "tools.pi.bash({command:'pnpm test'});\nreturn 'started';"],
   ["process exits early", "await tools.pi.read({path:'package.json'});\nprocess.exit(2);"],
   ["timeout", "while (true) {}", { timeoutMs: 100 }],
+  ["stalled", "await tools.pi.read({path:'a.ts'});\nawait new Promise(() => {});"],
   [
     "call limit",
     "for (const p of ['a','b','c']) await tools.pi.read({path:p});",

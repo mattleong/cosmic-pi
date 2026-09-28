@@ -112,6 +112,9 @@ Until the switch-over the interpreter gets essential fixes only.
 - The Windows-only `tools.pi.powershell` wiring remains but is unreachable while Code Mode refuses
   Windows.
 - `queueDurationMs` was dropped from lifecycle events; nothing read it.
+- Stall detection (borrowed from Pi's own Code Mode draft): the fd 3 channel is referenced only
+  while tool calls are pending, so a program awaiting a promise nothing can settle empties the
+  event loop and `beforeExit` fails it at once.
 
 ## Reviewing usage
 
