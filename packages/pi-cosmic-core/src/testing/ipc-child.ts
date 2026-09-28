@@ -40,9 +40,14 @@ export interface IpcChildOptions {
   readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
+/** Stderr kept for failure reports; older output is dropped so a chatty child never blocks. */
+const STDERR_TAIL = 4_096;
+
 /**
  * Runs a TypeScript fixture through `jiti/register` (resolved from the working directory)
- * with an IPC channel. Every message is recorded from spawn; scope closure kills the child.
+ * with an IPC channel. Every message is recorded from spawn, and stderr is drained into a
+ * bounded tail. A wait that times out fails with what the child did send, its exit status and
+ * stderr, so a slow or stuck fixture explains itself. Scope closure kills the child.
  */
 export const spawnIpcChild = (
   script: string,
@@ -57,6 +62,20 @@ export const spawnIpcChild = (
       });
       const messages: IpcMessage[] = [];
       child.on("message", (message) => messages.push(message));
+      let stderr = "";
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (chunk: string) => {
+        stderr = (stderr + chunk).slice(-STDERR_TAIL);
+      });
+      const stuck = (expected: string) =>
+        new Error(
+          [
+            `Timed out waiting for ${JSON.stringify(expected)} from ${nodePath.basename(script)} ${args.join(" ")}.`,
+            `Received: ${JSON.stringify(messages)}.`,
+            `Exit: ${child.exitCode ?? child.signalCode ?? "still running"}.`,
+            ...(stderr.trim() === "" ? [] : [`Stderr (tail):\n${stderr.trim()}`]),
+          ].join("\n"),
+        );
       /** Settles once `expected` has arrived, including before the call. */
       const wait = (expected: string) =>
         Effect.callback<void>((resume) => {
@@ -69,7 +88,12 @@ export const spawnIpcChild = (
           };
           child.on("message", receive);
           return Effect.sync(() => child.off("message", receive));
-        }).pipe(Effect.timeout(options.timeout));
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: options.timeout,
+            orElse: () => Effect.die(stuck(expected)),
+          }),
+        );
       return { child, messages, wait, exited: exitOf(child).pipe(Effect.timeout(options.timeout)) };
     }),
     ({ child }) => killChild(child),

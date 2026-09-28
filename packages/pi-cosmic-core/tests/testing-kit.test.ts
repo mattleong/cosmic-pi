@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { nodeFsPromises as fs } from "../src/platform/node-builtins.ts";
 import { deferredPromise, killChild, spawnIpcChild, temporaryDirectory } from "../testing.ts";
 
@@ -53,4 +55,25 @@ it.live("records IPC messages from spawn and removes the temporary directory wit
       ),
     ).toBe(false);
   }),
+);
+
+it.live("explains a wait that times out with what the child sent and how it exited", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory("cosmic-kit-test-");
+      const child = yield* spawnIpcChild(
+        fileURLToPath(new URL("./fixtures/cross-process-lock-child.ts", import.meta.url)),
+        [directory, "home"],
+        { timeout: "1 second" },
+      );
+      yield* child.exited;
+      const exit = yield* Effect.exit(child.wait("never-sent"));
+      const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+      expect(failure).toBeInstanceOf(Error);
+      const message = failure instanceof Error ? failure.message : "";
+      expect(message).toContain("never-sent");
+      expect(message).toContain("finished");
+      expect(message).toContain("Exit: 0");
+    }),
+  ),
 );
