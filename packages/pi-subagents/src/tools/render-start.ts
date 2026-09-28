@@ -53,7 +53,13 @@ export const renderSubagentStartCall = (
     container.addChild(
       new Text(
         renderToolHeader(
-          { title: `Start ${countLabel(agents.length, "subagent")}`, subtitle: requested },
+          {
+            title:
+              agents.length === 0
+                ? "Start subagents"
+                : `Start ${countLabel(agents.length, "subagent")}`,
+            subtitle: requested,
+          },
           theme,
         ),
         0,

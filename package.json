@@ -21,7 +21,7 @@
     "lint": "oxlint --deny-warnings scripts packages tools",
     "lint:fix": "oxlint --fix scripts packages tools",
     "layout:check": "node scripts/check-package-layout.mjs",
-    "test": "pnpm test:anti-slop && pnpm --workspace-concurrency=2 -r exec vitest run --maxWorkers=4",
+    "test": "pnpm test:anti-slop && node scripts/test-packages.mjs",
     "test:anti-slop": "node --test tools/oxlint/anti-slop/rules/*.test.ts",
     "typecheck": "pnpm typecheck:anti-slop && pnpm --workspace-concurrency=4 --no-sort -r run typecheck",
     "typecheck:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop/tsconfig.json",

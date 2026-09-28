@@ -104,7 +104,13 @@ try {
           ...tarballDependencies,
         },
         pnpm: {
-          overrides: tarballDependencies,
+          // The consumer has no lockfile. Without a pin, a fresh registry resolution can float
+          // this transitive package to a newer prerelease whose peer range excludes the pinned
+          // effect, leaving it unable to import effect at all.
+          overrides: {
+            ...tarballDependencies,
+            "@effect/platform-node-shared": expectedEffectVersion,
+          },
         },
       },
       null,

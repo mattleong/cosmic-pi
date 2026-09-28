@@ -16,6 +16,10 @@ import {
 } from "../src/platform/node-builtins.ts";
 import { killChild, spawnIpcChild, temporaryDirectory } from "../testing.ts";
 
+// Child processes load TypeScript through Jiti; on a loaded CI runner their startup alone can
+// exceed Vitest's 5 s default. Each wait below stays bounded by `spawn`'s own timeout.
+vi.setConfig({ testTimeout: 30_000 });
+
 const root = temporaryDirectory("cosmic-lock-test-");
 const childScript = fileURLToPath(
   new URL("./fixtures/cross-process-lock-child.ts", import.meta.url),

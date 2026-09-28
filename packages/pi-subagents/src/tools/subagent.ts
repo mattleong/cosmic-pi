@@ -36,6 +36,9 @@ import {
 } from "./schema.ts";
 import { countLabel } from "pi-cosmic-core";
 
+// Pi renders calls while arguments stream in, so any field may still be absent.
+const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
+
 type SubagentToolSpec<N extends SubagentToolName> = Pick<
   ToolDefinition<SubagentToolParameters<N>>,
   "label" | "description" | "promptSnippet" | "promptGuidelines" | "prepareArguments" | "renderCall"
@@ -74,8 +77,15 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "When a profiled run fails and its start receipt or status reports an eligible remaining route candidate, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
     ],
     prepareArguments: prepareSubagentStartArguments,
+    // Pi renders calls while arguments stream in, before `agents` exists.
     renderCall: (args, theme, context) =>
-      renderSubagentStartCall(args.agents, theme, context?.expanded === true, false, context),
+      renderSubagentStartCall(
+        Array.isArray(args.agents) ? args.agents : [],
+        theme,
+        context?.expanded === true,
+        false,
+        context,
+      ),
     lease: (presentation, args) => presentation.beginStart(args.agents.length),
   },
   [SUBAGENT_TOOL_NAME.list]: {
@@ -89,7 +99,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     description:
       "Inspect up to twelve specific subagent run IDs, including each run's capabilities.",
     renderCall: (args, theme) =>
-      renderSubagentCall(`Inspect ${countLabel(args.runIds.length, "subagent")}`, "", theme),
+      renderSubagentCall(`Inspect ${countLabel(args.runIds?.length ?? 0, "subagent")}`, "", theme),
   },
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
@@ -117,8 +127,8 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Send the same guidance message to one or more running subagents. For a reported retained run, this begins its next assignment and report generation. Mixed-target calls report each success and failure.",
     renderCall: (args, theme) =>
       renderSubagentCall(
-        `Guide ${countLabel(args.runIds.length, "subagent")}`,
-        `“${args.message}”`,
+        `Guide ${countLabel(args.runIds?.length ?? 0, "subagent")}`,
+        quoted(args.message),
         theme,
       ),
   },
@@ -126,7 +136,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     label: "Reply to Subagent",
     description: "Answer a blocking parent question from one subagent.",
     renderCall: (args, theme) =>
-      renderSubagentCall("Reply to subagent", `“${args.message}”`, theme),
+      renderSubagentCall("Reply to subagent", quoted(args.message), theme),
   },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
@@ -139,10 +149,11 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Never retry when the tool reports uncertain execution or unconfirmed cleanup. Writer retries may repeat partial side effects, so retry them only when the original handoff and current user intent authorize a fresh execution.",
     ],
     renderCall: (args, theme) => {
-      const action = `${args.action[0]?.toUpperCase() ?? ""}${args.action.slice(1)}`;
-      const message = args.action === "resume" && args.message ? `“${args.message}”` : "";
+      const verb = args.action ?? "manage";
+      const action = `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)}`;
+      const message = args.action === "resume" ? quoted(args.message) : "";
       return renderSubagentCall(
-        `${action} ${countLabel(args.runIds.length, "subagent")}`,
+        `${action} ${countLabel(args.runIds?.length ?? 0, "subagent")}`,
         message,
         theme,
       );
@@ -151,7 +162,8 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.rename]: {
     label: "Rename Subagent",
     description: "Change one subagent's local display name.",
-    renderCall: (args, theme) => renderSubagentCall("Rename subagent", `to ${args.name}`, theme),
+    renderCall: (args, theme) =>
+      renderSubagentCall("Rename subagent", args.name ? `to ${args.name}` : "", theme),
   },
   [SUBAGENT_TOOL_NAME.claims]: {
     label: "Manage Writer Claims",
