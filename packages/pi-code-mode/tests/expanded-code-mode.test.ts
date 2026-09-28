@@ -19,7 +19,6 @@ import { applyCollapsedStyle, restorePresentationSettings } from "./support/pres
 const renderer = <Args, Result>(args: Args, result: Result, isError = false) => {
   const owned = buildCodeModeToolDefinition({
     catalogBudget: 0,
-    includePowerShell: false,
     execute: () => Promise.reject(new Error("render-only")),
     startUiTicker: () => () => undefined,
   });

@@ -50,6 +50,7 @@ import {
   type CodeModeToolDefinition,
 } from "./tools/controller.ts";
 import { CodeModeResults, type ResultsContract } from "./results/service.ts";
+import { PROGRAM_PLATFORM_SUPPORTED } from "./boundary/host-program-process.ts";
 import { makeCodeModeToolExecute } from "./tools/execution.ts";
 import {
   makeHostExecutionOwner,
@@ -173,7 +174,8 @@ export function registerCodeModeApplication(
       const isCurrent = () => MutableRef.get(input.publicationOwner) && slot.isCurrent(token);
       if (!isCurrent()) return;
       const state = MutableRef.get(stateRef);
-      if (state === undefined || !state.available) return;
+      // Programs need a POSIX process group; elsewhere the tool would only ever fail.
+      if (state === undefined || !state.available || !PROGRAM_PLATFORM_SUPPORTED) return;
       let wrapped: CodeModeToolDefinition;
       try {
         const definitions = boundaries.makeNestedDefinitions(input.cwd);
@@ -181,7 +183,6 @@ export function registerCodeModeApplication(
           buildCodeModeToolDefinition({
             catalogBudget: state.config.catalogBudget,
             configSnapshot: state.config,
-            includePowerShell: definitions.powershell !== undefined,
             execute: makeCodeModeToolExecute({
               results,
               isCurrent: () => isCurrent() && input.executionOwner.current(),

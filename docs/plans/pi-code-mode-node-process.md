@@ -112,3 +112,9 @@ Until the switch-over the interpreter gets essential fixes only.
 - The Windows-only `tools.pi.powershell` wiring remains but is unreachable while Code Mode refuses
   Windows.
 - `queueDurationMs` was dropped from lifecycle events; nothing read it.
+
+## Reviewing usage
+
+`pnpm code-mode:usage [--since YYYY-MM-DD]` summarizes local Pi sessions: programs, nested calls,
+failures by kind, refused direct Node access and whether the next program recovered, and
+concurrency patterns. It prints aggregates only, never program source or tool output.

@@ -112,14 +112,10 @@ const NUMERIC_CONFIG_FIELDS = [
 const describeNumericConfig = (config: CodeModeConfig): string =>
   NUMERIC_CONFIG_FIELDS.map((field) => `${field}=${config[field]}`).join(", ");
 
-const descriptionHeader = (
-  includePowerShell: boolean,
-  catalogBudget: number,
-  registrationSnapshot?: CodeModeConfig,
-) =>
+const descriptionHeader = (catalogBudget: number, registrationSnapshot?: CodeModeConfig) =>
   "Run one JavaScript program in a fresh Node.js process that orchestrates Pi's seven core built-ins " +
   "(tools.pi.read, tools.pi.bash, tools.pi.edit, tools.pi.write, tools.pi.grep, " +
-  `tools.pi.find, tools.pi.ls)${includePowerShell ? ", the Windows-only tools.pi.powershell built-in," : ""} ` +
+  "tools.pi.find, tools.pi.ls) " +
   "and the explicit tools.session.backgroundTask and tools.mcp.request adapters in one call. Sequence, " +
   "transform, filter, branch, and parallelize nested calls, then return only the data you " +
   "need. The program uses Node.js for computation and the network: reading or writing files, " +
@@ -158,8 +154,6 @@ export interface CodeModeToolDefinitionInput {
   readonly catalogBudget: number;
   /** Optional registration-time label only; `{action:"status"}` rereads live state. */
   readonly configSnapshot?: CodeModeConfig;
-  /** Whether this registration includes Pi's native Windows PowerShell definition. */
-  readonly includePowerShell: boolean;
   readonly execute: CodeModeToolExecute;
   /** Test seam for the host-render ticker; production uses the shared Cosmic UI boundary. */
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
@@ -218,10 +212,9 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     name: CODE_MODE_TOOL_NAME,
     label: "Code Mode",
     description: `${descriptionHeader(
-      input.includePowerShell,
       input.catalogBudget,
       input.configSnapshot,
-    )}\n\n${describeCodeModeCatalog(input.catalogBudget, input.includePowerShell)}`,
+    )}\n\n${describeCodeModeCatalog(input.catalogBudget)}`,
     promptSnippet:
       "Run one Node.js program over Pi built-ins, background tasks, and bounded MCP requests",
     promptGuidelines: [

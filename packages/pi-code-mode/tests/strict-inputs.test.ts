@@ -21,7 +21,7 @@ interface NativeCall {
   readonly input: PiGuestToolInput;
 }
 
-/** Every built-in, including Windows-only PowerShell, recording each native dispatch. */
+/** Every built-in, recording each native dispatch. */
 const recordingDefinitions = (calls: NativeCall[]): NestedPiToolDefinitions => {
   const definition = (name: PiGuestToolName) => ({
     execute: (_id: string, input: PiGuestToolInput) => {
@@ -35,7 +35,6 @@ const recordingDefinitions = (calls: NativeCall[]): NestedPiToolDefinitions => {
   return nestedToolDefinitionsFixture({
     read: definition("read"),
     bash: definition("bash"),
-    powershell: definition("powershell"),
     edit: definition("edit"),
     write: definition("write"),
     grep: definition("grep"),
@@ -73,11 +72,6 @@ describe("closed guest tool inputs", () => {
       key: "requireCompleteness",
     },
     { tool: "bash", input: { command: "printf safe", cwd: "packages/web" }, key: "cwd" },
-    {
-      tool: "powershell",
-      input: { command: "Write-Output safe", cwd: "packages/web" },
-      key: "cwd",
-    },
     {
       tool: "edit",
       input: { path: "example.txt", edits: [{ oldText: "old", newText: "new" }], replaceAll: true },
@@ -123,7 +117,6 @@ describe("closed guest tool inputs", () => {
       const calls: NativeCall[] = [];
       const valid: ReadonlyArray<readonly [PiGuestToolName, object]> = [
         ["bash", { command: "printf safe", timeout: 1.5 }],
-        ["powershell", { command: "Write-Output safe", timeout: 2 }],
         ["edit", { path: "example.txt", edits: [{ oldText: "old", newText: "new" }] }],
         ["write", { path: "example.txt", content: "new" }],
         [

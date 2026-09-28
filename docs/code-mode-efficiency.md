@@ -1,5 +1,8 @@
 # Code Mode efficiency results
 
+> Historical: this describes Code Mode's former in-process interpreter. Programs now run in a
+> fresh Node.js process; see [the plan](plans/pi-code-mode-node-process.md).
+
 We retained compact JSON formatting and restored the original tool-selection guidance.
 The completed evaluator, fixtures, scorers, and experiment-only tests have been removed from
 active code. Production formatting, limits, cancellation, and lifecycle tests remain.

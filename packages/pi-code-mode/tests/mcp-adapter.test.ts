@@ -72,7 +72,7 @@ describe("fixed MCP request adapter", () => {
           () => Effect.fail(toolError("Unexpected background dispatch")),
           dispatchFor(eventsFor([provider]), 4_096),
           makeCumulativeOutputBudget(8_192),
-          { includePowerShell: false },
+          {},
         );
         expect(
           yield* executeProgram({

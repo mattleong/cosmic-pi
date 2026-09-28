@@ -89,10 +89,6 @@ const GUEST_TOOL_DESCRIPTIONS = {
     "Bash overrides or session-specific shell options. Output is limited to a 2,000-line/50 KiB " +
     "tail; larger full output is saved to a temporary file named in the result. Optional timeout " +
     "is in seconds; nonzero exit, timeout, and abort are catchable tool failures.",
-  powershell:
-    "Execute a command through Pi's native Windows PowerShell implementation with full local-user " +
-    "process, filesystem, environment, and network authority. Available only on Windows and does " +
-    "not inherit registered overrides or session-specific shell options.",
   edit:
     "Edit one unrestricted relative, absolute, or home-relative file with a non-empty canonical " +
     "edits array. Every oldText must uniquely match the original file and edits must not overlap. " +
@@ -112,7 +108,6 @@ const GUEST_TOOL_DESCRIPTIONS = {
 
 const GUEST_TOOL_INPUTS = {
   bash: ShellInput,
-  powershell: ShellInput,
   edit: EditInput,
   write: WriteInput,
   grep: GrepInput,
@@ -207,8 +202,6 @@ export interface CodeModeCatalogOptions {
   readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   /** Adapter output still needs output-schema decoding and delivery to the program. */
   readonly onOutputReturned?: (invocationId: number | undefined) => void;
-  /** True only when the current platform supplied a native PowerShell definition. */
-  readonly includePowerShell: boolean;
 }
 
 /** The tool tree exposed to programs; every leaf validates input with Effect Schema. */
@@ -216,9 +209,8 @@ const makeCodeModeGuestTools = (
   invokePi: NestedPiToolDispatch,
   invokeBackgroundTask: BackgroundTaskDispatch,
   invokeMcp: McpDispatch,
-  includePowerShell: boolean,
-) => {
-  const portablePi = {
+) => ({
+  pi: {
     read: readTool(invokePi),
     bash: guestTool("bash", invokePi),
     edit: guestTool("edit", invokePi),
@@ -226,17 +218,12 @@ const makeCodeModeGuestTools = (
     grep: guestTool("grep", invokePi),
     find: guestTool("find", invokePi),
     ls: guestTool("ls", invokePi),
-  };
-  return {
-    pi: includePowerShell
-      ? { ...portablePi, powershell: guestTool("powershell", invokePi) }
-      : portablePi,
-    session: {
-      backgroundTask: backgroundTaskTool(invokeBackgroundTask),
-    },
-    mcp: { request: mcpTool(invokeMcp) },
-  };
-};
+  },
+  session: {
+    backgroundTask: backgroundTaskTool(invokeBackgroundTask),
+  },
+  mcp: { request: mcpTool(invokeMcp) },
+});
 
 /**
  * Composes one execution's guest tools with cumulative-output admission. Structured companion
@@ -307,18 +294,11 @@ export const makeExecutionGuestTools = (
               "MCP output exceeds the remaining cumulative budget. Use a narrower result.read if retained; never repeat the original operation to recover output.",
           }),
       ),
-    options.includePowerShell,
   );
 };
 
 /** Model-facing catalog instructions rendered over the same shapes the program will see. */
-export const describeCodeModeCatalog = (
-  catalogBudget: number,
-  includePowerShell: boolean,
-): string => {
+export const describeCodeModeCatalog = (catalogBudget: number): string => {
   const preview = () => Effect.fail(toolError("Tool preview is not executable."));
-  return catalogInstructions(
-    makeCodeModeGuestTools(preview, preview, preview, includePowerShell),
-    catalogBudget,
-  );
+  return catalogInstructions(makeCodeModeGuestTools(preview, preview, preview), catalogBudget);
 };

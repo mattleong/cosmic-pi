@@ -39,7 +39,6 @@ export const presentationView = (
   const execute = vi.fn(() => Promise.reject(new Error("Rendering must not execute")));
   const owned = buildCodeModeToolDefinition({
     catalogBudget: 0,
-    includePowerShell: false,
     execute,
     startUiTicker,
   });

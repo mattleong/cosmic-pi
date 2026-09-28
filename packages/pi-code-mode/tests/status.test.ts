@@ -55,7 +55,7 @@ function statusHarness(states: ReadonlyArray<ReturnType<typeof codeModeStateFixt
     },
   };
   const executeCodeMode = vi.fn<NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]>>(() =>
-    Effect.die("status must not enter the interpreter"),
+    Effect.die("status must not start a program"),
   );
   let sessionRunnerTouches = 0;
   const runInSession: CodeModeExecutionEnvironment["runInSession"] = (effect, signal) => {
@@ -175,7 +175,7 @@ describe("effective Code Mode status", () => {
     }),
   );
 
-  it.effect("rejects mixed forms before interpreter or storage access", () =>
+  it.effect("rejects mixed forms before program execution or storage access", () =>
     Effect.gen(function* () {
       const state = codeModeStateFixture({ maxOutputBytes: 512 });
       for (const mixed of [
@@ -345,7 +345,6 @@ describe("registered status presentation and discovery", () => {
   it("accepts only the pure status and result.read forms in the registered parameters", () => {
     const definition = buildCodeModeToolDefinition({
       catalogBudget: 123,
-      includePowerShell: false,
       execute: () => Promise.reject(new Error("not executed")),
     });
     expect(Value.Check(definition.parameters, { action: "status" })).toBe(true);

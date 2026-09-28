@@ -14,7 +14,6 @@ export const MAX_NESTED_SUBJECT_LENGTH = 1024;
 const tools = new Map<string, BuiltinCompactTool>([
   ["pi.read", "read"],
   ["pi.bash", "bash"],
-  ["pi.powershell", "bash"],
   ["pi.edit", "edit"],
   ["pi.write", "write"],
   ["pi.grep", "grep"],

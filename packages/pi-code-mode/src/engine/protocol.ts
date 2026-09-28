@@ -125,6 +125,10 @@ export const ChildFailure = Schema.Struct({
   code: Schema.optionalKey(Text(64)),
   /** Node's module loader raised the error, for example while resolving an import. */
   module: Schema.optionalKey(Schema.Literal(true)),
+  /** What Node's permission model refused, such as `FileSystemRead`. */
+  permission: Schema.optionalKey(Text(64)),
+  /** The path a permission refusal applied to. */
+  resource: Schema.optionalKey(Text(4096)),
   /** The request whose tool failure escaped. */
   seq: Schema.optionalKey(Schema.Int),
   tool: Schema.optionalKey(Text(2_048)),

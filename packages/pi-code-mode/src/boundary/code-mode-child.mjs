@@ -137,12 +137,17 @@ const describe = (error, via) => {
       const name = read(error, "name");
       const code = read(error, "code");
       const stack = read(error, "stack");
+      // Node's permission refusals name what was refused and the path it applied to.
+      const permission = read(error, "permission");
+      const resource = read(error, "resource");
       return {
         kind: "thrown",
         via,
         message: message.slice(0, MAX_TEXT),
         ...(isString(name) && { name: name.slice(0, 256) }),
         ...(isString(code) && { code: code.slice(0, 64) }),
+        ...(isString(permission) && { permission: permission.slice(0, 64) }),
+        ...(isString(resource) && { resource: resource.slice(0, 4096) }),
         // Node's module loader raised it, for example while resolving an import.
         ...(isString(stack) && stack.includes("node:internal/modules/") && { module: true }),
         ...locate(stack),

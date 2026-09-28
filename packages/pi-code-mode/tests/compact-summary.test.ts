@@ -454,7 +454,6 @@ describe("Code Mode compact outcomes", () => {
   it("retained reads stay compact for both returned pages and host failures", () => {
     const definition = buildCodeModeToolDefinition({
       catalogBudget: 0,
-      includePowerShell: false,
       execute: () => Promise.reject(new Error("not executed")),
       startUiTicker: () => () => undefined,
     });

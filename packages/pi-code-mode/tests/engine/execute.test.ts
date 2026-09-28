@@ -195,13 +195,17 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
           `const { readFile } = await import("node:fs/promises");\nawait readFile("package.json", "utf8");`,
         );
         expect(read.message).toContain("tools.pi.read");
+        expect(read.message).toContain("package.json");
         expect(read.location?.line).toBe(2);
         const write = yield* refused(
           `const { writeFile } = await import("node:fs/promises");\nawait writeFile("x.txt", "x");`,
         );
         expect(write.message).toContain("tools.pi.write");
-        const imported = yield* refused(`await import("effect");`);
-        expect(imported.message).toContain("import project files or packages");
+        expect(write.message).toContain("x.txt");
+        const bare = yield* refused(`await import("effect");`);
+        expect(bare.message).toContain('"effect" package');
+        const relative = yield* refused(`await import("./src/engine/tool.ts");`);
+        expect(relative.message).toContain("src/engine/tool.ts");
         const spawned = yield* refused(
           `const { execSync } = await import("node:child_process");\nexecSync("true");`,
         );

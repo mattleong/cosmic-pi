@@ -8,7 +8,7 @@ A pnpm workspace for Pi extensions.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool and full-screen `/tasks` manager.
-- [`pi-code-mode`](packages/pi-code-mode) runs confined JavaScript over Pi built-ins, session background tasks, and the fixed MCP adapter.
+- [`pi-code-mode`](packages/pi-code-mode) — JavaScript programs in a fresh Node.js process that orchestrate Pi built-ins, session background tasks, and the fixed MCP adapter in one tool call.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.

@@ -16,6 +16,10 @@ import {
 const CHILD_PATH = fileURLToPath(new URL("./code-mode-child.mjs", import.meta.url));
 const WATCHDOG_PATH = fileURLToPath(new URL("./code-mode-watchdog.mjs", import.meta.url));
 
+/** Programs need a POSIX process group, so Code Mode runs on macOS and Linux only. */
+export const PROGRAM_PLATFORM_SUPPORTED =
+  process.platform === "darwin" || process.platform === "linux";
+
 /** Retained program stdout and stderr. One extra byte shows that output was cut. */
 export const PROGRAM_OUTPUT_BYTES = 256 * 1024;
 

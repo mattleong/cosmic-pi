@@ -1,5 +1,5 @@
 /**
- * Package-local adapters over seven core Pi definitions plus Windows-only PowerShell.
+ * Package-local adapters over seven core Pi definitions.
  *
  * These adapters deliberately dispatch nested Code Mode calls directly against fresh built-in
  * definitions. Nested calls therefore bypass Pi middleware, approval/preview extensions,
@@ -14,7 +14,6 @@ import {
   createFindToolDefinition,
   createGrepToolDefinition,
   createLsToolDefinition,
-  createPowerShellToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
   type AgentToolResult,
@@ -42,8 +41,6 @@ export type PiGuestToolInput = Parameters<AnyToolDefinition["execute"]>[1];
 export interface NestedPiToolDefinitions {
   readonly read: AnyToolDefinition;
   readonly bash: AnyToolDefinition;
-  /** Pi's native Windows shell tool. Omitted on other platforms. */
-  readonly powershell?: AnyToolDefinition;
   readonly edit: AnyToolDefinition;
   readonly write: AnyToolDefinition;
   readonly grep: AnyToolDefinition;
@@ -54,23 +51,15 @@ export interface NestedPiToolDefinitions {
 export type PiGuestToolName = keyof NestedPiToolDefinitions;
 
 /** Live factory: current built-in definitions bound to the session working directory. */
-export const makeNestedPiToolDefinitions = (
-  cwd: string,
-  platform: NodeJS.Platform = process.platform,
-): NestedPiToolDefinitions => {
-  const portable = {
-    read: createReadToolDefinition(cwd),
-    bash: createBashToolDefinition(cwd),
-    edit: createEditToolDefinition(cwd),
-    write: createWriteToolDefinition(cwd),
-    grep: createGrepToolDefinition(cwd),
-    find: createFindToolDefinition(cwd),
-    ls: createLsToolDefinition(cwd),
-  };
-  return platform === "win32"
-    ? { ...portable, powershell: createPowerShellToolDefinition(cwd) }
-    : portable;
-};
+export const makeNestedPiToolDefinitions = (cwd: string): NestedPiToolDefinitions => ({
+  read: createReadToolDefinition(cwd),
+  bash: createBashToolDefinition(cwd),
+  edit: createEditToolDefinition(cwd),
+  write: createWriteToolDefinition(cwd),
+  grep: createGrepToolDefinition(cwd),
+  find: createFindToolDefinition(cwd),
+  ls: createLsToolDefinition(cwd),
+});
 
 /** Tolerant shape of a nested `AgentToolResult` at this unknown boundary. */
 const NestedToolResultSchema = Schema.Struct({

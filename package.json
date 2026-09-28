@@ -14,6 +14,7 @@
   },
   "type": "module",
   "scripts": {
+    "code-mode:usage": "node scripts/code-mode-usage.mjs",
     "check": "pnpm layout:check && pnpm diagnostics:guard && pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

@@ -43,9 +43,6 @@ describe("nested compact targets", () => {
     expect(
       describeNestedSubject("mcp.request", { arguments: { password: "PRIVATE" } }, "/project"),
     ).toBeUndefined();
-    expect(describeNestedSubject("pi.powershell", { command: "Get-ChildItem" }, "/project")).toBe(
-      "Get-ChildItem",
-    );
   });
 
   it("bounds Unicode targets without splitting code points", () => {

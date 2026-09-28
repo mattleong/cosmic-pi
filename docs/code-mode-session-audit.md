@@ -1,5 +1,8 @@
 # Code Mode session audit
 
+> Historical: this describes Code Mode's former in-process interpreter. Programs now run in a
+> fresh Node.js process; see [the plan](plans/pi-code-mode-node-process.md).
+
 ## Scope
 
 Reviewed all 36 Code Mode invocations in the six most recent prior project sessions containing Code Mode calls. Excluded the current conversation and sessions without Code Mode. Inspected programs, recorded results, surrounding task context, and subsequent calls. Followed longer sequences where needed to assess dependencies. Did not execute logged commands or retain copies of transcripts or thinking.

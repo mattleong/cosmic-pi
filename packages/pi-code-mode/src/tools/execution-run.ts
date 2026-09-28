@@ -152,8 +152,7 @@ export function runCodeModeExecution(
         onDeliveryFailure: recordDeliveryFailure,
         observe: (id, name, args, result, isError) =>
           compact.observe(id, () => {
-            if (policy === undefined || presentationCwd === undefined || name === "powershell")
-              return undefined;
+            if (policy === undefined || presentationCwd === undefined) return undefined;
             return projectBuiltinCompactSummary(name, {
               ...policy,
               phase: "settled",
@@ -238,7 +237,6 @@ export function runCodeModeExecution(
           gated(dispatchMcp),
           budget,
           {
-            includePowerShell: environment.definitions.powershell !== undefined,
             observationId: compact.identity,
             onDeliveryFailure: recordDeliveryFailure,
             onOutputReturned: (id) => {

@@ -5,7 +5,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import {
-  makeNestedPiToolDefinitions,
   makeNestedPiToolDispatch,
   nestedResultToGuestData,
   type NestedDispatchOptions,
@@ -69,13 +68,6 @@ describe("nestedResultToGuestData", () => {
       expect(error.message).toContain("unrecognized result shape");
     }),
   );
-});
-
-describe("nested definition factory", () => {
-  it("adds Pi's PowerShell definition only for Windows", () => {
-    expect(makeNestedPiToolDefinitions("/project", "darwin").powershell).toBeUndefined();
-    expect(makeNestedPiToolDefinitions("C:\\project", "win32").powershell).toBeDefined();
-  });
 });
 
 describe("nested dispatch", () => {

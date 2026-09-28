@@ -280,7 +280,6 @@ const programs = (list: ReadonlyArray<ProgramScenario>) =>
 const registered = () => {
   const owned = buildCodeModeToolDefinition({
     catalogBudget: 0,
-    includePowerShell: false,
     execute: () => Promise.reject(new Error("Rendering must not execute")),
     startUiTicker: () => () => undefined,
   });

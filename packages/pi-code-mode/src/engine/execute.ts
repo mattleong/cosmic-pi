@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import {
   openProgramProcess,
   PROGRAM_OUTPUT_BYTES,
+  PROGRAM_PLATFORM_SUPPORTED,
   type ProgramProcess,
   type ProgramProcessOptions,
 } from "../boundary/host-program-process.ts";
@@ -162,7 +163,7 @@ export const executeProgram = <R>(
         finish(failure({ kind: "ParseError", message: "Code cannot be empty." })),
       );
     }
-    if (process.platform !== "darwin" && process.platform !== "linux") {
+    if (!PROGRAM_PLATFORM_SUPPORTED) {
       return Effect.succeed(
         finish(failure(executionFailure("Code Mode requires macOS or Linux."))),
       );
@@ -364,7 +365,9 @@ export const executeProgram = <R>(
       const { message } = outcome;
       if (!message.ok) {
         return withDetails(
-          failure(childFailureDiagnostic(message.failure, options.tools, callFailures)),
+          failure(
+            childFailureDiagnostic(message.failure, options.tools, callFailures, options.cwd),
+          ),
         );
       }
       const success = successResult(message, limits.maxOutputBytes);

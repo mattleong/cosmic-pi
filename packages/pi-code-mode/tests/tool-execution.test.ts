@@ -82,7 +82,7 @@ const fakeDefinitions = (
       }));
     },
   });
-  const portable = {
+  return nestedToolDefinitionsFixture({
     read: definition("read"),
     bash: definition("bash"),
     edit: definition("edit"),
@@ -90,12 +90,7 @@ const fakeDefinitions = (
     grep: definition("grep"),
     find: definition("find"),
     ls: definition("ls"),
-  };
-  return nestedToolDefinitionsFixture(
-    Object.hasOwn(impl, "powershell")
-      ? { ...portable, powershell: definition("powershell") }
-      : portable,
-  );
+  });
 };
 
 const leafDefinitions = (calls: FakeCall[]): NestedPiToolDefinitions => {
@@ -104,7 +99,6 @@ const leafDefinitions = (calls: FakeCall[]): NestedPiToolDefinitions => {
     {
       read: implemented("read"),
       bash: implemented("bash"),
-      powershell: implemented("powershell"),
       edit: implemented("edit"),
       write: implemented("write"),
       grep: implemented("grep"),
@@ -157,7 +151,6 @@ describe("guest catalog", () => {
         `tools.pi.find({ pattern: "*", limit: Number.MAX_SAFE_INTEGER + 1 })`,
         `tools.pi.ls({ limit: Infinity })`,
         `tools.pi.bash({ command: "true", timeout: 0 })`,
-        `tools.pi.powershell({ command: "Write-Output ok", timeout: NaN })`,
         `tools.pi.edit({ path: "x", edits: [] })`,
       ];
       const calls: FakeCall[] = [];
@@ -209,11 +202,6 @@ describe("guest catalog", () => {
           input: { command: "true", timeout: 0.5 },
         },
         {
-          name: "powershell",
-          source: `tools.pi.powershell({ command: "Write-Output ok", timeout: 0.25 })`,
-          input: { command: "Write-Output ok", timeout: 0.25 },
-        },
-        {
           name: "edit",
           source: `tools.pi.edit({ path: "a", edits: [{ oldText: "before", newText: "after" }] })`,
           input: { path: "a", edits: [{ oldText: "before", newText: "after" }] },
@@ -242,20 +230,6 @@ describe("guest catalog", () => {
       expect(guestJson(textOf(result))).toEqual(validCalls.map(({ name }) => name));
       expect(calls.map(({ name, input }) => ({ name, input }))).toEqual(
         validCalls.map(({ name, input }) => ({ name, input })),
-      );
-    }),
-  );
-
-  it.effect("does not expose PowerShell when the current definitions omit it", () =>
-    Effect.gen(function* () {
-      const nonWindows = makeHarness();
-      yield* Effect.promise(() =>
-        expect(
-          nonWindows(
-            "call-no-powershell",
-            `return await tools.pi.powershell({ command: "Write-Output nope" });`,
-          ),
-        ).rejects.toThrow(/Unknown tool.*pi\.powershell/s),
       );
     }),
   );
@@ -319,7 +293,7 @@ describe("guest catalog", () => {
 });
 
 describe("early-path clamp wiring", () => {
-  it.effect("clamps or fixes every early outcome before interpreter work", () =>
+  it.effect("clamps or fixes every early outcome before program work", () =>
     Effect.gen(function* () {
       const code = "return 1;";
       const source = "éé";
@@ -538,7 +512,7 @@ describe("cumulative nested output budget", () => {
     }),
   );
 
-  it.effect("charges repeated output-overrun refusals through the real interpreter", () =>
+  it.effect("charges repeated output-overrun refusals through a real program", () =>
     Effect.gen(function* () {
       const definitions = fakeDefinitions({ read: () => Promise.resolve("12345678") });
       for (const [limit, seed, expected] of [

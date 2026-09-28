@@ -260,7 +260,7 @@ describe("output recovery without replay", () => {
     }).pipe(Effect.provide(CodeModeResults.layer)),
   );
 
-  it.effect("rejects mixed execution forms before interpreter dispatch", () =>
+  it.effect("rejects mixed execution forms before starting a program", () =>
     Effect.gen(function* () {
       const results = yield* CodeModeResults;
       const h = harness(results);

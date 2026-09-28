@@ -53,42 +53,47 @@ const escaped = (failure: ChildFailure, text: string): string =>
       ? `Uncaught exception: ${text}`
       : `Uncaught ${text}`;
 
-/** What Node's permission model refused, named by the flag its message suggests. */
-const REFUSED = [
-  {
-    flag: "--allow-fs-read",
-    action: "read files",
-    tools: "tools.pi.read, tools.pi.grep, tools.pi.find or tools.pi.ls",
-    recorded: "read",
-  },
-  {
-    flag: "--allow-fs-write",
-    action: "write files",
-    tools: "tools.pi.write or tools.pi.edit",
-    recorded: "change",
-  },
-  {
-    flag: "--allow-child-process",
-    action: "start processes",
-    tools: "tools.pi.bash",
-    recorded: "command",
-  },
-];
+/** A refused path as the program wrote it: relative to its cwd when inside it. */
+const shownPath = (resource: string, cwd: string): string =>
+  resource.startsWith(`${cwd}/`) ? resource.slice(cwd.length + 1) : resource;
 
-const refusal = (failure: ChildFailure): string => {
+/** The package a refused `node_modules` path belongs to, including its scope. */
+const packageName = (resource: string): string | undefined => {
+  const index = resource.lastIndexOf("/node_modules/");
+  if (index < 0) return undefined;
+  const [first, second] = resource.slice(index + "/node_modules/".length).split("/");
+  return first?.startsWith("@") && second !== undefined ? `${first}/${second}` : first;
+};
+
+const refusal = (failure: ChildFailure, cwd: string): string => {
+  const { permission, resource } = failure;
+  const target = resource === undefined ? undefined : shownPath(resource, cwd);
   if (failure.module === true) {
-    return "Programs can't import project files or packages. Use node: built-in modules, and read files with tools.pi.read.";
+    const name = resource === undefined ? undefined : packageName(resource);
+    const what =
+      name !== undefined
+        ? `the "${name}" package`
+        : target !== undefined
+          ? target
+          : "project files or packages";
+    return `Programs can't import ${what}. Use node: built-in modules, and read files with tools.pi.read.`;
   }
-  const refused = REFUSED.find(({ flag }) => (failure.message ?? "").includes(flag));
-  return refused === undefined
-    ? "Programs can't use this Node.js API directly. Use tools.pi.* for files and processes so the work is recorded."
-    : `Programs can't ${refused.action} directly. Use ${refused.tools} so the ${refused.recorded} is recorded.`;
+  switch (permission) {
+    case "FileSystemRead":
+      return `Programs can't read ${target ?? "files"} directly. Use tools.pi.read, tools.pi.grep, tools.pi.find or tools.pi.ls so the read is recorded.`;
+    case "FileSystemWrite":
+      return `Programs can't write ${target ?? "files"} directly. Use tools.pi.write or tools.pi.edit so the change is recorded.`;
+    case "ChildProcess":
+      return "Programs can't start processes directly. Use tools.pi.bash so the command is recorded.";
+    default:
+      return "Programs can't use this Node.js API directly. Use tools.pi.* for files and processes so the work is recorded.";
+  }
 };
 
 /** Node's refusal points at launch flags the program cannot use; name the recorded tool. */
-const accessDenied = (failure: ChildFailure): CodeModeDiagnostic => ({
+const accessDenied = (failure: ChildFailure, cwd: string): CodeModeDiagnostic => ({
   kind: "ExecutionFailure",
-  message: refusal(failure),
+  message: refusal(failure, cwd),
   ...locationOf(failure),
   ...(failure.message !== undefined && { facts: { reason: failure.message } }),
 });
@@ -100,6 +105,7 @@ export const childFailureDiagnostic = <R>(
   failure: ChildFailure,
   tools: HostTools<R>,
   callFailures: ReadonlyMap<number, CodeModeDiagnostic>,
+  cwd: string,
 ): CodeModeDiagnostic => {
   const location = locationOf(failure);
   const message = failure.message ?? "";
@@ -144,7 +150,7 @@ export const childFailureDiagnostic = <R>(
         facts: { owner: "The return value" },
       };
     case "thrown": {
-      if (failure.code === "ERR_ACCESS_DENIED") return accessDenied(failure);
+      if (failure.code === "ERR_ACCESS_DENIED") return accessDenied(failure, cwd);
       const unknown = failure.name === "TypeError" ? NOT_A_FUNCTION.exec(message) : null;
       if (unknown !== null && failure.via !== "uncaught") {
         return unknownTool(tools, unknown[1]!, failure);

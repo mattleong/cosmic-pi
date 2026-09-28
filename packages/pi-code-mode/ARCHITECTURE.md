@@ -3,7 +3,7 @@
 `pi-code-mode` owns one Effect-managed Pi extension. It provides trusted-project configuration,
 the session lifecycle, `/code-mode settings` (through core's `registerExtensionCommand` and Cosmic UI's settings shell), and one `code_mode` tool. A `{code,intent?}` call runs one
 JavaScript program in a fresh Node.js process over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
-`write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
+`write`, `grep`, `find`, and `ls`. The tool registers only on macOS and Linux. The reviewed
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
 versioned session protocol. The fixed `tools.mcp.request` leaf queries `pi-mcp` through its own
 versioned session protocol. `src/engine/` supplies `tools.$codemode.search`. A mutually
@@ -162,8 +162,7 @@ code 1; stopped the program`) when it is the only matching row and the collapsed
   search, Pi-side dispatch, the process protocol, failure diagnostics and output bounding. See
   "Program execution" below.
 - `src/boundary/` contains the program process adapter and its plain-ESM child runner and watchdog,
-  fresh Pi built-in adapters including conditional
-  Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
+  fresh Pi built-in adapters, explicit Background Tasks and MCP protocol clients, the guarded progress
   publisher, the synchronous retained-output commit runner, the hostile renderer-ticker adapter,
   Pi dialog adapters, and the process-memory deactivation handoff. Foreign Promise
   adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
@@ -281,7 +280,8 @@ the runner's two files are readable, workers are allowed, and so is the network 
 child processes, addons and WASI are refused, so file and process work goes through
 recorded `tools.pi.*` calls. The allowlist uses the modules' real paths, because Node resolves the
 entry's real path under the same permissions. `engine/failure.ts` turns Node's
-`ERR_ACCESS_DENIED` into guidance naming the tool to use. macOS and Linux only; other platforms
+`ERR_ACCESS_DENIED` into guidance naming the refused file or package, from the error's
+`permission` and `resource`, and the tool to use instead. macOS and Linux only; other platforms
 are refused before anything starts.
 
 `boundary/code-mode-child.mjs` is plain ESM because Node does not strip types from packages under
@@ -330,7 +330,7 @@ second chance through its JSON codec.
 
 ## Tool execution and limits
 
-The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
+The catalog contains seven core `tools.pi` leaves, the fixed
 `tools.session.backgroundTask` and `tools.mcp.request` adapters, and engine-owned search. Inputs pass Effect Schema before
 dispatch. Built-in, read and Background Tasks guest inputs are closed: an unknown key at any depth
 is a catchable input failure before native dispatch or provider discovery, never stripped. MCP
@@ -340,7 +340,7 @@ Native read returns at most 2,000 lines or 51,200 bytes. Its optional structured
 continuation metadata. `requireComplete` rejects every explicit limit and offsets above 1; it does
 not auto-page or perform extra I/O. Decoded text is not raw-byte or atomic-read evidence, and outer
 saved paging cannot recover child data the read omitted. Grep context is a non-negative safe
-integer. Bash and PowerShell timeouts are positive finite numbers and may be fractional. Invalid
+integer. Bash timeouts are positive finite numbers and may be fractional. Invalid
 numeric input fails before a fresh Pi definition runs.
 
 Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and `tool_result`
