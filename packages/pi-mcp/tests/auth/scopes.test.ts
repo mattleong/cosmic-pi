@@ -77,6 +77,32 @@ describe("OAuth permission policy", () => {
           }
       }),
   );
+  it.effect("step-up keeps the rejected grant's scopes and asks only about new ones", () =>
+    Effect.gen(function* () {
+      for (const configured of [[], ["read"]])
+        expect(
+          yield* proposeScopes(
+            { ...config, scopes: configured },
+            {
+              retained: true,
+              challenge: { scope: "admin", error: "insufficient_scope" },
+              previousScopes: ["read", "write"],
+            },
+          ),
+        ).toEqual({
+          requested: ["admin", "read", "write"],
+          additions: ["admin"],
+          source: "challenge",
+        });
+      expect(
+        (yield* proposeScopes(config, {
+          retained: false,
+          challenge: { scope: "admin", error: "insufficient_scope" },
+          previousScopes: ["read"],
+        })).requested,
+      ).toEqual(["admin"]);
+    }),
+  );
   it.effect("explicit empty scopes suppress inference and conditional offline access", () =>
     Effect.gen(function* () {
       expect(

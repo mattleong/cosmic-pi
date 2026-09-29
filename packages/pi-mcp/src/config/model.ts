@@ -52,6 +52,12 @@ export interface McpEffectiveServer {
   readonly directory: string;
   /** Hash of owning scope and complete effective definition, never resolved credentials. */
   readonly identity: string;
+  /**
+   * Hash of owning source, id, and credential audience (HTTP URL and auth configuration).
+   * Stored OAuth credentials key on it, so tool policy, protocol, headers, and
+   * enablement changes keep a sign-in.
+   */
+  readonly credentialIdentity: string;
   readonly enabled: boolean;
   readonly definition?: McpServerDefinition;
   readonly diagnostic?: string;

@@ -1,10 +1,12 @@
-import type {
-  Client,
-  RequestOptions,
-  SubscriptionFilter,
-  Transport,
+import {
+  SUBSCRIPTION_ID_META_KEY,
+  type Client,
+  type RequestOptions,
+  type SubscriptionFilter,
+  type Transport,
 } from "@modelcontextprotocol/client";
 import { SDK_OPERATION_HEADER } from "./sdk-fetch.ts";
+import { decorateTransport } from "./sdk-transport.ts";
 import { invokeHostCallback, makeNativeContext } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -42,18 +44,16 @@ export const sdkCapabilities = (
   Effect.try({
     try: () => {
       const capabilities = client.getServerCapabilities();
+      const modern = client.getProtocolEra() === "modern";
       return Object.freeze({
         tools: capabilities?.tools !== undefined,
         resources: capabilities?.resources !== undefined,
         prompts: capabilities?.prompts !== undefined,
-        parameterHeaders: http && client.getNegotiatedProtocolVersion() === "2026-07-28",
+        parameterHeaders: http && modern,
         completions: capabilities?.completions !== undefined,
         resourceSubscriptions: capabilities?.resources?.subscribe === true,
-        multiRoundTrip: client.getNegotiatedProtocolVersion() === "2026-07-28",
-        requestLogging:
-          http &&
-          client.getNegotiatedProtocolVersion() === "2026-07-28" &&
-          capabilities?.logging !== undefined,
+        multiRoundTrip: modern,
+        requestLogging: http && modern && capabilities?.logging !== undefined,
       });
     },
     catch: () => boundaryError("protocol", "not-sent", "MCP capabilities are unavailable."),
@@ -99,7 +99,7 @@ const ProgressNotification = Schema.Struct({
 // accept the acknowledgement and exact honored filter before anything is queued.
 const SubscriptionAcknowledgement = Schema.Struct({
   params: Schema.Struct({
-    _meta: Schema.Struct({ "io.modelcontextprotocol/subscriptionId": ProgressToken }),
+    _meta: Schema.Struct({ [SUBSCRIPTION_ID_META_KEY]: ProgressToken }),
     notifications: Schema.Struct({
       toolsListChanged: Schema.optionalKey(Schema.Boolean),
       resourcesListChanged: Schema.optionalKey(Schema.Boolean),
@@ -115,7 +115,7 @@ const SubscriptionNotification = Schema.Struct({
     uri: Schema.String.check(Schema.isMaxLength(1_024)),
     _meta: Schema.optionalKey(
       Schema.Struct({
-        "io.modelcontextprotocol/subscriptionId": Schema.optionalKey(ProgressToken),
+        [SUBSCRIPTION_ID_META_KEY]: Schema.optionalKey(ProgressToken),
       }),
     ),
   }),
@@ -271,16 +271,8 @@ export const makeSdkEvents = (
             if (entry.token !== undefined) progress.delete(entry.token);
           });
       },
-      bindTransport: (transport: Transport): Transport => {
-        const decorated: Transport = {
-          get sessionId() {
-            return transport.sessionId;
-          },
-          start: () => transport.start(),
-          close: () => transport.close(),
-          setProtocolVersion: (version) => transport.setProtocolVersion?.(version),
-          setSupportedProtocolVersions: (versions) =>
-            transport.setSupportedProtocolVersions?.(versions),
+      bindTransport: (transport: Transport): Transport =>
+        decorateTransport(transport, {
           send: (message, options) => {
             const tag = options?.headers?.[SDK_OPERATION_HEADER];
             let entry =
@@ -326,67 +318,62 @@ export const makeSdkEvents = (
               return Promise.reject(error);
             }
           },
-        };
-        if (transport.hasPerRequestStream)
-          Object.defineProperty(decorated, "hasPerRequestStream", { value: true });
-        transport.onclose = () => decorated.onclose?.();
-        transport.onerror = (error) => decorated.onerror?.(error);
-        transport.onmessage = (message, extra) => {
-          const method = "method" in message ? message.method : undefined;
-          if (method === undefined && "id" in message) {
-            for (const entry of subscriptions.values())
-              if (entry.id === message.id) entry.writes.remoteTerminated();
-            for (const [token, entry] of progress)
-              if (entry.id === message.id) progress.delete(token);
-          } else if (method === "notifications/progress" && !ended && !state.closing) {
-            const value = Schema.decodeUnknownOption(ProgressNotification)(message);
-            if (Option.isSome(value)) {
-              try {
-                const { progressToken, ...reported } = value.value.params;
-                progress.get(progressToken)?.callback(reported);
-              } catch {
-                /* Progress is observational. */
+          receive: (message) => {
+            const method = "method" in message ? message.method : undefined;
+            if (method === undefined && "id" in message) {
+              for (const entry of subscriptions.values())
+                if (entry.id === message.id) entry.writes.remoteTerminated();
+              for (const [token, entry] of progress)
+                if (entry.id === message.id) progress.delete(token);
+            } else if (method === "notifications/progress" && !ended && !state.closing) {
+              const value = Schema.decodeUnknownOption(ProgressNotification)(message);
+              if (Option.isSome(value)) {
+                try {
+                  const { progressToken, ...reported } = value.value.params;
+                  progress.get(progressToken)?.callback(reported);
+                } catch {
+                  /* Progress is observational. */
+                }
               }
             }
-          }
-          if (method === "notifications/subscriptions/acknowledged") {
-            const acknowledged = Schema.decodeUnknownOption(SubscriptionAcknowledgement)(message);
-            if (Option.isSome(acknowledged))
-              for (const entry of subscriptions.values())
-                if (
-                  entry.accepting &&
-                  entry.acknowledged === undefined &&
-                  entry.id ===
-                    acknowledged.value.params._meta["io.modelcontextprotocol/subscriptionId"]
-                )
-                  entry.acknowledged =
-                    acknowledged.value.params.notifications.resourceSubscriptions ?? [];
-          }
-          if (method === "notifications/cancelled") {
-            const cancelled = Schema.decodeUnknownOption(Cancellation)(message);
-            if (Option.isSome(cancelled))
-              for (const entry of subscriptions.values())
-                if (entry.id === cancelled.value.params.requestId) entry.writes.remoteTerminated();
-          }
-          if (method === "notifications/resources/updated") {
-            if (ended || state.closing) return;
-            const value = Schema.decodeUnknownOption(SubscriptionNotification)(message);
-            if (Option.isNone(value)) return;
-            const { uri, _meta } = value.value.params;
-            const modern = client.getNegotiatedProtocolVersion() === "2026-07-28";
-            const id = modern ? _meta?.["io.modelcontextprotocol/subscriptionId"] : undefined;
-            if (modern && id === undefined) return;
-            const entry = accepts(id, uri);
-            if (!entry) return;
-            if (entry.filter === undefined) {
-              if (entry.pending.length < 32) entry.pending.push(uri);
-              else remoteDropped = Math.min(Number.MAX_SAFE_INTEGER, remoteDropped + 1);
-            } else offerRemote({ kind: "resource-updated", uri, subscription: entry.identity });
-          }
-          decorated.onmessage?.(message, extra);
-        };
-        return decorated;
-      },
+            if (method === "notifications/subscriptions/acknowledged") {
+              const acknowledged = Schema.decodeUnknownOption(SubscriptionAcknowledgement)(message);
+              if (Option.isSome(acknowledged))
+                for (const entry of subscriptions.values())
+                  if (
+                    entry.accepting &&
+                    entry.acknowledged === undefined &&
+                    entry.id === acknowledged.value.params._meta[SUBSCRIPTION_ID_META_KEY]
+                  )
+                    entry.acknowledged =
+                      acknowledged.value.params.notifications.resourceSubscriptions ?? [];
+            }
+            if (method === "notifications/cancelled") {
+              const cancelled = Schema.decodeUnknownOption(Cancellation)(message);
+              if (Option.isSome(cancelled))
+                for (const entry of subscriptions.values())
+                  if (entry.id === cancelled.value.params.requestId)
+                    entry.writes.remoteTerminated();
+            }
+            if (method === "notifications/resources/updated") {
+              if (ended || state.closing) return false;
+              const value = Schema.decodeUnknownOption(SubscriptionNotification)(message);
+              if (Option.isNone(value)) return false;
+              const { uri, _meta } = value.value.params;
+              // Modern updates name their listen stream; legacy notifications cannot.
+              const modern = client.getProtocolEra() === "modern";
+              const id = modern ? _meta?.[SUBSCRIPTION_ID_META_KEY] : undefined;
+              if (modern && id === undefined) return false;
+              const entry = accepts(id, uri);
+              if (!entry) return false;
+              if (entry.filter === undefined) {
+                if (entry.pending.length < 32) entry.pending.push(uri);
+                else remoteDropped = Math.min(Number.MAX_SAFE_INTEGER, remoteDropped + 1);
+              } else offerRemote({ kind: "resource-updated", uri, subscription: entry.identity });
+            }
+            return true;
+          },
+        }),
       remoteEvents: Stream.fromQueue(remote),
       remoteEventDrops: Effect.sync(() => remoteDropped),
       changes: Stream.fromQueue(queue).pipe(

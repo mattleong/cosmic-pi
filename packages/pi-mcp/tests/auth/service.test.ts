@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vitest";
 import type { McpGrant, McpRegistrationReceipt } from "../../src/auth/credentials.ts";
 import {
@@ -545,6 +546,72 @@ describe("user-only authentication ownership", () => {
     }),
   );
 
+  it.effect("a rejected unexpired token with a refresh token refreshes once, not a sign-in", () =>
+    Effect.gen(function* () {
+      const current = server("recover");
+      // The authorization server omitted expires_in, so expiry alone never refreshes.
+      const storage = memory({
+        ...grant(current.identity),
+        expiresAt: undefined,
+        tokens: { access_token: "first", refresh_token: "refresh" },
+      });
+      let refreshes = 0;
+      const tokens = Schema.decodeUnknownSync(Schema.Struct({ access_token: Schema.String }));
+      const auth = yield* make(storage, {
+        ...sdk,
+        refresh: (_server, value) =>
+          Effect.sync(() => {
+            refreshes++;
+            return {
+              ...value,
+              tokens: { access_token: `refreshed-${refreshes}`, refresh_token: "refresh" },
+            };
+          }),
+        token: (_server, value) => Effect.sync(() => tokens(value.tokens).access_token),
+      });
+      expect(yield* auth.access(current)).toBe("first");
+      yield* auth.reject(current, { credentialUsed: true });
+      expect(yield* auth.status(current)).not.toEqual({ state: "required" });
+      expect(yield* auth.access(current)).toBe("refreshed-1");
+      // A second rejection soon after recovery needs a sign-in, so refresh cannot loop.
+      yield* auth.reject(current, { credentialUsed: true });
+      expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({
+        kind: "auth-required",
+        reason: "oauth-token-rejected",
+      });
+      expect(yield* auth.status(current)).toEqual({ state: "required" });
+      expect(refreshes).toBe(1);
+      const receipt = yield* auth.login(current, ui);
+      yield* auth.finishLogin(current, receipt, true);
+      yield* storage.write(current.identity, {
+        ...grant(current.identity),
+        expiresAt: undefined,
+        tokens: { access_token: "signed-in", refresh_token: "refresh" },
+      });
+      expect(yield* auth.access(current)).toBe("signed-in");
+      yield* TestClock.adjust("1 minute");
+      yield* auth.reject(current, { credentialUsed: true });
+      expect(yield* auth.access(current)).toBe("refreshed-2");
+    }),
+  );
+
+  it.effect("a rejected token without a refresh token still requires sign-in", () =>
+    Effect.gen(function* () {
+      const current = server("no-refresh");
+      const storage = memory({ ...grant(current.identity), expiresAt: undefined });
+      const auth = yield* make(storage, {
+        ...sdk,
+        refresh: () => Effect.die("A grant without a refresh token must not refresh."),
+      });
+      expect(yield* auth.access(current)).toBe("private-token");
+      yield* auth.reject(current, { credentialUsed: true });
+      expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({
+        kind: "auth-required",
+        reason: "oauth-token-rejected",
+      });
+    }),
+  );
+
   it.effect("reports native mutation blocking without an additional credential read", () =>
     Effect.gen(function* () {
       let reads = 0;
@@ -594,13 +661,14 @@ describe("user-only authentication ownership", () => {
         };
         const boundary: McpSdkAuthContract = {
           ...sdk,
-          refresh: (_server, original) =>
+          refresh: (_server, original, onDispatch) =>
             Effect.gen(function* () {
               refreshes++;
               expect(original.quarantine).toBeUndefined();
               expect(stored.quarantine).toBe("refresh");
               expect(stored.tokens).toEqual(original.tokens);
               yield* Deferred.succeed(entered, undefined);
+              onDispatch?.();
               if (failure === "cancel") return yield* Effect.never;
               if (failure === "refresh") return yield* failed();
               return {
@@ -631,6 +699,29 @@ describe("user-only authentication ownership", () => {
         expect({ refreshes, writes }).toEqual(before);
       }),
     );
+
+  it.effect("a refresh that fails before sending keeps the refresh token usable", () =>
+    Effect.gen(function* () {
+      const current = server("refresh-not-sent");
+      const storage = memory(grant(current.identity));
+      let offline = true;
+      const auth = yield* make(storage, {
+        ...sdk,
+        // Name resolution fails before the token request leaves the process.
+        refresh: (_server, original, onDispatch) =>
+          Effect.suspend(() => {
+            if (offline) return Effect.fail(boundaryError("unavailable", "not-sent", "Offline."));
+            onDispatch?.();
+            return Effect.succeed({ ...original, expiresAt: Number.MAX_SAFE_INTEGER });
+          }),
+      });
+      expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({ kind: "unavailable" });
+      expect(storage.value?.quarantine).toBeUndefined();
+      offline = false;
+      expect(yield* auth.access(current)).toBe("private-token");
+      expect(storage.value?.expiresAt).toBe(Number.MAX_SAFE_INTEGER);
+    }),
+  );
 
   it.effect("restored quarantined grants never reach token validation or refresh", () =>
     Effect.gen(function* () {

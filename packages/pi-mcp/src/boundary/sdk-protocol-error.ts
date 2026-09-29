@@ -109,6 +109,8 @@ export const mapSdkClientError = <Failure>(
     case SdkErrorCode.NotInitialized:
     case SdkErrorCode.AlreadyConnected:
       return boundaryError("connection", "not-sent", unavailable);
+    case SdkErrorCode.EraNegotiationFailed:
+      return boundaryError("protocol", "not-sent", "MCP protocol negotiation failed.");
     default:
       return undefined;
   }

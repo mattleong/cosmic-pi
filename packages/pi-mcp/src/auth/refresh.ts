@@ -28,7 +28,28 @@ export const refreshGrant = (
     yield* store.write({ ...grant, quarantine: "refresh" });
     if (!owned()) return yield* stale();
     yield* yield* AuthRequestCurrent;
-    const refreshed = yield* sdk.refresh(server, grant);
+    let dispatched = false;
+    const refreshed = yield* sdk
+      .refresh(server, grant, () => {
+        dispatched = true;
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          // A transient local failure (DNS after sleep, a deadline before sending) never
+          // sent the refresh token, so it stays usable. Anything later stays quarantined.
+          dispatched || !owned() || (error.kind !== "unavailable" && error.kind !== "timeout")
+            ? Effect.void
+            : Effect.uninterruptibleMask((restore) =>
+                restore(store.write(grant)).pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      if (owned()) authority.blocked = undefined;
+                    }),
+                  ),
+                ),
+              ).pipe(Effect.ignore),
+        ),
+      );
     if (!owned()) return yield* stale();
     if (refreshed.quarantine !== undefined) return yield* authFailure();
     const token = yield* sdk.token(server, refreshed);
@@ -45,5 +66,7 @@ export const refreshGrant = (
       ),
     );
     if (!current() || authority.blocked !== undefined) return yield* stale();
+    // The SDK keeps the prior refresh token when the server does not rotate it.
+    authority.refreshable = true;
     return token;
   });

@@ -1,8 +1,9 @@
-import type {
-  AuthorizationServerMetadata,
-  OAuthClientInformationMixed,
-  OAuthProtectedResourceMetadata,
-  OAuthTokens,
+import {
+  checkResourceAllowed,
+  type AuthorizationServerMetadata,
+  type OAuthClientInformationMixed,
+  type OAuthProtectedResourceMetadata,
+  type OAuthTokens,
 } from "@modelcontextprotocol/client";
 import {
   OAuthMetadataSchema,
@@ -22,12 +23,24 @@ import {
   validateAuthUrl,
   callbackRedirect,
 } from "../auth/policy.ts";
-import { parseScopes, validateScopes, invalidScopes } from "../auth/scopes.ts";
+import { parseScopes, validateScopes } from "../auth/scopes.ts";
 import { boundaryError } from "../client/errors.ts";
-import type { McpEffectiveServer } from "../config/model.ts";
+import type { McpEffectiveServer, McpOAuthConfig } from "../config/model.ts";
 import { restorePublicClient } from "./sdk-auth-client.ts";
 
 export const sdkAuthValue = <A>(work: () => A) => Effect.try({ try: work, catch: deniedAuth });
+
+/**
+ * RFC 9728 servers often publish their origin or a parent path as the resource. Like the
+ * SDK, an endpoint accepts a same-origin path prefix and binds to the published
+ * identifier. A configured resource must match exactly, and a published query must
+ * match the expected one.
+ */
+export const resourceAllowed = (config: McpOAuthConfig, expected: URL, published: URL) =>
+  config.resource !== undefined
+    ? published.href === expected.href
+    : (published.search === "" || published.search === expected.search) &&
+      checkResourceAllowed({ requestedResource: expected, configuredResource: published });
 export const authJson = (
   value:
     | AuthorizationServerMetadata
@@ -46,13 +59,11 @@ const validTokens = (tokens: OAuthTokens): boolean =>
   !/\s/.test(tokens.access_token) &&
   (tokens.expires_in === undefined ||
     (Number.isFinite(tokens.expires_in) && tokens.expires_in >= 0));
+/** RFC 6749 section 3.3 lets the server grant different scopes; only their syntax is checked. */
 const tokenScopes = (tokens: OAuthTokens, requested?: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     if (requested) yield* validateScopes(requested);
-    if (tokens.scope === undefined) return;
-    const granted = yield* parseScopes(tokens.scope);
-    if (requested && granted.some((scope) => !requested.includes(scope)))
-      return yield* invalidScopes();
+    if (tokens.scope !== undefined) yield* parseScopes(tokens.scope);
   });
 
 /** No stored quarantined token may escape this boundary, including through refresh. */
@@ -69,7 +80,7 @@ export const decodeSdkGrant = (server: McpEffectiveServer, grant: McpGrant) =>
     if (
       !config ||
       server.definition?.transport !== "http" ||
-      grant.identity !== server.identity ||
+      grant.identity !== server.credentialIdentity ||
       grant.registration !== config.registration ||
       (grant.resourceMetadataSource === "configured" &&
         (config.allowMissingResourceMetadata === false || config.issuer === undefined)) ||
@@ -91,7 +102,7 @@ export const decodeSdkGrant = (server: McpEffectiveServer, grant: McpGrant) =>
       policy,
     );
     const storedResource = yield* validateAuthUrl(grant.resource, policy);
-    if (storedResource.href !== expectedResource.href) return yield* deniedAuth();
+    if (!resourceAllowed(config, expectedResource, storedResource)) return yield* deniedAuth();
     if (config.registration === "metadata") {
       if (!config.clientMetadataUrl) return yield* deniedAuth();
       const expectedClient = yield* validateAuthUrl(config.clientMetadataUrl, policy);

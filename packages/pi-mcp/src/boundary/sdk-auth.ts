@@ -31,10 +31,11 @@ import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import { openAuthCallback } from "./auth-callback.ts";
 import { withAuthFetch } from "./auth-fetch.ts";
-import { discoverAuthResource, missingOnlyMetadataFetch } from "./sdk-auth-discovery.ts";
+import { candidateMetadataFetch, discoverAuthResource } from "./sdk-auth-discovery.ts";
 import {
   authJson as json,
   decodeSdkGrant as decode,
+  resourceAllowed,
   sdkAuthValue as sdk,
   sdkGrantReceipt as receipt,
 } from "./sdk-auth-grant.ts";
@@ -46,15 +47,26 @@ export interface McpSdkAuthContract {
     ui: McpLoginUi,
     options?: McpLoginOptions,
   ) => Effect.Effect<McpGrant, McpBoundaryError>;
+  /** `onDispatch` runs once the token request may leave the process. */
   readonly refresh: (
     server: McpEffectiveServer,
     grant: McpGrant,
+    onDispatch?: () => void,
   ) => Effect.Effect<McpGrant, McpBoundaryError>;
   readonly token: (
     server: McpEffectiveServer,
     grant: McpGrant,
   ) => Effect.Effect<string, McpBoundaryError>;
 }
+/**
+ * Resource servers built on Python URL types list a bare-host issuer with a trailing
+ * slash. Like the SDK's issuer check, treat that one spelling difference as the same issuer.
+ */
+const bareHostSlashVariant = (left: string, right: string) => {
+  const [short, long] = left.length < right.length ? [left, right] : [right, left];
+  return long === `${short}/` && URL.parse(long)?.pathname === "/";
+};
+
 export const makeMcpSdkAuth = Effect.gen(function* () {
   const network = yield* NetworkAddresses;
   const crypto = yield* Crypto.Crypto;
@@ -76,7 +88,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             listener?.redirectUri ?? (yield* callbackRedirect(config.redirectUri)).href;
           if (ui.mode === "manual" && (!config.redirectUri || new URL(redirect).port === "0"))
             return yield* unsupported();
-          const resourceUrl = yield* validateAuthUrl(
+          const expectedResource = yield* validateAuthUrl(
             config.resource ?? server.definition.url,
             policy,
           );
@@ -84,14 +96,14 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           yield* authProgress(ui, { phase: "discovery", deadline });
           const discovery = yield* discoverAuthResource(
             endpoint,
-            resourceUrl,
+            expectedResource,
             config,
             policy,
             options?.challenge,
           ).pipe(Effect.provideService(NetworkAddresses, network));
-          const discoveredResource = yield* validateAuthUrl(discovery.metadata.resource, policy);
-          if (discoveredResource.href !== resourceUrl.href) return yield* deniedAuth();
-          let resource = { ...discovery.metadata, resource: discoveredResource.href };
+          const resourceUrl = yield* validateAuthUrl(discovery.metadata.resource, policy);
+          if (!resourceAllowed(config, expectedResource, resourceUrl)) return yield* deniedAuth();
+          let resource = { ...discovery.metadata, resource: resourceUrl.href };
           let issuer = config.issuer ?? resource.authorization_servers?.[0];
           if (
             !issuer ||
@@ -104,16 +116,20 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           const discoveryIssuer = discovery.source === "origin" ? `${issuer}/` : issuer;
           const metadata = yield* withAuthFetch(policy, (fetch) =>
             discoverAuthorizationServerMetadata(discoveryIssuer, {
-              fetchFn: missingOnlyMetadataFetch(fetch),
+              fetchFn: candidateMetadataFetch(fetch),
             }),
           ).pipe(Effect.provideService(NetworkAddresses, network));
           if (
             !metadata ||
             (metadata.issuer !== issuer &&
-              !(discovery.source === "origin" && metadata.issuer === `${issuer}/`))
+              !(
+                (discovery.source === "origin" || config.issuer === undefined) &&
+                bareHostSlashVariant(metadata.issuer, issuer)
+              ))
           )
             return yield* deniedAuth();
-          if (discovery.source === "origin") {
+          // Bind to the authorization server's own issuer spelling from here on.
+          if (discovery.source === "origin" || metadata.issuer !== issuer) {
             issuer = metadata.issuer;
             resource = { ...resource, authorization_servers: [issuer] };
           }
@@ -137,6 +153,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           yield* validateAuthUrl(metadata.token_endpoint, policy);
           const proposal = yield* proposeScopes(config, {
             retained: discovery.retained,
+            previousScopes: options?.previousGrant?.requestedScopes,
             challenge: discovery.challenge,
             resourceScopes: resource.scopes_supported,
             serverScopes: metadata.scopes_supported,
@@ -191,6 +208,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             .resolve(authorization.hostname)
             .pipe(Effect.mapError(deniedAuth));
           yield* validateAuthAddresses(authorization, addresses, policy);
+          listener?.expectState(state);
           const consume = singleUseCallback(redirect, state);
           const receive = Effect.suspend(() =>
             listener ? listener.receive : ui.readCallback(authorization.href, deadline),
@@ -232,7 +250,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           ).pipe(Effect.provideService(NetworkAddresses, network));
           const grant = {
             version: 1 as const,
-            identity: server.identity,
+            identity: server.credentialIdentity,
             issuer,
             resource: resourceUrl.href,
             clientId: client.client_id,
@@ -265,23 +283,31 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
         }),
       );
     });
-  const refresh: McpSdkAuthContract["refresh"] = (server, grant) =>
+  const refresh: McpSdkAuthContract["refresh"] = (server, grant, onDispatch) =>
     Effect.gen(function* () {
       yield* yield* AuthRequestCurrent;
       const { metadata, client, tokens } = yield* decode(server, grant);
       if (!tokens.refresh_token) return yield* authFailure();
       const policy = yield* authUrlPolicy(server);
-      const updated = yield* withAuthFetch(policy, (fetch) =>
-        refreshAuthorization(grant.issuer, {
-          metadata,
-          clientInformation: client,
-          refreshToken: tokens.refresh_token!,
-          resource: new URL(grant.resource),
-          fetchFn: fetch,
-        }),
+      let dispatched = false;
+      const updated = yield* withAuthFetch(
+        policy,
+        (fetch) =>
+          refreshAuthorization(grant.issuer, {
+            metadata,
+            clientInformation: client,
+            refreshToken: tokens.refresh_token!,
+            resource: new URL(grant.resource),
+            fetchFn: fetch,
+          }),
+        () => {
+          dispatched = true;
+          onDispatch?.();
+        },
       ).pipe(
         Effect.provideService(NetworkAddresses, network),
-        Effect.mapError(() => authFailure()),
+        // Before dispatch the local cause (such as DNS) stays visible to the caller.
+        Effect.mapError((error) => (dispatched ? authFailure() : error)),
       );
       const { tokens: _tokens, receivedAt: _receivedAt, expiresAt: _expiresAt, ...base } = grant;
       return yield* receipt({ ...base, clientInformation: yield* json(client) }, updated);

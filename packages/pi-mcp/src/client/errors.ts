@@ -48,7 +48,6 @@ export class McpBoundaryError extends Schema.TaggedError<McpBoundaryError>()("Mc
       "oauth-deletion-failed",
       "oauth-finalization-failed",
       "gateway-request-invalid",
-      "protocol-negotiation-rejected",
       "rpc-method-not-found",
       "rpc-invalid-params",
       "rpc-invalid-request",

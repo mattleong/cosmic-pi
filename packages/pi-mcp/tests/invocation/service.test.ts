@@ -315,6 +315,8 @@ const realFixture = (
     readonly closing?: Effect.Effect<void>;
     readonly request?: (input: McpRequest) => Effect.Effect<void, McpBoundaryError>;
     readonly open?: McpConnectorContract["open"];
+    /** Legacy servers never send TTL hints. */
+    readonly omitTtl?: boolean;
   } = {},
 ) => {
   const store = fakeConfigStore({
@@ -358,7 +360,7 @@ const realFixture = (
           return {
             action: input.action,
             outcome: "completed" as const,
-            result: { ttlMs: 60_000, ...result },
+            result: seams.omitTtl === true ? result : { ttlMs: 60_000, ...result },
           };
         }),
     }));
@@ -432,6 +434,33 @@ it.effect.each([
       expect(yield* h.read(result).pipe(Effect.flip)).toMatchObject({ kind: "denied" });
     }).pipe(Effect.provide(NodeCrypto.layer)),
 );
+
+it.effect("refuses a tool that requires task execution before dispatch", () => {
+  const f = realFixture({
+    tools: [
+      { name: "run", inputSchema: { type: "object" }, execution: { taskSupport: "required" } },
+    ],
+  });
+  return Effect.gen(function* () {
+    const { execution } = yield* f.harness();
+    expect(yield* execution.execute(request, options).pipe(Effect.flip)).toMatchObject({
+      kind: "unsupported",
+      outcome: "not-sent",
+    });
+    expect(f.sent.some((input) => input.action === "tools.call")).toBe(false);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect("repeated calls to a server without TTL hints list its metadata once", () => {
+  const f = realFixture({ omitTtl: true });
+  return Effect.gen(function* () {
+    const { execution } = yield* f.harness();
+    for (let call = 0; call < 3; call += 1)
+      expect((yield* execution.execute(request, options)).reply.outcome).toBe("completed");
+    expect(f.sent.filter((input) => input.action === "tools.list")).toHaveLength(1);
+    expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(3);
+  }).pipe(Effect.provide(f.layer));
+});
 
 it.effect(
   "connects only for instructions and retains the bounded prefix across disconnect, then revokes it",

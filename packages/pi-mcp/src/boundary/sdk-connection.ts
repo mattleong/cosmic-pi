@@ -11,7 +11,8 @@ import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
 import type { McpEffectiveServer, McpSettings } from "../config/model.ts";
 import { openSdkHttp, type SdkHttpOptions } from "./sdk-http.ts";
-import { openSdkStdio } from "./sdk-stdio.ts";
+import { openSdkStdio, type SdkStdioOptions } from "./sdk-stdio.ts";
+import type { StdioEraVerdict } from "./mcp-protocol/shared/stdio-negotiation.ts";
 import { observeSdkCleanup } from "./sdk-events.ts";
 import { requireSecureBearerDestination } from "../auth/policy.ts";
 
@@ -80,6 +81,9 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
       const provider = yield* ConfigProvider.ConfigProvider;
       const nativeFetch = yield* FetchHttpClient.Fetch;
       const path = yield* Path.Path;
+      // Session-local stdio era verdicts by exact definition identity. Any failed
+      // acquisition forgets its verdict, so the next attempt probes again.
+      const verdicts = new Map<string, StdioEraVerdict>();
       const open: McpConnectorContract["open"] = (server, settings, token, observer) =>
         Effect.gen(function* () {
           if (!settings.enabled || !server.enabled || server.definition === undefined) {
@@ -153,7 +157,16 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
             };
             let acquired: Effect.Effect<McpConnection, McpBoundaryError, Scope.Scope>;
             if (options.transport === "stdio") {
-              acquired = openSdkStdio({ ...common, ...options, onCleanup });
+              const stdioOptions: SdkStdioOptions = {
+                ...common,
+                ...options,
+                onCleanup,
+                onNegotiated: (verdict) => verdicts.set(server.identity, verdict),
+              };
+              const remembered = verdicts.get(server.identity);
+              acquired = openSdkStdio(
+                remembered === undefined ? stdioOptions : { ...stdioOptions, remembered },
+              ).pipe(Effect.tapError(() => Effect.sync(() => verdicts.delete(server.identity))));
             } else {
               const httpOptions: SdkHttpOptions = {
                 ...common,

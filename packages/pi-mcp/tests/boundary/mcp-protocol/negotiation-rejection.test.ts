@@ -4,8 +4,10 @@ import * as Effect from "effect/Effect";
 import { openSdkHttp } from "../../../src/boundary/sdk-http.ts";
 import { legacyInitialized, parseWire, rpcResult } from "../../fixtures/json-rpc.ts";
 
+// Stateful 2025-era HTTP servers answer an unknown pre-initialize request with an
+// uncorrelated 400, as Atlassian's endpoint did; that is legacy evidence.
 it.live.each(["auto", "legacy"] as const)(
-  "keeps pre-initialization rejection separate from authentication in %s mode",
+  "falls back to legacy after an uncorrelated 400 probe in %s mode",
   (protocol) =>
     Effect.gen(function* () {
       const methods: string[] = [];
@@ -19,14 +21,15 @@ it.live.each(["auto", "legacy"] as const)(
             return new Response(
               JSON.stringify({
                 jsonrpc: "2.0",
-                error: { code: -32600, message: "private-server-error" },
+                error: { code: -32000, message: "Bad Request: No valid session ID provided" },
+                id: null,
               }),
               { status: 400, headers: { "content-type": "application/json" } },
             );
           if (request.id === undefined) return new Response(null, { status: 202 });
           return rpcResult(request.id, legacyInitialized());
         });
-      const result = yield* openSdkHttp({
+      const connection = yield* openSdkHttp({
         url: new URL("https://fixture.test/mcp"),
         token: "private-token",
         protocol,
@@ -34,26 +37,11 @@ it.live.each(["auto", "legacy"] as const)(
         connectTimeoutMs: 1_000,
         cleanupTimeoutMs: 200,
         onCleanup: (confirmed) => cleanup.push(confirmed),
-      }).pipe(Effect.result);
-      if (protocol === "auto") {
-        expect(result._tag).toBe("Failure");
-        if (result._tag !== "Failure") throw new Error("Expected negotiation rejection.");
-        expect(result.failure).toMatchObject({
-          kind: "protocol",
-          outcome: "unknown",
-          reason: "protocol-negotiation-rejected",
-        });
-        // Rejected, uncorrelated evidence cannot trigger initialize or an application RPC.
-        expect(methods).toEqual(["server/discover"]);
-        expect(String(result)).not.toContain("private-");
-      } else {
-        expect(result._tag).toBe("Success");
-        if (result._tag !== "Success") throw new Error("Expected legacy connection.");
-        expect(result.success.protocolVersion).toBe("2025-11-25");
-        expect(methods).not.toContain("server/discover");
-        expect(methods).toContain("initialize");
-        yield* result.success.close;
-      }
+      });
+      expect(connection.protocolVersion).toBe("2025-11-25");
+      expect(methods).toContain("initialize");
+      expect(methods.includes("server/discover")).toBe(protocol === "auto");
+      yield* connection.close;
       expect(cleanup).toEqual([true]);
     }),
 );

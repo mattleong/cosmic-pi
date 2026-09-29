@@ -31,6 +31,9 @@ export const openAuthCallback = (configured?: string) =>
     if (server.address._tag !== "TcpAddress") return yield* deniedAuth();
     redirect.port = String(server.address.port);
     let consumed = false;
+    // Set once the authorization URL exists. Until then, and for any other state, a
+    // request cannot use up this attempt.
+    let expectedState: string | undefined;
     yield* server
       .serve(
         Effect.gen(function* () {
@@ -45,7 +48,12 @@ export const openAuthCallback = (configured?: string) =>
           )
             return HttpServerResponse.empty({ status: 404 });
           const callback = URL.parse(request.url, redirect);
-          if (!callback || callback.pathname !== redirect.pathname)
+          if (
+            !callback ||
+            callback.pathname !== redirect.pathname ||
+            expectedState === undefined ||
+            callback.searchParams.get("state") !== expectedState
+          )
             return HttpServerResponse.empty({ status: 404 });
           consumed = true;
           yield* Deferred.succeed(received, callback.href);
@@ -70,6 +78,9 @@ export const openAuthCallback = (configured?: string) =>
       );
     return {
       redirectUri: redirect.href,
+      expectState: (state: string) => {
+        expectedState = state;
+      },
       // The SDK attempt owns the one applicable deadline, beginning before discovery.
       receive: Deferred.await(received),
     };

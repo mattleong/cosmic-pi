@@ -17,6 +17,7 @@ export const oauthServer = (
 ): McpEffectiveServer => ({
   id: "owned",
   identity,
+  credentialIdentity: identity,
   enabled: true,
   scope: "global",
   directory: "/fixture",

@@ -26,7 +26,6 @@ const reasons = [
   "oauth-binding-rejected",
   "oauth-deletion-failed",
   "oauth-finalization-failed",
-  "protocol-negotiation-rejected",
   "rpc-method-not-found",
   "rpc-invalid-params",
   "rpc-invalid-request",
@@ -37,7 +36,6 @@ const reasons = [
 ] as const;
 describe("fixed diagnostic recovery policy", () => {
   it.each([
-    "protocol-negotiation-rejected",
     "auth-not-configured",
     "auth-env-required",
     "auth-env-sign-in-unsupported",

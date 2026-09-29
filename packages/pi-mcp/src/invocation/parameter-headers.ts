@@ -38,7 +38,7 @@ const object = (value: Schema.Json | undefined): value is Schema.JsonObject =>
 interface ParameterHeader {
   readonly path: ReadonlyArray<string>;
   readonly name: string;
-  readonly type: "string" | "integer" | "boolean";
+  readonly type: "string" | "integer" | "number" | "boolean";
 }
 export type ParameterHeaderScan =
   | { readonly valid: true; readonly headers: ReadonlyArray<ParameterHeader> }
@@ -74,7 +74,7 @@ export const scanParameterHeaders = (schema: Schema.Json): ParameterHeaderScan =
         current.path.length === 0 ||
         !Predicate.isString(name) ||
         !token.test(name) ||
-        (type !== "string" && type !== "integer" && type !== "boolean") ||
+        (type !== "string" && type !== "integer" && type !== "number" && type !== "boolean") ||
         names.has(name.toLowerCase())
       )
         return invalid;
@@ -129,10 +129,15 @@ export const scanParameterHeaders = (schema: Schema.Json): ParameterHeaderScan =
   return { valid: true, headers };
 };
 
-/** MCP's sentinel is case-sensitive; literals matching it must themselves be encoded. */
+/**
+ * MCP's sentinel is case-sensitive; literals matching it must themselves be encoded. An
+ * empty value is encoded too, as in the SDK, so it survives field parsing.
+ */
 export const encodeMcpHeaderValue = (value: string): string => {
   let plain =
-    !/^[\t ]|[\t ]$/.test(value) && !(value.startsWith("=?base64?") && value.endsWith("?="));
+    value.length > 0 &&
+    !/^[\t ]|[\t ]$/.test(value) &&
+    !(value.startsWith("=?base64?") && value.endsWith("?="));
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdfff) {
@@ -172,9 +177,14 @@ export const parameterHeaders = (
     if (
       (header.type === "string" && !Predicate.isString(value)) ||
       (header.type === "boolean" && !Predicate.isBoolean(value)) ||
-      (header.type === "integer" && (!Predicate.isNumber(value) || !Number.isSafeInteger(value)))
+      (header.type === "integer" && (!Predicate.isNumber(value) || !Number.isInteger(value))) ||
+      (header.type === "number" && (!Predicate.isNumber(value) || !Number.isFinite(value)))
     )
       throw invalid();
+    // A valid integer beyond exact JavaScript range has no faithful header text; like the
+    // SDK, omit that header rather than refuse the call.
+    if (Predicate.isNumber(value) && Number.isInteger(value) && !Number.isSafeInteger(value))
+      continue;
     const text = String(value);
     // Reject oversized values before allocating UTF-8/base64 copies.
     if (text.length > MCP_PARAMETER_HEADER_LIMITS.bytes) throw invalid();

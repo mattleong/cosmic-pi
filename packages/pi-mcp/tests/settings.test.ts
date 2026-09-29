@@ -41,6 +41,7 @@ const config: McpResolvedConfig = {
       scope: "global",
       directory: `/private/${secret}`,
       identity: secret,
+      credentialIdentity: secret,
       definition: {
         transport: "http",
         url: `https://mcp.example/${secret}`,

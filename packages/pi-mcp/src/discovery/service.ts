@@ -50,13 +50,20 @@ const matches = (
   snapshot.identity === operation.binding.identity &&
   snapshot.configRevision === operation.binding.configRevision &&
   snapshot.authorizationRevision === operation.binding.authorizationRevision;
-const reusable = (state: DiscoveryState, operation: McpOperation, now: number) => {
+/**
+ * The current revision stays valid until a notification, failed refresh, owner
+ * retirement, or authority change removes it. TTL expiry alone does not.
+ */
+const valid = (state: DiscoveryState, operation: McpOperation) => {
   const snapshot = state.snapshots.get(operation.binding.server);
-  return matches(snapshot, operation) &&
-    metadataIsFresh(snapshot, now) &&
-    state.evidence.get(snapshot.server) === undefined
+  return matches(snapshot, operation) && state.evidence.get(snapshot.server) === undefined
     ? snapshot
     : undefined;
+};
+/** Listing honors TTL: a missing or nonpositive hint is immediately stale. */
+const fresh = (state: DiscoveryState, operation: McpOperation, now: number) => {
+  const snapshot = valid(state, operation);
+  return snapshot !== undefined && metadataIsFresh(snapshot, now) ? snapshot : undefined;
 };
 const visibleSnapshots = (state: DiscoveryState, config: McpResolvedConfig) =>
   [...state.snapshots.values()]
@@ -261,16 +268,23 @@ const makeDiscovery = Effect.gen(function* () {
       yield* watch(operation);
       return yield* operation.shared("metadata", fetchSnapshot);
     });
-  const ensure: McpDiscoveryContract["ensure"] = (operation) =>
+  const acquire = (
+    operation: McpOperation,
+    usable: (
+      state: DiscoveryState,
+      operation: McpOperation,
+      now: number,
+    ) => McpMetadataSnapshot | undefined,
+  ) =>
     Effect.gen(function* () {
       yield* watch(operation);
       const existing = yield* operation.commit(SynchronizedRef.get(state));
-      const snapshot = reusable(existing, operation, yield* metadataTime);
+      const snapshot = usable(existing, operation, yield* metadataTime);
       if (snapshot !== undefined) return snapshot;
       const acquired = yield* operation.shared("metadata", (owner) =>
         Effect.gen(function* () {
           const latest = yield* owner.commit(SynchronizedRef.get(state));
-          const ready = reusable(latest, owner, yield* metadataTime);
+          const ready = usable(latest, owner, yield* metadataTime);
           return ready ?? (yield* fetchSnapshot(owner));
         }),
       );
@@ -280,6 +294,10 @@ const makeDiscovery = Effect.gen(function* () {
       // A freshly acquired zero-TTL revision serves this acquisition once. Do not loop on expiry.
       return acquired;
     });
+  // Like the SDK's call-time tool index, invocation reuses the current revision after
+  // its TTL. Otherwise every call on a server without TTL hints would relist everything.
+  const ensure: McpDiscoveryContract["ensure"] = (operation) => acquire(operation, valid);
+  const ensureFresh = (operation: McpOperation) => acquire(operation, fresh);
 
   const page = (
     request: Exclude<McpDiscoveryRequest, { readonly action: "tools.describe" }>,
@@ -425,7 +443,7 @@ const makeDiscovery = Effect.gen(function* () {
         Effect.gen(function* () {
           if (request.action === "tools.describe")
             yield* requireToolAllowed(operation.server, request.tool);
-          const snapshot = yield* ensure(operation);
+          const snapshot = yield* ensureFresh(operation);
           if (request.action === "tools.describe") {
             const tool = snapshot.tools.find((item) => item.name === request.tool);
             if (tool === undefined)

@@ -21,6 +21,10 @@ import {
 } from "pi-cosmic-core";
 
 const WRITE_QUEUE_CAPACITY = 64;
+/** Concurrent requests may wait behind a large write; each message keeps its own limit. */
+const WRITE_QUEUE_MESSAGES = 4;
+/** Cancellation notices are tiny and must not wait for room behind the requests they cancel. */
+const CANCELLATION_RESERVE_BYTES = 64 * 1024;
 
 /** Native transport failures contain no child output or SDK diagnostics. */
 export class SdkStdioTransportError extends Schema.TaggedError<SdkStdioTransportError>()(
@@ -34,6 +38,7 @@ export class SdkStdioTransportError extends Schema.TaggedError<SdkStdioTransport
       "write",
       "input-limit",
       "output-limit",
+      "busy",
     ]),
     message: Schema.String,
   },
@@ -64,6 +69,8 @@ export interface SdkStdioTransport extends Transport {
   readonly stderr: null;
   /** Preserve a fatal transport failure when the SDK rejects requests on close. */
   readonly failure: SdkStdioTransportError | undefined;
+  /** The child ended its output cleanly before sending any message. */
+  readonly exitedWithoutReply: boolean;
 }
 
 const genericReadError = (error: DuplexProcessError): SdkStdioTransportError =>
@@ -85,6 +92,8 @@ export const makeSdkStdioTransport = (
       void completion.promise.catch(() => {});
       let started = false;
       let closed = false;
+      let replied = false;
+      let peerEnded = false;
       let closeNotified = false;
       let failure: SdkStdioTransportError | undefined;
       let onclose: Transport["onclose"];
@@ -132,6 +141,7 @@ export const makeSdkStdioTransport = (
           while (!closed) {
             const message = readBuffer.readMessage();
             if (message === null) break;
+            replied = true;
             onmessage?.(message);
           }
         } catch {
@@ -144,7 +154,10 @@ export const makeSdkStdioTransport = (
         ),
         Effect.match({
           onFailure: (error) => requestClose(genericReadError(error)),
-          onSuccess: () => requestClose(),
+          onSuccess: () => {
+            if (!closed) peerEnded = true;
+            requestClose();
+          },
         }),
       );
       const writeLoop = Effect.forever(
@@ -233,12 +246,17 @@ export const makeSdkStdioTransport = (
           } catch {
             return Promise.reject(SdkStdioTransportError.of("write"));
           }
-          if (
-            bytes.byteLength > options.maxWriteBytes ||
-            queuedBytes + bytes.byteLength > options.maxWriteBytes
-          ) {
+          if (bytes.byteLength > options.maxWriteBytes)
             return Promise.reject(SdkStdioTransportError.of("input-limit"));
-          }
+          const reserve =
+            "method" in message && message.method === "notifications/cancelled"
+              ? CANCELLATION_RESERVE_BYTES
+              : 0;
+          if (
+            queuedBytes + bytes.byteLength >
+            options.maxWriteBytes * WRITE_QUEUE_MESSAGES + reserve
+          )
+            return Promise.reject(SdkStdioTransportError.of("busy"));
           const completion = Promise.withResolvers<void>();
           {
             const abort = (): void => {
@@ -274,6 +292,9 @@ export const makeSdkStdioTransport = (
         },
         get failure() {
           return failure;
+        },
+        get exitedWithoutReply() {
+          return peerEnded && !replied;
         },
         get onclose() {
           return onclose;

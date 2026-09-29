@@ -305,6 +305,7 @@ it.effect.each([false, true])(
       const server = {
         id: "a",
         identity: "disabled-config",
+        credentialIdentity: "disabled-credentials",
         scope: "project" as const,
         directory: "/project",
         enabled: false,

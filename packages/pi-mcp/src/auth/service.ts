@@ -20,7 +20,7 @@ import {
   type McpAuthLiveAuthority,
 } from "./authority.ts";
 import { getAuthChallenge } from "./challenge.ts";
-import type { McpRegistrationReceipt } from "./credentials.ts";
+import { hasRefreshToken, type McpRegistrationReceipt } from "./credentials.ts";
 import { refreshGrant } from "./refresh.ts";
 import { withAuthFailureReason } from "./diagnostics.ts";
 import {
@@ -102,7 +102,7 @@ export const makeMcpAuthWithAuthority = (
           : Effect.fail(stale()),
       );
     const captureAuthority = (server: McpEffectiveServer) => {
-      const authority = authorityFor(server.identity);
+      const authority = authorityFor(server.credentialIdentity);
       const generation = authority.generation;
       const session = sessionGeneration;
       const evidence = authority.evidenceRevision;
@@ -139,7 +139,8 @@ export const makeMcpAuthWithAuthority = (
           Effect.mapError((error) => withAuthFailureReason(server, error)),
           Effect.tap(() =>
             Effect.sync(() => {
-              if (current() && publishReady) observed.set(server.identity, { state: "ready" });
+              if (current() && publishReady)
+                observed.set(server.credentialIdentity, { state: "ready" });
             }),
           ),
           Effect.tapError((error) =>
@@ -150,7 +151,7 @@ export const makeMcpAuthWithAuthority = (
                 error.kind !== "stale" &&
                 error.reason !== "auth-env-sign-in-unsupported"
               )
-                observed.set(server.identity, {
+                observed.set(server.credentialIdentity, {
                   state: error.kind === "auth-required" ? "required" : "unavailable",
                 });
             }),
@@ -162,8 +163,8 @@ export const makeMcpAuthWithAuthority = (
         const anonymous =
           oauthConfig(server)?.implicit === true &&
           options?.requireGrant !== true &&
-          !observed.has(server.identity) &&
-          !authorityFor(server.identity).blocked;
+          !observed.has(server.credentialIdentity) &&
+          !authorityFor(server.credentialIdentity).blocked;
         return owned(
           server,
           Effect.gen(function* () {
@@ -182,25 +183,34 @@ export const makeMcpAuthWithAuthority = (
             const { authority, current } = captureAuthority(server);
             return yield* store
               .withTransaction(
-                server.identity,
+                server.credentialIdentity,
                 (tx) =>
                   Effect.gen(function* () {
                     if (!current()) return yield* stale();
-                    if (authority.blocked) return yield* blockedFailure(authority.blocked);
+                    const block = authority.blocked;
+                    if (block && !block.recover) return yield* blockedFailure(block);
                     const grant = yield* tx.read;
                     yield* checkServer(server);
-                    if (!current() || authority.blocked) return yield* stale();
+                    if (!current() || authority.blocked !== block) return yield* stale();
                     if (!grant) return yield* authFailure();
                     if (grant.quarantine !== undefined) {
                       authority.blocked = { kind: "refresh" };
                       return yield* blockedFailure(authority.blocked);
                     }
                     const now = yield* Clock.currentTimeMillis;
+                    if (block?.recover) {
+                      // The server rejected an unexpired token. Refresh once for the next
+                      // request; the rejected operation itself is never replayed.
+                      authority.blocked = undefined;
+                      authority.recoveredAt = now;
+                      return yield* refreshGrant(server, grant, authority, current, tx, sdk);
+                    }
                     if (grant.expiresAt !== undefined && grant.expiresAt <= now + 30_000)
                       return yield* refreshGrant(server, grant, authority, current, tx, sdk);
                     const token = yield* sdk.token(server, grant);
                     if (!current() || authority.blocked) return yield* stale();
                     yield* checkServer(server);
+                    authority.refreshable = hasRefreshToken(grant);
                     return token;
                   }),
                 { checkCurrent: checkServer(server), isCurrent: current },
@@ -219,11 +229,11 @@ export const makeMcpAuthWithAuthority = (
           yield* checkServer(server);
           const failure = authCommandFailure(server, "login");
           if (failure) return yield* failure;
-          pendingLogins.delete(server.identity);
+          pendingLogins.delete(server.credentialIdentity);
           const { authority, generation, session, evidence, current } = captureAuthority(server);
           return yield* store
             .withTransaction(
-              server.identity,
+              server.credentialIdentity,
               (tx) =>
                 Effect.gen(function* () {
                   if (!current()) return yield* stale();
@@ -241,7 +251,7 @@ export const makeMcpAuthWithAuthority = (
                       yield* tx.writeRegistration(receipt);
                       if (!registering || !current()) return yield* stale();
                     });
-                  const challenge = challenges.get(server.identity);
+                  const challenge = challenges.get(server.credentialIdentity);
                   let options: McpLoginOptions = { saveRegistration };
                   if (previousGrant) options = { ...options, previousGrant };
                   if (registration) options = { ...options, registration };
@@ -270,14 +280,14 @@ export const makeMcpAuthWithAuthority = (
                             return;
                           }
                           authority.blocked = undefined;
-                          challenges.delete(server.identity);
-                          pendingLogins.set(server.identity, {
+                          challenges.delete(server.credentialIdentity);
+                          pendingLogins.set(server.credentialIdentity, {
                             status,
                             session,
                             generation,
                             evidence,
                           });
-                          observed.set(server.identity, { state: "unavailable" });
+                          observed.set(server.credentialIdentity, { state: "unavailable" });
                         }),
                       ),
                     ),
@@ -285,7 +295,7 @@ export const makeMcpAuthWithAuthority = (
                     Effect.ensuring(
                       Effect.gen(function* () {
                         if (!current()) authority.blocked ??= { kind: "rejected" };
-                        const mutation = yield* store.mutation(server.identity);
+                        const mutation = yield* store.mutation(server.credentialIdentity);
                         yield* authProgress(ui, {
                           phase: saved ? "finalizing" : "saving",
                           credentialsSaved: saved,
@@ -310,18 +320,18 @@ export const makeMcpAuthWithAuthority = (
       Effect.suspend(() => {
         const failure = authCommandFailure(server, "logout");
         if (failure) return Effect.fail(failure);
-        observed.set(server.identity, { state: "required" });
-        pendingLogins.delete(server.identity);
-        const authority = authorityFor(server.identity);
+        observed.set(server.credentialIdentity, { state: "required" });
+        pendingLogins.delete(server.credentialIdentity);
+        const authority = authorityFor(server.credentialIdentity);
         authority.generation++;
         authority.blocked = { kind: "logout" };
-        challenges.delete(server.identity);
+        challenges.delete(server.credentialIdentity);
         const previous = authority.revoked;
         authority.revoked = Deferred.makeUnsafe<void>();
         Deferred.doneUnsafe(previous, Effect.void);
         // Revoke first, then join the permit and the store's native mutation fence.
         return store
-          .withTransaction(server.identity, (tx) => tx.remove, {
+          .withTransaction(server.credentialIdentity, (tx) => tx.remove, {
             checkCurrent: checkServer(server),
             isCurrent: () => !disposed && live.isTrusted(),
           })
@@ -336,43 +346,52 @@ export const makeMcpAuthWithAuthority = (
           return { state: "none" };
         if (
           server.definition.auth.type === "oauth" &&
-          (yield* store.mutation(server.identity)) !== "idle"
+          (yield* store.mutation(server.credentialIdentity)) !== "idle"
         )
           return { state: "unavailable" };
-        if (authorityFor(server.identity).blocked) return { state: "required" };
-        return observed.get(server.identity) ?? { state: "unchecked" };
+        const block = authorityFor(server.credentialIdentity).blocked;
+        if (block && !block.recover) return { state: "required" };
+        return observed.get(server.credentialIdentity) ?? { state: "unchecked" };
       });
     const reject: McpAuthContract["reject"] = (server, evidence) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (disposed) return;
+        const now = yield* Clock.currentTimeMillis;
+        const authority = authorityFor(server.credentialIdentity);
         const challenge = evidence?.error && getAuthChallenge(evidence.error);
-        if (challenge && oauthConfig(server)) challenges.set(server.identity, challenge);
+        if (challenge && oauthConfig(server)) challenges.set(server.credentialIdentity, challenge);
         if (evidence?.credentialUsed && oauthConfig(server))
-          authorityFor(server.identity).blocked =
+          authority.blocked =
             evidence.error?.reason === "oauth-insufficient-scope"
               ? { kind: "rejected", reason: "oauth-insufficient-scope" }
-              : { kind: "rejected" };
-        authorityFor(server.identity).evidenceRevision++;
-        pendingLogins.delete(server.identity);
-        observed.set(server.identity, { state: "required" });
+              : // Refresh recovers revoked or clock-skewed tokens. A second rejection within
+                // a minute of that recovery needs a sign-in rather than another refresh.
+                authority.refreshable &&
+                  (authority.recoveredAt === undefined || now - authority.recoveredAt >= 60_000)
+                ? { kind: "rejected", recover: true }
+                : { kind: "rejected" };
+        authority.evidenceRevision++;
+        pendingLogins.delete(server.credentialIdentity);
+        if (authority.blocked?.recover) observed.delete(server.credentialIdentity);
+        else observed.set(server.credentialIdentity, { state: "required" });
       });
     const finishLogin: McpAuthContract["finishLogin"] = (server, status, succeeded) =>
       Effect.gen(function* () {
-        const mutation = yield* store.mutation(server.identity);
-        const receipt = pendingLogins.get(server.identity);
+        const mutation = yield* store.mutation(server.credentialIdentity);
+        const receipt = pendingLogins.get(server.credentialIdentity);
         if (
           !receipt ||
           receipt.status !== status ||
           disposed ||
           receipt.session !== sessionGeneration ||
-          receipt.generation !== authorityFor(server.identity).generation ||
-          receipt.evidence !== authorityFor(server.identity).evidenceRevision
+          receipt.generation !== authorityFor(server.credentialIdentity).generation ||
+          receipt.evidence !== authorityFor(server.credentialIdentity).evidenceRevision
         )
           return;
-        pendingLogins.delete(server.identity);
-        observed.set(server.identity, {
+        pendingLogins.delete(server.credentialIdentity);
+        observed.set(server.credentialIdentity, {
           state:
-            succeeded && mutation === "idle" && !authorityFor(server.identity).blocked
+            succeeded && mutation === "idle" && !authorityFor(server.credentialIdentity).blocked
               ? "ready"
               : "unavailable",
         });

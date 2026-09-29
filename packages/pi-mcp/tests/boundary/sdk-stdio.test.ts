@@ -506,10 +506,49 @@ it.effect.each(["overflow", "read-error", "malformed", "eof"])(
       expect(transport.failure?.kind).toBe(
         mode === "overflow" ? "output-limit" : mode === "eof" ? undefined : "read",
       );
+      // Only a clean end before any reply is evidence a negotiation probe may use.
+      expect(transport.exitedWithoutReply).toBe(mode === "eof");
       expect(String(transport.failure)).not.toContain("private-");
       yield* foreign(() => transport.close());
       expect(closes).toBe(1);
     }),
+);
+
+it.effect("a busy write queue is not an oversized request, and cancellations still fit", () =>
+  Effect.gen(function* () {
+    const fake = yield* makeProcess();
+    const transport = yield* startTransport(fake);
+    fake.state.holdWrites = true;
+    const request = (id: number, size: number) =>
+      foreign(() =>
+        transport.send({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "x", arguments: { pad: "x".repeat(size) } },
+        }),
+      ).pipe(Effect.result);
+    const queued = yield* Effect.all([1, 2, 3, 4].map((id) => Effect.forkChild(request(id, 900))));
+    yield* Deferred.await(fake.writeEntered);
+    expect(yield* request(5, 900)).toMatchObject({ _tag: "Failure", failure: { kind: "busy" } });
+    expect(yield* request(6, 2_000)).toMatchObject({
+      _tag: "Failure",
+      failure: { kind: "input-limit" },
+    });
+    const cancel = yield* Effect.forkChild(
+      foreign(() =>
+        transport.send({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 99 },
+        }),
+      ),
+    );
+    yield* Deferred.succeed(fake.writeGate, undefined);
+    for (const fiber of queued) expect((yield* Fiber.join(fiber))._tag).toBe("Success");
+    yield* Fiber.join(cancel);
+    yield* foreign(() => transport.close());
+  }),
 );
 
 it.effect("cancellation also interrupts waiting inside the owned process writer", () =>

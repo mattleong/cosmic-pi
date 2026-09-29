@@ -7,8 +7,6 @@ import {
   UnauthorizedError,
   InsufficientScopeError,
   StreamableHTTPClientTransport,
-  type JSONRPCMessage,
-  type MessageExtraInfo,
   type RequestId,
   type Transport,
 } from "@modelcontextprotocol/client";
@@ -30,8 +28,8 @@ import {
 } from "./sdk-fetch.ts";
 import type { SdkHttpControl } from "./sdk-http-control.ts";
 import { mapSdkClientError } from "./sdk-protocol-error.ts";
+import { decorateTransport } from "./sdk-transport.ts";
 import { boundedSdkCleanup } from "./mcp-protocol/shared/bounded-cleanup.ts";
-import { isSdkNegotiationRejected } from "./mcp-protocol/shared/negotiation-error.ts";
 import {
   beginSdkHttpChallenge,
   sdkHttpChallengeStatus,
@@ -167,7 +165,15 @@ export class SdkHttpOperationRegistry {
     this.context = context;
   }
 
-  current = (): SdkHttpOperation | undefined => this.context?.current();
+  /**
+   * Long-lived SDK continuations, such as the standalone GET stream started by the
+   * initialized notification, inherit the context that began them. A finished
+   * operation cannot own that later traffic, so it falls back to control ownership.
+   */
+  current = (): SdkHttpOperation | undefined => {
+    const operation = this.context?.current();
+    return operation?.signal.aborted === false ? operation : undefined;
+  };
   run = <A>(operation: SdkHttpOperation, callback: () => A): A =>
     this.context ? this.context.run(operation, callback) : callback();
 
@@ -213,14 +219,6 @@ const requestOutcome = (operation: SdkHttpOperation): McpBoundaryError["outcome"
 export const mapSdkFailure = (error: Error, operation: SdkHttpOperation): McpBoundaryError => {
   const outcome = requestOutcome(operation);
   error = operation.failure ?? error;
-  if (isSdkNegotiationRejected(error)) {
-    return boundaryError(
-      "protocol",
-      outcome,
-      "MCP protocol negotiation was rejected.",
-      "protocol-negotiation-rejected",
-    );
-  }
   if (error instanceof SdkFetchResponseLimitError) {
     return boundaryError("output-limit", outcome, "MCP response exceeds its byte limit.");
   }
@@ -299,7 +297,18 @@ export const closeSdkTransport = (
     // DELETE needs a live transport signal. Regardless of its result, revoke all
     // fetch admission and close the client. SDK continuations arriving late then
     // receive an aborted signal without starting another network operation.
-    const terminated = yield* bounded(terminate);
+    // Any HTTP answer, including 404, 401, or 5xx, arrives after the SDK drained the
+    // body, so it settles DELETE locally. A remote session left behind is the server's
+    // to expire and cannot block a replacement connection.
+    const terminated = yield* bounded(() =>
+      terminate().catch((error) => {
+        if (
+          !(error instanceof SdkHttpError) ||
+          error.code !== SdkErrorCode.ClientHttpFailedToTerminateSession
+        )
+          throw error;
+      }),
+    );
     registry.traffic.abort();
     const closed = yield* bounded(() =>
       Promise.allSettled([client.close(), transport.close()]).then((settled) => {
@@ -375,15 +384,8 @@ export const makeSdkHttpTransport = (
   transport: Transport,
   registry: SdkHttpOperationRegistry,
   acquisition: () => SdkHttpOperation | undefined = () => undefined,
-): Transport => {
-  const decorated: Transport = {
-    get sessionId() {
-      return transport.sessionId;
-    },
-    setProtocolVersion: (version) => transport.setProtocolVersion?.(version),
-    setSupportedProtocolVersions: (versions) => transport.setSupportedProtocolVersions?.(versions),
-    start: () => transport.start(),
-    close: () => transport.close(),
+): Transport =>
+  decorateTransport(transport, {
     send: (message, options) => {
       // Capture ownership and reserve native send before any Promise turn can race cleanup.
       const tag = privateHeader(options?.headers);
@@ -421,25 +423,11 @@ export const makeSdkHttpTransport = (
         })
         .finally(() => operation?.fetchFinished());
     },
-  };
-
-  transport.onclose = () => decorated.onclose?.();
-  transport.onerror = (error) => decorated.onerror?.(error);
-  transport.onmessage = (message: JSONRPCMessage, extra?: MessageExtraInfo) => {
-    const operation = registry.current();
-    if (operation && !operation.signal.aborted && !operation.responseReceivedValue)
-      observeHttpLog(message, operation.logScope);
-    if (!isJSONRPCRequest(message) && "id" in message && message.id !== undefined)
-      registry.lookupRequestId(message.id)?.responseReceived();
-    decorated.onmessage?.(message, extra);
-  };
-  if (transport.hasPerRequestStream === true) {
-    Object.defineProperty(decorated, "hasPerRequestStream", {
-      configurable: false,
-      enumerable: true,
-      value: true,
-      writable: false,
-    });
-  }
-  return decorated;
-};
+    receive: (message) => {
+      const operation = registry.current();
+      if (operation && !operation.signal.aborted && !operation.responseReceivedValue)
+        observeHttpLog(message, operation.logScope);
+      if (!isJSONRPCRequest(message) && "id" in message && message.id !== undefined)
+        registry.lookupRequestId(message.id)?.responseReceived();
+    },
+  });

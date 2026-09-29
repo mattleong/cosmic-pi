@@ -183,6 +183,7 @@ export interface McpDiscoveryContract {
   readonly cached: (request: McpCachedRequest) => Effect.Effect<McpCachedPage, McpBoundaryError>;
   readonly cachedDetail: (ref: McpCachedRef) => Effect.Effect<McpCachedDetail, McpBoundaryError>;
   readonly subscribeChanges: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
+  /** Invocation metadata: the current valid revision, acquired only when absent or invalidated. */
   readonly ensure: (
     operation: McpOperation,
   ) => Effect.Effect<McpMetadataSnapshot, McpBoundaryError>;

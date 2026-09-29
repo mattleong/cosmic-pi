@@ -97,3 +97,28 @@ for (const transport of ["http", "stdio"] as const)
       }).pipe(Effect.provide(fixture.layer));
     },
   );
+
+it.live("a legacy unsubscribe answered with an error still confirms cleanup", () => {
+  const fixture = optionalFixture(
+    (request) => {
+      if (request.method === "initialize") return legacyInitialize(request.id!);
+      if (request.method === "resources/subscribe") return rpcResult(request.id!, {});
+      // The server already forgot the lease; its answer still settles the request.
+      if (request.method === "resources/unsubscribe")
+        return rpcError(request.id!, { code: -32602, message: privateMessage });
+      return undefined;
+    },
+    { protocol: "legacy" },
+  );
+  return Effect.gen(function* () {
+    const execution = yield* McpExecution;
+    const valid = { ...subscribe, uri: "test://one" };
+    yield* execution.execute(valid, projection);
+    yield* execution.execute({ ...valid, action: "resources.unsubscribe" }, projection);
+    yield* execution.execute(valid, projection);
+    expect(fixture.opens()).toBe(1);
+    expect(
+      (yield* execution.execute({ action: "disconnect", server: "fixture" }, projection)).reply,
+    ).toMatchObject({ data: { result: { cleanup: "confirmed" } } });
+  }).pipe(Effect.provide(fixture.layer));
+});

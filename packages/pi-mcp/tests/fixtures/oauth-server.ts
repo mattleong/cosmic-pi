@@ -49,6 +49,12 @@ export interface OAuthFixtureOptions {
   readonly authorizationScopeQuery?: string;
   readonly registrationScope?: string;
   readonly rejectClient?: boolean;
+  /** Protected-resource metadata lists the bare-host issuer with a trailing slash. */
+  readonly listedIssuerSlash?: boolean;
+  /** Protected-resource metadata publishes the origin for the `/mcp` endpoint. */
+  readonly resourcePublishedRoot?: boolean;
+  /** Scope the token endpoint reports, which RFC 6749 lets differ from the request. */
+  readonly grantedScope?: string;
 }
 export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
   Effect.gen(function* () {
@@ -59,6 +65,8 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
     const origin = `http://127.0.0.1:${server.address.port}`;
     const resource = options.resourceRoot ? `${origin}/` : `${origin}/mcp`;
     const issuer = options.issuerRootSlash ? `${origin}/` : origin;
+    // The resource indicator clients send: the published identifier when it differs.
+    const audience = options.resourcePublishedRoot ? `${origin}/` : resource;
     const crypto = yield* Crypto.Crypto;
     const codes = new Map<
       string,
@@ -116,10 +124,10 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         const metadata: FixtureDocument = {
           resource: options.resourceMismatch
             ? `${origin}/other`
-            : options.resourceRoot
+            : options.resourceRoot || options.resourcePublishedRoot
               ? origin
               : resource,
-          authorization_servers: [issuer],
+          authorization_servers: [options.listedIssuerSlash ? `${issuer}/` : issuer],
         };
         if (options.resourceScopes) metadata.scopes_supported = [...options.resourceScopes];
         return reply(metadata);
@@ -185,7 +193,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         if (options.requireNoScope && url.searchParams.has("scope"))
           return reply({ error: "invalid_scope" }, 400);
         if (
-          url.searchParams.get("resource") !== resource ||
+          url.searchParams.get("resource") !== audience ||
           url.searchParams.get("code_challenge_method") !== "S256"
         )
           return reply({ error: "invalid_request" }, 400);
@@ -213,7 +221,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         if (options.rejectClient) return reply({ error: "invalid_client" }, 400);
         let offline = !options.requireOfflineAccess;
         if (
-          input.get("resource") !== resource ||
+          input.get("resource") !== audience ||
           request.headers.authorization ||
           input.has("client_secret")
         )
@@ -249,6 +257,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
           expires_in: 3600,
         };
         if (offline) tokens.refresh_token = currentRefresh;
+        if (options.grantedScope !== undefined) tokens.scope = options.grantedScope;
         return reply(tokens);
       }
       return HttpServerResponse.empty({ status: 404 });
@@ -265,6 +274,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
       return {
         id: "fixture",
         identity: "a".repeat(64),
+        credentialIdentity: "a".repeat(64),
         enabled: true,
         scope: "global",
         directory: "/fixture",

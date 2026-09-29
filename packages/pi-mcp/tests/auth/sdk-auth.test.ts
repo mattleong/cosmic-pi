@@ -214,6 +214,25 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
       }).pipe(Effect.provide(layers)),
   );
 
+  for (const [requested, granted] of [
+    [[], "profile"],
+    [["tools"], "tools admin"],
+  ] as const)
+    it.live(`accepts a grant of "${granted}" for requested [${requested.join(" ")}]`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ grantedScope: granted });
+        const sdk = yield* makeMcpSdkAuth;
+        const grant = yield* sdk.login(
+          fixture.configured("pre-registered", { scopes: [...requested] }),
+          yield* browser("manual"),
+        );
+        expect(grant.requestedScopes).toEqual(requested);
+        expect(yield* sdk.token(fixture.configured("pre-registered"), grant)).toBe(
+          "fixture-access-0",
+        );
+      }).pipe(Effect.provide(layers)),
+    );
+
   it.live("only retained insufficient-scope evidence can add to a configured baseline", () =>
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer({ resourceScopes: ["admin"] });
@@ -272,6 +291,35 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
             })
             .pipe(Effect.isFailure),
         ).toBe(true);
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live("accepts a listed issuer that differs only by a bare-host trailing slash", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ listedIssuerSlash: true });
+      const sdk = yield* makeMcpSdkAuth;
+      const pinned = fixture.configured("pre-registered");
+      if (pinned.definition?.transport !== "http" || pinned.definition.auth.type !== "oauth")
+        return yield* Effect.die("Fixture OAuth definition missing.");
+      // Unpinned: the issuer comes from protected-resource metadata.
+      const { issuer: _issuer, ...auth } = pinned.definition.auth;
+      const server = { ...pinned, definition: { ...pinned.definition, auth } };
+      const grant = yield* sdk.login(server, yield* browser("manual"));
+      expect(grant.issuer).toBe(fixture.issuer);
+      expect(yield* sdk.token(server, grant)).toBe("fixture-access-0");
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live("binds a path endpoint to its published origin resource unless one is configured", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ resourcePublishedRoot: true });
+      const sdk = yield* makeMcpSdkAuth;
+      const server = fixture.configured("pre-registered");
+      const grant = yield* sdk.login(server, yield* browser("manual"));
+      expect(grant.resource).toBe(`${fixture.origin}/`);
+      expect(yield* sdk.token(server, grant)).toBe("fixture-access-0");
+      const pinned = fixture.configured("pre-registered", { resource: fixture.resource });
+      expect(yield* sdk.login(pinned, yield* browser("manual")).pipe(Effect.isFailure)).toBe(true);
     }).pipe(Effect.provide(layers)),
   );
 
@@ -439,6 +487,12 @@ describe("SDK-owned public OAuth", () => {
         const callback = yield* openAuthCallback("http://127.0.0.1:0/callback");
         const client = yield* HttpClient.HttpClient;
         const privateUrl = `${callback.redirectUri}?code=PRIVATE_CODE&state=PRIVATE_STATE`;
+        // Nothing is accepted before the attempt's state exists, or for another state.
+        expect((yield* client.get(privateUrl)).status).toBe(404);
+        callback.expectState("PRIVATE_STATE");
+        expect((yield* client.get(`${callback.redirectUri}?code=STRAY&state=OTHER`)).status).toBe(
+          404,
+        );
         const response = yield* client.get(privateUrl);
         const html = yield* response.text;
         expect(response.headers["content-type"]).toContain("text/html");
@@ -762,12 +816,13 @@ describe("SDK-owned public OAuth", () => {
         }).pipe(Effect.provide(layers)),
     );
 
-  for (const status of [404, 410, 401, 403, 429, 502])
-    it.live(`authorization-server fallback requires absence, not rejection: ${status}`, () =>
+  for (const status of [404, 410, 401, 403, 429, 502, 500, 503])
+    it.live(`authorization-server metadata tries the next candidate after ${status}`, () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ authorizationMetadataStatuses: [status, 200] });
         const sdk = yield* makeMcpSdkAuth;
-        const absent = status === 404 || status === 410;
+        // Client errors and 502 mean this candidate is unusable; other outages are fatal.
+        const absent = status < 500 || status === 502;
         expect(
           yield* sdk
             .login(fixture.configured("dynamic"), yield* browser("manual"))

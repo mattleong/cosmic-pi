@@ -397,6 +397,42 @@ for (const cancel of [false, true])
       }),
   );
 
+it.live("a modern resource subscription stream ending keeps the shared connection", () => {
+  const fixture = optionalFixture((request) =>
+    request.method === "subscriptions/listen"
+      ? sseResponse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                sseFrames({
+                  jsonrpc: "2.0",
+                  method: "notifications/subscriptions/acknowledged",
+                  params: {
+                    notifications: request.params?.notifications,
+                    _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id },
+                  },
+                }),
+              );
+              controller.close();
+            },
+          }),
+        )
+      : undefined,
+  );
+  return Effect.gen(function* () {
+    const execution = yield* McpExecution;
+    yield* execution.execute(subscribe, projection);
+    // The server ends only this lease; a second one reuses the same connection.
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const active = yield* execution.execute(status, projection);
+      if (serialize(active.reply.data).includes('"subscriptions":[]')) break;
+      yield* Effect.sleep(5);
+    }
+    yield* execution.execute(subscribe, projection);
+    expect(fixture.opens()).toBe(1);
+  }).pipe(Effect.provide(fixture.layer));
+});
+
 for (const [code, kind, reason] of [
   [-32602, "protocol", "rpc-invalid-params"],
   [-32601, "unsupported", "rpc-method-not-found"],

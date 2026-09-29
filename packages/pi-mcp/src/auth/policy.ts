@@ -198,7 +198,15 @@ export const singleUseCallback = (redirect: string, state: string) => {
             url.origin !== base.origin ||
             url.pathname !== base.pathname ||
             new Set(keys).size !== keys.length ||
-            url.searchParams.get("state") !== state ||
+            url.searchParams.get("state") !== state
+          )
+            return Effect.fail(deniedAuth());
+          // RFC 6749 section 4.1.2.1: the user declined at the authorization server.
+          if (url.searchParams.get("error") === "access_denied")
+            return Effect.fail(
+              boundaryError("cancelled", "not-sent", "OAuth login was cancelled."),
+            );
+          if (
             url.searchParams.has("error") ||
             !url.searchParams.get("code") ||
             url.searchParams.has("access_token")

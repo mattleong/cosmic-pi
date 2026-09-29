@@ -18,8 +18,7 @@ import {
   type SdkHttpOptions,
   type TokenState,
 } from "./sdk-http-options.ts";
-import { selectProtocol, guardNegotiation } from "./mcp-protocol/select.ts";
-import type { McpProtocolAdapter } from "./mcp-protocol/contract.ts";
+import { selectProtocol } from "./mcp-protocol/select.ts";
 import type { McpConnection, McpCapabilities } from "../client/model.ts";
 import { makeSdkClient } from "./sdk-client.ts";
 import { finalizeOperation, makeSdkHttpExchange } from "./sdk-http-request.ts";
@@ -52,7 +51,6 @@ export const openSdkHttp = (
     const registry = new SdkHttpOperationRegistry(context);
     const token: TokenState = { value: snapshot.token, headers: { ...snapshot.headers } };
     let events: SdkEvents | undefined;
-    let protocol: McpProtocolAdapter | undefined;
     let acquisition: SdkHttpOperation | undefined;
     return yield* openSdkConnection({
       transport: "http",
@@ -83,10 +81,11 @@ export const openSdkHttp = (
             beginControl: controls.begin,
             lookupOperation: registry.lookupRequestId,
             currentOperation: registry.current,
-            isObservationRequest: (method) => protocol?.isObservationRequest(method) === true,
             onObservationFailure: () => events?.observationFailed(),
             onResponse: (status, headers) => {
-              if (!state.closing && protocol?.sessionExpired(status, headers)) {
+              // Only a stateful legacy session sends its id; a 404 then means the server
+              // forgot the session. Modern stateless HTTP never sends one.
+              if (!state.closing && status === 404 && headers.has("mcp-session-id")) {
                 state.closing = true;
                 registry.closeAdmissions();
                 events?.finish(
@@ -173,17 +172,8 @@ export const openSdkHttp = (
             makeSdkHttpTransport(transport, registry, () => acquisition),
           );
           setCleanup(
-            closeSdkTransport(
-              client,
-              transport,
-              registry,
-              controls,
-              snapshot.cleanupTimeoutMs,
-              () =>
-                protocol === undefined
-                  ? transport.terminateSession()
-                  : protocol.terminate(transport),
-            ),
+            // The SDK sends DELETE only when it holds a session id.
+            closeSdkTransport(client, transport, registry, controls, snapshot.cleanupTimeoutMs),
           );
 
           const connectOperation = registry.begin();
@@ -196,7 +186,7 @@ export const openSdkHttp = (
           const connectBudget = yield* remaining;
           const connectCore = Effect.tryPromise({
             try: () =>
-              client.connect(guardNegotiation(decorated), {
+              client.connect(decorated, {
                 timeout: connectBudget,
                 maxTotalTimeout: connectBudget,
                 signal: connectOperation.signal,
@@ -227,11 +217,10 @@ export const openSdkHttp = (
             return yield* boundaryError("cleanup", "unknown", "MCP connection cleanup failed.");
           }
           if (Exit.isFailure(connectExit)) return yield* Effect.failCause(connectExit.cause);
-          protocol = yield* selectProtocol(client);
           return {
             client,
             events: acquiredEvents,
-            protocol,
+            protocol: yield* selectProtocol(client),
             exchange: (capabilities: McpCapabilities) =>
               makeSdkHttpExchange(client, registry, snapshot, state, capabilities, acquiredEvents),
             setToken: (value: string | undefined) =>

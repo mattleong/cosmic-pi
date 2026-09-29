@@ -49,6 +49,11 @@ export interface McpInvocationReply {
 /** The caller serializes only each helper validation, never remote work or user waits. */
 export type McpValidate = JsonSchemaValidatorContract["validateJsonSchema"];
 
+/** 2025-11-25 tasks: a required-task tool cannot run without the tasks capability we omit. */
+const requiresTask = Schema.is(
+  Schema.Struct({ execution: Schema.Struct({ taskSupport: Schema.Literal("required") }) }),
+);
+
 export const invokeTool = (
   operation: McpOperation,
   input: Extract<McpGatewayRequest, { readonly action: "tools.call" }>,
@@ -64,6 +69,12 @@ export const invokeTool = (
         "not-found",
         "not-sent",
         "MCP tool was not advertised or is not permitted.",
+      );
+    if (requiresTask(tool))
+      return yield* boundaryError(
+        "unsupported",
+        "not-sent",
+        "MCP tool requires task execution, which is not supported.",
       );
     // Capture this exact immutable metadata entry. A list-change or refresh after
     // dispatch must not change the output contract of the already accepted call.

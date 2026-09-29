@@ -1,5 +1,7 @@
 import {
+  CLIENT_CAPABILITIES_META_KEY,
   Client,
+  LOG_LEVEL_META_KEY,
   withInputRequired,
   type InputRequiredResult,
   type Request,
@@ -82,14 +84,18 @@ export const sdkHandshake = (client: Client) =>
   });
 
 /** Keep remote schema compilation out of the SDK's synchronous high-level paths. */
-export const makeSdkClient = (protocol?: "auto" | "legacy", probeTimeoutMs?: number) =>
+export const makeSdkClient = (
+  protocol?: "auto" | "legacy",
+  probeTimeoutMs?: number,
+  pin?: string,
+) =>
   Effect.try({
     try: () =>
       new Client(
         { name: "pi-mcp", version: "0.2.0" },
         {
           capabilities: {},
-          versionNegotiation: negotiationOptions(protocol, probeTimeoutMs),
+          versionNegotiation: negotiationOptions(protocol, probeTimeoutMs, pin),
           inputRequired: { autoFulfill: false },
           jsonSchemaValidator: {
             getValidator: () => {
@@ -121,19 +127,20 @@ const requestWithSdkSchema = <Output>(
   // SAFETY: each caller passes an SDK 2.0 result schema whose public Standard Schema
   // contract is preserved; this cast only reconciles duplicate declaration identities.
   const clientSchema = schema as StandardSchemaV1<unknown, Output>;
+  // Modern results may ask for input in-band instead of a server-to-client request.
   const multiRound =
-    client.getNegotiatedProtocolVersion() === "2026-07-28" &&
+    client.getProtocolEra() === "modern" &&
     (request.method === "tools/call" ||
       request.method === "resources/read" ||
       request.method === "prompts/get");
   let params = { ...request.params };
   if (multiRound) params = { ...params, ...options.continuation };
   let meta = { ...request.params?._meta };
-  if (options.logLevel) meta = { ...meta, "io.modelcontextprotocol/logLevel": options.logLevel };
+  if (options.logLevel) meta = { ...meta, [LOG_LEVEL_META_KEY]: options.logLevel };
   if (multiRound && options.elicitation)
     meta = {
       ...meta,
-      "io.modelcontextprotocol/clientCapabilities": { elicitation: { form: {}, url: {} } },
+      [CLIENT_CAPABILITIES_META_KEY]: { elicitation: { form: {}, url: {} } },
     };
   params = { ...params, _meta: meta };
   return multiRound

@@ -51,6 +51,8 @@ export const testServer = (
 ): McpEffectiveServer => ({
   id,
   identity: `identity-${id}`,
+  // Auth fixtures key credentials by the configured identity unless a test separates them.
+  credentialIdentity: overrides.identity ?? `identity-${id}`,
   scope: "global",
   directory: "/fixture",
   enabled: true,

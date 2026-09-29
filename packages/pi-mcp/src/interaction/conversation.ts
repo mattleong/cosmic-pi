@@ -67,13 +67,14 @@ export const converse = (
             "unknown",
             "MCP conversation round limit reached.",
           );
-        if (declined)
+        const requests = Object.entries(exchange.inputRequests ?? {});
+        // A round that only carries request state asks nothing new of the user.
+        if (declined && requests.length > 0)
           return yield* boundaryError(
             "cancelled",
             "unknown",
             "MCP requested more input after the user declined.",
           );
-        const requests = Object.entries(exchange.inputRequests ?? {});
         requested += requests.length;
         if (
           requested > MCP_INTERACTION_LIMITS.requests ||

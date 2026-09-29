@@ -1,11 +1,15 @@
-import type { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import type { Client } from "@modelcontextprotocol/client";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type { McpBoundaryError } from "../../client/errors.ts";
 import type { McpResourceSubscription } from "../../resources/subscription-model.ts";
 import type { SdkEvents } from "../sdk-events.ts";
 
-/** Only the boundary selects an era. Application owners consume connection health. */
+/**
+ * What differs between protocol eras: how list changes are observed and how a resource
+ * subscription is held. Session handling needs no era: modern HTTP never carries a
+ * session id, and legacy connections never open listen streams.
+ */
 export interface McpProtocolAdapter {
   readonly observe: (
     client: Client,
@@ -21,7 +25,4 @@ export interface McpProtocolAdapter {
     cleanupTimeoutMs: number,
     identity?: symbol,
   ) => Effect.Effect<McpResourceSubscription, McpBoundaryError, Scope.Scope>;
-  readonly isObservationRequest: (method: string) => boolean;
-  readonly sessionExpired: (status: number, headers: Headers) => boolean;
-  readonly terminate: (transport: StreamableHTTPClientTransport) => Promise<void>;
 }

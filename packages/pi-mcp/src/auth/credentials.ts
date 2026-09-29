@@ -37,3 +37,9 @@ export const validGrantTimes = (grant: McpGrant) =>
   grant.receivedAt >= 0 &&
   (grant.expiresAt === undefined ||
     (Number.isFinite(grant.expiresAt) && grant.expiresAt >= grant.receivedAt));
+const refreshableTokens = Schema.Struct({
+  refresh_token: Schema.String.check(Schema.isMinLength(1)),
+});
+/** Whether a stored grant can attempt refresh; the SDK boundary still validates everything else. */
+export const hasRefreshToken = (grant: McpGrant): boolean =>
+  Schema.is(refreshableTokens)(grant.tokens);

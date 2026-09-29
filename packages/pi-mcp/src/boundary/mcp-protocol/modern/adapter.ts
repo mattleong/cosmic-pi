@@ -25,8 +25,4 @@ export const modernProtocol: McpProtocolAdapter = {
       false,
       identity,
     ),
-  isObservationRequest: (method) => method === "subscriptions/listen",
-  sessionExpired: () => false,
-  // Stateless modern HTTP has no legacy session to delete.
-  terminate: () => Promise.resolve(),
 };

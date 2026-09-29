@@ -19,7 +19,7 @@ const schema = (property: Schema.Json): Schema.JsonObject => ({
 
 it.each([
   ["simple", "simple"],
-  ["", ""],
+  ["", "=?base64??="],
   ["a b\tc", "a b\tc"],
   [" padded ", "=?base64?IHBhZGRlZCA=?="],
   ["\t", "=?base64?CQ==?="],
@@ -75,7 +75,7 @@ it.each(["", "has space", "bad:colon", "bad\r\nInjected", "é", null, 3])(
     expect(scanParameterHeaders(schema(annotated("string", name))).valid).toBe(false);
   },
 );
-it.each(["number", "object", "array", "null", ["string", "null"]])(
+it.each(["object", "array", "null", ["string", "null"]])(
   "rejects unsupported and union primitive types: %j",
   (type) => {
     expect(scanParameterHeaders(schema({ type, "x-mcp-header": "Region" })).valid).toBe(false);
@@ -195,8 +195,16 @@ it("defends nested input and safe-integer conversion even if a validator seam ac
     expect(() =>
       parameterHeaders(schema(schema(annotated())), { region: args.nested }),
     ).toThrowError(expect.objectContaining({ kind: "invalid-input", outcome: "not-sent" }));
-  for (const value of [1.1, Number.MAX_SAFE_INTEGER + 1, "1", true])
+  for (const value of [1.1, "1", true])
     expect(() => parameterHeaders(schema(annotated("integer")), { region: value })).toThrow();
+  // Valid but inexact integers omit only their header, as in the SDK.
+  expect(
+    parameterHeaders(schema(annotated("integer")), { region: Number.MAX_SAFE_INTEGER + 1 }),
+  ).toEqual({});
+  expect(parameterHeaders(schema(annotated("number")), { region: 2.5 })).toEqual({
+    "Mcp-Param-Region": "2.5",
+  });
+  expect(() => parameterHeaders(schema(annotated("number")), { region: "2.5" })).toThrow();
   expect(() => parameterHeaders(schema(annotated("boolean")), { region: "false" })).toThrow();
   expect(() => parameterHeaders(schema(annotated()), { region: 42 })).toThrow();
 });

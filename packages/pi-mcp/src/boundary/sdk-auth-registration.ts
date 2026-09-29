@@ -49,7 +49,7 @@ const compatibleReceipt = (raw: McpRegistrationReceipt, input: RegistrationInput
     const receipt = yield* Schema.decodeEffect(registrationReceiptSchema)(raw).pipe(
       Effect.mapError(deniedAuth),
     );
-    if (receipt.identity !== input.server.identity || receipt.issuer !== input.issuer)
+    if (receipt.identity !== input.server.credentialIdentity || receipt.issuer !== input.issuer)
       return yield* deniedAuth();
     const resource = yield* validateAuthUrl(receipt.resource, input.policy);
     if (resource.href !== input.resource.href) return yield* deniedAuth();
@@ -170,7 +170,7 @@ export const loginClient = (input: RegistrationInput) =>
     if (!full.redirect_uris.includes(redirect)) return yield* deniedAuth();
     const capacity = full.scope === undefined ? [...scopes] : yield* parseScopes(full.scope);
     const receipt: McpRegistrationReceipt = {
-      identity: input.server.identity,
+      identity: input.server.credentialIdentity,
       issuer,
       resource: input.resource.href,
       registration: "dynamic",

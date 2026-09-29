@@ -80,4 +80,14 @@ describe("OAuth destination and callback policy", () => {
       for (const effect of rejected) expect(yield* Effect.isFailure(effect)).toBe(true);
     }),
   );
+  it.effect("reports a declined authorization as a cancelled sign-in", () =>
+    Effect.gen(function* () {
+      const consume = singleUseCallback("http://127.0.0.1:8000/callback", "state");
+      expect(
+        yield* consume("http://127.0.0.1:8000/callback?state=state&error=access_denied").pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ kind: "cancelled", outcome: "not-sent" });
+    }),
+  );
 });

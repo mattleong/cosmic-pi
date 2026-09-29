@@ -58,7 +58,6 @@ export interface SdkFetchOptions {
   readonly lookupOperation: (requestId: RequestId) => SdkFetchOperation | undefined;
   /** Exact native POST context also owns SDK cancellation-notification cleanup. */
   readonly currentOperation?: () => SdkFetchOperation | undefined;
-  readonly isObservationRequest?: (method: string) => boolean;
   readonly onObservationFailure?: () => void;
   readonly onResponse?: (status: number, requestHeaders: Headers) => void;
 }
@@ -216,9 +215,9 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
           : request === undefined
             ? options.currentOperation?.()
             : options.lookupOperation(request.id);
-      const observation =
-        method === "GET" ||
-        (request !== undefined && options.isObservationRequest?.(request.method) === true);
+      // The standalone GET stream is connection-wide observation. Listen streams belong
+      // to their subscription owner, which decides whether their loss matters.
+      const observation = method === "GET";
       if (options.session.signal.aborted || init?.signal?.aborted || operation?.signal.aborted) {
         throw aborted();
       }

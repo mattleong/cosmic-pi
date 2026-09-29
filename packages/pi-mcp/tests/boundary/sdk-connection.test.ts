@@ -10,6 +10,7 @@ import * as Core from "pi-cosmic-core";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
 import * as Stdio from "../../src/boundary/sdk-stdio.ts";
 import * as Http from "../../src/boundary/sdk-http.ts";
+import { boundaryError } from "../../src/client/errors.ts";
 import type { McpServerDefinition } from "../../src/config/model.ts";
 import {
   fakeConnection,
@@ -271,5 +272,41 @@ it.effect.each([
     spyStdio();
     const retried = yield* replacement.open(target, settings).pipe(Effect.result);
     expect(retried._tag).toBe(confirmed ? "Success" : "Failure");
+  }),
+);
+
+it.effect("reuses a stdio era verdict for the same definition until an acquisition fails", () =>
+  Effect.gen(function* () {
+    const opened: Stdio.SdkStdioOptions[] = [];
+    let fail = false;
+    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
+      opened.push(options);
+      if (fail) return Effect.fail(boundaryError("protocol", "not-sent", "Stale verdict."));
+      options.onNegotiated?.({ era: "modern", version: "2026-07-28" });
+      return cleanupOnClose(options.onCleanup);
+    });
+    const connector = yield* makeConnector();
+    const target = stdioServer("verdict");
+    const openAndClose = connector.open(target, settings).pipe(
+      Effect.flatMap((connection) => connection.close),
+      Effect.scoped,
+    );
+    yield* openAndClose;
+    yield* openAndClose;
+    expect(opened.map((options) => options.remembered)).toEqual([
+      undefined,
+      { era: "modern", version: "2026-07-28" },
+    ]);
+    // A different definition never inherits another's verdict.
+    yield* connector.open({ ...target, identity: "edited" }, settings).pipe(
+      Effect.flatMap((connection) => connection.close),
+      Effect.scoped,
+    );
+    expect(opened[2]?.remembered).toBeUndefined();
+    fail = true;
+    yield* openAndClose.pipe(Effect.flip);
+    fail = false;
+    yield* openAndClose;
+    expect(opened[4]?.remembered).toBeUndefined();
   }),
 );

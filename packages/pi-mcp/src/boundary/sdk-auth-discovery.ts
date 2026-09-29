@@ -31,6 +31,19 @@ export const missingOnlyMetadataFetch =
       return response;
     });
 
+/**
+ * Authorization-server metadata candidates share one issuer. Like the SDK, a client error
+ * or 502 on one (object stores answer 403 for missing files) moves on to the next.
+ */
+export const candidateMetadataFetch =
+  (fetch: FetchLike): FetchLike =>
+  (url, init) =>
+    fetch(url, init).then((response) => {
+      if (response.status >= 500 && response.status !== 502)
+        throw boundaryError("unavailable", "not-sent", "OAuth metadata request failed.");
+      return response;
+    });
+
 /** A retained POST challenge wins. A failed explicit URL never grants guessed-path fallback. */
 export const discoverAuthResource = (
   endpoint: string,

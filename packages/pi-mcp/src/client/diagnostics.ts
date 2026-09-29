@@ -42,11 +42,6 @@ type Entry = readonly [
 ];
 type Reason = NonNullable<McpBoundaryError["reason"]>;
 const REASONS = {
-  "protocol-negotiation-rejected": [
-    "Protocol negotiation rejected",
-    'The server rejected modern protocol negotiation or returned unusable version evidence. Automatic legacy fallback was not authorized. Review the server\'s supported protocol; a known legacy server can use "protocol": "legacy" in /mcp settings. Changing protocol changes credential identity and may require a new explicit OAuth sign-in.',
-    ["inspect-settings"],
-  ],
   "auth-not-configured": [
     "Managed authentication is not configured",
     "Managed authentication is disabled for this HTTP server, or custom headers keep it outside implicit OAuth. Review /mcp settings and the server's authentication headers. Explicit auth: false or auth: none does not enable OAuth. Headerless HTTP servers with omitted auth can use explicit user-approved OAuth sign-in after an authentication challenge.",

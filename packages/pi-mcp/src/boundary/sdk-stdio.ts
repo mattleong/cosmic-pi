@@ -1,4 +1,4 @@
-import type { Client } from "@modelcontextprotocol/client";
+import type { Client, ConnectOptions, PriorDiscovery } from "@modelcontextprotocol/client";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -15,7 +15,7 @@ import { decodeSdkExchange } from "./sdk-elicitation.ts";
 import { mapSdkClientError } from "./sdk-protocol-error.ts";
 import { selectProtocol } from "./mcp-protocol/select.ts";
 import { boundedSdkCleanup } from "./mcp-protocol/shared/bounded-cleanup.ts";
-import { negotiateStdio } from "./mcp-protocol/shared/stdio-negotiation.ts";
+import { negotiateStdio, type StdioEraVerdict } from "./mcp-protocol/shared/stdio-negotiation.ts";
 import {
   MCP_BOUNDARY_LIMITS,
   type McpConnection,
@@ -46,18 +46,27 @@ const OptionsSchema = Schema.Struct({
 export type SdkStdioOptions = typeof OptionsSchema.Encoded & {
   /** Installed before acquisition; reports full local cleanup, including failed startup. */
   readonly onCleanup?: (confirmed: boolean) => void;
+  /** This session's earlier verdict for the same definition, which skips the probe child. */
+  readonly remembered?: StdioEraVerdict;
+  /** Reports the era an automatic negotiation settled on, after the connection succeeds. */
+  readonly onNegotiated?: (verdict: StdioEraVerdict) => void;
 };
 
 const snapshotOptions = (options: SdkStdioOptions) =>
   Effect.try({
     try: () => {
       const decoded = Schema.decodeUnknownSync(OptionsSchema)(options);
-      if (options.onCleanup !== undefined && !Predicate.isFunction(options.onCleanup)) {
-        throw new Error("Invalid cleanup observer.");
+      if (
+        (options.onCleanup !== undefined && !Predicate.isFunction(options.onCleanup)) ||
+        (options.onNegotiated !== undefined && !Predicate.isFunction(options.onNegotiated))
+      ) {
+        throw new Error("Invalid observer.");
       }
       return Object.freeze({
         ...decoded,
         onCleanup: options.onCleanup,
+        remembered: options.remembered,
+        onNegotiated: options.onNegotiated,
         args: Object.freeze([...decoded.args]),
         environment: Object.freeze({ ...decoded.environment }),
       });
@@ -97,6 +106,8 @@ const transportFailure = <Value>(
           "not-sent",
           "MCP stdio request exceeds its byte limit.",
         );
+      case "busy":
+        return boundaryError("busy", "not-sent", "MCP stdio writes are queued to capacity.");
       case "output-limit":
         return boundaryError("output-limit", outcome, "MCP stdio output exceeds its byte limit.");
       case "not-started":
@@ -160,7 +171,9 @@ const stdioExchange =
     decodeMcpRequest(input).pipe(
       Effect.flatMap((decoded) =>
         Effect.suspend(() => {
-          if (state.closing) {
+          // Same admission as HTTP: unconfirmed cleanup, such as a failed subscription
+          // close, stops new work before the owner retires the connection.
+          if (state.closing || state.closed || state.cleanupUnconfirmed) {
             return Effect.fail(
               boundaryError("connection", "not-sent", "MCP stdio connection is unavailable."),
             );
@@ -206,58 +219,70 @@ export const openSdkStdio = (
       events: () => events,
       connect: ({ state, remaining, restore, setCleanup }) =>
         Effect.gen(function* () {
-          const openNative = Effect.gen(function* () {
-            const budget = yield* remaining;
-            const processOptions: DuplexProcessOptions = {
-              command: snapshot.command,
-              args: snapshot.args,
-              environment: snapshot.environment,
-              maxReadQueueBytes: snapshot.responseBytes,
-              maxStderrBytes: snapshot.stderrBytes,
-              maxStderrQueueBytes: Math.max(1, snapshot.stderrBytes),
-              maxWriteBytes: snapshot.requestBytes,
-              maxWriteQueueBytes: snapshot.requestBytes,
-              writeTimeoutMs: snapshot.requestTimeoutMs,
-              startTimeoutMs: budget,
-              cleanupTimeoutMs: snapshot.cleanupTimeoutMs,
-              onCleanup: (confirmed) => {
-                if (!confirmed) state.cleanupUnconfirmed = true;
-              },
-            };
-            const process = yield* restore(
-              openDuplexProcess(
-                snapshot.cwd === undefined
-                  ? processOptions
-                  : { ...processOptions, cwd: snapshot.cwd },
-              ).pipe(
-                Effect.mapError(processFailure),
-                Effect.tapError((error) =>
-                  Effect.sync(() => {
-                    if (error.kind === "cleanup") state.cleanupUnconfirmed = true;
-                  }),
+          const openNative = (pin?: string) =>
+            Effect.gen(function* () {
+              const budget = yield* remaining;
+              const processOptions: DuplexProcessOptions = {
+                command: snapshot.command,
+                args: snapshot.args,
+                environment: snapshot.environment,
+                maxReadQueueBytes: snapshot.responseBytes,
+                maxStderrBytes: snapshot.stderrBytes,
+                maxStderrQueueBytes: Math.max(1, snapshot.stderrBytes),
+                maxWriteBytes: snapshot.requestBytes,
+                maxWriteQueueBytes: snapshot.requestBytes,
+                writeTimeoutMs: snapshot.requestTimeoutMs,
+                startTimeoutMs: budget,
+                cleanupTimeoutMs: snapshot.cleanupTimeoutMs,
+                onCleanup: (confirmed) => {
+                  if (!confirmed) state.cleanupUnconfirmed = true;
+                },
+              };
+              const process = yield* restore(
+                openDuplexProcess(
+                  snapshot.cwd === undefined
+                    ? processOptions
+                    : { ...processOptions, cwd: snapshot.cwd },
+                ).pipe(
+                  Effect.mapError(processFailure),
+                  Effect.tapError((error) =>
+                    Effect.sync(() => {
+                      if (error.kind === "cleanup") state.cleanupUnconfirmed = true;
+                    }),
+                  ),
                 ),
-              ),
-            );
-            setCleanup(closeProcess(process));
-            const client = yield* makeSdkClient(
-              snapshot.protocol,
-              Math.max(1, Math.min(1_000, Math.floor(budget / 3))),
-            );
-            const transport = yield* makeSdkStdioTransport(process, {
-              maxBufferSize: snapshot.responseBytes,
-              maxWriteBytes: snapshot.requestBytes,
+              );
+              setCleanup(closeProcess(process));
+              // The SDK reads a silent stdio probe as a legacy server, so the probe must
+              // outlast a cold `npx`/`uvx` start. Half the budget leaves the other half for
+              // a legacy fallback on the application child. A pinned revision has no fallback.
+              const client = yield* makeSdkClient(
+                snapshot.protocol,
+                pin === undefined ? Math.max(1, Math.floor(budget / 2)) : budget,
+                pin,
+              );
+              const transport = yield* makeSdkStdioTransport(process, {
+                maxBufferSize: snapshot.responseBytes,
+                maxWriteBytes: snapshot.requestBytes,
+              });
+              const nativeClose = closeSdk(client, transport, process, snapshot.cleanupTimeoutMs);
+              setCleanup(nativeClose);
+              return { client, transport, close: nativeClose };
             });
-            const nativeClose = closeSdk(client, transport, process, snapshot.cleanupTimeoutMs);
-            setCleanup(nativeClose);
-            return { client, transport, close: nativeClose };
-          });
-          const prior =
-            snapshot.protocol === "legacy"
-              ? { kind: "legacy" as const }
-              : yield* negotiateStdio(openNative, remaining);
+          // A remembered era avoids a second launch: legacy skips the probe, and modern
+          // pins its revision and negotiates on the application child itself, which also
+          // fails loudly if the server changed.
+          const remembered = snapshot.protocol === "auto" ? snapshot.remembered : undefined;
+          const pin = remembered?.era === "modern" ? remembered.version : undefined;
+          const prior: PriorDiscovery | undefined =
+            snapshot.protocol === "legacy" || remembered?.era === "legacy"
+              ? { kind: "legacy" }
+              : pin !== undefined
+                ? undefined
+                : yield* negotiateStdio(openNative(), remaining);
           // negotiateStdio returns only after its scoped child and native cleanup join.
           if (state.cleanupUnconfirmed) return yield* cleanupFailure();
-          const { client, transport } = yield* openNative;
+          const { client, transport } = yield* openNative(pin);
           const acquiredEvents = yield* makeSdkEvents(client, state, undefined, {
             timeoutMs: snapshot.cleanupTimeoutMs,
             requireCancellationWrite: true,
@@ -266,13 +291,15 @@ export const openSdkStdio = (
           const budget = yield* remaining;
           yield* restore(
             Effect.tryPromise({
-              try: (signal) =>
-                client.connect(acquiredEvents.bindTransport(transport), {
+              try: (signal) => {
+                const connectOptions: ConnectOptions = {
                   signal,
                   timeout: budget,
                   maxTotalTimeout: budget,
-                  prior,
-                }),
+                };
+                if (prior !== undefined) connectOptions.prior = prior;
+                return client.connect(acquiredEvents.bindTransport(transport), connectOptions);
+              },
               catch: (error) => transportFailure(transport.failure ?? error, "not-sent"),
             }).pipe(
               Effect.timeoutOrElse({
@@ -284,6 +311,11 @@ export const openSdkStdio = (
               }),
             ),
           );
+          const era = client.getProtocolEra();
+          const version = client.getNegotiatedProtocolVersion();
+          if (snapshot.protocol === "auto" && era === "legacy") snapshot.onNegotiated?.({ era });
+          if (snapshot.protocol === "auto" && era === "modern" && version !== undefined)
+            snapshot.onNegotiated?.({ era, version });
           return {
             client,
             events: acquiredEvents,

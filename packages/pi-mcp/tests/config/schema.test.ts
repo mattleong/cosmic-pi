@@ -70,6 +70,10 @@ describe("MCP configuration boundaries", () => {
           url: "https://example.test",
           auth: { type: "oauth", registration: "pre-registered" },
         },
+        // The SDK owns MCP protocol headers; a configured value would replace them.
+        { url: "https://example.test", headers: { "Mcp-Session-Id": "fixed" } },
+        { url: "https://example.test", headers: { "mcp-protocol-version": "2025-03-26" } },
+        { url: "https://example.test", headers: { "Mcp-Param-Region": "eu" } },
       ];
       for (const value of bad)
         expect((yield* decodeMcpServer(value).pipe(Effect.flip)).kind).toBe("config");

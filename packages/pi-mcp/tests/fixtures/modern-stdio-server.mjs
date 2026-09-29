@@ -6,8 +6,9 @@ const fail = (id, code) =>
   process.stdout.write(
     JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: "fixture rejection" } }) + "\n",
   );
-const input = createInterface({ input: process.stdin });
-input.on("line", (line) => {
+// Stdin buffers while a delayed fixture imitates a cold `npx`/`uvx` start.
+const delay = Number(process.env.FIXTURE_DELAY_MS ?? "0");
+const onLine = (line) => {
   const request = JSON.parse(line);
   if (request.method === "server/discover") {
     if (mode === "exit-before-init") {
@@ -46,4 +47,5 @@ input.on("line", (line) => {
       content: [{ type: "text", text: String(process.pid) }],
     });
   } else if (request.id !== undefined) fail(request.id, -32601);
-});
+};
+setTimeout(() => createInterface({ input: process.stdin }).on("line", onLine), delay);

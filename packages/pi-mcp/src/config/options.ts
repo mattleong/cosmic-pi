@@ -7,6 +7,7 @@ import { boundaryError } from "../client/errors.ts";
 import type {
   McpConfigScope,
   McpEffectiveServer,
+  McpHttpAuth,
   McpResolvedConfig,
   McpServerDefinition,
   McpSettings,
@@ -101,14 +102,45 @@ const decodeSettings = (value: McpDecodedDocument["settings"]) =>
   });
 
 /** Stable key ordering makes identity independent of JSON formatting and object insertion order. */
-const identityInput = (source: McpConfigSource, server: McpEffectiveServer): string =>
-  JSON.stringify({ scope: source.scope, path: source.path, server }, (_key, item: Schema.Json) =>
+interface IdentityInput {
+  readonly scope: McpConfigScope;
+  readonly path: string;
+  readonly server: Omit<McpEffectiveServer, "identity">;
+}
+interface CredentialInput {
+  readonly scope: McpConfigScope;
+  readonly path: string;
+  readonly id: string;
+  readonly audience:
+    | { readonly url: string; readonly auth: McpHttpAuth }
+    | McpServerDefinition["transport"]
+    | null;
+}
+const canonicalJson = (value: IdentityInput | CredentialInput): string =>
+  JSON.stringify(value, (_key, item: Schema.Json) =>
     Predicate.isObject(item)
       ? Object.fromEntries(
           Object.entries(item).sort(([left], [right]) => left.localeCompare(right)),
         )
       : item,
   );
+const identityInput = (source: McpConfigSource, server: Omit<McpEffectiveServer, "identity">) =>
+  canonicalJson({ scope: source.scope, path: source.path, server });
+/** Credentials authorize one declared server's audience, independent of how it is used. */
+const credentialInput = (
+  source: McpConfigSource,
+  id: string,
+  definition: McpServerDefinition | undefined,
+) =>
+  canonicalJson({
+    scope: source.scope,
+    path: source.path,
+    id,
+    audience:
+      definition?.transport === "http"
+        ? { url: definition.url, auth: definition.auth }
+        : (definition?.transport ?? null),
+  });
 
 export const resolveMcpConfig = (options: {
   readonly revision: number;
@@ -152,6 +184,15 @@ export const resolveMcpConfig = (options: {
         raw === undefined || raw.enabled === false
           ? undefined
           : normalizeMcpServer(raw, source.directory, options.path);
+      const digest = (input: string) =>
+        crypto.digest("SHA-256", new TextEncoder().encode(input)).pipe(
+          Effect.map((bytes) =>
+            Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+          ),
+          Effect.mapError(() =>
+            boundaryError("config", "not-sent", "Unable to identify MCP configuration."),
+          ),
+        );
       const diagnostic = projectBlocked
         ? "Project MCP configuration is unavailable; execution is disabled."
         : decoded._tag === "Failure"
@@ -159,11 +200,12 @@ export const resolveMcpConfig = (options: {
           : undefined;
       if (decoded._tag === "Failure") invalidEntries = true;
       const enabled = diagnostic === undefined && definition !== undefined;
-      let server: McpEffectiveServer = {
+      const credentialIdentity = yield* digest(credentialInput(source, id, definition));
+      let server: Omit<McpEffectiveServer, "identity"> = {
         id,
         scope: source.scope,
         directory: source.directory,
-        identity: "",
+        credentialIdentity,
         enabled,
       };
       if (definition !== undefined) server = { ...server, definition };
@@ -172,21 +214,12 @@ export const resolveMcpConfig = (options: {
         try: () => identityInput(source, server),
         catch: () => boundaryError("config", "not-sent", "Unable to identify MCP configuration."),
       });
-      const digest = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(input))
-        .pipe(
-          Effect.mapError(() =>
-            boundaryError("config", "not-sent", "Unable to identify MCP configuration."),
-          ),
-        );
+      const identity = yield* digest(input);
       Object.defineProperty(servers, id, {
         enumerable: true,
         configurable: true,
         writable: true,
-        value: {
-          ...server,
-          identity: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
-        } satisfies McpEffectiveServer,
+        value: { ...server, identity } satisfies McpEffectiveServer,
       });
     }
     if (invalidEntries) diagnostics.push("Some MCP server entries were disabled or ignored.");

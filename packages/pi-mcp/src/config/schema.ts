@@ -63,6 +63,12 @@ export const DEFAULT_MCP_SETTINGS: typeof McpSettingsSchema.Type = Object.freeze
 });
 
 const environment = Schema.Record(envName, noNulText(8_192, 0)).check(Schema.isMaxProperties(128));
+/** The SDK owns these per-connection and per-request headers; configured values would replace them. */
+const reservedHeader = (name: string) =>
+  name === "mcp-protocol-version" ||
+  name === "mcp-session-id" ||
+  name === "last-event-id" ||
+  name.startsWith("mcp-param-");
 const headers = Schema.Record(
   headerName,
   text(8_192, 0).check(Schema.isPattern(/^[^\r\n\0]*$/)),
@@ -70,7 +76,7 @@ const headers = Schema.Record(
   Schema.isMaxProperties(128),
   Schema.makeFilter((value) => {
     const keys = Object.keys(value).map((key) => key.toLowerCase());
-    return new Set(keys).size === keys.length;
+    return new Set(keys).size === keys.length && !keys.some(reservedHeader);
   }),
 );
 const oauth = Schema.Struct({
@@ -171,7 +177,7 @@ const serverFieldHints = new Map(
     env: '"env": expected valid environment-variable names mapped to string values.',
     url: '"url": expected an HTTP or HTTPS URL without embedded credentials or a fragment.',
     headers:
-      '"headers": expected unique case-insensitive HTTP header names mapped to strings without CR, LF, or NUL.',
+      '"headers": expected unique case-insensitive HTTP header names mapped to strings without CR, LF, or NUL. MCP protocol headers (MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID, Mcp-Param-*) are set by the client.',
     auth: '"auth": use false to disable managed authentication, or an object with type "none", "env", or "oauth" and its supported fields. Omission enables implicit OAuth only without custom headers. Boolean true is not supported.',
   }),
 );

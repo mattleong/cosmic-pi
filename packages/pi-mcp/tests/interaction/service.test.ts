@@ -138,6 +138,30 @@ it.live.each(["unsupported", "malformed"])("rejects whole %s batches before any 
   }).pipe(Effect.provide(fixture.layer));
 });
 
+it.live("a state-only round after a decline continues to the server's result", () => {
+  let leg = 0;
+  const decline = countingDecline();
+  const fixture = optionalFixture(
+    (request) => {
+      if (request.method !== "tools/call") return undefined;
+      const current = leg++;
+      if (current === 0)
+        return reply(request.id!, { resultType: "input_required", inputRequests: { first: form } });
+      // The server acknowledges the decline and keeps working without new questions.
+      if (current === 1)
+        return reply(request.id!, { resultType: "input_required", requestState: "after-decline" });
+      return reply(request.id!, { content: [{ type: "text", text: "done without input" }] });
+    },
+    { interaction: decline.host },
+  );
+  return Effect.gen(function* () {
+    const result = yield* (yield* McpExecution).execute(input, projection);
+    expect(result.reply.outcome).toBe("completed");
+    expect(decline.asks()).toBe(1);
+    expect(leg).toBe(3);
+  }).pipe(Effect.provide(fixture.layer));
+});
+
 it.live("decline handles maximum and prototype-looking request keys without reopening UI", () => {
   let asks = 0;
   const owners: ExtensionFormOwner[] = [];

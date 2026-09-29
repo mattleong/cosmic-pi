@@ -901,8 +901,8 @@ it.effect("keeps an empty metadata search distinct from unsupported dispatcher o
   }),
 );
 
-it.effect.each([undefined, -1, 0, 1e100])(
-  "TTL %s serves one acquisition but is never a later cache hit",
+it.effect.each([undefined, -1, 0])(
+  "TTL %s keeps serving invocation but is never a later listing cache hit",
   (ttlMs) =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ a: server("a") });
@@ -925,8 +925,10 @@ it.effect.each([undefined, -1, 0, 1e100])(
         expect(passive.notices).toHaveLength(1);
         expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("stale");
         expect(yield* Ref.get(harness.calls)).toHaveLength(1);
-        const next = yield* connections.withOperation("a", {}, discovery.ensure);
-        expect(next.revision).toBeGreaterThan(first.revision);
+        expect(yield* connections.withOperation("a", {}, discovery.ensure)).toBe(first);
+        expect(yield* Ref.get(harness.calls)).toHaveLength(1);
+        yield* discovery.query({ action: "tools.describe", server: "a", tool: "first" });
+        expect((yield* discovery.known)[0]!.revision).toBeGreaterThan(first.revision);
         expect(yield* Ref.get(harness.calls)).toHaveLength(2);
         expect(
           yield* discovery
@@ -938,7 +940,7 @@ it.effect.each([undefined, -1, 0, 1e100])(
 );
 
 it.effect(
-  "expiry is access-driven; passive reads stay local and failed refresh cannot authorize calls",
+  "expiry is access-driven; expired metadata serves calls until a failed refresh revokes it",
   () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ a: server("a") });
@@ -961,12 +963,15 @@ it.effect(
         const passive = yield* discovery.query({ action: "tools.list" });
         expect(passive.notices).toHaveLength(1);
         expect((yield* decodePage(passive)).page.items).toHaveLength(1);
+        expect(yield* connections.withOperation("a", {}, discovery.ensure)).toBe(first);
         expect(yield* Ref.get(harness.calls)).toHaveLength(1);
         yield* Ref.set(harness.route, () =>
           Effect.fail(boundaryError("transport", "not-sent", "secret")),
         );
         expect(
-          yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.result),
+          yield* discovery
+            .query({ action: "tools.describe", server: "a", tool: "old" })
+            .pipe(Effect.result),
         ).toMatchObject({ _tag: "Failure" });
         expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe(
           "refresh-failed",
@@ -975,6 +980,9 @@ it.effect(
           "secret",
         );
         expect(yield* Ref.get(harness.calls)).toHaveLength(2);
+        expect(
+          yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.result),
+        ).toMatchObject({ _tag: "Failure" });
         yield* Ref.set(harness.route, defaultRoute);
         expect(
           (yield* connections.withOperation("a", {}, discovery.ensure)).revision,
@@ -1017,9 +1025,8 @@ it.effect(
         expect(first.cacheScope).toBe("private");
         expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("stale");
         yield* Ref.set(harness.route, defaultRoute);
-        expect(
-          (yield* connections.withOperation("a", {}, discovery.ensure)).revision,
-        ).toBeGreaterThan(first.revision);
+        yield* discovery.query({ action: "tools.list", server: "a" });
+        expect((yield* discovery.known)[0]!.revision).toBeGreaterThan(first.revision);
       });
     }),
 );
@@ -1151,10 +1158,12 @@ it.effect.each(
         ).toEqual(["alpha", "beta", "gamma"]);
         expect((yield* discovery.known)[0]!.revision).toBe(revision);
         expect(yield* Ref.get(harness.calls)).toEqual(calls);
-        // Snapshot inspection must not make the same revision safe for invocation.
-        expect(
-          yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.flip),
-        ).toMatchObject({ kind: "transport", outcome: "not-sent" });
+        // The expired revision still serves invocation without a remote call.
+        expect((yield* connections.withOperation("a", {}, discovery.ensure)).revision).toBe(
+          revision,
+        );
+        expect(yield* Ref.get(harness.calls)).toEqual(calls);
+        // Targeted listing honors TTL, and its failed refresh revokes invocation authority.
         expect(
           yield* discovery
             .query({ action: "tools.describe", server: "a", tool: "alpha" })
@@ -1163,6 +1172,9 @@ it.effect.each(
         expect(yield* discovery.query(request).pipe(Effect.flip)).toMatchObject({
           kind: "transport",
         });
+        expect(
+          yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.flip),
+        ).toMatchObject({ kind: "transport", outcome: "not-sent" });
       });
     }),
 );
@@ -1274,7 +1286,7 @@ it.effect.each([true, false])(
               })),
               {
                 name: "invalid",
-                inputSchema: { properties: { value: { type: "number", "x-mcp-header": "Value" } } },
+                inputSchema: { properties: { value: { type: "object", "x-mcp-header": "Value" } } },
               },
             ],
           }),

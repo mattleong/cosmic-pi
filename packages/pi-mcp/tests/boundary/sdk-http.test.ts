@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -281,6 +282,64 @@ describe("scoped SDK HTTP connection", () => {
       expect(reply.outcome).toBe("completed");
       // Cancellation was confirmed while the connection and test scopes remain open.
       expect((yield* connection.request({ action: "tools.call", tool: "sse" })).outcome).toBe(
+        "completed",
+      );
+    }),
+  );
+
+  it.effect.each([401, 500])(
+    "a DELETE answered with HTTP %i still confirms local cleanup",
+    (status) =>
+      Effect.gen(function* () {
+        const cleanup: boolean[] = [];
+        const fetch = controlledFetch((init) =>
+          init?.method === "DELETE" ? Promise.resolve(new Response(null, { status })) : undefined,
+        );
+        const connection = yield* openSdkHttp({
+          url: fakeUrl,
+          fetch,
+          ...defaults,
+          onCleanup: (confirmed) => cleanup.push(confirmed),
+        });
+        yield* connection.close;
+        expect(cleanup).toEqual([true]);
+        expect(yield* connection.health).toMatchObject({ cleanupUnconfirmed: false });
+      }),
+  );
+
+  it.effect("answers a server request on the standalone GET stream after connecting", () =>
+    Effect.gen(function* () {
+      let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let answer: string | undefined;
+      const fetch = controlledFetch((init) => {
+        if (init?.method === "GET") {
+          return Promise.resolve(
+            streamResponse(
+              {
+                start(controller) {
+                  stream = controller;
+                },
+              },
+              sse,
+            ),
+          );
+        }
+        const body = init?.body;
+        if (Predicate.isString(body) && body.includes('"server-ping"')) {
+          answer = body;
+          return Promise.resolve(new Response(null, { status: 202 }));
+        }
+        return undefined;
+      });
+      const connection = yield* openSdkHttp({ url: fakeUrl, fetch, ...defaults });
+      yield* yieldUntil(() => stream !== undefined);
+      // The stream outlives the connect operation that started it.
+      stream?.enqueue(
+        bytes(`data: ${json({ jsonrpc: "2.0", id: "server-ping", method: "ping" })}\n\n`),
+      );
+      yield* yieldUntil(() => answer !== undefined);
+      expect(answer).toContain('"result"');
+      expect((yield* connection.request({ action: "tools.call", tool: "later" })).outcome).toBe(
         "completed",
       );
     }),

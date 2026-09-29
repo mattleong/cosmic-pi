@@ -1,19 +1,29 @@
 import type { Client, PriorDiscovery, Transport } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Predicate from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import { boundaryError, type McpBoundaryError } from "../../../client/errors.ts";
-import { priorDiscovery, guardNegotiation } from "../select.ts";
-import { isSdkNegotiationRejected } from "./negotiation-error.ts";
+import { priorDiscovery } from "../select.ts";
+
+/**
+ * The era an earlier connection to the same definition negotiated in this session.
+ * Only the era is kept, never a discover result, so capabilities are always fresh.
+ */
+export type StdioEraVerdict =
+  | { readonly era: "legacy" }
+  | { readonly era: "modern"; readonly version: string };
 
 export interface OwnedStdioProbe {
   readonly client: Client;
-  readonly transport: Transport;
+  readonly transport: Transport & { readonly exitedWithoutReply: boolean };
   readonly close: Effect.Effect<void, McpBoundaryError>;
 }
 
-/** Probe only on a disposable owned child; never reinterpret a failed connect as legacy. */
+/**
+ * Probe only on a disposable owned child; the SDK classifies its replies. Like the
+ * SDK's own disposable probe, a child that exits before answering `server/discover`
+ * is legacy evidence. A child that answered and then failed is not.
+ */
 export const negotiateStdio = (
   acquire: Effect.Effect<OwnedStdioProbe, McpBoundaryError, Scope.Scope>,
   remaining: Effect.Effect<number, McpBoundaryError>,
@@ -28,26 +38,23 @@ export const negotiateStdio = (
               Effect.flatMap((timeoutMs) =>
                 Effect.tryPromise({
                   try: (signal) =>
-                    probe.client.connect(guardNegotiation(probe.transport), {
+                    probe.client.connect(probe.transport, {
                       signal,
                       timeout: timeoutMs,
                       maxTotalTimeout: timeoutMs,
                     }),
-                  catch: (error) =>
-                    Predicate.isError(error) && isSdkNegotiationRejected(error)
-                      ? boundaryError(
-                          "protocol",
-                          "not-sent",
-                          "MCP protocol negotiation was rejected.",
-                          "protocol-negotiation-rejected",
-                        )
-                      : boundaryError(
-                          "connection",
-                          "not-sent",
-                          "MCP stdio negotiation failed. Known legacy servers may require protocol: legacy.",
-                        ),
+                  catch: () =>
+                    boundaryError(
+                      "connection",
+                      "not-sent",
+                      "MCP stdio negotiation failed. Known legacy servers may require protocol: legacy.",
+                    ),
                 }).pipe(
                   Effect.andThen(priorDiscovery(probe.client)),
+                  Effect.catchIf(
+                    () => probe.transport.exitedWithoutReply,
+                    () => Effect.succeed<PriorDiscovery>({ kind: "legacy" }),
+                  ),
                   Effect.timeoutOrElse({
                     duration: timeoutMs,
                     orElse: () =>

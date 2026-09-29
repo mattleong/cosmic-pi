@@ -318,19 +318,41 @@ it.live(
     }),
 );
 
+/** Answers everything after the probe as a legacy server, counting methods. */
+const afterProbe = (probe: (request: ReturnType<typeof parseWire>) => Response) => {
+  const methods: string[] = [];
+  const fetch: FetchLike = (_url, init) =>
+    Promise.resolve().then(() => {
+      if (init?.method !== "POST") return new Response(null, { status: 405 });
+      const request = parseWire(init.body);
+      methods.push(request.method);
+      if (request.method === "server/discover") return probe(request);
+      if (request.id === undefined) return new Response(null, { status: 202 });
+      return response(
+        request.id,
+        request.method === "initialize" ? legacyInitialized() : { content: [] },
+      );
+    });
+  return { fetch, methods };
+};
+
 it.live.each([400, 401, 403, 404, 408, 422, 429, 500])(
-  "does not downgrade or replay negotiation rejected with HTTP %i",
+  "classifies a probe answered with HTTP %i as the SDK does, never replaying a call",
   (status) =>
     Effect.gen(function* () {
-      const methods: string[] = [];
-      const fetch: FetchLike = (_url, init) =>
-        Promise.resolve().then(() => {
-          if (init?.method === "POST") methods.push(parseWire(init.body).method);
-          return new Response("broken", { status });
-        });
+      const { fetch, methods } = afterProbe(() => new Response("broken", { status }));
       const result = yield* openSdkHttp({ url, fetch, ...defaults }).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      expect(methods).toEqual(["server/discover"]);
+      // Authorization failures and server errors are not legacy evidence.
+      if (status === 401 || status === 403 || status === 500) {
+        expect(result._tag).toBe("Failure");
+        expect(methods).toEqual(["server/discover"]);
+        return;
+      }
+      if (result._tag !== "Success") throw new Error("Expected legacy fallback.");
+      expect(result.success.protocolVersion).toBe("2025-11-25");
+      expect(methods.slice(0, 2)).toEqual(["server/discover", "initialize"]);
+      expect(methods).not.toContain("tools/call");
+      yield* result.success.close;
     }),
 );
 
@@ -343,29 +365,33 @@ it.live.each([
   "version-empty",
   "version-garbage",
   "version-future",
-])("rejects %s probe replies rather than initializing legacy", (mode) =>
+])("falls back to legacy after a %s probe reply unless only newer versions are offered", (mode) =>
   Effect.gen(function* () {
-    const methods: string[] = [];
-    const fetch: FetchLike = (_url, init) =>
-      Promise.resolve().then(() => {
-        const request = parseWire(init?.body);
-        methods.push(request.method);
-        const supported = mode.includes("empty")
-          ? []
-          : mode.includes("future")
-            ? ["2027-01-01"]
-            : ["garbage"];
-        if (mode === "malformed") return response(request.id!, { supportedVersions: 3 });
-        if (mode === "server-error")
-          return rpcError(request.id!, { code: -32603, message: "failure" });
-        if (mode.startsWith("version-"))
-          return rpcError(request.id!, { code: -32022, message: "version", data: { supported } });
-        return response(request.id!, { ...discovered, supportedVersions: supported });
-      });
-    expect((yield* openSdkHttp({ url, fetch, ...defaults }).pipe(Effect.result))._tag).toBe(
-      "Failure",
-    );
-    expect(methods).toEqual(["server/discover"]);
+    const supported = mode.includes("empty")
+      ? []
+      : mode.includes("future")
+        ? ["2027-01-01"]
+        : ["garbage"];
+    const { fetch, methods } = afterProbe((request) => {
+      if (mode === "malformed") return response(request.id!, { supportedVersions: 3 });
+      if (mode === "server-error")
+        return rpcError(request.id!, { code: -32603, message: "failure" });
+      if (mode.startsWith("version-"))
+        return rpcError(request.id!, { code: -32022, message: "version", data: { supported } });
+      return response(request.id!, { ...discovered, supportedVersions: supported });
+    });
+    const result = yield* openSdkHttp({ url, fetch, ...defaults }).pipe(Effect.result);
+    // A typed version disagreement naming only revisions the SDK orders after 2026-07-28
+    // (including unparseable ones) is not legacy evidence.
+    if (mode === "version-future" || mode === "version-garbage") {
+      expect(result).toMatchObject({ _tag: "Failure", failure: { kind: "unsupported" } });
+      expect(methods).toEqual(["server/discover"]);
+      return;
+    }
+    if (result._tag !== "Success") throw new Error("Expected legacy fallback.");
+    expect(result.success.protocolVersion).toBe("2025-11-25");
+    expect(methods.slice(0, 2)).toEqual(["server/discover", "initialize"]);
+    yield* result.success.close;
   }),
 );
 
@@ -465,7 +491,7 @@ it.live("reports subscription close failure after still joining native transport
 );
 
 it.live.each(["missing", "partial"])(
-  "joins subscription cleanup after %s acknowledgement",
+  "joins subscription cleanup after %s acknowledgement; honoring nothing still connects",
   (mode) =>
     Effect.gen(function* () {
       let cancelled = false;
@@ -508,8 +534,15 @@ it.live.each(["missing", "partial"])(
         connectTimeoutMs: 80,
         onCleanup: (value) => cleanup.push(value),
       }).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
       expect(cancelled).toBe(true);
+      if (mode === "missing") {
+        expect(result._tag).toBe("Failure");
+        expect(cleanup).toEqual([true]);
+        return;
+      }
+      // An empty honored filter is a legal subset: tools stay unobserved.
+      if (result._tag !== "Success") throw new Error("Expected an unobserved connection.");
+      yield* result.success.close;
       expect(cleanup).toEqual([true]);
     }),
 );

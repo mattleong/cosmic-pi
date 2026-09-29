@@ -273,4 +273,36 @@ layer(Layer.mergeAll(Path.layer, NodeCrypto.layer))("MCP configuration resolutio
         );
       }),
   );
+
+  it.effect("keeps a sign-in across tool policy, protocol, and header edits only", () =>
+    Effect.gen(function* () {
+      const base = {
+        url: "https://mcp.example/mcp",
+        auth: { type: "oauth", registration: "dynamic", scopes: ["read"] },
+      };
+      const credential = (server: Schema.Json) =>
+        decodeMcpDocument({ mcpServers: { server } }).pipe(
+          Effect.flatMap((document) => resolve(document)),
+          Effect.map((config) => config.servers.server!),
+        );
+      const original = yield* credential(base);
+      for (const edit of [
+        { denyTools: ["write"] },
+        { allowTools: ["read"] },
+        { protocol: "legacy" },
+        { headers: { "x-client": "pi" } },
+      ]) {
+        const edited = yield* credential({ ...base, ...edit });
+        expect(edited.identity).not.toBe(original.identity);
+        expect(edited.credentialIdentity).toBe(original.credentialIdentity);
+      }
+      for (const edit of [
+        { url: "https://other.example/mcp" },
+        { auth: { ...base.auth, scopes: ["write"] } },
+      ])
+        expect((yield* credential({ ...base, ...edit })).credentialIdentity).not.toBe(
+          original.credentialIdentity,
+        );
+    }),
+  );
 });

@@ -52,6 +52,8 @@ export const withCredentialPermit = <A>(
 export interface AuthBlock {
   readonly kind: "refresh" | "rejected" | "logout";
   readonly reason?: "oauth-insufficient-scope";
+  /** A rejected token whose grant can refresh: the next access refreshes once instead of failing. */
+  readonly recover?: true;
 }
 export interface AuthAuthority {
   readonly permit: Semaphore.Semaphore;
@@ -59,6 +61,10 @@ export interface AuthAuthority {
   evidenceRevision: number;
   blocked: AuthBlock | undefined;
   revoked: Deferred.Deferred<void>;
+  /** The last token issued came from a grant holding a refresh token. */
+  refreshable: boolean;
+  /** When a rejection last triggered a refresh; bounds rejection-refresh loops. */
+  recoveredAt: number | undefined;
 }
 // Session revocation and observations are process-local. Credential transactions use
 // the separate OS-user CrossProcessLock before reading or mutating Keychain.
@@ -72,6 +78,8 @@ export const authorityFor = (identity: string): AuthAuthority => {
       evidenceRevision: 0,
       blocked: undefined,
       revoked: Deferred.makeUnsafe<void>(),
+      refreshable: false,
+      recoveredAt: undefined,
     };
     authorities.set(identity, value);
   }

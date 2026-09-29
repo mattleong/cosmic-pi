@@ -24,6 +24,7 @@ interface FetchJob {
   readonly url: string;
   readonly init: RequestInit;
   readonly headersOnly: boolean;
+  readonly onDispatch: (() => void) | undefined;
   readonly resolve: (response: Response) => void;
   readonly reject: (error: McpBoundaryError) => void;
 }
@@ -115,6 +116,8 @@ const request = (
           headers.get("content-type") ?? "application/x-www-form-urlencoded",
         );
       yield* checkCurrent;
+      // Everything before this point provably sent nothing.
+      job.onDispatch?.();
       const response = yield* client.execute(outgoing).pipe(
         Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
         Effect.mapError(unavailable),
@@ -168,13 +171,17 @@ const request = (
     }),
   );
 
-/** SDK Promise ingress, not an Effect runner. Every request is owned by this scope. */
+/**
+ * SDK Promise ingress, not an Effect runner. Every request is owned by this scope.
+ * `onDispatch` runs before any request leaves the process, after local validation.
+ */
 export const withAuthFetch = <A>(
   policy: AuthUrlPolicy,
   use: (
     fetch: FetchLike,
     probe: (url: string | URL, signal?: AbortSignal) => Promise<Response>,
   ) => Promise<A>,
+  onDispatch?: () => void,
 ): Effect.Effect<A, McpBoundaryError, NetworkAddresses> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -215,6 +222,7 @@ export const withAuthFetch = <A>(
           url: String(url),
           init,
           headersOnly,
+          onDispatch,
           resolve: completion.resolve,
           reject: completion.reject,
         };
