@@ -106,6 +106,7 @@ export class McpCredentialStore extends Context.Service<
                   write: (grant) => update((record) => ({ ...record, grant })),
                   writeRegistration: (registration) =>
                     update((record) => ({ ...record, registration })),
+                  forgetRegistration: update(({ registration: _forgotten, ...record }) => record),
                   remove: Effect.andThen(checked, store.remove(identity, owner)),
                 }).pipe(
                   Effect.ensuring(

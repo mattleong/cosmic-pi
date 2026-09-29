@@ -45,6 +45,7 @@ const protocolErrors = [
     kind: "not-found",
     reason: "rpc-resource-not-found",
   },
+  { name: "header mismatch", code: -32020, kind: "protocol", reason: "rpc-header-mismatch" },
   { name: "custom server error", code: -32099, kind: "protocol", reason: "rpc-error" },
   {
     name: "bare elicitation code",

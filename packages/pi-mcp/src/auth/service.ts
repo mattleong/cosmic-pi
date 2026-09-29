@@ -69,6 +69,8 @@ export const makeMcpAuthWithAuthority = (
     let revoked = Deferred.makeUnsafe<void>();
     const observed = new Map<string, McpAuthStatus>();
     const challenges = new Map<string, McpAuthChallenge>();
+    // Reused clients this session saw rejected, by credential identity.
+    const staleClients = new Map<string, string>();
     const pendingLogins = new Map<
       string,
       {
@@ -252,7 +254,15 @@ export const makeMcpAuthWithAuthority = (
                       if (!registering || !current()) return yield* stale();
                     });
                   const challenge = challenges.get(server.credentialIdentity);
-                  let options: McpLoginOptions = { saveRegistration };
+                  const forgetRegistration = (clientId: string) =>
+                    Effect.gen(function* () {
+                      if (!current()) return yield* stale();
+                      staleClients.set(server.credentialIdentity, clientId);
+                      yield* tx.forgetRegistration;
+                    });
+                  let options: McpLoginOptions = { saveRegistration, forgetRegistration };
+                  const staleClientId = staleClients.get(server.credentialIdentity);
+                  if (staleClientId !== undefined) options = { ...options, staleClientId };
                   if (previousGrant) options = { ...options, previousGrant };
                   if (registration) options = { ...options, registration };
                   if (challenge) options = { ...options, challenge };
@@ -281,6 +291,7 @@ export const makeMcpAuthWithAuthority = (
                           }
                           authority.blocked = undefined;
                           challenges.delete(server.credentialIdentity);
+                          staleClients.delete(server.credentialIdentity);
                           pendingLogins.set(server.credentialIdentity, {
                             status,
                             session,

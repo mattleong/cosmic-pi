@@ -15,3 +15,7 @@ export const MCP_VALIDATION_NOTICES = {
 } as const;
 
 export type McpValidationNoticeIdentity = keyof typeof MCP_VALIDATION_NOTICES;
+
+/** The server still validates its own input; only the local pre-check was skipped. */
+export const MCP_INPUT_UNCHECKED_NOTICE =
+  "The server's input schema uses features this client cannot check, so the arguments were sent without local validation.";

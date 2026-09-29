@@ -95,8 +95,14 @@ it.effect(
           grant: marked,
           registration: changed,
         });
-        yield* store.write(identity, { ...grant, tokens: { access_token: "rotated" } });
+        const rotated = { ...grant, tokens: { access_token: "rotated" } };
+        yield* store.write(identity, rotated);
         expect(yield* store.readRegistration(identity)).toEqual(changed);
+        // Forgetting a rejected client drops only its checkpoint.
+        yield* store.forgetRegistration!(identity);
+        expect(yield* store.readRegistration(identity)).toBeUndefined();
+        expect(yield* store.read(identity)).toEqual(rotated);
+        yield* store.writeRegistration(identity, changed);
         yield* store.remove(identity);
         expect(yield* store.read(identity)).toBeUndefined();
         expect(yield* store.readRegistration(identity)).toBeUndefined();

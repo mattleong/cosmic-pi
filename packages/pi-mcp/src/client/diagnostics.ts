@@ -185,6 +185,11 @@ const REASONS = {
     "The MCP server reported that the requested resource was not found.",
     ["inspect-operation"],
   ],
+  "rpc-header-mismatch": [
+    "Parameter headers rejected",
+    "The MCP server reported JSON-RPC error -32020: mirrored parameter headers did not match the arguments, so the call did not run. The tool's definition may have changed; review it with tools.describe.",
+    ["inspect-operation"],
+  ],
   "rpc-error": [
     "Server JSON-RPC error",
     "The MCP server returned a JSON-RPC error. Its private message and data were not exposed.",

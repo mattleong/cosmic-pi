@@ -10,6 +10,12 @@ import {
 } from "@modelcontextprotocol/client";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 
+/**
+ * SEP-2243 HEADER_MISMATCH: mirrored `Mcp-Param-*` headers disagreed with the body, and the
+ * server rejected the call before running it. The SDK does not export this constant.
+ */
+export const MCP_HEADER_MISMATCH_CODE = -32020;
+
 /** Project only fixed protocol categories. SDK messages, data and custom codes stay private. */
 export const mapSdkProtocolError = (
   error: ProtocolError,
@@ -58,6 +64,13 @@ export const mapSdkProtocolError = (
         outcome,
         "MCP server reported an internal error.",
         "rpc-internal-error",
+      );
+    case MCP_HEADER_MISMATCH_CODE:
+      return boundaryError(
+        "protocol",
+        outcome,
+        "MCP server rejected the mirrored parameter headers.",
+        "rpc-header-mismatch",
       );
     case ProtocolErrorCode.UrlElicitationRequired:
     case ProtocolErrorCode.MissingRequiredClientCapability:

@@ -2,6 +2,8 @@ import {
   discoverAuthorizationServerMetadata,
   startAuthorization,
   exchangeAuthorization,
+  OAuthError,
+  OAuthErrorCode,
   refreshAuthorization,
   validateAuthorizationResponseIssuer,
 } from "@modelcontextprotocol/client";
@@ -75,6 +77,9 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
       const checkCurrent = yield* AuthRequestCurrent;
       yield* checkCurrent;
       const deadline = (yield* Clock.currentTimeMillis) + 180_000;
+      // A reused client can be one the authorization server has since forgotten.
+      let reused: string | undefined;
+      let rejectedClient = false;
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const config = oauthConfig(server);
@@ -175,6 +180,9 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             mode: ui.mode,
             scopes,
             options,
+            onReused: (clientId) => {
+              reused = clientId;
+            },
           }).pipe(Effect.provideService(NetworkAddresses, network));
           const state = Encoding.encodeBase64Url(
             yield* crypto.randomBytes(32).pipe(Effect.mapError(deniedAuth)),
@@ -246,7 +254,11 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           };
           if (response.iss !== undefined) exchange.iss = response.iss;
           const tokens = yield* withAuthFetch(policy, (fetch) =>
-            exchangeAuthorization(issuer, { ...exchange, fetchFn: fetch }),
+            exchangeAuthorization(issuer, { ...exchange, fetchFn: fetch }).catch((error) => {
+              if (error instanceof OAuthError && error.code === OAuthErrorCode.InvalidClient)
+                rejectedClient = true;
+              throw error;
+            }),
           ).pipe(Effect.provideService(NetworkAddresses, network));
           const grant = {
             version: 1 as const,
@@ -281,6 +293,17 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
               ),
             ),
         }),
+        // An authorization server that forgot a client shows its error in the browser and
+        // never redirects back, so an abandoned or timed-out sign-in also forgets it.
+        Effect.tapError((error) =>
+          reused !== undefined &&
+          options?.forgetRegistration !== undefined &&
+          (rejectedClient ||
+            error.kind === "cancelled" ||
+            error.reason === "oauth-callback-timeout")
+            ? options.forgetRegistration(reused).pipe(Effect.ignore)
+            : Effect.void,
+        ),
       );
     });
   const refresh: McpSdkAuthContract["refresh"] = (server, grant, onDispatch) =>

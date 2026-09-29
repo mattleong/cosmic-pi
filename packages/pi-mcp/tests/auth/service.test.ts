@@ -700,6 +700,42 @@ describe("user-only authentication ownership", () => {
       }),
     );
 
+  it.effect("a forgotten reused client is dropped from storage and skipped next sign-in", () =>
+    Effect.gen(function* () {
+      const current = server("stale-client");
+      const forgotten: string[] = [];
+      const seen: Array<McpLoginOptions | undefined> = [];
+      let fail = true;
+      const auth = yield* make(
+        {
+          forgetRegistration: (identity) =>
+            Effect.sync(() => {
+              forgotten.push(identity);
+            }),
+        },
+        {
+          ...sdk,
+          login: (target, _ui, options) =>
+            Effect.gen(function* () {
+              seen.push(options);
+              if (!fail) return grant(target.credentialIdentity, Number.MAX_SAFE_INTEGER);
+              yield* options!.forgetRegistration!("reused-client");
+              return yield* boundaryError("cancelled", "not-sent", "Abandoned.");
+            }),
+        },
+      );
+      yield* auth.login(current, ui).pipe(Effect.result);
+      expect(forgotten).toEqual([current.credentialIdentity]);
+      expect(seen[0]?.staleClientId).toBeUndefined();
+      fail = false;
+      yield* auth.login(current, ui);
+      expect(seen[1]?.staleClientId).toBe("reused-client");
+      // A successful sign-in clears the marker.
+      yield* auth.login(current, ui);
+      expect(seen[2]?.staleClientId).toBeUndefined();
+    }),
+  );
+
   it.effect("a refresh that fails before sending keeps the refresh token usable", () =>
     Effect.gen(function* () {
       const current = server("refresh-not-sent");

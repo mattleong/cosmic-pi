@@ -32,6 +32,7 @@ const reasons = [
   "rpc-parse-error",
   "rpc-internal-error",
   "rpc-resource-not-found",
+  "rpc-header-mismatch",
   "rpc-error",
 ] as const;
 describe("fixed diagnostic recovery policy", () => {

@@ -92,17 +92,18 @@ describe("protected-resource challenge discovery", () => {
         }).pipe(Effect.provide(network)),
     );
 
-  it.live("rejects ambiguous retained challenges before probing the endpoint", () =>
+  it.live("ignores an ambiguous retained challenge and discovers from the resource origin", () =>
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer();
       const challenge = {
         status: 401 as const,
         wwwAuthenticate: `Bearer scope="read", Bearer resource_metadata="${fixture.origin}/oauth/resource"`,
       };
-      expect(yield* discover(fixture.origin, bare, { challenge }).pipe(Effect.isFailure)).toBe(
-        true,
-      );
-      expect(fixture.requests).toEqual([]);
+      const result = yield* discover(fixture.origin, bare, { challenge });
+      expect(result.metadata.resource).toBe(fixture.resource);
+      // Neither the ambiguous metadata URL nor its scope is used.
+      expect(result.challenge?.scope).toBeUndefined();
+      expect(fixture.requests.some((request) => request.path === "/oauth/resource")).toBe(false);
     }).pipe(Effect.provide(network)),
   );
   for (const parameter of [
@@ -158,20 +159,36 @@ describe("protected-resource challenge discovery", () => {
     );
 
   for (const header of [
-    'Bearer resource_metadata="/relative"',
     'Bearer resource_metadata=""',
     "Bearer resource_metadata=",
     'Bearer resource_metadata="https://public.example/unclosed',
     'Bearer resource_metadata="https://public.example/metadata"junk',
+    'Bearer resource_metadata="https://public.example/a", resource_metadata="https://public.example/b"',
+  ])
+    it.live(`ignores an unparseable advertised hint and uses well-known discovery: ${header}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ resourceChallenge: () => header });
+        const result = yield* discover(fixture.origin);
+        expect(result.metadata.resource).toBe(fixture.resource);
+        expect(
+          fixture.requests.some((request) =>
+            request.path.startsWith("/.well-known/oauth-protected-resource"),
+          ),
+        ).toBe(true);
+      }).pipe(Effect.provide(network)),
+    );
+
+  // A well-formed hint naming an unsafe destination is an attempt to redirect discovery.
+  for (const header of [
+    'Bearer resource_metadata="/relative"',
     'Bearer resource_metadata="http://169.254.169.254/metadata"',
     'Bearer resource_metadata="https://private.example/metadata"',
     'Bearer resource_metadata="https://user:secret@public.example/metadata"',
     'Bearer resource_metadata="https://public.example/metadata#fragment"',
     'Bearer resource_metadata="https://public.example/white space"',
     'Bearer resource_metadata="https://public.example/back\\\\slash"',
-    'Bearer resource_metadata="https://public.example/a", resource_metadata="https://public.example/b"',
   ])
-    it.live(`rejects unsafe or malformed advertised hints: ${header}`, () =>
+    it.live(`rejects unsafe advertised hints: ${header}`, () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ resourceChallenge: () => header });
         const result = yield* discover(fixture.origin).pipe(Effect.result);

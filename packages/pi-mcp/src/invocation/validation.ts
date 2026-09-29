@@ -1,14 +1,17 @@
 import * as Effect from "effect/Effect";
-import { MCP_VALIDATION_NOTICES } from "../results/validation-notices.ts";
+import {
+  MCP_INPUT_UNCHECKED_NOTICE,
+  MCP_VALIDATION_NOTICES,
+} from "../results/validation-notices.ts";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { JsonSchemaValidatorContract } from "../boundary/schema-validator.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import { MCP_BOUNDARY_LIMITS, type McpReply } from "../client/model.ts";
 import type { McpOperation } from "../connection/model.ts";
-import type { McpDiscoveryContract } from "../discovery/model.ts";
+import type { McpDiscoveryContract, McpMetadataSnapshot } from "../discovery/model.ts";
 import { McpGatewayRequestSchema, type McpGatewayRequest } from "../tools/model.ts";
-import { snapshotBoundedJson } from "../validation/schema-policy.ts";
+import { isSupportedJsonSchema, snapshotBoundedJson } from "../validation/schema-policy.ts";
 import { parameterHeaders } from "./parameter-headers.ts";
 
 const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
@@ -54,15 +57,16 @@ const requiresTask = Schema.is(
   Schema.Struct({ execution: Schema.Struct({ taskSupport: Schema.Literal("required") }) }),
 );
 
-export const invokeTool = (
+type ToolCallInput = Extract<McpGatewayRequest, { readonly action: "tools.call" }>;
+
+/** Everything one call takes from one immutable metadata entry, checked before dispatch. */
+const prepareCall = (
+  snapshot: McpMetadataSnapshot,
   operation: McpOperation,
-  input: Extract<McpGatewayRequest, { readonly action: "tools.call" }>,
-  discovery: McpDiscoveryContract,
+  input: ToolCallInput,
   validate: McpValidate,
-): Effect.Effect<McpInvocationReply, McpBoundaryError> =>
+) =>
   Effect.gen(function* () {
-    const snapshot = yield* discovery.ensure(operation);
-    yield* operation.checkCurrent;
     const tool = snapshot.tools.find((candidate) => candidate.name === input.tool);
     if (!tool)
       return yield* boundaryError(
@@ -80,7 +84,10 @@ export const invokeTool = (
     // dispatch must not change the output contract of the already accepted call.
     const { inputSchema, outputSchema } = tool;
     const arguments_ = input.arguments ?? {};
-    yield* validate(inputSchema, arguments_, "not-sent");
+    // A schema this client cannot use (OpenAPI nullable, an unmarked draft-07 tuple) is the
+    // server's to enforce. Refusing would blame the caller for the server's schema.
+    const inputChecked = isSupportedJsonSchema(inputSchema);
+    if (inputChecked) yield* validate(inputSchema, arguments_, "not-sent");
     const headers =
       operation.capabilities.parameterHeaders === true
         ? yield* Effect.try({
@@ -93,20 +100,57 @@ export const invokeTool = (
               ),
           })
         : undefined;
+    return {
+      arguments: arguments_,
+      outputSchema,
+      headers,
+      notices: inputChecked ? [] : [MCP_INPUT_UNCHECKED_NOTICE],
+    };
+  });
+
+export const invokeTool = (
+  operation: McpOperation,
+  input: ToolCallInput,
+  discovery: McpDiscoveryContract,
+  validate: McpValidate,
+): Effect.Effect<McpInvocationReply, McpBoundaryError> =>
+  Effect.gen(function* () {
+    const snapshot = yield* discovery.ensure(operation);
     yield* operation.checkCurrent;
-    const reply = yield* operation.request(
-      {
-        action: "tools.call",
-        tool: input.tool,
-        arguments: arguments_,
-      },
-      headers === undefined ? undefined : { parameterHeaders: headers },
+    let call = yield* prepareCall(snapshot, operation, input, validate);
+    const send = (prepared: typeof call) =>
+      Effect.andThen(
+        operation.checkCurrent,
+        operation.request(
+          { action: "tools.call", tool: input.tool, arguments: prepared.arguments },
+          prepared.headers === undefined ? undefined : { parameterHeaders: prepared.headers },
+        ),
+      );
+    const reply = yield* send(call).pipe(
+      Effect.catchIf(
+        // SEP-2243 requires this rejection before the tool runs, so nothing executed and the
+        // mirrored headers came from stale metadata. Refresh it and retry once against the
+        // new definition, which then also supplies the output contract.
+        (error) =>
+          error.reason === "rpc-header-mismatch" &&
+          error.outcome === "completed" &&
+          call.headers !== undefined,
+        () =>
+          Effect.gen(function* () {
+            const refreshed = yield* discovery.refresh(operation);
+            yield* operation.checkCurrent;
+            call = yield* prepareCall(refreshed, operation, input, validate);
+            return yield* send(call);
+          }),
+      ),
     );
+    const { outputSchema } = call;
+    const inputNotices = call.notices;
     yield* operation.checkCurrent;
     const result = reply.result;
     // Tool-error payloads need not satisfy the tool's successful-output contract.
     if (outputSchema === undefined || (isJsonObject(result) && result.isError === true))
-      return { reply };
+      return inputNotices.length === 0 ? { reply } : { reply, notices: inputNotices };
     const structuredContent = isJsonObject(result) ? result.structuredContent : undefined;
     const validation =
       structuredContent === undefined
@@ -114,7 +158,10 @@ export const invokeTool = (
         : validate(outputSchema, structuredContent, "completed");
     const validationResult = yield* validation.pipe(Effect.result);
     yield* operation.checkCurrent;
-    if (validationResult._tag === "Success") return { reply, outputValidation: "passed" };
+    if (validationResult._tag === "Success")
+      return inputNotices.length === 0
+        ? { reply, outputValidation: "passed" }
+        : { reply, outputValidation: "passed", notices: inputNotices };
     // A local validator failure says nothing about whether remote output matches.
     return {
       reply,
@@ -123,6 +170,7 @@ export const invokeTool = (
         validationResult.failure.kind === "protocol"
           ? MCP_VALIDATION_NOTICES.failed.invocation
           : MCP_VALIDATION_NOTICES.unavailable.invocation,
+        ...inputNotices,
       ],
     };
   });

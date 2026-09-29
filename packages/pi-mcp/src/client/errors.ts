@@ -54,6 +54,7 @@ export class McpBoundaryError extends Schema.TaggedError<McpBoundaryError>()("Mc
       "rpc-parse-error",
       "rpc-internal-error",
       "rpc-resource-not-found",
+      "rpc-header-mismatch",
       "rpc-error",
     ]),
   ),

@@ -28,7 +28,10 @@ import {
 } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
 import { canonicalValidationWarning, isOwnedValidationNotice } from "../ui/validation-notices.ts";
-import type { McpValidationNoticeIdentity } from "../results/validation-notices.ts";
+import {
+  MCP_INPUT_UNCHECKED_NOTICE,
+  type McpValidationNoticeIdentity,
+} from "../results/validation-notices.ts";
 import type { McpPresentation } from "./presentation.ts";
 
 const FailureEvidence = Schema.Struct({
@@ -84,6 +87,7 @@ const OWNED_NOTICES: ReadonlyArray<
     "Output was too large to keep",
   ],
   ["No advertised tool metadata matched", "info", "no-match", "No tools matched"],
+  [MCP_INPUT_UNCHECKED_NOTICE, "info", "input-unchecked", "Arguments weren't checked locally"],
 ];
 
 /** Envelope notices, redacted in full before bounding. An oversized notice is not a complete

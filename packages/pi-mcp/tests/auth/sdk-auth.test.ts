@@ -451,7 +451,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
   );
 
   it.live(
-    "incompatible scope capacity creates a new registration, but a rejected reused client never retries",
+    "a rejected reused client never retries within a sign-in, but is forgotten for the next one",
     () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ rejectClient: true });
@@ -468,13 +468,29 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
           .login(server, cancelledUi, { registration: { ...first, scopes: [] }, saveRegistration })
           .pipe(Effect.result);
         expect(fixture.counts().registered).toBe(2);
+        const forgotten: string[] = [];
+        const forgetRegistration = (clientId: string) =>
+          Effect.sync(() => {
+            forgotten.push(clientId);
+          });
+        const reused = registration!;
         expect(
           yield* sdk
-            .login(server, yield* browser("manual"), { registration: registration! })
+            .login(server, yield* browser("manual"), { registration: reused, forgetRegistration })
             .pipe(Effect.isFailure),
         ).toBe(true);
         expect(fixture.counts().registered).toBe(2);
         expect(fixture.counts().exchanged).toBe(0);
+        expect(forgotten).toEqual(["fixture-dynamic-client"]);
+        // The next sign-in skips the rejected client and registers fresh.
+        yield* sdk
+          .login(server, cancelledUi, {
+            registration: reused,
+            staleClientId: forgotten[0]!,
+            saveRegistration,
+          })
+          .pipe(Effect.result);
+        expect(fixture.counts().registered).toBe(3);
       }).pipe(Effect.provide(layers)),
   );
 });

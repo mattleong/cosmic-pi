@@ -242,6 +242,26 @@ export const measureBoundedJson = <Input>(
   limits: BoundedJsonLimits,
 ): BoundedJsonUsage => walkJson(root, limits, { allowShared: true });
 
+/**
+ * Whether local validation can use this remote schema at all, by the same bounds and
+ * rules as the validator's own pre-check. Reference targets are checked by the helper.
+ */
+export const isSupportedJsonSchema = (schema: Schema.Json): boolean => {
+  try {
+    assertSchemaDocument(
+      strictSnapshot(
+        schema,
+        JSON_SCHEMA_VALIDATOR_LIMITS.maximumSchemaBytes,
+        JSON_SCHEMA_VALIDATOR_LIMITS.maximumSchemaStringBytes,
+      ),
+      { references: false },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const encodeSchemaValidationRequest = (
   schema: Schema.Json,
   data: Schema.Json,

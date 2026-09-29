@@ -44,6 +44,14 @@ export const candidateMetadataFetch =
       return response;
     });
 
+/**
+ * Challenges only hint at discovery. One the strict parser rejects (ambiguous, malformed,
+ * or oversized) is treated as absent, so well-known discovery on the resource's own origin
+ * still runs; nothing from it is used.
+ */
+const challengeHint = (header: string) =>
+  parseBearerChallenge(header).pipe(Effect.orElseSucceed(() => undefined));
+
 /** A retained POST challenge wins. A failed explicit URL never grants guessed-path fallback. */
 export const discoverAuthResource = (
   endpoint: string,
@@ -53,12 +61,12 @@ export const discoverAuthResource = (
   original?: McpAuthChallenge,
 ): Effect.Effect<ResourceDiscovery, McpBoundaryError, NetworkAddresses> =>
   Effect.gen(function* () {
-    const retained = original ? yield* parseBearerChallenge(original.wwwAuthenticate) : undefined;
+    const retained = original ? yield* challengeHint(original.wwwAuthenticate) : undefined;
     let challenge = retained;
     let rawUrl = retained?.resourceMetadata;
     if (rawUrl === undefined) {
       const response = yield* withAuthFetch(policy, (_fetch, probe) => probe(endpoint));
-      const probed = yield* parseBearerChallenge(response.headers.get("www-authenticate") ?? "");
+      const probed = yield* challengeHint(response.headers.get("www-authenticate") ?? "");
       rawUrl = probed?.resourceMetadata;
       // A GET can supply a missing metadata URL, but cannot donate scope/error fields
       // to the original rejection. Empty or realm-only evidence has no such authority.

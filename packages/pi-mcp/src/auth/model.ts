@@ -25,6 +25,10 @@ export interface McpLoginOptions {
   readonly saveRegistration?: (
     registration: McpRegistrationReceipt,
   ) => Effect.Effect<void, McpBoundaryError>;
+  /** A reused client this session saw rejected; registration skips it and starts fresh. */
+  readonly staleClientId?: string;
+  /** Forget a reused client the server rejected or whose sign-in was abandoned. */
+  readonly forgetRegistration?: (clientId: string) => Effect.Effect<void, McpBoundaryError>;
 }
 
 /** User command capability. Never accepted by gateway or Code Mode parameters. */

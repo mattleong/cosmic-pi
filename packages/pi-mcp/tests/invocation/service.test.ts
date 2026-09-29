@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest";
+import { MCP_INPUT_UNCHECKED_NOTICE } from "../../src/results/validation-notices.ts";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -317,6 +318,8 @@ const realFixture = (
     readonly open?: McpConnectorContract["open"];
     /** Legacy servers never send TTL hints. */
     readonly omitTtl?: boolean;
+    /** Modern HTTP mirrors x-mcp-header arguments into request headers. */
+    readonly parameterHeaders?: boolean;
   } = {},
 ) => {
   const store = fakeConfigStore({
@@ -331,7 +334,12 @@ const realFixture = (
   });
   const open: McpConnectorContract["open"] = () =>
     fakeConnection((terminal) => ({
-      capabilities: { tools: true, resources: true, prompts: true },
+      capabilities: {
+        tools: true,
+        resources: true,
+        prompts: true,
+        parameterHeaders: seams.parameterHeaders === true,
+      },
       instructions: boundedSdkInstructions(seams.instructions),
       close: Effect.gen(function* () {
         if (yield* Deferred.isDone(terminal)) return;
@@ -435,6 +443,86 @@ it.effect.each([
     }).pipe(Effect.provide(NodeCrypto.layer)),
 );
 
+it.effect.each([
+  { name: "OpenAPI nullable", schema: { type: "string", nullable: true } },
+  { name: "unmarked draft-07 tuple", schema: { type: "array", items: [{ type: "string" }] } },
+])("sends arguments unchecked when the server's input schema uses an $name", ({ schema }) => {
+  const f = realFixture({
+    tools: [{ name: "run", inputSchema: { type: "object", properties: { value: schema } } }],
+  });
+  return Effect.gen(function* () {
+    const { execution } = yield* f.harness({
+      validate: () => Effect.die("An unsupported schema must not reach local validation."),
+    });
+    const result = yield* execution.execute(request, options);
+    expect(result.reply.outcome).toBe("completed");
+    expect(result.reply.notices).toContain(MCP_INPUT_UNCHECKED_NOTICE);
+    expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(1);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect.each([
+  { failures: 1, outcome: "completed" },
+  { failures: 2, outcome: "rpc-header-mismatch" },
+])(
+  "refreshes metadata and retries once after a header mismatch ($failures rejections)",
+  ({ failures, outcome }) => {
+    let rejected = 0;
+    const f = realFixture({
+      parameterHeaders: true,
+      tools: [
+        {
+          name: "run",
+          inputSchema: {
+            type: "object",
+            properties: { value: { type: "integer", "x-mcp-header": "Value" } },
+          },
+        },
+      ],
+      request: (input) =>
+        input.action === "tools.call" && rejected++ < failures
+          ? Effect.fail(
+              boundaryError("protocol", "completed", "Header mismatch.", "rpc-header-mismatch"),
+            )
+          : Effect.void,
+    });
+    return Effect.gen(function* () {
+      const { execution } = yield* f.harness();
+      const result = yield* execution.execute(request, options).pipe(Effect.result);
+      if (outcome === "completed")
+        expect(result).toMatchObject({ _tag: "Success", success: { reply: { outcome } } });
+      else expect(result).toMatchObject({ _tag: "Failure", failure: { reason: outcome } });
+      // One retry at most, after refetching the tool definitions.
+      expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(2);
+      expect(f.sent.filter((input) => input.action === "tools.list")).toHaveLength(2);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect("never retries a call rejected for any reason other than a header mismatch", () => {
+  const f = realFixture({
+    parameterHeaders: true,
+    tools: [
+      {
+        name: "run",
+        inputSchema: {
+          type: "object",
+          properties: { value: { type: "integer", "x-mcp-header": "Value" } },
+        },
+      },
+    ],
+    request: (input) =>
+      input.action === "tools.call"
+        ? Effect.fail(boundaryError("protocol", "completed", "Rejected.", "rpc-invalid-params"))
+        : Effect.void,
+  });
+  return Effect.gen(function* () {
+    const { execution } = yield* f.harness();
+    yield* execution.execute(request, options).pipe(Effect.result);
+    expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(1);
+  }).pipe(Effect.provide(f.layer));
+});
+
 it.effect("refuses a tool that requires task execution before dispatch", () => {
   const f = realFixture({
     tools: [
@@ -527,11 +615,12 @@ it.effect(
       { base64: "literal-base64" },
       { type: "image", data: "literal-image", mimeType: "image/png" },
     ];
+    // Separate copies, as parsed wire JSON would be; the validator rejects shared objects.
     const payloadSchema = {
-      const: literals,
-      default: literals,
-      enum: [literals],
-      examples: [literals],
+      const: structuredClone(literals),
+      default: structuredClone(literals),
+      enum: [structuredClone(literals)],
+      examples: [structuredClone(literals)],
     };
     const metadata = {
       name: "run",

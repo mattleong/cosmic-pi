@@ -23,7 +23,10 @@ import type {
 } from "../src/results/model.ts";
 import { normalizeResult } from "../src/results/normalize.ts";
 import { projectPrepared } from "../src/results/projection.ts";
-import { MCP_VALIDATION_NOTICES } from "../src/results/validation-notices.ts";
+import {
+  MCP_INPUT_UNCHECKED_NOTICE,
+  MCP_VALIDATION_NOTICES,
+} from "../src/results/validation-notices.ts";
 import { buildMcpTool, wrapMcpTool, type McpToolDefinition } from "../src/tools/controller.ts";
 import {
   MCP_INLINE_BYTES,
@@ -184,6 +187,9 @@ const scenarios = Effect.gen(function* () {
       outputValidation: "failed",
       notices: [MCP_VALIDATION_NOTICES.failed.invocation],
     }),
+  );
+  const inputUnchecked = yield* project(
+    prepare("tools.call", { content: text("Clicked.") }, { notices: [MCP_INPUT_UNCHECKED_NOTICE] }),
   );
 
   const status = yield* project(
@@ -387,6 +393,7 @@ const scenarios = Effect.gen(function* () {
     settled("output not saved", click, unsaved),
     settled("output validation unavailable", form, unchecked),
     settled("output validation failed", form, invalid),
+    settled("input not checked locally", click, inputUnchecked),
     settled(
       "cancelled before sending",
       click,

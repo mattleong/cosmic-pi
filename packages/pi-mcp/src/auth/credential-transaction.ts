@@ -10,6 +10,8 @@ export interface McpCredentialTransaction {
   readonly writeRegistration: (
     registration: McpRegistrationReceipt,
   ) => Effect.Effect<void, McpBoundaryError>;
+  /** Drops only the dynamic-registration checkpoint, keeping any grant. */
+  readonly forgetRegistration: Effect.Effect<void, McpBoundaryError>;
   readonly remove: Effect.Effect<void, McpBoundaryError>;
 }
 export interface CredentialTransactionGuard {

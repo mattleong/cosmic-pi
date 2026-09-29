@@ -18,6 +18,10 @@ export interface FlatCredentialStore {
     registration: McpRegistrationReceipt,
   ) => ReturnType<McpCredentialTransaction["writeRegistration"]>;
   readonly remove: (identity: string) => McpCredentialTransaction["remove"];
+  /** Defaults to a no-op for stores whose tests never reuse a registration. */
+  readonly forgetRegistration?: (
+    identity: string,
+  ) => McpCredentialTransaction["forgetRegistration"];
 }
 
 /** Runs each flat operation as its own transaction on an actual or fake store. */
@@ -28,6 +32,7 @@ export const flat = (store: McpCredentialStoreContract): Omit<FlatCredentialStor
   writeRegistration: (identity, registration) =>
     store.withTransaction(identity, (tx) => tx.writeRegistration(registration)),
   remove: (identity) => store.withTransaction(identity, (tx) => tx.remove),
+  forgetRegistration: (identity) => store.withTransaction(identity, (tx) => tx.forgetRegistration),
 });
 
 /** In-memory owned boundary adapter. Cross-process tests use the actual credential-store Layer. */
@@ -53,6 +58,10 @@ export const transactionStore = (store: FlatCredentialStore): McpCredentialStore
         writeRegistration: (receipt) =>
           Effect.andThen(check, store.writeRegistration(identity, receipt)),
         remove: Effect.andThen(check, store.remove(identity)),
+        forgetRegistration: Effect.andThen(
+          check,
+          store.forgetRegistration?.(identity) ?? Effect.void,
+        ),
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {

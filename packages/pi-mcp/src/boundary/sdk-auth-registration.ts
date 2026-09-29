@@ -43,6 +43,8 @@ interface RegistrationInput {
   readonly mode: McpLoginUi["mode"];
   readonly scopes: ReadonlyArray<string>;
   readonly options?: McpLoginOptions | undefined;
+  /** Reports a saved dynamic client chosen for reuse instead of a fresh registration. */
+  readonly onReused?: (clientId: string) => void;
 }
 const compatibleReceipt = (raw: McpRegistrationReceipt, input: RegistrationInput) =>
   Effect.gen(function* () {
@@ -86,7 +88,10 @@ const compatibleReceipt = (raw: McpRegistrationReceipt, input: RegistrationInput
     return { receipt: { ...receipt, clientInformation: yield* authJson(client) }, client };
   });
 
-/** Reuse is an explicit-login choice. A rejected reused client never triggers automatic DCR retry. */
+/**
+ * Reuse is an explicit-login choice. A rejected reused client never triggers an automatic
+ * retry within one sign-in; the caller forgets it so the next sign-in registers fresh.
+ */
 export const loginClient = (input: RegistrationInput) =>
   Effect.gen(function* () {
     const { config, issuer, metadata, policy, redirect, scopes } = input;
@@ -133,9 +138,13 @@ export const loginClient = (input: RegistrationInput) =>
     }
     for (const candidate of candidates) {
       const reusable = yield* compatibleReceipt(candidate, input).pipe(Effect.result);
-      if (reusable._tag === "Success") {
+      if (
+        reusable._tag === "Success" &&
+        reusable.success.client.client_id !== input.options?.staleClientId
+      ) {
         if (input.options?.saveRegistration)
           yield* input.options.saveRegistration(reusable.success.receipt);
+        input.onReused?.(reusable.success.client.client_id);
         return reusable.success.client;
       }
     }
