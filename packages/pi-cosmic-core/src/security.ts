@@ -167,7 +167,8 @@ export function sanitizeDiagnosticContent(
   return `${sanitized.slice(0, Math.max(0, maximumLength - 1)).trimEnd()}…`;
 }
 
-const isSensitiveKey = (key: string): boolean => {
+/** Shared field policy for structured diagnostics and incomplete JSON previews. */
+export const isSensitiveDiagnosticKey = (key: string): boolean => {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
   return (
     normalized === "access" ||
@@ -195,7 +196,7 @@ export function redactDiagnosticValue<ValueInput>(
       return Object.fromEntries(
         Object.entries(current).map(([key, entry]) => [
           key,
-          isSensitiveKey(key) ? REDACTED : redact(entry, depth + 1),
+          isSensitiveDiagnosticKey(key) ? REDACTED : redact(entry, depth + 1),
         ]),
       );
     } catch {

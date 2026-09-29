@@ -29,6 +29,10 @@ export interface CompactChild {
   /** Measured dispatch duration, not an estimate or a sum of sibling timings. */
   durationMs?: number;
   status: CompactStatus;
+  /** Confirm a completed dispatch with a neutral checkmark, without asserting operation success. */
+  returnedCheckmark?: true;
+  /** Keep measured duration beside this call’s routine detail, subject to timing policy. */
+  showTiming?: true;
 }
 
 /** Semantic display data, never inferred from a rendered component or Pi's success flag. */

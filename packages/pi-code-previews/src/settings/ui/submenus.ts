@@ -94,7 +94,11 @@ function createToolToggleItems(
         ? "Preview replacement installed."
         : status?.state === "registration-error"
           ? "Registration failed; retry with /reload."
-          : "Takes effect after /reload.";
+          : status?.state === "not-active"
+            ? "Native tool was inactive at startup; styling waits until an active reload."
+            : status?.state === "unavailable"
+              ? "Native tool is not available; styling never enables it."
+              : "Takes effect after /reload.";
     return {
       id: toolToggleId(tool),
       label: `${tool} preview`,

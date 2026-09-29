@@ -244,6 +244,7 @@ export {
   decodeJwtPayloadText,
   extractJwtClaim,
   hasControlCharacter,
+  isSensitiveDiagnosticKey,
   maskIdentifier,
   redactDiagnosticValue,
   redactedTokenSchema,

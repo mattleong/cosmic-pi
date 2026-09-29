@@ -1,4 +1,4 @@
-export const ALL_CODE_PREVIEW_TOOLS = [
+export const CORE_CODE_PREVIEW_TOOLS = [
   "bash",
   "read",
   "write",
@@ -7,6 +7,8 @@ export const ALL_CODE_PREVIEW_TOOLS = [
   "find",
   "ls",
 ] as const;
+
+export const ALL_CODE_PREVIEW_TOOLS = [...CORE_CODE_PREVIEW_TOOLS, "codemode"] as const;
 
 export type CodePreviewToolName = (typeof ALL_CODE_PREVIEW_TOOLS)[number];
 

@@ -10,13 +10,13 @@ const Fields = {
   action: Schema.optionalKey(Schema.String),
   counters: Schema.optionalKey(Labels),
   metadata: Schema.optionalKey(Labels),
+  showTiming: Schema.optionalKey(Schema.Literal(true)),
   issues: Schema.optionalKey(Issues),
 };
 const Summary = Schema.Struct({
   ...Fields,
   subject: Schema.String,
   outcome: Schema.optionalKey(Outcome),
-  showTiming: Schema.optionalKey(Schema.Literal(true)),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,
@@ -24,6 +24,7 @@ const Summary = Schema.Struct({
         Schema.Struct({
           ...Fields,
           label: Schema.String,
+          returnedCheckmark: Schema.optionalKey(Schema.Literal(true)),
           subject: Schema.optionalKey(Schema.String),
           durationMs: Schema.optionalKey(Schema.Finite),
           status: Schema.Literals([

@@ -16,8 +16,14 @@ const ACTIVITY_KINDS = {
 } as const satisfies Record<string, ManagerActivityKind>;
 
 /** ✓ ⚠ ✗ ⊘ for settled outcomes; ? when the outcome cannot be confirmed. */
-export function compactStatusIcon(status: CompactStatus, theme: Theme, animationFrame = 0): string {
-  if (status === "returned") return theme.fg("muted", "•");
+export function compactStatusIcon(
+  status: CompactStatus,
+  theme: Theme,
+  animationFrame = 0,
+  returnedCheckmark = false,
+): string {
+  if (status === "returned")
+    return theme.fg("muted", returnedCheckmark ? managerActivityGlyph("done") : "•");
   if (status === "uncertain") return theme.fg("warning", "?");
   const glyph =
     status === "warning"

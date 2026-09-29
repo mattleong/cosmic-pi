@@ -12,6 +12,7 @@ The package publishes TypeScript source and runs directly through Pi's Jiti load
 - Clearer `edit` and `write` diffs, including pending edit previews.
 - Readable `grep` results grouped by file.
 - Compact `find` and `ls` path lists with optional icons.
+- Native `codemode` program previews and neutral nested-call rows, while retaining Pi’s native execution.
 - Optional visual warnings for risky-looking shell commands and secret-looking output.
 - Opt-in one-row collapsed tool calls, including pending and running calls.
 - Tool call duration timing inline in compact summaries, or in result footers and border frames.
@@ -38,6 +39,7 @@ Once installed, previews are enhanced automatically for:
 - `grep`
 - `find`
 - `ls`
+- Native `codemode`, when active at startup and eligible (see below)
 
 Everything lives under one command, `/code-previews`; type it and a space to autocomplete its subcommands. Open settings inside pi with:
 
@@ -51,9 +53,25 @@ Everything lives under one command, `/code-previews`; type it and a space to aut
 /code-previews health
 ```
 
-The health panel shows configured tools, installed replacements, registration errors, disabled tools, and replacements skipped because another extension owns that tool. Individual tool toggles are available in the Preview tools submenu in `/code-previews settings` and take effect after `/reload`.
+The health panel shows configured tools, installed replacements, registration errors, inactive/unavailable native tools, disabled tools, and replacements skipped because another extension owns that tool. Individual tool toggles are available in the Preview tools submenu in `/code-previews settings` and take effect after `/reload`.
 
 Renderer installation is best effort after planning completes. A discovery or definition-construction failure stops startup before registration begins. If one `registerTool` call fails, later replacements are still attempted and successful replacements keep a live session runtime. Attempted names and successful installs are tracked separately, so a Pi 0.84 refresh failure after registry mutation remains retryable on the next session start. There is no rollback of successful installs.
+
+### Native codemode
+
+On Pi versions exposing `createCodemodeExtension`, Code Previews styles native `codemode` only when it is active at `session_start` and public source metadata identifies `builtin:codemode`. Eligibility is captured before settings I/O. Missing, excluded, inactive, or foreign tools are never introduced or enabled. MCP activation after startup gets styling on the next `/reload`.
+
+Code Previews creates its **own fresh native definition** through the public factory and a local API adapter, then decorates only its render callbacks. The loaded builtin is not mutated or wrapped. Pi retains execution, parameter-schema identity, grammar, prompt metadata, live `codemode.mode`/`inlineBudget`, default model access, nested hooks, and branch-scoped `store()`/`load()` behavior. No custom engine is involved.
+
+`codemode` is included in the default preview-tools selection. Existing explicit `tools` lists must add `codemode` to opt in; removing it disables styling, not native execution. If a previously styled definition is genuinely owned by this loaded lifecycle, a repeated start restores a fresh unstyled native definition when styling is disabled or the tool is inactive. Retired renderer callbacks cannot animate through the replacement session.
+
+Pi’s first extension registration wins. Ordinary CLI discovery places Code Previews before the default builtin; an explicit earlier `-e builtin:codemode` can instead keep the native renderer. Health reports that visible-owner conflict rather than claiming installation or forcing a takeover. Ownership must match the unique public `/code-previews` command source; unavailable or ambiguous ownership evidence fails closed.
+
+Native child `ok` uses a muted completion checkmark, without a redundant status label or a confirmed operation outcome. A completed script with handled child errors shows a warning; cancelled/unsettled children leave the overall outcome unconfirmed. A native failure header remains a failure: guest-controlled error names and stacks cannot prove cancellation, so abort diagnostics are retained without asserting a typed stop reason. Malformed historical details fall back conservatively. Expanded views retain the complete original program, native output, errors, recovery paths, and image evidence; call arguments are sanitized, abbreviated native previews, never fabricated nested results. Complete leading paths and targets survive later JSON truncation; cut string values carry an ellipsis. MCP and background-task rows show observed actions and targets, never inferred fields beyond the preview. Rendering reads no saved-output files.
+
+Native presentation keeps five calls collapsed. Preview style shows at most eight wrapped program rows and advertises hidden output or errors. Expansion retains **Program → Calls → Output**, omitting an empty Output section while streaming. Parent and child measured timing obey `toolCallTiming`; live native content animates in both styles and expansion states even with timing disabled.
+
+Call evidence inspects only the latest 256 `details.calls` slots. Invalid records do not erase valid neighbors; omitted or rejected records leave completed outcomes unconfirmed and use **N calls listed**, not an inferred dispatch total. Expanded Calls explains the retained coverage even when the outer header is unknown, and saved-output paths validate independently. These are native metadata records, not richer domain receipts or the persisted `nestedCalls` unavailable to renderers. No older problem records are searched outside the bounded window.
 
 ## Benchmarks
 
@@ -109,7 +127,7 @@ In compact mode, ordinary collapsed calls use one extension-rendered text row wh
 
 Ordinary live output and pending write/edit previews stay hidden until expanded. Each warning or error is one line under the heading, with its own icon and colour: known filesystem and command-status errors get short messages ("File not found", "Exited with code 1"), and unrecognized errors show their first line. The same words appear when expanded, followed by any technical detail or agent-facing recovery. Cancellation uses neutral styling and unconfirmed outcomes use `?`. Routine read-range and known complete-line pagination hints, including read byte caps, appear only when expanded. Byte-cap hints require a recognized numeric size-limit footer and explicit evidence that the final returned line is complete. Routine grep/find/ls result caps use a quiet `limit reached: N` counter, prioritized over optional metadata and timing. A reached cap does not establish a total, additional results, or how many survived output truncation. Successful writes use `diff skipped: size` or `diff skipped: complexity` metadata only for structured size evidence or computed guards with known previous contents. Missing history, non-regular previous paths, unclassified skip reasons, missing edit diffs, and secrets are warnings. Other byte caps, partial lines, oversized-line recovery, and unknown truncation are warnings too. Original tool results are unchanged. Expansion shows the heading, the issues with their details, then unique content, or falls back to the original renderers, within the configured `toolCallBackground`. Compact mode takes precedence over per-tool collapsed-preview toggles and line limits; those retain their existing meaning in `preview` mode. `toolCallTiming` remains independent.
 
-Compact rendering covers only installed replacements for `read`, `bash`, `write`, `edit`, `grep`, `find`, and `ls`. It does not activate disabled tools or replace tools owned by another extension. All tools wrapped with `withCodePreviewShell` use compact rows, including tools without a summary provider. Missing, malformed, or incomplete summaries get a generic row (the error's first line, or a details-on-expand hint), never an automatic full card. In `preview` style, builtin tools show the same issue lines under their heading, including risky-command and secret warnings before the call runs. Pi's host-owned blank separator remains, and Pi still renders native images outside the extension's text-row budget.
+Compact rendering covers installed replacements for `read`, `bash`, `write`, `edit`, `grep`, `find`, and `ls`, plus eligible fresh-native `codemode` composition. It does not activate disabled tools or replace tools owned by another extension. All tools wrapped with `withCodePreviewShell` use compact rows, including tools without a summary provider. Missing, malformed, or incomplete summaries get a generic row (the error's first line, or a details-on-expand hint), never an automatic full card. In `preview` style, builtin tools show the same issue lines under their heading, including risky-command and secret warnings before the call runs. Pi's host-owned blank separator remains, and Pi still renders native images outside the extension's text-row budget.
 
 ### Project settings
 
@@ -211,7 +229,7 @@ tool result's text parts with newlines, the same projection the builtin renderer
 
 Workspace integrations include MCP, subagents, Code Mode, background tasks, questionnaires, and image generation. Each supplies its own semantic summary; `loadCodePreviewSettings` alone does not change rendering. Successes, failures, cancellations, and incomplete results all stay compact while collapsed. Unknown outcomes are not labelled successful. Expansion retains the existing details, including subagent recovery/report cards and MCP uncertainty. Child-only acknowledgements and parent-message tools use the same shell.
 
-Cooperative animation also requires `scheduleAnimation` from the registering extension's session. Pi isolates extension module instances, so loading settings cannot activate another extension's scheduler. Compose `CodePreviewSchedulerService.layer` into the owner's runtime, pass its `schedule` callback through the shell options, and reject scheduling after that session is replaced. Runtime disposal cancels every remaining animation. Built-in previews use their own scheduler by default.
+Cooperative animation also requires `scheduleAnimation` from the registering extension's session. Pi isolates extension module instances, so loading settings cannot activate another extension's scheduler. Compose `CodePreviewSchedulerService.layer` into the owner's runtime, pass its `schedule` callback through the shell options, and reject scheduling after that session is replaced. Runtime disposal cancels every remaining animation. Built-in previews use their own scheduler by default. A content renderer may opt into `animateProgress: true` to keep visible progress animated when timing is disabled or content is expanded; it defaults to false and reuses the same owner-scoped scheduler. Native `codemode` opts in. Declined scheduler admission never borrows a replacement session's scheduler.
 
 Pass `compactSummary` to `withCodePreviewShell` to provide semantic action, subject, counts, metadata, outcome, and issues. The callback receives `{ phase, args, result, context }`. Settled summaries require an explicit outcome; a false host error flag does not prove success. When Pi reports an error the summary did not classify, the shell adds one error issue from the first line of the error text. Missing or malformed summaries remain compact when collapsed and use original details on expansion.
 

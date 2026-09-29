@@ -29,12 +29,19 @@ import {
 import { CodePreviewSchedulerService, type CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewToolName } from "../tools/names";
 import { registerToolRenderers } from "../tools/renderers/registration";
+import {
+  nativeCodemodeRegistration,
+  type NativeCodemodeSnapshot,
+} from "../tools/native-codemode-registration";
+import { getEnabledCodePreviewTools } from "../tools/selection";
 export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
 
 type SessionInput = {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly settingsAdmission: SettingsAdmission;
+  readonly nativeCodemode: NativeCodemodeSnapshot;
+  readonly presentation: { live: boolean };
   readonly signal?: AbortSignal;
   readonly notifyFailure: () => void;
 };
@@ -94,11 +101,13 @@ export function codePreviewsWithDependencies(
 ): Promise<void> {
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
+  const nativeCodemode = nativeCodemodeRegistration();
   dependencies.registerCommands(pi);
 
   const startup = (input: SessionInput) =>
     Effect.gen(function* () {
       yield* dependencies.loadSettings(input.settingsAdmission, input.cwd, input.projectTrusted);
+      const scheduler = yield* CodePreviewSchedulerService;
       yield* registerRenderersAtHostBoundary(() =>
         dependencies.registerRenderers(pi, input.cwd, {
           ownedTools,
@@ -106,7 +115,21 @@ export function codePreviewsWithDependencies(
           projectTrusted: input.projectTrusted,
         }),
       );
-      return yield* CodePreviewSchedulerService;
+      yield* registerRenderersAtHostBoundary(() =>
+        nativeCodemode.register(
+          pi,
+          input.nativeCodemode,
+          getEnabledCodePreviewTools().has("codemode"),
+          (interval, tick) =>
+            input.presentation.live
+              ? scheduler.schedule(interval, () => {
+                  if (input.presentation.live) tick();
+                })
+              : undefined,
+          input.cwd,
+        ),
+      );
+      return scheduler;
     });
   const slot = makePiSessionRuntimeSlot<
     SessionInput,
@@ -129,10 +152,12 @@ export function codePreviewsWithDependencies(
       if (codePreviewSettings.syntaxHighlighting)
         slot.fork(dependencies.initializeSyntax(codePreviewSettings.shikiTheme), input.signal);
     },
-    onDeactivated: () => {
+    onDeactivated: (input) => {
+      input.presentation.live = false;
       clearCodePreviewSessionCapability();
     },
     onStartFailure: (input) => {
+      input.presentation.live = false;
       clearCodePreviewSessionCapability();
       input.notifyFailure();
     },
@@ -149,15 +174,31 @@ export function codePreviewsWithDependencies(
     if (capturedHost.aborted) notifyFailure();
     const projectTrusted = isProjectTrusted(ctx);
     const settingsAdmission = makeSettingsAdmission();
+    let nativeSnapshot: NativeCodemodeSnapshot;
+    try {
+      nativeSnapshot = nativeCodemode.capture(pi);
+    } catch {
+      notifyFailure();
+      return slot.shutdown().then(() => undefined);
+    }
     const input: SessionInput = capturedHost.signal
       ? {
           cwd: capturedHost.cwd,
           projectTrusted,
           settingsAdmission,
+          nativeCodemode: nativeSnapshot,
+          presentation: { live: true },
           signal: capturedHost.signal,
           notifyFailure,
         }
-      : { cwd: capturedHost.cwd, projectTrusted, settingsAdmission, notifyFailure };
+      : {
+          cwd: capturedHost.cwd,
+          projectTrusted,
+          settingsAdmission,
+          nativeCodemode: nativeSnapshot,
+          presentation: { live: true },
+          notifyFailure,
+        };
     return slot.start(input, capturedHost.signal).then(() => undefined);
   });
 

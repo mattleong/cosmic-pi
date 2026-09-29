@@ -20,6 +20,7 @@ type CompactRowInput = {
   phase: CompactPhase;
   summary: CompactSummary;
   status?: CompactStatus;
+  returnedCheckmark?: true | undefined;
   /** Colored issue text that replaces the routine counter on one-line child rows. */
   issueLabel?: string | undefined;
   duration?: string | undefined;
@@ -39,7 +40,7 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
   if (width <= 0) return { row: "", issueShown: false };
   const { phase, summary } = input;
   const status = input.status ?? compactStatus(phase, summary);
-  const icon = compactStatusIcon(status, theme, input.animationFrame);
+  const icon = compactStatusIcon(status, theme, input.animationFrame, input.returnedCheckmark);
   const action = compactSingleLine(summary.action ?? "");
   const prefix = `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
   const subject = compactSingleLine(

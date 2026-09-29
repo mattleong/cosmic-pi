@@ -44,6 +44,8 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Skipped previews: ${skippedLines.length ? "" : "none"}`,
       ...skippedLines,
       `Disabled by config: ${formatCodePreviewToolsWithState("disabled-by-config")}`,
+      `Inactive native tools: ${formatCodePreviewToolsWithState("not-active")}`,
+      `Unavailable native tools: ${formatCodePreviewToolsWithState("unavailable")}`,
       ...(pendingTools === "none" ? [] : [`Pending registration: ${pendingTools}`]),
       `Cache: ${status.cacheSize}/${status.cacheLimit}`,
       `Loaded languages: ${status.loadedLanguages}`,

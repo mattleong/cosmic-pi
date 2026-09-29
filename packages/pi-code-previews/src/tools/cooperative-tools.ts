@@ -44,6 +44,9 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
     ) => Component;
   };
 
+  /** Keep visible progress animated in preview/expanded views even when timing is disabled. */
+  animateProgress?: boolean;
+
   /** Session-owned scheduler. Independent extension loaders cannot share previews' runtime. */
   scheduleAnimation?: CompactAnimationScheduler | undefined;
 }
@@ -83,6 +86,7 @@ export function withCodePreviewShell<
     mode,
     compactSummary: options.compactSummary,
     scheduleAnimation: options.scheduleAnimation,
+    animateProgress: options.animateProgress,
     // SAFETY: Both callback sets derive their args/details/state from this same tool definition.
     expandedContent: options.expandedContent as CodePreviewToolRenderers<TTool>["expandedContent"],
     renderCall: tool.renderCall ?? ((_args, theme) => renderFallbackToolCall(tool, theme)),

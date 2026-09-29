@@ -71,6 +71,7 @@ export function renderCompactChildren(
         name: entry.label,
         phase: entry.status === "pending" || entry.status === "running" ? entry.status : "settled",
         status: entry.status,
+        returnedCheckmark: entry.returnedCheckmark,
         summary: {
           ...entry,
           subject: entry.subject ?? "",

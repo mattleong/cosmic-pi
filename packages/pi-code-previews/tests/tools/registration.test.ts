@@ -9,7 +9,7 @@ import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../../src/tools/names";
+import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../../src/tools/names";
 import { registerToolRenderers } from "../../src/tools/renderers/registration";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 
@@ -47,7 +47,7 @@ function piFixture(
 ): ExtensionAPI {
   return extensionApiFixture({
     getAllTools:
-      options.getAllTools ?? (() => ALL_CODE_PREVIEW_TOOLS.map((tool) => toolInfo(tool))),
+      options.getAllTools ?? (() => CORE_CODE_PREVIEW_TOOLS.map((tool) => toolInfo(tool))),
     registerTool: options.registerTool ?? (() => undefined),
     getActiveTools: () => {
       throw new Error("active tool API called");
@@ -88,7 +88,7 @@ test.each([
 });
 
 test("a registration failure is bounded, later tools continue, and retry installs only failures", () => {
-  enableOnly(...ALL_CODE_PREVIEW_TOOLS);
+  enableOnly(...CORE_CODE_PREVIEW_TOOLS);
   const attempts: string[] = [];
   const installedTools = new Set<CodePreviewToolName>();
   let failRead = true;
@@ -102,10 +102,10 @@ test("a registration failure is bounded, later tools continue, and retry install
   assert.doesNotThrow(() =>
     registerToolRenderers(pi, "/project", { installedTools, toolOptions: {} }),
   );
-  assert.deepEqual(attempts, [...ALL_CODE_PREVIEW_TOOLS]);
+  assert.deepEqual(attempts, [...CORE_CODE_PREVIEW_TOOLS]);
   assert.deepEqual(
     [...installedTools],
-    ALL_CODE_PREVIEW_TOOLS.filter((tool) => tool !== "read"),
+    CORE_CODE_PREVIEW_TOOLS.filter((tool) => tool !== "read"),
   );
   assert.deepEqual(getCodePreviewToolStatuses().get("read"), { state: "registration-error" });
   assert.equal(
@@ -118,8 +118,8 @@ test("a registration failure is bounded, later tools continue, and retry install
   registerToolRenderers(pi, "/project", { installedTools, toolOptions: {} });
 
   assert.deepEqual(attempts, ["read"]);
-  assert.deepEqual(installedTools, new Set(ALL_CODE_PREVIEW_TOOLS));
-  for (const tool of ALL_CODE_PREVIEW_TOOLS)
+  assert.deepEqual(installedTools, new Set(CORE_CODE_PREVIEW_TOOLS));
+  for (const tool of CORE_CODE_PREVIEW_TOOLS)
     assert.deepEqual(getCodePreviewToolStatuses().get(tool), { state: "installed" });
 });
 

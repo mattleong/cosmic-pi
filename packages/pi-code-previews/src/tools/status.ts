@@ -4,6 +4,8 @@ import { formatToolsSettingValue } from "./policy";
 
 export type CodePreviewToolStatus =
   | { state: "pending" }
+  | { state: "not-active" }
+  | { state: "unavailable" }
   | { state: "installed" }
   | { state: "disabled-by-config" }
   | { state: "skipped-conflict"; owner: SourceInfo }

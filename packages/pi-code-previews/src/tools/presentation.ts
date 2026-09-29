@@ -9,6 +9,7 @@ export const CODE_PREVIEW_TOOL_ICONS = {
   grep: "🔎",
   find: "🎯",
   ls: "📂",
+  codemode: "⚙️",
 } as const satisfies Record<CodePreviewToolName, string>;
 
 /** Return the canonical standalone-call icon for a supported built-in tool name. */

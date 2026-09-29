@@ -31,6 +31,7 @@ export interface CompactShellOptions {
   // The public adapter retains the tool's argument, details and state types.
   compactSummary: CompactSummaryProvider<any, any, any>;
   scheduleAnimation?: CompactAnimationScheduler | undefined;
+  animateProgress?: boolean | undefined;
 }
 
 type ToolRenderContext = HostToolRenderContext<any, any>;
@@ -109,7 +110,8 @@ class CompactShell implements Component {
     this.display = undefined;
     this.detailBounds = undefined;
     const timing = updateToolCallTiming(context, {
-      animateWithoutTiming: !context.expanded && !context.isError,
+      animateWithoutTiming:
+        (!context.expanded || this.options.animateProgress === true) && !context.isError,
       scheduleAnimation: this.options.scheduleAnimation,
     });
     this.duration = timing?.duration;

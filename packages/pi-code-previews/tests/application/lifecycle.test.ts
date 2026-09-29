@@ -211,6 +211,9 @@ function harness(options: HarnessOptions = {}) {
   let loadCalls = 0;
   const pi = extensionApiFixture({
     on: (name: string, handler: Handler) => handlers.set(name, handler),
+    getAllTools: () => [],
+    getActiveTools: () => [],
+    getCommands: () => [],
   });
   const dependencies: CodePreviewExtensionDependencies = {
     registerCommands: () => undefined,
@@ -516,24 +519,27 @@ effectTest("lifecycle retries a tool left visible by mutate-then-refresh failure
   yield* step(() => shutdown(h));
 });
 
-effectTest("getAllTools discovery failure reaches lifecycle startup handling", function* () {
-  const h = harness({
-    load: () => Effect.succeed({ ...settings, tools: ["bash"] }),
-    realRenderers: true,
-  });
-  Object.assign(h.pi, {
-    getAllTools: () => {
-      throw new Error("host discovery failed");
-    },
-  });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+effectTest(
+  "getAllTools admission failure reaches lifecycle handling before settings I/O",
+  function* () {
+    const h = harness({
+      load: () => Effect.succeed({ ...settings, tools: ["bash"] }),
+      realRenderers: true,
+    });
+    Object.assign(h.pi, {
+      getAllTools: () => {
+        throw new Error("host discovery failed");
+      },
+    });
+    yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
 
-  yield* step(() => start(h));
+    yield* step(() => start(h));
 
-  assert.equal(hasCodePreviewSessionCapability(), false);
-  assert.deepEqual(h.counts(), { acquisitions: 1, releases: 1, loads: 1 });
-  assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
-});
+    assert.equal(hasCodePreviewSessionCapability(), false);
+    assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
+    assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
+  },
+);
 
 const captureFailures: ReadonlyArray<readonly [string, (context: HostContext) => void]> = [
   ["cwd getters", (context) => throwingGetter(context, "cwd")],

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getBuiltinToolOptions, type BuiltinToolOptions } from "../builtin-options";
-import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
+import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
 import { getEnabledCodePreviewTools } from "../selection";
 import { resetCodePreviewToolStatuses, setCodePreviewToolStatus } from "../status";
 import { createBashPreviewTool } from "./bash";
@@ -29,7 +29,7 @@ const TOOL_DEFINITION_FACTORIES = {
   grep: (cwd) => createGrepPreviewTool(cwd),
   find: (cwd) => createFindPreviewTool(cwd),
   ls: (cwd) => createLsPreviewTool(cwd),
-} satisfies Record<CodePreviewToolName, ToolDefinitionFactory>;
+} satisfies Record<(typeof CORE_CODE_PREVIEW_TOOLS)[number], ToolDefinitionFactory>;
 
 type PlannedTool = {
   readonly name: CodePreviewToolName;
@@ -48,7 +48,7 @@ export function registerToolRenderers(
     options.toolOptions ?? getBuiltinToolOptions(cwd, options.projectTrusted ?? false);
   const plan: PlannedTool[] = [];
 
-  for (const name of ALL_CODE_PREVIEW_TOOLS) {
+  for (const name of CORE_CODE_PREVIEW_TOOLS) {
     if (!enabledTools.has(name)) continue;
     if (options.installedTools?.has(name)) {
       setCodePreviewToolStatus(name, { state: "installed" });

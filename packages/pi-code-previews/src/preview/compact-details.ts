@@ -4,6 +4,7 @@ import type { CompactPhase, CompactSummary } from "../tools/compact-summary";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { renderCompactIssues } from "./compact-issues";
 import { renderCompactRow } from "./compact-row";
+import { timingState } from "./tool-timing";
 import { CompactSlots, type CompactRenderBody, type CompactSlot } from "./compact-slots";
 
 /**
@@ -64,6 +65,7 @@ export function composeCompactDetails(input: {
             duration: input.duration,
             elapsedMs: input.elapsedMs,
             timingEnabled: input.timingEnabled,
+            animationFrame: timingState(context).codePreviewAnimationFrame ?? 0,
           },
           theme,
           width,

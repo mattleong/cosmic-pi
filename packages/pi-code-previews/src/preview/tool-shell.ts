@@ -47,6 +47,7 @@ export function createCodePreviewToolShell(
   if (compact && codePreviewSettings.toolCallCollapsedStyle === "compact")
     return createCompactToolShell(mode, { ...compact, scheduleAnimation });
   const summary = compact?.compactSummary;
+  const animateProgress = compact?.animateProgress ?? false;
   return {
     renderShell: mode === "on" ? "default" : "self",
     renderCall: (context, theme, render) =>
@@ -56,10 +57,18 @@ export function createCodePreviewToolShell(
         theme,
         summary ? (current) => renderWithPreviewIssues(render, summary, current, theme) : render,
         scheduleAnimation,
+        animateProgress,
       ),
     renderResult: (context, theme, render, result) => {
       recordPreviewResult(context, result);
-      return renderCodePreviewResult(mode, context, theme, render, scheduleAnimation);
+      return renderCodePreviewResult(
+        mode,
+        context,
+        theme,
+        render,
+        scheduleAnimation,
+        animateProgress,
+      );
     },
   };
 }
@@ -70,6 +79,7 @@ function renderCodePreviewCall<TState, TArgs>(
   theme: Theme,
   render: (context: ToolRenderContext<TState, TArgs>) => Component,
   scheduleAnimation: CompactAnimationScheduler | undefined,
+  animateProgress: boolean,
 ): Component {
   if (mode !== "border") {
     const state = timingState(context);
@@ -82,7 +92,12 @@ function renderCodePreviewCall<TState, TArgs>(
         ? previousWrapped
         : new TimingPreservedComponent(component);
     state.codePreviewTimingCallComponent = wrapped;
-    updateToolCallTiming(context, { animate: false, formatLabel: false, scheduleAnimation });
+    updateToolCallTiming(context, {
+      animate: animateProgress,
+      animateWithoutTiming: animateProgress,
+      formatLabel: false,
+      scheduleAnimation,
+    });
     return wrapped;
   }
   const state = borderState(context);
@@ -92,7 +107,10 @@ function renderCodePreviewCall<TState, TArgs>(
   const callComponent = renderWithBorderSlot(state, "call", () =>
     render(withLastComponent(context, state.codePreviewBorderCallComponent)),
   );
-  const timing = updateToolCallTiming(context, { scheduleAnimation });
+  const timing = updateToolCallTiming(context, {
+    scheduleAnimation,
+    animateWithoutTiming: animateProgress,
+  });
   state.codePreviewBorderCallComponent = callComponent;
   state.codePreviewBorderLastCallExecutionStarted = context.executionStarted;
   state.codePreviewBorderLastCallPartial = context.isPartial;
@@ -111,8 +129,12 @@ function renderCodePreviewResult<TState, TArgs>(
   theme: Theme,
   render: (context: ToolRenderContext<TState, TArgs>) => Component,
   scheduleAnimation: CompactAnimationScheduler | undefined,
+  animateProgress: boolean,
 ): Component {
-  const timing = updateToolCallTiming(context, { scheduleAnimation });
+  const timing = updateToolCallTiming(context, {
+    scheduleAnimation,
+    animateWithoutTiming: animateProgress,
+  });
   if (mode !== "border") {
     return renderTimedResultFooter(context, theme, render, timing?.label);
   }
