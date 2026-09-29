@@ -27,6 +27,7 @@ import {
   ReadResourceResultSchema,
 } from "@modelcontextprotocol/core";
 import * as Effect from "effect/Effect";
+import packageManifest from "../../package.json" with { type: "json" };
 import * as Schema from "effect/Schema";
 import { boundaryError } from "../client/errors.ts";
 import {
@@ -92,7 +93,8 @@ export const makeSdkClient = (
   Effect.try({
     try: () =>
       new Client(
-        { name: "pi-mcp", version: "0.2.0" },
+        // The synchronized workspace version, so clientInfo never drifts from the release.
+        { name: "pi-mcp", version: packageManifest.version },
         {
           capabilities: {},
           versionNegotiation: negotiationOptions(protocol, probeTimeoutMs, pin),

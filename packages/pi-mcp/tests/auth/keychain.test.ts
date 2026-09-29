@@ -93,6 +93,53 @@ describe("Keychain native mutation ownership", () => {
       }),
   );
 
+  it.effect("a settled write lifts the fence even after a refusal or an abandoned waiter", () =>
+    Effect.gen(function* () {
+      let refuse = true;
+      const completion = Promise.withResolvers<void>();
+      let password: string | undefined = "stored-grant";
+      let slow = false;
+      const factory: KeychainEntryFactory = () =>
+        Promise.resolve({
+          getPassword: () => Promise.resolve(password),
+          setPassword: (value) => {
+            if (refuse) return Promise.reject(new Error("user denied Keychain access"));
+            if (slow)
+              return completion.promise.then(() => {
+                password = value;
+              });
+            password = value;
+            return Promise.resolve();
+          },
+          deleteCredential: () => Promise.resolve(true),
+        });
+      const store = yield* makeKeychainStore({ entryFactory: factory, timeoutMs: 100 });
+      // A refused write leaves the old value, which reads may use again at once.
+      expect(yield* store.write(identity, "new-grant").pipe(Effect.isFailure)).toBe(true);
+      expect(yield* store.mutation(identity)).toBe("idle");
+      expect(yield* store.read(identity)).toBe("stored-grant");
+      // A write outliving its waiter's deadline lifts the fence once it settles.
+      refuse = false;
+      slow = true;
+      const saving = yield* store
+        .write(identity, "late-grant")
+        .pipe(Effect.result, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(101);
+      expect((yield* Fiber.join(saving))._tag).toBe("Failure");
+      expect(yield* store.read(identity).pipe(Effect.isFailure)).toBe(true);
+      completion.resolve();
+      yield* yieldUntil(() => password === "late-grant");
+      let mutation = yield* store.mutation(identity);
+      for (let i = 0; i < 20 && mutation !== "idle"; i++) {
+        yield* Effect.yieldNow;
+        mutation = yield* store.mutation(identity);
+      }
+      expect(mutation).toBe("idle");
+      expect(yield* store.read(identity)).toBe("late-grant");
+    }),
+  );
+
   it.effect("normalizes either native absence value without losing later stored credentials", () =>
     Effect.gen(function* () {
       for (const missing of [null, undefined]) {

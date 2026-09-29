@@ -81,7 +81,8 @@ export const decodeSdkGrant = (server: McpEffectiveServer, grant: McpGrant) =>
       !config ||
       server.definition?.transport !== "http" ||
       grant.identity !== server.credentialIdentity ||
-      grant.registration !== config.registration ||
+      (grant.registration !== config.registration &&
+        !(grant.registration === "dynamic" && config.dynamicFallback === true)) ||
       (grant.resourceMetadataSource === "configured" &&
         (config.allowMissingResourceMetadata === false || config.issuer === undefined)) ||
       (config.issuer !== undefined && grant.issuer !== config.issuer) ||
@@ -103,7 +104,7 @@ export const decodeSdkGrant = (server: McpEffectiveServer, grant: McpGrant) =>
     );
     const storedResource = yield* validateAuthUrl(grant.resource, policy);
     if (!resourceAllowed(config, expectedResource, storedResource)) return yield* deniedAuth();
-    if (config.registration === "metadata") {
+    if (grant.registration === "metadata") {
       if (!config.clientMetadataUrl) return yield* deniedAuth();
       const expectedClient = yield* validateAuthUrl(config.clientMetadataUrl, policy);
       if (grant.clientId !== expectedClient.href) return yield* deniedAuth();

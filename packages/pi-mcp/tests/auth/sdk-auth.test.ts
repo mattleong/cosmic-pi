@@ -294,6 +294,23 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
     }).pipe(Effect.provide(layers)),
   );
 
+  it.live("an inferred metadata client falls back to dynamic registration without CIMD", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ metadata: false });
+      const sdk = yield* makeMcpSdkAuth;
+      const inferred = fixture.configured("metadata", { dynamicFallback: true });
+      const grant = yield* sdk.login(inferred, yield* browser("manual"));
+      expect(grant.registration).toBe("dynamic");
+      expect(fixture.counts().registered).toBe(1);
+      expect(yield* sdk.token(inferred, grant)).toBe("fixture-access-0");
+      // An explicit metadata choice never switches registration method.
+      const pinned = fixture.configured("metadata");
+      expect(yield* sdk.login(pinned, yield* browser("manual")).pipe(Effect.flip)).toMatchObject({
+        reason: "oauth-registration-unsupported",
+      });
+    }).pipe(Effect.provide(layers)),
+  );
+
   it.live("accepts a listed issuer that differs only by a bare-host trailing slash", () =>
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer({ listedIssuerSlash: true });

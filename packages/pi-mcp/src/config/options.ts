@@ -74,6 +74,9 @@ export function normalizeMcpServer(
                   : auth.clientMetadataUrl !== undefined
                     ? "metadata"
                     : "dynamic"),
+              ...(auth.registration === undefined &&
+                auth.clientId === undefined &&
+                auth.clientMetadataUrl !== undefined && { dynamicFallback: true as const }),
               scopes: [...new Set(auth.scopes ?? [])].sort(),
             }
           : auth,

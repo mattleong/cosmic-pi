@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { MCP_LOGGING_UNAVAILABLE_NOTICE } from "../../src/observations/model.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   deserializeMessage,
@@ -777,14 +778,13 @@ it.live(
         );
         expect(asks).toBe(1);
         expect(seen).toEqual([100, 0]);
-        expect(
-          yield* execution
-            .execute(
-              { action: "tools.call", server: "fixture", tool: "example", logLevel: "error" },
-              projection,
-            )
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "unsupported", outcome: "not-sent" });
+        // Stdio has no request logging; the call still runs and says so.
+        const logged = yield* execution.execute(
+          { action: "tools.call", server: "fixture", tool: "example", logLevel: "error" },
+          projection,
+        );
+        expect(logged.reply.outcome).toBe("completed");
+        expect(logged.reply.notices).toContain(MCP_LOGGING_UNAVAILABLE_NOTICE);
         yield* execution.execute(subscribe, projection);
         yield* Effect.sleep(80);
         const events = yield* execution.execute(

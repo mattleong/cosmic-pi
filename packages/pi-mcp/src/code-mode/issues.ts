@@ -28,6 +28,7 @@ import {
 } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
 import { canonicalValidationWarning, isOwnedValidationNotice } from "../ui/validation-notices.ts";
+import { MCP_LOGGING_UNAVAILABLE_NOTICE } from "../observations/model.ts";
 import {
   MCP_INPUT_UNCHECKED_NOTICE,
   type McpValidationNoticeIdentity,
@@ -88,6 +89,12 @@ const OWNED_NOTICES: ReadonlyArray<
   ],
   ["No advertised tool metadata matched", "info", "no-match", "No tools matched"],
   [MCP_INPUT_UNCHECKED_NOTICE, "info", "input-unchecked", "Arguments weren't checked locally"],
+  [
+    MCP_LOGGING_UNAVAILABLE_NOTICE,
+    "info",
+    "logging-unavailable",
+    "Request logging isn't available",
+  ],
 ];
 
 /** Envelope notices, redacted in full before bounding. An oversized notice is not a complete

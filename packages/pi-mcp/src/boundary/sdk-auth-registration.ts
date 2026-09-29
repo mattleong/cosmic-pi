@@ -88,6 +88,17 @@ const compatibleReceipt = (raw: McpRegistrationReceipt, input: RegistrationInput
     return { receipt: { ...receipt, clientInformation: yield* authJson(client) }, client };
   });
 
+/** The registration this sign-in uses, after an inferred metadata client's fallback. */
+export const effectiveRegistration = (
+  config: McpOAuthConfig,
+  metadata: AuthorizationServerMetadata,
+): McpOAuthConfig["registration"] =>
+  config.registration === "metadata" &&
+  config.dynamicFallback === true &&
+  metadata.client_id_metadata_document_supported !== true
+    ? "dynamic"
+    : config.registration;
+
 /**
  * Reuse is an explicit-login choice. A rejected reused client never triggers an automatic
  * retry within one sign-in; the caller forgets it so the next sign-in registers fresh.
@@ -96,11 +107,12 @@ export const loginClient = (input: RegistrationInput) =>
   Effect.gen(function* () {
     const { config, issuer, metadata, policy, redirect, scopes } = input;
     const network = yield* NetworkAddresses;
-    if (config.registration === "pre-registered") {
+    const registration = effectiveRegistration(config, metadata);
+    if (registration === "pre-registered") {
       if (!config.clientId) return yield* unsupportedRegistration();
       return yield* normalizePublicClient({ client_id: config.clientId });
     }
-    if (config.registration === "metadata") {
+    if (registration === "metadata") {
       if (!config.clientMetadataUrl || metadata.client_id_metadata_document_supported !== true)
         return yield* unsupportedRegistration();
       const url = yield* validateAuthUrl(config.clientMetadataUrl, policy);

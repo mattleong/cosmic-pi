@@ -367,7 +367,8 @@ describe("user-only authentication ownership", () => {
         write: () => Effect.fail(boundaryError("unavailable", "not-sent", "Store unavailable.")),
       });
       expect((yield* auth.access(currentServer).pipe(Effect.result))._tag).toBe("Failure");
-      expect(yield* auth.status(currentServer)).toEqual({ state: "required" });
+      // Storage is down, but nothing was spent: no sign-in is required.
+      expect(yield* auth.status(currentServer)).toEqual({ state: "unavailable" });
     }),
   );
   it.effect(
@@ -694,6 +695,16 @@ describe("user-only authentication ownership", () => {
         if (failure === "replacement-save-after-write")
           expect(stored.tokens).toEqual({ access_token: "replacement" });
         expect(refreshes).toBe(failure === "marker-save" ? 0 : 1);
+        if (failure === "marker-save") {
+          // No marker, no spend: later accesses may retry the marker but never refresh
+          // while it cannot be saved.
+          for (let attempt = 0; attempt < 3; attempt += 1)
+            expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({
+              kind: "unavailable",
+            });
+          expect(refreshes).toBe(0);
+          return;
+        }
         const before = { refreshes, writes };
         yield* expectFenced(auth, make(storage, boundary), current, "oauth-refresh-unresolved");
         expect({ refreshes, writes }).toEqual(before);

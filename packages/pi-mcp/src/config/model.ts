@@ -10,6 +10,12 @@ export interface McpOAuthConfig {
   /** Internal default for headerless URL servers; anonymous until challenged or checked by the user. */
   readonly implicit?: true;
   readonly registration: "pre-registered" | "dynamic" | "metadata";
+  /**
+   * Metadata registration inferred from `clientMetadataUrl` alone. When the authorization
+   * server does not support Client ID Metadata Documents, sign-in uses dynamic
+   * registration instead, the next option in MCP's registration order.
+   */
+  readonly dynamicFallback?: true;
   readonly clientId?: string;
   readonly clientMetadataUrl?: string;
   readonly issuer?: string;

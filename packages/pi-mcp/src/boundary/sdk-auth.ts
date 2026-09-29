@@ -41,7 +41,11 @@ import {
   sdkAuthValue as sdk,
   sdkGrantReceipt as receipt,
 } from "./sdk-auth-grant.ts";
-import { loginClient, unsupportedRegistration as unsupported } from "./sdk-auth-registration.ts";
+import {
+  effectiveRegistration,
+  loginClient,
+  unsupportedRegistration as unsupported,
+} from "./sdk-auth-registration.ts";
 
 export interface McpSdkAuthContract {
   readonly login: (
@@ -266,7 +270,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             issuer,
             resource: resourceUrl.href,
             clientId: client.client_id,
-            registration: config.registration,
+            registration: effectiveRegistration(config, metadata),
             requestedScopes: [...scopes],
             redirectUri: redirect,
             discovery: yield* json(metadata),

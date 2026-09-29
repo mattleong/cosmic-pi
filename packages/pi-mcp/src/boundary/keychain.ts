@@ -154,20 +154,25 @@ export const makeKeychainStore = (options: KeychainOptions = {}) =>
                 signal.removeEventListener("abort", abort);
                 throw error();
               }
+              // Once native work settles, the Keychain again holds the truth and every
+              // transaction rereads it, so the fence lifts even when the waiter gave up or a
+              // write was refused. A refused removal and a synchronous throw stay blocked.
+              const settle = () => {
+                owner?.lease?.mutationSettled();
+                if (fence.pending === completion.promise) fence.pending = undefined;
+                if (fence.revision === revision) fence.blocked = false;
+                completion.resolve();
+              };
               return native
                 .then(
                   () => {
-                    owner?.lease?.mutationSettled();
-                    if (fence.pending === completion.promise) fence.pending = undefined;
-                    if (fence.revision === revision) fence.blocked = interrupted;
-                    completion.resolve();
+                    settle();
                     if (interrupted) throw error();
                   },
                   () => {
-                    owner?.lease?.mutationSettled();
-                    if (fence.pending === completion.promise) fence.pending = undefined;
-                    fence.blocked = true;
-                    completion.resolve();
+                    settle();
+                    // A refused removal leaves the credential the user meant to delete.
+                    if (removing && fence.revision === revision) fence.blocked = true;
                     throw error();
                   },
                 )

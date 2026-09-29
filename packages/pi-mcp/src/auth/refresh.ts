@@ -25,7 +25,15 @@ export const refreshGrant = (
     // Never reuse this refresh token after entering consumption, including cancellation
     // or a failed native save. Only this exact owner can clear its local block.
     authority.blocked = owner;
-    yield* store.write({ ...grant, quarantine: "refresh" });
+    // The marker must be durable before the token is spent. If saving it failed, nothing
+    // was sent; the stored grant, quarantined or not, decides the next attempt.
+    yield* store.write({ ...grant, quarantine: "refresh" }).pipe(
+      Effect.tapError(() =>
+        Effect.sync(() => {
+          if (owned()) authority.blocked = undefined;
+        }),
+      ),
+    );
     if (!owned()) return yield* stale();
     yield* yield* AuthRequestCurrent;
     let dispatched = false;

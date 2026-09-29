@@ -274,6 +274,28 @@ layer(Layer.mergeAll(Path.layer, NodeCrypto.layer))("MCP configuration resolutio
       }),
   );
 
+  it.effect("marks only an inferred metadata client as able to fall back to dynamic", () =>
+    Effect.gen(function* () {
+      const auth = (value: Schema.Json) =>
+        decodeMcpDocument({
+          mcpServers: { server: { url: "https://mcp.example/mcp", auth: value } },
+        }).pipe(
+          Effect.flatMap((document) => resolve(document)),
+          Effect.map((config) => config.servers.server!.definition),
+        );
+      const metadataUrl = "https://client.example/metadata.json";
+      expect(yield* auth({ type: "oauth", clientMetadataUrl: metadataUrl })).toMatchObject({
+        auth: { registration: "metadata", dynamicFallback: true },
+      });
+      const explicit = yield* auth({
+        type: "oauth",
+        registration: "metadata",
+        clientMetadataUrl: metadataUrl,
+      });
+      expect(explicit?.transport === "http" && explicit.auth).not.toHaveProperty("dynamicFallback");
+    }),
+  );
+
   it.effect("keeps a sign-in across tool policy, protocol, and header edits only", () =>
     Effect.gen(function* () {
       const base = {

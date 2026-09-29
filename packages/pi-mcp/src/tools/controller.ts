@@ -43,7 +43,7 @@ export const McpToolParameters = Type.Object(
       Type.String({
         enum: [...McpLogLevel.literals],
         description:
-          "Optional deprecated modern HTTP-only request logging on tools.call, resources.read, prompts.get, completion.complete only.",
+          "Optional deprecated request logging on tools.call, resources.read, prompts.get, completion.complete only. Only modern HTTP servers with logging support it; elsewhere the call runs without it.",
       }),
     ),
     ref: Type.Optional(

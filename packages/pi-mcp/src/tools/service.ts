@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import { MCP_LOGGING_UNAVAILABLE_NOTICE } from "../observations/model.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -139,7 +140,14 @@ export const makeMcpExecution = Effect.gen(function* () {
           input.logLevel,
           options.onProgress,
         ),
-      ).pipe(Effect.flatMap((reply) => projectReply(operation, reply, options))),
+      ).pipe(
+        Effect.map((reply) =>
+          input.logLevel !== undefined && !operation.capabilities.requestLogging
+            ? { ...reply, notices: [...(reply.notices ?? []), MCP_LOGGING_UNAVAILABLE_NOTICE] }
+            : reply,
+        ),
+        Effect.flatMap((reply) => projectReply(operation, reply, options)),
+      ),
     );
 
   const targetedDiscovery = (input: McpDiscoveryRequest, options: McpProjectionOptions) => {

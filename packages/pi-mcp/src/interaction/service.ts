@@ -28,7 +28,8 @@ export const interactiveOperation = (
         operation.capabilities.multiRoundTrip && host ? yield* host.resolve : undefined;
       yield* operation.checkCurrent;
       let dispatch = options;
-      if (logLevel) dispatch = { ...dispatch, logLevel };
+      // Logging only observes; a connection without it still runs the request.
+      if (logLevel && operation.capabilities.requestLogging) dispatch = { ...dispatch, logLevel };
       if (onProgress) dispatch = { ...dispatch, onprogress: onProgress };
       return yield* converse(operation, input, dispatch, provider, validate);
     }),

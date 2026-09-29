@@ -21,6 +21,7 @@ import type {
   McpResultRead,
   McpRetentionOutcome,
 } from "../src/results/model.ts";
+import { MCP_LOGGING_UNAVAILABLE_NOTICE } from "../src/observations/model.ts";
 import { normalizeResult } from "../src/results/normalize.ts";
 import { projectPrepared } from "../src/results/projection.ts";
 import {
@@ -187,6 +188,13 @@ const scenarios = Effect.gen(function* () {
       outputValidation: "failed",
       notices: [MCP_VALIDATION_NOTICES.failed.invocation],
     }),
+  );
+  const loggingUnavailable = yield* project(
+    prepare(
+      "tools.call",
+      { content: text("Clicked.") },
+      { notices: [MCP_LOGGING_UNAVAILABLE_NOTICE] },
+    ),
   );
   const inputUnchecked = yield* project(
     prepare("tools.call", { content: text("Clicked.") }, { notices: [MCP_INPUT_UNCHECKED_NOTICE] }),
@@ -394,6 +402,7 @@ const scenarios = Effect.gen(function* () {
     settled("output validation unavailable", form, unchecked),
     settled("output validation failed", form, invalid),
     settled("input not checked locally", click, inputUnchecked),
+    settled("request logging unavailable", click, loggingUnavailable),
     settled(
       "cancelled before sending",
       click,

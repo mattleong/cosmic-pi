@@ -1,5 +1,8 @@
 import * as Schema from "effect/Schema";
 
+/** A requested log level is observational; without request logging the call runs without it. */
+export const MCP_LOGGING_UNAVAILABLE_NOTICE =
+  "Request logging is unavailable on this connection, so the call ran without it.";
 export const McpLogLevel = Schema.Literals([
   "debug",
   "info",
