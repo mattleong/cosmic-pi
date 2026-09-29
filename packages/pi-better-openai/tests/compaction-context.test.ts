@@ -91,8 +91,8 @@ describe("owned checkpoint reconstruction", () => {
     betterOpenAIWithDependencies(extensionApiFixture(registration));
     const host = { sessionManager: history(), abort: vi.fn(), ui: { notify: vi.fn() } };
     const ctx = extensionContextFixture(host);
-    handlers.get("context")!(
-      { type: "context", messages: host.sessionManager.buildSessionContext().messages },
+    handlers.get("context_with_system")!(
+      { type: "context_with_system", messages: host.sessionManager.buildSessionContext().messages },
       ctx,
     );
     expect(host.abort).toHaveBeenCalledOnce();
@@ -175,13 +175,14 @@ describe("owned checkpoint reconstruction", () => {
   for (const omitSnapshots of [false, true])
     it(`rebuilds authoritative prompt and tools for old v1 snapshots, absent=${omitSnapshots}`, () => {
       const manager = SessionManager.inMemory("/virtual/old-snapshots");
-      const first = manager.appendMessage({
-        role: "system",
+      const obsoleteSystem = {
+        role: "system" as const,
         content: "opaque original",
         sections: { rules: "old" },
         toolsAdded: [{ name: "old", description: "old", parameters: { type: "object" } }],
         timestamp: 0,
-      });
+      };
+      const first = manager.appendMessage(obsoleteSystem);
       appendUser(manager, "first dialogue");
       appendCheckpoint(manager, first);
       manager.appendMessage({
@@ -197,10 +198,13 @@ describe("owned checkpoint reconstruction", () => {
       appendUser(manager, "third dialogue");
       appendCheckpoint(manager, first);
       appendUser(manager, "otherwise safe fallback tail");
+      // Modern Pi no longer replays retained older snapshots. Its fresh checkpoints
+      // are safe; legacy fixtures must explicitly carry their obsolete authority.
+      expect(prepareOpenAIFallback(manager.getBranch(), preparation)).toBeDefined();
       const branch = manager.getBranch().map((entry) => {
-        if (entry.type !== "compaction" || !omitSnapshots) return entry;
+        if (entry.type !== "compaction") return entry;
         const { systemMessage: _ignored, ...legacy } = entry;
-        return legacy;
+        return omitSnapshots ? legacy : { ...legacy, systemMessage: obsoleteSystem };
       });
       const repaired = repairOpenAIContext(branch, buildSessionContext(branch).messages)!.messages!;
       const prompt = getCurrentSystemPrompt(repaired);
@@ -212,6 +216,57 @@ describe("owned checkpoint reconstruction", () => {
       expect(serializedSnapshot(repaired)).toContain("second dialogue");
       // Pi would persist its unfiltered, obsolete system state on ordinary fallback.
       expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
+    });
+
+  for (const editAfterCheckpoint of [false, true])
+    it(`honors persisted omissions and replacements without mutating history, edited after checkpoint=${editAfterCheckpoint}`, () => {
+      const manager = SessionManager.inMemory("/virtual/context-edits");
+      manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
+      const removed = appendUser(manager, "omitted user dialogue");
+      const replaced = manager.appendCustomMessageEntry(
+        "extension",
+        "obsolete custom content",
+        false,
+      );
+      const tool = manager.appendMessage({
+        role: "toolResult",
+        toolCallId: "call",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "obsolete tool content" }],
+        timestamp: 2,
+      });
+      if (editAfterCheckpoint) appendCheckpoint(manager, removed);
+      manager.appendContextEdit(removed, null);
+      manager.appendContextEdit(replaced, { content: "edited custom content" });
+      manager.appendContextEdit(tool, { content: "edited tool content" });
+      if (!editAfterCheckpoint) appendCheckpoint(manager, removed);
+      appendUser(manager, "safe retained tail");
+      const branch = manager.getBranch();
+      const before = serializedSnapshot(branch);
+      const repaired = repairOpenAIContext(
+        branch,
+        manager.buildSessionContext().messages,
+      )!.messages!;
+      expect(serializedSnapshot(repaired)).not.toContain("omitted user dialogue");
+      expect(serializedSnapshot(repaired)).not.toContain("obsolete");
+      expect(serializedSnapshot(repaired)).toContain("edited custom content");
+      expect(repaired.find((message) => message.role === "toolResult")?.content).toEqual([
+        { type: "text", text: "edited tool content" },
+      ]);
+      expect(reconstructOpenAIContext(branch)?.coverageChanged).toBe(editAfterCheckpoint);
+      const fallback = prepareOpenAIFallback(branch, preparation)!;
+      expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("edited custom content");
+      expect(serializedSnapshot(fallback.messagesToSummarize)).not.toContain("obsolete");
+      expect(serializedSnapshot(branch)).toBe(before);
+      const tampered = manager
+        .buildSessionContext()
+        .messages.map((message) =>
+          message.role === "toolResult"
+            ? { ...message, content: [{ type: "text" as const, text: "foreign" }] }
+            : message,
+        );
+      expect(() => repairOpenAIContext(branch, tampered)).toThrow();
     });
 
   it("preserves complete tool results and images, and never retains an orphaned result", () => {

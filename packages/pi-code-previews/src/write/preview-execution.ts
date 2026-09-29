@@ -1,5 +1,5 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { executeNativeWrite } from "../boundary/host-write";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -64,7 +64,7 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   path: string,
   content: string,
   cwd: string,
-  ctx?: ExtensionContext,
+  ctx?: ExtensionToolContext,
 ) {
   const executionCwd = ctx?.cwd || cwd;
   const absolutePath = resolvePreviewPath(path, executionCwd);
@@ -114,7 +114,7 @@ export function executeWriteWithPreview(
   content: string,
   cwd: string,
   signal: AbortSignal | undefined,
-  ctx?: ExtensionContext,
+  ctx?: ExtensionToolContext,
 ) {
   const owner = captureCodePreviewSessionCapability();
   if (!owner) return rejectInactiveCodePreviewSession("write");

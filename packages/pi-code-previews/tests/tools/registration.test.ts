@@ -34,6 +34,7 @@ function toolInfo(name: string, sourceInfo: SourceInfo = builtinSource): ToolInf
     name,
     description: `${name} tool`,
     parameters: opaqueFixture({}),
+    exposure: "direct",
     sourceInfo,
   };
 }

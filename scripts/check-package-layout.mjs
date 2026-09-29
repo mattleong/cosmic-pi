@@ -9,6 +9,13 @@ const declaredNestedPackages = new Set(
   NESTED_PACKAGE_DIRECTORIES.map((nested) => join(packagesDir, nested)),
 );
 const violations = [];
+const hostProvidedPackages = new Set([
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-tui",
+  "typebox",
+]);
 const ignoredDirectories = new Set([".git", ".pi", "coverage", "dist", "node_modules"]);
 const extensionRootAllowlist = new Set([
   "application.ts",
@@ -68,6 +75,19 @@ for (let index = 0; index < packageDirectories.length; index += 1) {
   const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
   const files = await walkFiles(packageDir, packageDirectories);
   const isExtensionPackage = manifest.pi !== undefined;
+
+  for (const name of hostProvidedPackages) {
+    const manifestPath = relative(rootDir, join(packageDir, "package.json"));
+    if (manifest.dependencies?.[name] || manifest.optionalDependencies?.[name]) {
+      violations.push(`${manifestPath}: host-provided ${name} must not be a runtime dependency`);
+    }
+    if (
+      manifest.peerDependencies?.[name] !== undefined &&
+      manifest.peerDependencies[name] !== "*"
+    ) {
+      violations.push(`${manifestPath}: host-provided ${name} requires a "*" peer dependency`);
+    }
+  }
 
   for (const file of files) {
     const packageRelativePath = relative(packageDir, file).split(sep).join("/");

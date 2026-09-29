@@ -1,5 +1,5 @@
 // Promise assertions are test-runner boundaries.
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
@@ -150,7 +150,7 @@ const parentModel = {
   thinkingLevelMap: { xhigh: "xhigh", max: "max" },
 };
 
-export const context: ExtensionContext = extensionContextFixture({
+export const context: ExtensionToolContext = extensionContextFixture({
   cwd: "/project",
   mode: "tui" as const,
   hasUI: true,

@@ -447,7 +447,7 @@ export function betterOpenAIWithDependencies(
     cosmicUi.shutdown();
     return slot.shutdown();
   });
-  pi.on("context", (event, ctx) => {
+  pi.on("context_with_system", (event, ctx) => {
     updateContext(ctx);
     if (!currentContext) {
       if (needsContextRepair(ctx)) abortIncompleteContext(ctx);

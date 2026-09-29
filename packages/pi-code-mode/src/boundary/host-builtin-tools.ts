@@ -17,7 +17,7 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
   type AgentToolResult,
-  type ExtensionContext,
+  type ExtensionToolContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
@@ -118,7 +118,7 @@ export interface NestedDispatchOptions {
     isError: boolean,
   ) => void;
   readonly definitions: NestedPiToolDefinitions;
-  readonly ctx: ExtensionContext;
+  readonly ctx: ExtensionToolContext;
   /** Outer `code_mode` tool-call id; nested ids derive from it deterministically. */
   readonly toolCallId: string;
 }

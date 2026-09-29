@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ExtensionToolContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
@@ -15,12 +16,12 @@ export const extensionApiFixture = <Fixture extends object>(
   return fixture as Fixture & ExtensionAPI;
 };
 
-/** One fixture usable at both extension-event and command callback boundaries. */
+/** One partial fixture usable at extension-event, command, and tool callback boundaries. */
 export const extensionContextFixture = <Fixture extends object>(
   fixture: Fixture,
-): Fixture & ExtensionContext & ExtensionCommandContext => {
+): Fixture & ExtensionContext & ExtensionCommandContext & ExtensionToolContext => {
   // SAFETY: Each test uses only the host context members its fixture implements.
-  return fixture as Fixture & ExtensionContext & ExtensionCommandContext;
+  return fixture as Fixture & ExtensionContext & ExtensionCommandContext & ExtensionToolContext;
 };
 
 /** An opaque host value, such as a TUI or keybindings manager, typed for any target. */

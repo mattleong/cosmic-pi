@@ -1,7 +1,7 @@
 import {
   createWriteTool,
   createWriteToolDefinition,
-  type ExtensionContext,
+  type ExtensionToolContext,
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -25,7 +25,7 @@ export const executeNativeWrite = <E, R>(
     ) => Effect.Effect<void, E, R>;
   },
   onError: () => E,
-  ctx?: ExtensionContext,
+  ctx?: ExtensionToolContext,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -1,10 +1,10 @@
-import type { ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 const serialize = <Value>(value: Value) => JSON.stringify(value);
 // SAFETY: The tool controller never reads the Pi context; its execution port owns context checks.
-const unusedContext = {} as ExtensionContext;
+const unusedContext = {} as ExtensionToolContext;
 import {
   boundedMcpReply,
   makeMcpErrorReceipts,

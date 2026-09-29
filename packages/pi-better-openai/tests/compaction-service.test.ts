@@ -84,13 +84,11 @@ function fixture(options: {
   readonly enabled: boolean;
   readonly currentModel?: Model<Api>;
   readonly branch?: SessionEntry[];
-  readonly contextEntries?: SessionEntry[];
   readonly hostileBranch?: boolean;
   readonly manager?: SessionManager;
   readonly streamSimple?: ExtensionContext["modelRegistry"]["streamSimple"];
 }) {
   const branch = options.branch ?? [];
-  const contextEntries = options.contextEntries ?? [];
   const ctxFixture = {
     modelRegistry: { streamSimple: options.streamSimple },
     thinkingLevel: "high" as const,
@@ -104,7 +102,6 @@ function fixture(options: {
         if (options.hostileBranch) throw new Error("host-context-secret");
         return branch;
       },
-      buildContextEntries: () => contextEntries,
     },
   };
   const context = MutableRef.make(extensionContextFixture(ctxFixture));
@@ -120,7 +117,7 @@ function fixture(options: {
     }));
   const setModel = (model: Model<Api>) =>
     MutableRef.update(context, (current) => ({ ...current, model }));
-  return { branch, contextEntries, context, projection, fastProjection, setEnabled, setModel };
+  return { branch, context, projection, fastProjection, setEnabled, setModel };
 }
 
 function serviceLayer(
@@ -466,11 +463,49 @@ describe("OpenAICompactionService", () => {
     });
   });
 
+  for (const replacement of [null, { content: "revised covered dialogue" }])
+    it.effect(
+      `does not encrypt obsolete context after a persisted ${replacement ? "replacement" : "omission"}`,
+      () => {
+        const manager = SessionManager.inMemory("/virtual/edited-checkpoints");
+        manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
+        const covered = manager.appendMessage({
+          role: "user",
+          content: "raw original dialogue",
+          timestamp: 1,
+        });
+        manager.appendContextEdit(covered, { content: "initial edited dialogue" });
+        const target = fixture({ enabled: true, manager });
+        const { requests, client } = recordingClient("edited-checkpoint");
+        return Effect.gen(function* () {
+          const service = yield* OpenAICompactionService;
+          commit(manager, yield* service.compact(compactEvent()));
+          expect(serializedSnapshot(requests[0]?.input)).toContain("initial edited dialogue");
+          expect(serializedSnapshot(requests[0]?.input)).not.toContain("raw original dialogue");
+          manager.appendContextEdit(covered, replacement);
+          const messages = yield* service.filterContext(manager.buildSessionContext().messages);
+          expect(serializedSnapshot(messages)).not.toContain("initial edited dialogue");
+          const input = responsesInput(testModel(), messages!);
+          expect(yield* service.inject({ input })).toBeUndefined();
+          manager.appendMessage({ role: "user", content: "new tail", timestamp: 2 });
+          commit(manager, yield* service.compact(compactEvent()));
+          const text = serializedSnapshot(requests[1]?.input);
+          expect(text).not.toContain("edited-checkpoint-1");
+          expect(text).not.toContain("initial edited dialogue");
+          expect(text).not.toContain("raw original dialogue");
+          expect(text).toContain("new tail");
+          if (replacement) expect(text).toContain(replacement.content);
+          const repaired = yield* service.filterContext(manager.buildSessionContext().messages);
+          const injected = yield* service.inject({ input: responsesInput(testModel(), repaired!) });
+          expect(serializedSnapshot(injected?.input)).toContain("edited-checkpoint-2");
+        }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+      },
+    );
+
   it.effect("creates, reuses, filters, and injects native checkpoints", () => {
     const target = fixture({
       enabled: true,
       branch: [entry("one", "first turn"), { ...entry("two", "second turn"), parentId: "one" }],
-      contextEntries: [entry("one", "first turn"), entry("two", "second turn")],
     });
     const requests: OpenAICompactRequest[] = [];
     const outputs: Array<readonly OpenAICompactionJsonObject[]> = [];
@@ -504,8 +539,6 @@ describe("OpenAICompactionService", () => {
         tokensBefore: first?.tokensBefore ?? 0,
         details: first?.details,
       });
-      target.contextEntries.splice(0, 1);
-      target.contextEntries.push(entry("three", "third turn"));
       target.branch.push({ ...entry("three", "third turn"), parentId: "checkpoint-entry" });
 
       const second = yield* service.compact(compactEvent("kept-again"));

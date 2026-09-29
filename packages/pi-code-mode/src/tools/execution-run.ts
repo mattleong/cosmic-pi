@@ -1,4 +1,4 @@
-import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { captureBuiltinCompactPolicy, projectBuiltinCompactSummary } from "pi-code-previews";
@@ -61,7 +61,7 @@ export function runCodeModeExecution(
   params: { readonly code: string },
   signal: AbortSignal | undefined,
   onUpdate: Parameters<CodeModeToolExecute>[3],
-  ctx: ExtensionContext,
+  ctx: ExtensionToolContext,
 ) {
   const receipts = makeExecutionReceipts();
   let capture: ResultCapture = { status: "unavailable", reason: "runtime-unavailable" };

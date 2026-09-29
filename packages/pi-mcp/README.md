@@ -13,6 +13,8 @@ pnpm install
 pi install "$PWD/packages/pi-mcp"
 ```
 
+Disable Pi's built-in MCP extension in `pi config` under **Built-in extensions**, or add `"-builtin:mcp"` to the `extensions` array in `~/.pi/agent/settings.json`. Keep this package enabled; both implementations register `/mcp` and should not be loaded together.
+
 For a single session, use `pi -e ./packages/pi-mcp`. Disable or remove any other extension that registers `mcp` first; this package reports a foreign `mcp` registration and leaves it untouched. Pi/Jiti loads the shipped TypeScript source directly, with no build step. There is no importer for another MCP extension's configuration.
 
 ## Tool display

@@ -1,7 +1,7 @@
 import { calculateCost, getCurrentSystemPrompt, type Usage } from "@earendil-works/pi-ai";
 import type {
   CompactionResult,
-  ContextEvent,
+  ContextWithSystemEvent,
   ExtensionContext,
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -36,6 +36,7 @@ import { compactWithPi } from "../boundary/host-compaction.ts";
 import {
   hasExactPrefix,
   latestOwnedCompaction,
+  projectContextEntries,
   reconstructOpenAIContext,
   repairOpenAIContext,
   retryOmissions,
@@ -83,9 +84,9 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
                 restored,
                 contextEntries:
                   restored?.entries ??
-                  ctx.sessionManager
-                    .buildContextEntries()
-                    .filter((entry) => !omittedEntryIds.includes(entry.id)),
+                  projectContextEntries(branch).filter(
+                    (entry) => !omittedEntryIds.includes(entry.id),
+                  ),
                 systemPrompt: restored
                   ? getCurrentSystemPrompt(restored.messages)
                   : ctx.getSystemPrompt(),
@@ -189,7 +190,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           });
         });
         const filterContext = Effect.fn("OpenAICompaction.filterContext")(function* (
-          messages: ContextEvent["messages"],
+          messages: ContextWithSystemEvent["messages"],
         ) {
           const branch = yield* readBranch();
           const observed = yield* Ref.get(observedOmissions);

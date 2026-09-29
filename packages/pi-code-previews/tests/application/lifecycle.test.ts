@@ -313,6 +313,7 @@ function builtinToolInfo(name: string): ToolInfo {
     name,
     description: `${name} tool`,
     parameters: opaqueFixture({}),
+    exposure: "direct",
     sourceInfo: {
       path: "builtin",
       source: "builtin",

@@ -1,8 +1,9 @@
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import {
   buildContextEntries,
+  buildSessionProjection,
   sessionEntryToContextMessages,
-  type ContextEvent,
+  type ContextWithSystemEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
@@ -82,6 +83,23 @@ export function retryOmissions(
     .map((entry) => entry.id);
 }
 
+/** Materialize Pi's edited contributions without changing persisted entries or their IDs. */
+export function projectContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
+  return buildSessionProjection([...branch]).entries.flatMap(
+    ({ sourceEntry, messages }): SessionEntry[] => {
+      if (sourceEntry.type === "message")
+        return messages.map((message) => ({ ...sourceEntry, message }));
+      if (sourceEntry.type === "custom_message") {
+        const message = messages[0];
+        return message?.role === "custom" ? [{ ...sourceEntry, content: message.content }] : [];
+      }
+      // Retained older compactions are raw anchors, not additional summaries/snapshots.
+      if (sourceEntry.type === "compaction" && !messages.length) return [];
+      return [sourceEntry];
+    },
+  );
+}
+
 /** Restore conversation without replaying superseded system snapshots or ordinary summaries. */
 export function reconstructOpenAIContext(
   branch: readonly SessionEntry[],
@@ -108,14 +126,16 @@ export function reconstructOpenAIContext(
         }
       : entry,
   );
-  const visible = buildContextEntries(unwrapped);
+  const visible = projectContextEntries(unwrapped);
   const coveredIds = new Set(branch.slice(0, checkpointIndex + 1).map((entry) => entry.id));
   const omittedEntryIds = retryOmissions(branch, observedOmissions);
   const omitted = new Set(omittedEntryIds);
   const persistedOmissions = new Set(retryOmissions(branch));
-  const coverageChanged = omittedEntryIds.some(
-    (id) => coveredIds.has(id) && !persistedOmissions.has(id),
-  );
+  const coverageChanged =
+    omittedEntryIds.some((id) => coveredIds.has(id) && !persistedOmissions.has(id)) ||
+    branch
+      .slice(checkpointIndex + 1)
+      .some((entry) => entry.type === "context_edit" && coveredIds.has(entry.targetId));
   const conversation = visible.flatMap((entry): SessionEntry[] => {
     if (omitted.has(entry.id)) return [];
     if (!coveredIds.has(entry.id)) return [entry];
@@ -129,9 +149,7 @@ export function reconstructOpenAIContext(
   // Old v1 snapshots may already contain replayed obsolete snapshots, or be absent.
   // Fold the original prompt updates with Pi's public reducer instead of trusting them.
   const systemMessage = getCurrentSystemMessage(
-    buildContextEntries(unwrapped.slice(0, checkpointIndex + 1)).flatMap(
-      sessionEntryToContextMessages,
-    ),
+    buildSessionProjection(unwrapped.slice(0, checkpointIndex + 1)).messages,
   );
   const snapshot: SessionEntry[] = systemMessage
     ? [
@@ -151,25 +169,27 @@ export function reconstructOpenAIContext(
     coverageChanged,
     entries,
     coveredEntries: [...snapshot, ...conversation.filter((entry) => coveredIds.has(entry.id))],
-    nativeMessages: buildContextEntries([...branch]).flatMap(sessionEntryToContextMessages),
+    nativeMessages: buildSessionProjection([...branch]).messages,
     messages: entries.flatMap(sessionEntryToContextMessages),
   };
 }
 
 export function repairOpenAIContext(
   branch: readonly SessionEntry[],
-  messages: ContextEvent["messages"],
+  messages: ContextWithSystemEvent["messages"],
   observedOmissions: readonly string[] = [],
 ) {
-  const nativeEntries = buildContextEntries([...branch]);
-  const visibleIds = new Set(nativeEntries.map((entry) => entry.id));
+  const nativeEntries = buildSessionProjection([...branch]).entries;
+  const visibleIds = new Set(
+    nativeEntries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
+  );
   // A tree restore can legitimately put an old failed response back in native context.
   const omitted = new Set(
     retryOmissions(branch, observedOmissions).filter((id) => !visibleIds.has(id)),
   );
   let cursor = 0;
-  for (const entry of nativeEntries) {
-    for (const expected of sessionEntryToContextMessages(entry)) {
+  for (const { sourceEntry: entry, messages: projected } of nativeEntries) {
+    for (const expected of projected) {
       if (cursor < messages.length && hasExactPrefix([messages[cursor]], [expected])) cursor++;
       else if (isRetryOmittable(entry)) omitted.add(entry.id);
       else {

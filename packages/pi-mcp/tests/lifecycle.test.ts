@@ -78,6 +78,7 @@ const harness = (
             name: "mcp",
             description: tool.description,
             parameters: tool.parameters,
+            exposure: tool.exposure ?? "direct",
             sourceInfo: { path: source, source, scope: "user", origin: "top-level" },
           },
         ]

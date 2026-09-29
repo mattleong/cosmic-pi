@@ -1,6 +1,9 @@
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
   AgentToolResult,
   ExtensionAPI,
+  ExtensionContext,
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
 import { expect, it, layer } from "@effect/vitest";
@@ -31,6 +34,7 @@ import betterOpenAI, {
 import { registerOpenAIImage } from "../src/image/register.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
 import { waitUntil } from "./helpers.ts";
+import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
@@ -116,7 +120,11 @@ const harness = (
     });
     if (dependencies) betterOpenAIWithDependencies(pi, dependencies);
     else betterOpenAI(pi);
-    const emit = (name: string, event: any = {}, useCtx = ctx): Effect.Effect<void> =>
+    const emit = (
+      name: string,
+      event: any = {},
+      useCtx: ExtensionContext = ctx,
+    ): Effect.Effect<void> =>
       Effect.forEach(
         handlers.get(name) ?? [],
         (handler) => Effect.promise(() => Promise.resolve(handler(event, useCtx))),
@@ -218,6 +226,66 @@ it.effect("image command and tool results keep one base64 payload", () =>
 );
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
+  it.effect(
+    "repairs the full context hook with prompt and tools, and aborts a mismatched native prefix",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        const manager = SessionManager.inMemory(h.ctx.cwd);
+        manager.appendMessage({
+          role: "system",
+          content: "system authority",
+          toolsAdded: [{ name: "read", description: "read", parameters: { type: "object" } }],
+          timestamp: 0,
+        });
+        manager.appendMessage({ role: "user", content: "covered history", timestamp: 1 });
+        const retained = manager.appendMessage({ role: "user", content: "retained", timestamp: 2 });
+        manager.appendCompaction(
+          "owned",
+          retained,
+          100,
+          {
+            type: OPENAI_COMPACTION_DETAILS_TYPE,
+            checkpoint: {
+              version: 1,
+              provider: "openai",
+              api: "openai-responses",
+              model: "gpt-5.5",
+              output: [{ type: "compaction", encrypted_content: "encrypted" }],
+              rawInputCount: 1,
+              createdAt: 0,
+              tokensBefore: 100,
+            },
+          },
+          true,
+        );
+        const ctx = { ...h.ctx, sessionManager: manager, abort: vi.fn() };
+        yield* h.emit("session_start", {}, ctx);
+        const handler = h.handlers.get("context_with_system")![0]!;
+        const messages = manager.buildSessionContext().messages;
+        const repaired = yield* Effect.promise(() =>
+          Promise.resolve(handler({ type: "context_with_system", messages }, ctx)),
+        );
+        expect(repaired.messages[0]?.role).toBe("system");
+        expect(getCurrentSystemPrompt(repaired.messages)).toBe("system authority");
+        expect(getCurrentTools(repaired.messages).map((tool) => tool.name)).toEqual(["read"]);
+        expect(
+          repaired.messages.some(
+            (message: { content: unknown }) => message.content === "covered history",
+          ),
+        ).toBe(true);
+        expect(ctx.abort).not.toHaveBeenCalled();
+        const rejected = yield* Effect.promise(() =>
+          Promise.resolve(
+            handler({ type: "context_with_system", messages: messages.slice(1) }, ctx),
+          ),
+        );
+        expect(rejected).toBeUndefined();
+        expect(ctx.abort).toHaveBeenCalledOnce();
+        yield* h.emit("session_shutdown", {}, ctx);
+      }),
+  );
+
   it.effect("activates only the replacement after its preview loader wins", () =>
     Effect.gen(function* () {
       const loads = [deferredPromise(), deferredPromise()];

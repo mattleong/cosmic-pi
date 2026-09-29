@@ -2,7 +2,7 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -64,7 +64,7 @@ export type CodeModeToolExecute = (
   params: CodeModeInput,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<CodeModeToolDetails> | undefined,
-  ctx: ExtensionContext,
+  ctx: ExtensionToolContext,
 ) => Promise<AgentToolResult<CodeModeToolDetails>>;
 
 /** Admission gate: the current session slot and an available state, read in that order. */
