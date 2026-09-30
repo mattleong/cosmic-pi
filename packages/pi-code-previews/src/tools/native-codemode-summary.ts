@@ -36,6 +36,7 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
     ...target,
     label: sanitizeDiagnosticError(target.label ?? call.name, { maximumLength: 100 }),
     showTiming: true,
+    showShortTiming: true,
     subject: target.subject ? sanitizeDiagnosticError(target.subject, { maximumLength: 200 }) : "",
     // Native dispatch return remains semantically neutral, even with a completion checkmark.
     status:
@@ -111,7 +112,10 @@ export function nativeCodemodeHeader(
 export const nativeCodemodeSummary =
   (cwd: string): CompactSummaryProvider<{ code: string }, unknown, any> =>
   ({ phase, result, context }) => {
-    if (!result) return phase === "settled" ? undefined : { subject: "", showTiming: true };
+    if (!result)
+      return phase === "settled"
+        ? undefined
+        : { subject: "", showTiming: true, showShortTiming: true };
     const evidence = nativeCodemodeEvidence(result.details);
     const calls = evidence.kind === "available" ? evidence.calls : [];
     const complete = evidence.kind === "available" && evidence.complete;
@@ -139,7 +143,7 @@ export const nativeCodemodeSummary =
     if (evidence.fullOutputPath || truncatedEnvelope) {
       const truncated: CompactIssue = {
         code: "native-output-truncated",
-        severity: "warning",
+        severity: evidence.fullOutputPath ? "info" : "warning",
         message: "Script output is truncated",
       };
       issues.push(
@@ -162,6 +166,7 @@ export const nativeCodemodeSummary =
     const summary = {
       subject: "",
       showTiming: true as const,
+      showShortTiming: true as const,
       counters:
         evidence.kind === "unavailable"
           ? []

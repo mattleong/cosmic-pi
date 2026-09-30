@@ -75,7 +75,6 @@ export function renderCompactChildren(
         summary: {
           ...entry,
           subject: entry.subject ?? "",
-          metadata: entry.metadata ?? (entry.status === "returned" ? ["returned"] : []),
         },
         issueLabel: issueLabel || undefined,
         duration,

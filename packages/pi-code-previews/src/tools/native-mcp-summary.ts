@@ -37,6 +37,7 @@ export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence 
       if (!("value" in descriptor)) return undefined;
       if (descriptor.value === undefined) continue;
       if (!Predicate.isString(descriptor.value)) return undefined;
+      if (key === "fullOutputPath" && !descriptor.value.trim()) continue;
       input[key] = descriptor.value;
     }
     return decodeUnknownOrUndefined(Evidence, input);
@@ -152,6 +153,7 @@ function outputIssues(
     return [
       {
         ...truncated,
+        severity: "info",
         detail: `Full output saved to ${sanitizeDiagnosticContent(evidence.fullOutputPath)}`,
       },
     ];
@@ -212,8 +214,8 @@ export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined):
 
 /**
  * Native MCP results report delivery, not domain success: a settled call that Pi does not flag
- * as an error is `returned`. Truncation and aggregate listing failures raise warnings; results
- * whose details are missing, malformed, or foreign decline to the generic row.
+ * as an error is `returned`. Recoverable clipping is informational; unsaved output and aggregate
+ * listing failures raise warnings. Missing, malformed, or foreign details decline to the generic row.
  */
 export const nativeMcpSummary =
   (identity: NativeMcpIdentity): CompactSummaryProvider<any, any, any> =>

@@ -23,6 +23,7 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { styleNativeCodemode } from "../../src/tools/native-codemode-render";
 import { nativeCodemodeRegistration } from "../../src/tools/native-codemode-registration";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
+import { compactStatus } from "../../src/tools/compact-summary";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { stripAnsi } from "../support/render";
 
@@ -380,6 +381,75 @@ test("native outcomes require known native evidence, and child delivery is neutr
   ])
     assert.equal(projection({ ...output(), content: [{ type: "text", text }] }), undefined);
 });
+
+const truncatedOutput =
+  "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n" +
+  "TRUNCATED_HEAD\nTRUNCATED_TAIL\n\n" +
+  "[Full output: /tmp/RECOVERABLE_OUTPUT (read with offset/limit)]";
+
+test("recoverable native output does not raise attention; missing recovery remains a warning", () => {
+  for (const path of ["/tmp/RECOVERABLE_OUTPUT", undefined, "", " \n\t ", 3, "x".repeat(4097)]) {
+    const value = output("completed", [call()]);
+    value.content[1] = { type: "text", text: truncatedOutput };
+    value.details = { calls: [call()], fullOutputPath: path };
+    const before = structuredClone(value);
+    const summary = projection(value)!;
+    const saved = path === "/tmp/RECOVERABLE_OUTPUT";
+    const clipping = summary.issues?.find((entry) => entry.code === "native-output-truncated");
+    assert.equal(clipping?.severity, saved ? "info" : "warning");
+    assert.equal(compactStatus("settled", summary), saved ? "success" : "warning");
+    assert.equal(clipping?.detail, saved ? path : undefined);
+    assert.deepEqual(value, before);
+  }
+});
+
+test("saved output cannot hide script failures, child failures, or incomplete call evidence", () => {
+  const recovery = { fullOutputPath: "/tmp/RECOVERABLE_OUTPUT" };
+  assert.equal(projection(output("failed", [], recovery), true)?.outcome, "error");
+  assert.equal(projection(output("completed", [call("error")], recovery))?.outcome, "warning");
+  assert.equal(
+    projection({ ...output("completed", [], recovery), details: { ...recovery, calls: [null] } })
+      ?.outcome,
+    "uncertain",
+  );
+  const unsaved = output();
+  unsaved.content[1] = {
+    type: "text",
+    text: truncatedOutput + "\n\n[Could not save the full output: ENOSPC: disk full]",
+  };
+  const summary = projection(unsaved)!;
+  assert.equal(compactStatus("settled", summary), "warning");
+  assert.equal(
+    summary.issues?.find((entry) => entry.code === "native-output-save-failed")?.severity,
+    "warning",
+  );
+});
+
+for (const style of ["compact", "preview"] as const)
+  test(`native ${style} keeps recoverable clipping expanded-only without changing output`, () => {
+    settings(style);
+    const tool = styleNativeCodemode(nativeApi().fresh, noSchedule, "/project");
+    const value = output("completed", [call()], { fullOutputPath: "/tmp/RECOVERABLE_OUTPUT" });
+    value.content[1] = { type: "text", text: truncatedOutput };
+    const before = structuredClone(value);
+    const clipping = projection(value)!.issues!.find(
+      (entry) => entry.code === "native-output-truncated",
+    )!;
+    const harness = createToolPresentationHarness(tool);
+    for (const frame of harness.cycle({ code: "return 'SOURCE_MARKER';" }, value)) {
+      const text = stripAnsi(frame.text);
+      assert.equal(text.includes(clipping.message), frame.expanded);
+      if (frame.expanded)
+        for (const marker of [
+          "SOURCE_MARKER",
+          "TRUNCATED_HEAD",
+          "TRUNCATED_TAIL",
+          clipping.detail!,
+        ])
+          assert.ok(text.includes(marker), marker);
+    }
+    assert.deepEqual(value, before);
+  });
 
 test("projection sanitizes bounded attention/targets without changing raw native details", () => {
   const secret = "sk-verysecretvalue123456";

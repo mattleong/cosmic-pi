@@ -44,6 +44,9 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
     ) => Component;
   };
 
+  /** Display measured subsecond durations; the global timing setting still applies. */
+  showShortTiming?: boolean;
+
   /** Keep visible progress animated in preview/expanded views even when timing is disabled. */
   animateProgress?: boolean;
 
@@ -93,6 +96,7 @@ export function withCodePreviewShell<
     compactSummary: options.compactSummary,
     scheduleAnimation: options.scheduleAnimation,
     animateProgress: options.animateProgress,
+    showShortTiming: options.showShortTiming,
     displayName: options.displayName,
     // SAFETY: Both callback sets derive their args/details/state from this same tool definition.
     expandedContent: options.expandedContent as CodePreviewToolRenderers<TTool>["expandedContent"],

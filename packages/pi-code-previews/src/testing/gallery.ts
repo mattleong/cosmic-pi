@@ -23,6 +23,8 @@ export interface GalleryScenario {
   readonly result?: AgentToolResult<unknown> | undefined;
   readonly isError?: boolean;
   readonly phase?: GalleryPhase;
+  /** Replay a measured duration in the presentation fixture, without starting a real clock. */
+  readonly durationMs?: number;
 }
 
 export interface GalleryView {
@@ -47,7 +49,15 @@ export function galleryFrames(
   const phase = scenario.phase ?? "settled";
   const live = { isPartial: phase !== "settled", executionStarted: phase !== "pending" };
   return views.flatMap(({ expanded, width }) => {
-    const harness = createToolPresentationHarness(tool, { width });
+    const harness = createToolPresentationHarness(tool, {
+      width,
+      ...(scenario.durationMs !== undefined && {
+        state: {
+          codePreviewTimingStartedAt: 1000,
+          codePreviewTimingEndedAt: 1000 + scenario.durationMs,
+        },
+      }),
+    });
     harness.call(scenario.args, { expanded, isError, ...live });
     if (scenario.result) harness.result(scenario.result, { expanded, isError, ...live });
     return frame(`${scenario.title}${phase === "settled" ? "" : ` · ${phase}`}`, expanded, width, [

@@ -37,6 +37,7 @@ export interface CodePreviewToolRenderers<TTool extends AdaptableToolDefinition>
   readonly mode?: ToolCallBackgroundMode;
   readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   readonly animateProgress?: boolean | undefined;
+  readonly showShortTiming?: boolean | undefined;
   /** Heading name only; the definition's registered `name` is never changed. */
   readonly displayName?: string | undefined;
   readonly compactSummary?:
@@ -76,6 +77,7 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
     {
       name: renderers.displayName || tool.name,
       animateProgress: renderers.animateProgress,
+      showShortTiming: renderers.showShortTiming,
       compactSummary: renderers.compactSummary ?? (() => undefined),
     },
     renderers.scheduleAnimation,

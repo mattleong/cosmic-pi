@@ -55,6 +55,7 @@ afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 test("native MCP registered aliases provide targets without recovering remote identifiers", () => {
   for (const name of [
     "mcp__docs__lookup",
+    "mcp__atlassian__tool_call",
     "mcp__team-docs__find_page",
     "mcp__docs__lookup_1234abcd",
   ]) {

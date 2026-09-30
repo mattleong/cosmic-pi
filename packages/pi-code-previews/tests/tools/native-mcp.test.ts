@@ -182,8 +182,12 @@ test("settled native dispatch is neutral; only native evidence raises warnings",
     }),
     {},
   );
-  assert.equal(status(saved), "warning");
-  assert.ok(saved?.issues?.some((issue) => issue.detail?.includes("/tmp/pi-mcp-1.txt")));
+  assert.equal(status(saved), "returned");
+  assert.ok(
+    saved?.issues?.some(
+      (issue) => issue.severity === "info" && issue.detail?.includes("/tmp/pi-mcp-1.txt"),
+    ),
+  );
   const unsaved = summarize(
     tool,
     result(`${envelope}head…tail\n\n[Could not save the full output: ENOSPC: disk full]`, docs),
@@ -195,6 +199,44 @@ test("settled native dispatch is neutral; only native evidence raises warnings",
   for (const issue of [...(saved?.issues ?? []), ...warnings])
     assert.deepEqual(issueMessageStyleProblems(issue.message), []);
 });
+
+for (const style of ["compact", "preview"] as const)
+  test(`native MCP ${style} keeps saved clipping quiet but preserves loss and error attention`, () => {
+    settings(style);
+    const definition = dynamicTool();
+    const tool = styleNativeMcp(definition);
+    for (const path of ["/tmp/RECOVERABLE_OUTPUT", undefined, "", " \n\t "]) {
+      const value = result(
+        "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n" +
+          "TRUNCATED_HEAD\nTRUNCATED_TAIL\n\n" +
+          "[Full output: /tmp/RECOVERABLE_OUTPUT (read with offset/limit)]",
+        { ...docs, fullOutputPath: path },
+      );
+      const before = structuredClone(value);
+      const saved = path === "/tmp/RECOVERABLE_OUTPUT";
+      const summary = summarize(definition, value, {})!;
+      const clipping = summary.issues!.find((entry) => entry.code === "mcp-output-truncated")!;
+      assert.equal(clipping.severity, saved ? "info" : "warning");
+      assert.equal(status(summary), saved ? "returned" : "warning");
+      const failed = summarize(definition, value, {}, true)!;
+      assert.equal(status(failed), "error");
+      assert.ok(failed.issues?.some((entry) => entry.code === "mcp-error"));
+      const harness = createToolPresentationHarness(tool);
+      for (const frame of harness.cycle({ query: "QUERY_MARKER" }, value)) {
+        const text = stripAnsi(frame.text);
+        assert.equal(text.includes(clipping.message), frame.expanded || !saved);
+        if (frame.expanded)
+          for (const marker of [
+            "QUERY_MARKER",
+            "TRUNCATED_HEAD",
+            "TRUNCATED_TAIL",
+            "/tmp/RECOVERABLE_OUTPUT",
+          ])
+            assert.ok(text.includes(marker), marker);
+      }
+      assert.deepEqual(value, before);
+    }
+  });
 
 test("malformed, foreign, or accessor details decline without invoking getters", () => {
   let touched = false;
@@ -462,8 +504,8 @@ test("aggregate listings report bounded server failures, pagination, and unreada
     );
   const unreadable = (server: string) =>
     truncated(server)?.issues?.filter((issue) => issue.severity === "warning").length;
-  assert.equal(unreadable(""), 2, "an unreadable aggregate cannot hide failed servers");
-  assert.equal(unreadable("docs"), 1, "one server's listing fails as a whole");
+  assert.equal(unreadable(""), 1, "an unreadable aggregate cannot hide failed servers");
+  assert.equal(unreadable("docs"), 0, "one server's saved listing remains recoverable");
 });
 
 for (const style of ["compact", "preview"] as const)

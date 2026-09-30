@@ -27,7 +27,7 @@ export type TimingState = RendererState & {
   codePreviewTimingResultComponent?: Component;
 };
 
-/** Every tool shows its duration only from this long; quicker calls say nothing about time. */
+/** Default timing threshold; native Code Mode explicitly opts into shorter measured durations. */
 export const TIMING_VISIBLE_MS = 1_000;
 
 type ToolCallTiming = {
@@ -59,6 +59,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   options: {
     animate?: boolean;
     formatLabel?: boolean;
+    showShortTiming?: boolean | undefined;
     animateWithoutTiming?: boolean;
     scheduleAnimation?: CompactAnimationScheduler | undefined;
   } = {},
@@ -96,7 +97,8 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   const endTime = running ? synchronousNow() : (state.codePreviewTimingEndedAt ?? synchronousNow());
   const label = running ? "Elapsed" : "Took";
   const elapsedMs = Math.max(0, endTime - startedAt);
-  if (elapsedMs < TIMING_VISIBLE_MS) return undefined;
+  if (!Number.isFinite(elapsedMs)) return undefined;
+  if (!options.showShortTiming && elapsedMs < TIMING_VISIBLE_MS) return undefined;
   const duration = formatDuration(elapsedMs);
   return { label: `${label} ${duration}`, duration, elapsedMs };
 }

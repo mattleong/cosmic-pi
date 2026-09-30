@@ -18,6 +18,7 @@ const Fields = {
   counters: Schema.optionalKey(Labels),
   metadata: Schema.optionalKey(Labels),
   showTiming: Schema.optionalKey(Schema.Literal(true)),
+  showShortTiming: Schema.optionalKey(Schema.Literal(true)),
   issues: Schema.optionalKey(Issues),
 };
 const Summary = Schema.Struct({

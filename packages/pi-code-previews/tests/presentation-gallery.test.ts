@@ -188,6 +188,7 @@ const scenarios: ReadonlyArray<
   {
     tool: "codemode",
     title: "native measured timing and cost",
+    durationMs: 3400,
     args: { code: "await runChecks();" },
     timing: true,
     result: nativeResult("completed", [
@@ -199,6 +200,18 @@ const scenarios: ReadonlyArray<
         durationMs: 2600,
         cost: 0.03,
       },
+    ]),
+  },
+  {
+    tool: "codemode",
+    title: "native short program and MCP child timing",
+    args: { code: "await Promise.allSettled(checks);" },
+    timing: true,
+    durationMs: 379,
+    result: nativeResult("completed", [
+      { ...nativeCall("ok"), durationMs: 137 },
+      { ...nativeArgumentCall("mcp__atlassian__tool_call", {}), durationMs: 253 },
+      { ...nativeArgumentCall("mcp__docs__lookup", {}), durationMs: 0 },
     ]),
   },
   {
@@ -377,12 +390,25 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
-    title: "native truncated output retains recovery",
+    title: "native recoverable output stays quiet",
     args: { code: "text('large output');" },
     result: nativeResult(
       "completed",
       [],
       "Warning: truncated output\nhead…tail\n[Full output: /tmp/native-output.txt (read with offset/limit)]",
+      "/tmp/native-output.txt",
+    ),
+  },
+  {
+    tool: "codemode",
+    title: "native recoverable output preserves child failures",
+    args: {
+      code: "try { await tools.read({path: 'missing.ts'}); } catch { text('large output'); }",
+    },
+    result: nativeResult(
+      "completed",
+      [nativeCall("error", "File not found")],
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nhead…tail\n\n[Full output: /tmp/native-output.txt (read with offset/limit)]",
       "/tmp/native-output.txt",
     ),
   },

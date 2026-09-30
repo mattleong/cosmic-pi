@@ -49,7 +49,10 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
   const duration =
     input.timingEnabled !== false &&
     phase !== "pending" &&
-    (input.elapsedMs ?? 0) >= TIMING_VISIBLE_MS
+    input.elapsedMs !== undefined &&
+    Number.isFinite(input.elapsedMs) &&
+    input.elapsedMs >= 0 &&
+    (summary.showShortTiming || input.elapsedMs >= TIMING_VISIBLE_MS)
       ? compactSingleLine(input.duration ?? "")
       : undefined;
   const metadata =

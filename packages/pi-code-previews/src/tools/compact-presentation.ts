@@ -14,7 +14,10 @@ export function planCompactPresentation(input: {
   /** Expanded views already show the details, so they get no "details on expand" hint. */
   expanded?: boolean;
   heading?:
-    | Pick<CompactSummary, "subject" | "compactSubject" | "action" | "showTiming">
+    | Pick<
+        CompactSummary,
+        "subject" | "compactSubject" | "action" | "showTiming" | "showShortTiming"
+      >
     | undefined;
 }) {
   const summary = resolveCompactSummary(input.summary, input.phase, input.isError, input.errorText);
@@ -42,12 +45,18 @@ export function planCompactPresentation(input: {
 }
 
 function fallbackHeading(
-  heading: Pick<CompactSummary, "subject" | "compactSubject" | "action" | "showTiming"> | undefined,
+  heading:
+    | Pick<
+        CompactSummary,
+        "subject" | "compactSubject" | "action" | "showTiming" | "showShortTiming"
+      >
+    | undefined,
 ): CompactSummary {
   return {
     subject: heading?.subject ?? "",
     ...(heading?.compactSubject !== undefined && { compactSubject: heading.compactSubject }),
     ...(heading?.action !== undefined && { action: heading.action }),
     ...(heading?.showTiming && { showTiming: true }),
+    ...(heading?.showShortTiming && { showShortTiming: true }),
   };
 }

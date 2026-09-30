@@ -239,6 +239,7 @@ export function styleNativeCodemode(
       preserveSelfShell: false,
       compactSummary: summary,
       animateProgress: true,
+      showShortTiming: true,
       scheduleAnimation,
       expandedContent: { renderCall: renderSource, renderResult: renderOutput },
     },

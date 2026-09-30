@@ -48,6 +48,7 @@ export function createCodePreviewToolShell(
     return createCompactToolShell(mode, { ...compact, scheduleAnimation });
   const summary = compact?.compactSummary;
   const animateProgress = compact?.animateProgress ?? false;
+  const showShortTiming = compact?.showShortTiming ?? false;
   return {
     renderShell: mode === "on" ? "default" : "self",
     renderCall: (context, theme, render) =>
@@ -58,6 +59,7 @@ export function createCodePreviewToolShell(
         summary ? (current) => renderWithPreviewIssues(render, summary, current, theme) : render,
         scheduleAnimation,
         animateProgress,
+        showShortTiming,
       ),
     renderResult: (context, theme, render, result) => {
       recordPreviewResult(context, result);
@@ -68,6 +70,7 @@ export function createCodePreviewToolShell(
         render,
         scheduleAnimation,
         animateProgress,
+        showShortTiming,
       );
     },
   };
@@ -80,6 +83,7 @@ function renderCodePreviewCall<TState, TArgs>(
   render: (context: ToolRenderContext<TState, TArgs>) => Component,
   scheduleAnimation: CompactAnimationScheduler | undefined,
   animateProgress: boolean,
+  showShortTiming: boolean,
 ): Component {
   if (mode !== "border") {
     const state = timingState(context);
@@ -110,6 +114,7 @@ function renderCodePreviewCall<TState, TArgs>(
   const timing = updateToolCallTiming(context, {
     scheduleAnimation,
     animateWithoutTiming: animateProgress,
+    showShortTiming,
   });
   state.codePreviewBorderCallComponent = callComponent;
   state.codePreviewBorderLastCallExecutionStarted = context.executionStarted;
@@ -130,10 +135,12 @@ function renderCodePreviewResult<TState, TArgs>(
   render: (context: ToolRenderContext<TState, TArgs>) => Component,
   scheduleAnimation: CompactAnimationScheduler | undefined,
   animateProgress: boolean,
+  showShortTiming: boolean,
 ): Component {
   const timing = updateToolCallTiming(context, {
     scheduleAnimation,
     animateWithoutTiming: animateProgress,
+    showShortTiming,
   });
   if (mode !== "border") {
     return renderTimedResultFooter(context, theme, render, timing?.label);

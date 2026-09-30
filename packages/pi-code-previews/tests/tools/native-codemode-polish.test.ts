@@ -113,25 +113,99 @@ for (const style of ["compact", "preview"] as const)
             assert.ok(final.includes("OUTPUT_RETAINED"));
           });
 
-for (const enabled of [false, true])
-  test(`native measured parent/child timing respects the setting, enabled=${enabled}`, () => {
-    settings("compact", enabled);
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createToolPresentationHarness(
-      styleNativeCodemode(fresh(), () => undefined, "/project"),
-    );
-    h.call({ code: "return 1" }, { executionStarted: true, isPartial: true });
-    h.result(running, { isPartial: true });
-    now += 3200;
-    h.result({
-      ...completed,
-      details: { calls: [{ ...running.details.calls[0], status: "ok", durationMs: 2500 }] },
+for (const style of ["compact", "preview"] as const)
+  for (const expanded of [false, true])
+    for (const enabled of [false, true])
+      for (const background of ["off", "on", "border"] as const)
+        for (const parentMs of [0, 379, 3200])
+          test(`native independent measured timing in ${style}/${background}, expanded=${expanded}, timing=${enabled}, parent=${parentMs}ms`, () => {
+            settings(style, enabled, background);
+            let now = 1000;
+            vi.spyOn(Date, "now").mockImplementation(() => now);
+            const h = createToolPresentationHarness(
+              styleNativeCodemode(fresh(), () => undefined, "/project"),
+            );
+            const args = { code: "await Promise.allSettled(checks);" };
+            h.call(args, { executionStarted: true, isPartial: true, expanded });
+            h.result(running, { isPartial: true, expanded });
+            now += parentMs;
+            const final = {
+              ...completed,
+              details: {
+                calls: [
+                  { ...running.details.calls[0], status: "ok", durationMs: 137 },
+                  {
+                    id: "private/2",
+                    name: "mcp__atlassian__tool_call",
+                    args: "{}",
+                    status: "ok",
+                    durationMs: 253,
+                  },
+                  {
+                    id: "private/3",
+                    name: "bash",
+                    args: '{"command":"run-check"}',
+                    status: "error",
+                    error: "CHECK_FAILURE_RETAINED",
+                    durationMs: 211,
+                  },
+                ],
+              },
+            };
+            h.result(final, { expanded });
+            // Pi rebuilds both slots at settlement, including a previously partial border call.
+            h.invalidate();
+            const assertMeasurements = () => {
+              const rows = stripAnsi(h.render(160).join("\n"));
+              for (const duration of [parentMs, 137, 253, 211])
+                assert.equal(rows.split(formatDuration(duration)).length - 1, enabled ? 1 : 0);
+              // Concurrent children are not summed into the parent or each other.
+              assert.equal(rows.includes(formatDuration(390)), false);
+              assert.ok(rows.includes("atlassian / tool_call"));
+              assert.ok(rows.includes("CHECK_FAILURE_RETAINED"));
+            };
+            assertMeasurements();
+            assert.equal(h.context.state.codePreviewTimingStartedAt, enabled ? 1000 : undefined);
+            assert.equal(
+              h.context.state.codePreviewTimingEndedAt,
+              enabled ? 1000 + parentMs : undefined,
+            );
+            now += 5000;
+            h.call(args, { expanded: !expanded, isPartial: false });
+            h.result(final, { expanded: !expanded });
+            assertMeasurements();
+          });
+
+for (const style of ["compact", "preview"] as const)
+  for (const background of ["off", "on", "border"] as const)
+    test(`native ${style}/${background} pending and replayed calls never acquire synthetic timing`, () => {
+      settings(style, true, background);
+      for (const durationMs of [undefined, -1, NaN, Infinity, "250", 0]) {
+        const h = createToolPresentationHarness(
+          styleNativeCodemode(fresh(), () => undefined, "/project"),
+        );
+        const args = { code: "// SOURCE_RETAINED" };
+        h.call(args, { executionStarted: false, isPartial: true });
+        assert.equal(h.render(160).join("\n").includes(formatDuration(0)), false);
+        assert.equal(h.context.state.codePreviewTimingStartedAt, undefined);
+        const final = {
+          ...completed,
+          details: {
+            calls: [{ ...running.details.calls[0], status: "ok", durationMs }],
+          },
+        };
+        for (const expanded of [false, true]) {
+          h.call(args, { expanded, executionStarted: true, isPartial: false });
+          h.result(final, { expanded });
+          const rows = stripAnsi(h.render(160).join("\n"));
+          // Only the child's actual recorded zero is eligible; the header is not a new clock.
+          assert.equal(rows.split(formatDuration(0)).length - 1, durationMs === 0 ? 1 : 0);
+          assert.equal(rows.includes(formatDuration(250)), false);
+          assert.equal(h.context.state.codePreviewTimingStartedAt, undefined);
+          assert.equal(h.context.state.codePreviewTimingEndedAt, undefined);
+        }
+      }
     });
-    const rows = h.render(120).join("\n");
-    assert.equal(rows.includes(formatDuration(3200)), enabled);
-    assert.equal(rows.includes(formatDuration(2500)), enabled);
-  });
 
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} expansion preserves bounded calls with oversized or unknown history`, () => {

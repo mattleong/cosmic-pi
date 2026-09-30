@@ -223,7 +223,7 @@ test.each(modes)("parent timing has one owner across expansion and fallback in %
   }
 });
 
-test("quick calls show no duration in any style or frame, bash included", () => {
+test("quick non-native calls keep the default threshold even when timing placement is requested", () => {
   for (const style of ["compact", "preview"] as const)
     for (const mode of ["off", "on", "border"] as const)
       withPresentationSettings({ toolCallTiming: true, toolCallCollapsedStyle: style }, () => {
@@ -234,7 +234,10 @@ test("quick calls show no duration in any style or frame, bash included", () => 
             renderCall: () => new Text("arguments", 0, 0),
             renderResult: () => new Text("output", 0, 0),
           },
-          { mode, compactSummary: () => ({ subject: "file", outcome: "success" }) },
+          {
+            mode,
+            compactSummary: () => ({ subject: "file", outcome: "success", showTiming: true }),
+          },
         );
         const h = createToolPresentationHarness(tool, {
           state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },

@@ -32,6 +32,7 @@ export interface CompactShellOptions {
   compactSummary: CompactSummaryProvider<any, any, any>;
   scheduleAnimation?: CompactAnimationScheduler | undefined;
   animateProgress?: boolean | undefined;
+  showShortTiming?: boolean | undefined;
 }
 
 type ToolRenderContext = HostToolRenderContext<any, any>;
@@ -113,6 +114,7 @@ class CompactShell implements Component {
       animateWithoutTiming:
         (!context.expanded || this.options.animateProgress === true) && !context.isError,
       scheduleAnimation: this.options.scheduleAnimation,
+      showShortTiming: this.options.showShortTiming,
     });
     this.duration = timing?.duration;
     this.elapsedMs = timing?.elapsedMs;

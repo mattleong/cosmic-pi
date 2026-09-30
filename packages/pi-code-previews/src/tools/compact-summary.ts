@@ -43,6 +43,8 @@ export interface CompactChild {
   returnedCheckmark?: true;
   /** Keep measured duration beside this call’s routine detail, subject to timing policy. */
   showTiming?: true;
+  /** Also display measured subsecond durations when global timing is enabled. */
+  showShortTiming?: true;
 }
 
 /** Semantic display data, never inferred from a rendered component or Pi's success flag. */
@@ -60,6 +62,8 @@ export interface CompactSummary {
   metadata?: readonly string[];
   /** Keep measured timing beside the routine detail instead of only when there is none. */
   showTiming?: true;
+  /** Also display measured subsecond durations when global timing is enabled. */
+  showShortTiming?: true;
   /** Required once settled. Children never change their parent's outcome. */
   outcome?: CompactOutcome;
   /** This operation's own issues in display order. Children carry theirs. */

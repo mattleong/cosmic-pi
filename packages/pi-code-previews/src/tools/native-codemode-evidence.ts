@@ -66,7 +66,7 @@ export function nativeCodemodeEvidence<Value>(value: Value): NativeCallEvidence 
       ownDescriptor(value, "fullOutputPath")?.value,
     );
     const recovery: NativeRecovery = {};
-    if (fullOutputPath !== undefined) recovery.fullOutputPath = fullOutputPath;
+    if (fullOutputPath?.trim()) recovery.fullOutputPath = fullOutputPath;
     const records = ownDescriptor(value, "calls")?.value;
     if (!invokeHostCallback(() => Array.isArray(records), false))
       return { ...unavailable, ...recovery };
