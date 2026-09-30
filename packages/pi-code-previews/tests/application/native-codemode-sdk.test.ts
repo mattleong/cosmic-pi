@@ -124,6 +124,7 @@ for (const earlierBuiltin of [false, true])
                     initializeSyntax: () => Effect.void,
                     registerRenderers: (api, cwd, options) =>
                       registerToolRenderers(api, cwd, { ...options, toolOptions: {} }),
+                    loadStartupSettings: () => Promise.resolve({ nativeMcpPreviews: false }),
                   },
                 );
               },

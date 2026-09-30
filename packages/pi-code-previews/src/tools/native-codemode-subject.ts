@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 import type { CompactChild } from "./compact-summary";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
 import type { NativeArgumentPreview } from "./native-codemode-args";
+import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-subject";
 import { formatDisplayPath } from "pi-cosmic-core";
 
 const builtinNames: ReadonlySet<string> = new Set([
@@ -36,12 +37,6 @@ const mcpActions = new Map([
   ["resources.subscriptions", "subscriptions"],
 ]);
 
-const nativeResourceActions = new Map([
-  ["read_mcp_resource", "read resource"],
-  ["list_mcp_resources", "list resources"],
-  ["list_mcp_resource_templates", "list templates"],
-]);
-
 /** Argument/name-only targets; never inspect results, foreign definitions, or provider state. */
 export function nativeCodemodeCallSubject(
   name: string,
@@ -57,7 +52,7 @@ export function nativeCodemodeCallSubject(
       : null;
   if (nativeName)
     return { label: "mcp", action: "call", subject: `${nativeName[1]} / ${nativeName[2]}` };
-  const resourceAction = nativeResourceActions.get(name);
+  const resourceAction = nativeMcpResourceAction(name);
   if (!preview)
     return resourceAction ? { label: "mcp", action: resourceAction, subject: "" } : { subject: "" };
   const text = (key: string): string => {
@@ -70,9 +65,7 @@ export function nativeCodemodeCallSubject(
     return {
       label: "mcp",
       action: resourceAction,
-      subject: [text("server"), name === "read_mcp_resource" ? text("uri") : ""]
-        .filter(Boolean)
-        .join(" / "),
+      subject: nativeMcpResourceSubject(name, text("server"), text("uri")),
     };
   const action = preview.partialFields.has("action") ? "" : text("action");
   if (builtinNames.has(name)) {

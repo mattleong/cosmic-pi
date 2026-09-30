@@ -2,7 +2,14 @@ import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { CompactIssueSchema } from "./compact-issues";
 
-const Outcome = Schema.Literals(["success", "warning", "error", "cancelled", "uncertain"]);
+const Outcome = Schema.Literals([
+  "success",
+  "returned",
+  "warning",
+  "error",
+  "cancelled",
+  "uncertain",
+]);
 const Labels = Schema.Array(Schema.String);
 const Issues = Schema.Array(CompactIssueSchema);
 const Fields = {

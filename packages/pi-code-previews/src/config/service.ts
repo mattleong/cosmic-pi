@@ -12,18 +12,21 @@ import {
 } from "pi-cosmic-core";
 import {
   flushSettingsCoordinator,
+  makeSettingsAdmission,
   type SettingsAdmission,
   withSettingsCoordinator,
 } from "./coordinator";
 import {
   loadSettingsSaveContextEffect,
+  loadStartupSettingsEffect,
   saveSettingsStateEffect,
+  saveStartupSettingsEffect,
   type LoadSettingsOptions,
   type SettingsDocumentDependencies,
   type SettingsSaveContext,
 } from "./document-store";
 import { CodePreviewEnvironmentService } from "./env";
-import type { CodePreviewSettings } from "./schema";
+import type { CodePreviewSettings, CodePreviewStartupSettings } from "./schema";
 import { cloneCodePreviewSettings, setCodePreviewSettings } from "./state";
 
 export interface SaveSettingsOptions {
@@ -41,6 +44,13 @@ export interface CodePreviewSettingsServiceContract {
     options?: SaveSettingsOptions,
   ) => Effect.Effect<void, JsonDocumentError>;
   readonly flush: Effect.Effect<void>;
+  /** Global startup opt-ins; serialized with settings work but never published. */
+  readonly loadStartup: Effect.Effect<CodePreviewStartupSettings>;
+  /** Global-only startup edits, with currency independent of ordinary preview edits. */
+  readonly saveStartup: (
+    settings: CodePreviewStartupSettings,
+    admission: SettingsAdmission,
+  ) => Effect.Effect<CodePreviewStartupSettings, JsonDocumentError>;
 }
 
 export class CodePreviewSettingsService extends Context.Service<
@@ -108,10 +118,32 @@ export class CodePreviewSettingsService extends Context.Service<
           }),
         );
 
+      const loadStartup = Effect.suspend(() =>
+        withSettingsCoordinator(makeSettingsAdmission(), () => loadStartupSettingsEffect(deps)),
+      );
+
+      const saveStartup = (settings: CodePreviewStartupSettings, admission: SettingsAdmission) =>
+        withSettingsCoordinator(
+          admission,
+          (coordinator) =>
+            coordinator.isCurrent()
+              ? saveStartupSettingsEffect(
+                  deps,
+                  settings,
+                  Effect.sync(() => {
+                    coordinator.publishIfCurrent(() => undefined);
+                  }),
+                )
+              : loadStartupSettingsEffect(deps),
+          "startup",
+        );
+
       return CodePreviewSettingsService.of({
         load,
         save,
         flush: flushSettingsCoordinator,
+        loadStartup,
+        saveStartup,
       });
     }),
   );

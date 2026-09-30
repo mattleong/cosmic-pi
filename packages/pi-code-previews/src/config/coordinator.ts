@@ -16,6 +16,7 @@ export interface SettingsCoordinator {
 const settingsPermit = Semaphore.makeUnsafe(1);
 let nextAdmission = 0;
 let latestSuccessfulPublication = 0;
+let latestSuccessfulStartupPublication = 0;
 
 export function makeSettingsAdmission(): SettingsAdmission {
   return { sequence: ++nextAdmission };
@@ -25,16 +26,20 @@ export function makeSettingsAdmission(): SettingsAdmission {
 export function withSettingsCoordinator<A, E, R>(
   admission: SettingsAdmission,
   use: (coordinator: SettingsCoordinator) => Effect.Effect<A, E, R>,
+  currency: "preview" | "startup" = "preview",
 ): Effect.Effect<A, E, R> {
   return settingsPermit.withPermit(
     Effect.suspend(() => {
-      const isCurrent = () => admission.sequence > latestSuccessfulPublication;
+      const isCurrent = () =>
+        admission.sequence >
+        (currency === "startup" ? latestSuccessfulStartupPublication : latestSuccessfulPublication);
       return use({
         isCurrent,
         publishIfCurrent: (publish) => {
           if (!isCurrent()) return false;
           publish();
-          latestSuccessfulPublication = admission.sequence;
+          if (currency === "startup") latestSuccessfulStartupPublication = admission.sequence;
+          else latestSuccessfulPublication = admission.sequence;
           return true;
         },
       });

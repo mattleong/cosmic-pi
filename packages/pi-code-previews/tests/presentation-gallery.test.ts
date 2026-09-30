@@ -1,7 +1,10 @@
 import type * as Schema from "effect/Schema";
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
+import { SettingsList } from "@earendil-works/pi-tui";
+import { stripTerminalControls } from "pi-cosmic-core";
+import { createSettingsCategoryItems } from "../src/settings/ui";
 import * as Effect from "effect/Effect";
 import {
   galleryDirectory,
@@ -16,6 +19,7 @@ import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
 import { registerToolRenderers } from "../src/tools/renderers/registration";
 import { captureFreshNativeCodemode } from "../src/boundary/host-native-codemode";
 import { styleNativeCodemode } from "../src/tools/native-codemode-render";
+import { styleNativeMcp } from "../src/tools/native-mcp-render";
 
 /** Registered builtin renderers in one collapsed style. */
 function registered(style: "compact" | "preview") {
@@ -41,8 +45,57 @@ function registered(style: "compact" | "preview") {
     "codemode",
     styleNativeCodemode(fresh, () => undefined, "/project"),
   );
+  for (const definition of nativeMcpDefinitions())
+    tools.set(
+      definition.name,
+      styleNativeMcp(definition, () => undefined),
+    );
   return tools;
 }
+
+/** A fresh dynamic native MCP definition as Pi's MCP extension creates it. */
+const nativeMcpTool = (
+  name: string,
+  server: string,
+  tool: string,
+): ToolDefinition<any, any, any> => ({
+  name,
+  label: `${server}/${tool}`,
+  description: `MCP tool ${tool} from server ${server}`,
+  parameters: opaqueFixture({ type: "object", properties: {} }),
+  exposure: "direct",
+  namespace: { name: `mcp__${server}`, description: `Tools in the mcp__${server} namespace.` },
+  execute: () => Promise.resolve({ content: [], details: { server, tool } }),
+});
+
+/** A fresh native MCP resource tool definition. */
+const nativeMcpResourceTool = (name: string): ToolDefinition<any, any, any> => ({
+  name,
+  label: name,
+  description: "MCP resources",
+  parameters: opaqueFixture({ type: "object", properties: {} }),
+  exposure: "direct",
+  annotations: { readOnlyHint: true },
+  execute: () => Promise.resolve({ content: [], details: { server: "", tool: name } }),
+});
+
+function nativeMcpDefinitions(): ToolDefinition<any, any, any>[] {
+  return [
+    nativeMcpTool("mcp__docs__lookup", "docs", "lookup"),
+    nativeMcpTool("mcp__team_docs__find_page_1a2b3c4d", "team.docs", "find page"),
+    nativeMcpResourceTool("list_mcp_resources"),
+    nativeMcpResourceTool("list_mcp_resource_templates"),
+    nativeMcpResourceTool("read_mcp_resource"),
+  ];
+}
+
+const mcpResult = (
+  value: string,
+  details: { server: string; tool: string; fullOutputPath?: string } = {
+    server: "docs",
+    tool: "lookup",
+  },
+): AgentToolResult<unknown> => ({ content: [{ type: "text", text: value }], details });
 
 const text = (value: string): AgentToolResult<unknown> => ({
   content: [{ type: "text", text: value }],
@@ -344,6 +397,123 @@ const scenarios: ReadonlyArray<
     ),
   },
   {
+    tool: "mcp__docs__lookup",
+    title: "native MCP tool awaiting approval",
+    args: { query: "Effect services", limit: 5 },
+    phase: "pending",
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP tool progress",
+    args: { query: "Effect services" },
+    phase: "running",
+    result: mcpResult("Indexing 3/10"),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP tool returned output",
+    args: { query: "Effect services", limit: 5 },
+    result: mcpResult(
+      Array.from({ length: 8 }, (_, index) => `Result ${index + 1}: docs://effect/${index}`).join(
+        "\n",
+      ),
+    ),
+  },
+  {
+    tool: "mcp__team_docs__find_page_1a2b3c4d",
+    title: "native MCP readable label for a shortened alias",
+    args: { title: "Getting started" },
+    narrow: true,
+    result: mcpResult("Found 1 page", { server: "team.docs", tool: "find page" }),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP tool error keeps recovery",
+    args: { query: "Effect services" },
+    isError: true,
+    result: mcpResult("MCP server docs requires sign-in. Run /mcp to sign in."),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP tool error without text",
+    args: {},
+    isError: true,
+    result: mcpResult("MCP tool docs/lookup returned an error"),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP truncated output saved",
+    args: { query: "everything" },
+    result: mcpResult(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nhead…tail\n\n[Full output: /tmp/pi-mcp-1a2b.txt (read it with offset/limit)]",
+      { server: "docs", tool: "lookup", fullOutputPath: "/tmp/pi-mcp-1a2b.txt" },
+    ),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP image result",
+    args: { query: "diagram" },
+    result: {
+      content: [
+        { type: "text", text: "Architecture diagram" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP malformed details decline",
+    args: { query: "Effect services" },
+    result: mcpResult("Historical output", { server: "other", tool: "lookup" }),
+  },
+  {
+    tool: "read_mcp_resource",
+    title: "native MCP read resource",
+    args: { server: "docs", uri: "docs://guide/start" },
+    result: mcpResult("# Getting started\nInstall the package.", {
+      server: "docs",
+      tool: "read_mcp_resource",
+    }),
+  },
+  {
+    tool: "list_mcp_resources",
+    title: "native MCP listing with server failures",
+    args: {},
+    result: mcpResult(
+      JSON.stringify({
+        resources: [{ server: "docs", uri: "docs://guide/start", name: "start" }],
+        errors: [
+          { server: "tickets", error: "connect ECONNREFUSED 127.0.0.1:4100" },
+          { server: "wiki", error: "Request timed out" },
+        ],
+      }),
+      { server: "", tool: "list_mcp_resources" },
+    ),
+  },
+  {
+    tool: "list_mcp_resource_templates",
+    title: "native MCP template page with more available",
+    args: { server: "docs" },
+    result: mcpResult(
+      JSON.stringify({
+        server: "docs",
+        resourceTemplates: [
+          { server: "docs", uriTemplate: "docs://guide/{page}", name: "guide page" },
+        ],
+        nextCursor: "opaque-cursor",
+      }),
+      { server: "docs", tool: "list_mcp_resource_templates" },
+    ),
+  },
+  {
+    tool: "list_mcp_resources",
+    title: "native MCP resource error",
+    args: { server: "missing" },
+    isError: true,
+    result: text('MCP server "missing" has no resources. Servers with resources: docs'),
+  },
+  {
     tool: "bash",
     title: "bash awaiting approval",
     args: { command: "rm -rf build" },
@@ -442,13 +612,48 @@ const scenarios: ReadonlyArray<
   },
 ];
 
+function nativeMcpSettingsFrames(): string[] {
+  const lines: string[] = [];
+  for (const enabled of [false, true]) {
+    const items = createSettingsCategoryItems(
+      defaultCodePreviewSettings,
+      () => defaultCodePreviewSettings,
+      () => undefined,
+      undefined,
+      { nativeMcpPreviews: enabled },
+    );
+    for (const width of [60, 100]) {
+      const list = new SettingsList(
+        items,
+        items.length,
+        {
+          label: (value) => value,
+          value: (value) => value,
+          description: (value) => value,
+          cursor: "›",
+          hint: (value) => value,
+        },
+        () => undefined,
+        () => undefined,
+      );
+      list.selectItem("nativeMcpPreviews");
+      lines.push(
+        `── Native MCP previews · ${enabled ? "on" : "off"} · ${width} cols`,
+        ...list.render(width).map((line) => stripTerminalControls(line).trimEnd()),
+        "",
+      );
+    }
+  }
+  return lines;
+}
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
   it.effect("renders builtin tool scenarios in both collapsed styles", () =>
     Effect.gen(function* () {
       const saved = codePreviewSettings;
-      const lines: string[] = [];
+      const lines = nativeMcpSettingsFrames();
       try {
         for (const style of ["compact", "preview"] as const) {
           const tools = registered(style);

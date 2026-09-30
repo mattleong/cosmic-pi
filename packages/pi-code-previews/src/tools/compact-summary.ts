@@ -12,8 +12,18 @@ export type CompactAnimationScheduler = (
 ) => (() => void) | undefined;
 
 export type CompactPhase = "pending" | "running" | "settled";
-export type CompactOutcome = "success" | "warning" | "error" | "cancelled" | "uncertain";
-export type CompactStatus = Exclude<CompactPhase, "settled"> | "returned" | CompactOutcome;
+/**
+ * `returned` is a neutral delivery outcome: the call settled without an error, but its
+ * producer does not assert that the operation succeeded. Issues still raise its status.
+ */
+export type CompactOutcome =
+  | "success"
+  | "returned"
+  | "warning"
+  | "error"
+  | "cancelled"
+  | "uncertain";
+export type CompactStatus = Exclude<CompactPhase, "settled"> | CompactOutcome;
 
 /** One nested dispatch. `returned` confirms delivery, not semantic operation success. */
 export interface CompactChild {

@@ -48,6 +48,16 @@ export type ToolCallCollapsedStyle = SchemaSettings["toolCallCollapsedStyle"];
 export type PathIconMode = SchemaSettings["pathIcons"];
 export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
 
+/**
+ * Global startup-only opt-ins. They are read once when the extension factory runs, never from
+ * trusted-project settings. The global settings control saves them separately; ordinary preview
+ * saves and resets preserve them as unknown root fields.
+ */
+export const CodePreviewStartupSettingsSchema = Schema.Struct({
+  nativeMcpPreviews: Schema.Boolean,
+});
+export type CodePreviewStartupSettings = typeof CodePreviewStartupSettingsSchema.Type;
+
 export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(
   // SAFETY: The authoritative struct fields and CodePreviewSettings are derived from the same schema.
   Object.keys(CodePreviewSettingsSchema.fields) as (keyof CodePreviewSettings)[],

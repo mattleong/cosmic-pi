@@ -49,6 +49,12 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
 
   /** Session-owned scheduler. Independent extension loaders cannot share previews' runtime. */
   scheduleAnimation?: CompactAnimationScheduler | undefined;
+
+  /**
+   * Human tool name for shell headings, such as `mcp`. Presentation only: the registered
+   * `name` Pi and the model use is unchanged. Defaults to the tool's name.
+   */
+  displayName?: string | undefined;
 }
 
 /**
@@ -87,6 +93,7 @@ export function withCodePreviewShell<
     compactSummary: options.compactSummary,
     scheduleAnimation: options.scheduleAnimation,
     animateProgress: options.animateProgress,
+    displayName: options.displayName,
     // SAFETY: Both callback sets derive their args/details/state from this same tool definition.
     expandedContent: options.expandedContent as CodePreviewToolRenderers<TTool>["expandedContent"],
     renderCall: tool.renderCall ?? ((_args, theme) => renderFallbackToolCall(tool, theme)),

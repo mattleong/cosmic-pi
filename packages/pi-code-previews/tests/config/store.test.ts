@@ -22,16 +22,18 @@ import { runOneShotSettingsEffect } from "../../src/boundary/settings-one-shot";
 import {
   CodePreviewSettingsService,
   getSettingsPath,
+  loadCodePreviewStartupSettings,
   queueSettingsSave,
+  queueStartupSettingsSave,
   type LoadSettingsOptions,
 } from "../../src/config/store";
-import type { CodePreviewSettings } from "../../src/config/schema";
+import type { CodePreviewSettings, CodePreviewStartupSettings } from "../../src/config/schema";
 
 // Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const { mkdir, readFile, writeFile } = nodeFsModule.promises;
+const { mkdir, readFile, rename, writeFile } = nodeFsModule.promises;
 const { dirname, join } = nodePathModule;
 
 // Mutating agent-directory and HOME slots is this suite's process-environment host boundary.
@@ -86,6 +88,7 @@ const loadPreviewSettings = (project: string, trusted?: boolean) =>
 const originalPiCodingAgentDir = processEnv.PI_CODING_AGENT_DIR;
 const originalHome = processEnv.HOME;
 const originalCollapsedStyle = processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
+const originalNativeMcp = processEnv.CODE_PREVIEW_NATIVE_MCP;
 const originalCwd = process.cwd();
 
 afterEach(() => {
@@ -96,6 +99,8 @@ afterEach(() => {
   if (originalCollapsedStyle === undefined)
     delete processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
   else processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE = originalCollapsedStyle;
+  if (originalNativeMcp === undefined) delete processEnv.CODE_PREVIEW_NATIVE_MCP;
+  else processEnv.CODE_PREVIEW_NATIVE_MCP = originalNativeMcp;
   process.chdir(originalCwd);
   clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
@@ -481,6 +486,163 @@ effectTest("loadSettingsFromDisk skips invalid JSON and continues", function* ()
   const loaded = yield* loadSettingsFromDisk();
   assert.equal(loaded?.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
   assert.equal(loaded?.grepCollapsedLines, 31);
+});
+
+const nativeMcpOptIn = () =>
+  step(() => loadCodePreviewStartupSettings()).pipe(
+    Effect.map((startup) => startup.nativeMcpPreviews),
+  );
+
+effectTest("the native MCP startup opt-in is global-only and defaults off", function* () {
+  const { agentDir, project } = yield* settingsRoots("pi-code-previews-startup-");
+  delete processEnv.CODE_PREVIEW_NATIVE_MCP;
+  assert.equal(yield* nativeMcpOptIn(), false);
+
+  process.chdir(yield* step(() => mkdir(project, { recursive: true }).then(() => project)));
+  yield* writeJson(join(project, ".pi", "settings.json"), {
+    codePreview: { nativeMcpPreviews: true },
+  });
+  assert.equal(yield* nativeMcpOptIn(), false, "trusted-project settings never opt in");
+
+  yield* writeJson(join(agentDir, "settings.json"), { codePreview: { nativeMcpPreviews: true } });
+  assert.equal(yield* nativeMcpOptIn(), true);
+  yield* writeJson(join(agentDir, "code-previews.json"), { nativeMcpPreviews: false });
+  assert.equal(yield* nativeMcpOptIn(), false, "the package document overrides settings.json");
+
+  processEnv.CODE_PREVIEW_NATIVE_MCP = "on";
+  yield* writeJson(join(agentDir, "code-previews.json"), {});
+  yield* writeJson(join(agentDir, "settings.json"), {});
+  assert.equal(yield* nativeMcpOptIn(), true, "the environment supplies only the default");
+});
+
+const failedOptIns: ReadonlyArray<readonly [string, string]> = [
+  ["an invalid value", '{"nativeMcpPreviews":"yes"}'],
+  ["unreadable JSON", "{invalid"],
+];
+for (const [label, contents] of failedOptIns)
+  effectTest(`the native MCP startup opt-in fails closed on ${label}`, function* () {
+    const { agentDir } = yield* settingsRoots("pi-code-previews-startup-invalid-");
+    processEnv.CODE_PREVIEW_NATIVE_MCP = "on";
+    yield* writeJson(join(agentDir, "settings.json"), { codePreview: { nativeMcpPreviews: true } });
+    yield* step(() => writeFile(join(agentDir, "code-previews.json"), contents, "utf8"));
+
+    assert.equal(yield* nativeMcpOptIn(), false);
+  });
+
+effectTest("settings saves preserve the startup opt-in as an unknown root field", function* () {
+  const { agentDir } = yield* settingsRoots("pi-code-previews-startup-save-");
+  delete processEnv.CODE_PREVIEW_NATIVE_MCP;
+  const path = join(agentDir, "code-previews.json");
+  yield* writeJson(path, { nativeMcpPreviews: true, readCollapsedLines: 12 });
+
+  const loaded = yield* loadSettingsFromDisk();
+  assert.equal(Object.hasOwn(loaded, "nativeMcpPreviews"), false);
+  yield* saveSettingsToDisk({ ...loaded, readCollapsedLines: 30 });
+
+  assert.deepEqual(yield* readSavedDocument(path), {
+    nativeMcpPreviews: true,
+    readCollapsedLines: 30,
+  });
+  assert.equal(yield* nativeMcpOptIn(), true);
+});
+
+const saveStartupWithAdmission = (
+  settings: CodePreviewStartupSettings,
+  admission: ReturnType<typeof makeSettingsAdmission>,
+) =>
+  step(() =>
+    runOneShotSettingsEffect(
+      CodePreviewSettingsService.use((service) => service.saveStartup(settings, admission)),
+    ),
+  );
+
+effectTest(
+  "startup edits write global overrides without changing previews, project files or MCP config",
+  function* () {
+    const { agentDir, project } = yield* settingsRoots("pi-code-previews-startup-edit-");
+    const file = join(agentDir, "code-previews.json");
+    const projectFile = join(project, ".pi", "settings.json");
+    const mcpFile = join(agentDir, "mcp.json");
+    const original = { readCollapsedLines: 12, futureSetting: { keep: true } };
+    yield* writeJson(file, original);
+    yield* writeJson(projectFile, { codePreview: { nativeMcpPreviews: false } });
+    yield* writeJson(mcpFile, { mcpServers: { docs: { command: "fixture", enabled: true } } });
+    const preview = codePreviewSettings;
+    yield* step(() => queueStartupSettingsSave({ nativeMcpPreviews: true }));
+    assert.deepEqual(yield* readSavedDocument(file), { ...original, nativeMcpPreviews: true });
+    assert.deepEqual(yield* readSavedDocument(projectFile), {
+      codePreview: { nativeMcpPreviews: false },
+    });
+    assert.deepEqual(yield* readSavedDocument(mcpFile), {
+      mcpServers: { docs: { command: "fixture", enabled: true } },
+    });
+    assert.equal(codePreviewSettings, preview, "startup edits do not publish live preview changes");
+    yield* step(() => queueStartupSettingsSave({ nativeMcpPreviews: false }));
+    assert.equal(yield* nativeMcpOptIn(), false);
+  },
+);
+
+effectTest(
+  "startup and ordinary saves do not suppress each other's independently admitted edits",
+  function* () {
+    const { agentDir } = yield* settingsRoots("pi-code-previews-startup-currency-");
+    const file = join(agentDir, "code-previews.json");
+    yield* writeJson(file, { nativeMcpPreviews: false, readCollapsedLines: 12 });
+    const ordinary = makeSettingsAdmission();
+    yield* step(() => queueStartupSettingsSave({ nativeMcpPreviews: true }));
+    yield* step(() =>
+      runOneShotSettingsEffect(
+        CodePreviewSettingsService.use((service) =>
+          service.save({ ...defaultCodePreviewSettings, readCollapsedLines: 41 }, ordinary, {
+            rehydrate: {},
+          }),
+        ),
+      ),
+    );
+    assert.equal((yield* readSavedDocument(file)).readCollapsedLines, 41);
+    assert.equal((yield* readSavedDocument(file)).nativeMcpPreviews, true);
+
+    const startup = makeSettingsAdmission();
+    yield* saveSettingsToDisk({ ...defaultCodePreviewSettings, readCollapsedLines: 54 });
+    yield* saveStartupWithAdmission({ nativeMcpPreviews: false }, startup);
+    assert.equal((yield* readSavedDocument(file)).nativeMcpPreviews, false);
+    assert.equal((yield* readSavedDocument(file)).readCollapsedLines, 54);
+  },
+);
+
+effectTest("a late older startup save cannot undo a newer successful startup edit", function* () {
+  const { agentDir } = yield* settingsRoots("pi-code-previews-startup-stale-");
+  const older = makeSettingsAdmission();
+  yield* step(() => queueStartupSettingsSave({ nativeMcpPreviews: true }));
+  const restored = yield* saveStartupWithAdmission({ nativeMcpPreviews: false }, older);
+  assert.equal(restored.nativeMcpPreviews, true);
+  assert.equal(
+    (yield* readSavedDocument(join(agentDir, "code-previews.json"))).nativeMcpPreviews,
+    true,
+  );
+});
+
+effectTest("failed startup writes do not obsolete an earlier recoverable edit", function* () {
+  const { agentDir } = yield* settingsRoots("pi-code-previews-startup-failure-");
+  const file = join(agentDir, "code-previews.json");
+  yield* step(() => mkdir(file, { recursive: true }));
+  const earlier = makeSettingsAdmission();
+  yield* step(() => assert.rejects(queueStartupSettingsSave({ nativeMcpPreviews: false })));
+  yield* step(() => rename(file, join(agentDir, "failed-settings-directory")));
+  yield* saveStartupWithAdmission({ nativeMcpPreviews: true }, earlier);
+  assert.equal((yield* readSavedDocument(file)).nativeMcpPreviews, true);
+});
+
+effectTest("aborted startup edits leave the persisted setting unchanged", function* () {
+  const { agentDir } = yield* settingsRoots("pi-code-previews-startup-abort-");
+  const file = join(agentDir, "code-previews.json");
+  yield* writeJson(file, { nativeMcpPreviews: true });
+  const controller = new AbortController();
+  controller.abort();
+  yield* step(() =>
+    assert.rejects(queueStartupSettingsSave({ nativeMcpPreviews: false }, controller.signal)),
+  );
+  assert.deepEqual(yield* readSavedDocument(file), { nativeMcpPreviews: true });
 });
 
 function writeJson<DataInput>(path: string, data: DataInput): Effect.Effect<void> {

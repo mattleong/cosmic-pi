@@ -17,8 +17,8 @@ import {
 } from "../layer";
 import { registerCodePreviewsCommand } from "../commands/register";
 import { makeSettingsAdmission, type SettingsAdmission } from "../config/coordinator";
-import type { CodePreviewSettings } from "../config/schema";
-import { CodePreviewSettingsService } from "../config/store";
+import type { CodePreviewSettings, CodePreviewStartupSettings } from "../config/schema";
+import { CodePreviewSettingsService, loadCodePreviewStartupSettings } from "../config/store";
 import { codePreviewSettings } from "../config/state";
 import { CodePreviewSyntaxService } from "../syntax/service";
 import {
@@ -33,6 +33,7 @@ import {
   nativeCodemodeRegistration,
   type NativeCodemodeSnapshot,
 } from "../tools/native-codemode-registration";
+import { nativeMcpRegistration, type NativeMcpSeams } from "../tools/native-mcp-registration";
 import { getEnabledCodePreviewTools } from "../tools/selection";
 export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
 
@@ -77,6 +78,10 @@ export interface CodePreviewExtensionDependencies {
   ) => Effect.Effect<void, never, CodePreviewSyntaxService>;
   readonly registerCommands: typeof registerCodePreviewsCommand;
   readonly registerRenderers: typeof registerToolRenderers;
+  /** Factory-time global opt-ins; production reads through the one-shot settings boundary. */
+  readonly loadStartupSettings: () => Promise<CodePreviewStartupSettings>;
+  /** Isolated native MCP test seams; production composes Pi's factory with default options. */
+  readonly nativeMcp?: NativeMcpSeams;
 }
 
 const defaultDependencies: CodePreviewExtensionDependencies = {
@@ -92,6 +97,7 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
   initializeSyntax: (theme) => CodePreviewSyntaxService.use((service) => service.initialize(theme)),
   registerCommands: registerCodePreviewsCommand,
   registerRenderers: registerToolRenderers,
+  loadStartupSettings: loadCodePreviewStartupSettings,
 };
 
 /** Pi registration; `dependencies` is the seam for lifecycle/finalizer tests. */
@@ -102,6 +108,7 @@ export function codePreviewsWithDependencies(
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
   const nativeCodemode = nativeCodemodeRegistration();
+  const nativeMcp = nativeMcpRegistration(dependencies.nativeMcp);
   dependencies.registerCommands(pi);
 
   const startup = (input: SessionInput) =>
@@ -149,6 +156,7 @@ export function codePreviewsWithDependencies(
         defer: scheduler.defer,
         schedule: scheduler.schedule,
       });
+      nativeMcp.present({ presentation: input.presentation, schedule: scheduler.schedule });
       if (codePreviewSettings.syntaxHighlighting)
         slot.fork(dependencies.initializeSyntax(codePreviewSettings.shikiTheme), input.signal);
     },
@@ -203,5 +211,14 @@ export function codePreviewsWithDependencies(
   });
 
   pi.on("session_shutdown", () => slot.shutdown());
-  return Promise.resolve();
+
+  // Native MCP composes after the main command and preview lifecycle, so its handlers run later.
+  // Registering its `/mcp` during this awaited factory is what omits Pi's replaceable builtin.
+  return dependencies
+    .loadStartupSettings()
+    .then(
+      (optIns) => optIns.nativeMcpPreviews === true,
+      () => false,
+    )
+    .then((enabled) => (enabled ? nativeMcp.compose(pi) : nativeMcp.disable()));
 }

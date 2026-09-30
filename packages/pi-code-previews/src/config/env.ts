@@ -8,11 +8,13 @@ import * as Schema from "effect/Schema";
 import {
   defaultCodePreviewPerformanceConfig,
   defaultCodePreviewSettings,
+  defaultCodePreviewStartupSettings,
   type CodePreviewPerformanceConfig,
 } from "./defaults";
 import {
   CodePreviewSettingsSchema,
   type CodePreviewSettings,
+  type CodePreviewStartupSettings,
   type ToolCallBackgroundMode,
 } from "./schema";
 
@@ -101,15 +103,20 @@ const PERFORMANCE_ENVIRONMENT = {
   maxWriteDiffChangedLineCells: "CODE_PREVIEW_MAX_WRITE_DIFF_CHANGED_LINE_CELLS",
 } as const satisfies Record<keyof CodePreviewPerformanceConfig, string>;
 
+/** Startup opt-in variables; an invalid value leaves the default (off). */
+const NATIVE_MCP_ENVIRONMENT = "CODE_PREVIEW_NATIVE_MCP";
+
 type EnvironmentKey =
   | (typeof SETTINGS_ENVIRONMENT)[keyof typeof SETTINGS_ENVIRONMENT][0]
   | (typeof PERFORMANCE_ENVIRONMENT)[keyof typeof PERFORMANCE_ENVIRONMENT]
+  | typeof NATIVE_MCP_ENVIRONMENT
   | "CODE_PREVIEW_TOOLS";
 export type CodePreviewEnvironment = Readonly<Record<EnvironmentKey, string | undefined>>;
 
 const ENVIRONMENT_KEYS: readonly EnvironmentKey[] = [
   ...Object.values(SETTINGS_ENVIRONMENT).map(([name]) => name),
   ...Object.values(PERFORMANCE_ENVIRONMENT),
+  NATIVE_MCP_ENVIRONMENT,
   "CODE_PREVIEW_TOOLS",
 ];
 
@@ -144,6 +151,16 @@ export function defaultsFromEnvironment(environment: CodePreviewEnvironment): Co
   return { ...settings, tools: [...defaultCodePreviewSettings.tools] } as CodePreviewSettings;
 }
 
+export function startupDefaultsFromEnvironment(
+  environment: CodePreviewEnvironment,
+): CodePreviewStartupSettings {
+  return Object.freeze({
+    nativeMcpPreviews:
+      parseBoolean(environment[NATIVE_MCP_ENVIRONMENT]) ??
+      defaultCodePreviewStartupSettings.nativeMcpPreviews,
+  });
+}
+
 export let codePreviewPerformanceConfig = defaultCodePreviewPerformanceConfig;
 export let codePreviewToolsEnvironmentValue: string | undefined;
 
@@ -172,6 +189,7 @@ export function publishCodePreviewEnvironmentProjection(
 
 export interface CodePreviewEnvironmentContract {
   readonly defaults: CodePreviewSettings;
+  readonly startupDefaults: CodePreviewStartupSettings;
 }
 
 export class CodePreviewEnvironmentService extends Context.Service<
@@ -185,7 +203,10 @@ export class CodePreviewEnvironmentService extends Context.Service<
       const defaults = Object.freeze(defaultsFromEnvironment(values));
       const performance = performanceConfigFromEnvironment(values);
       publishCodePreviewEnvironmentProjection(performance, values.CODE_PREVIEW_TOOLS);
-      return CodePreviewEnvironmentService.of({ defaults });
+      return CodePreviewEnvironmentService.of({
+        defaults,
+        startupDefaults: startupDefaultsFromEnvironment(values),
+      });
     }),
   );
 

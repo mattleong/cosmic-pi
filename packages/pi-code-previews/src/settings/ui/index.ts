@@ -6,12 +6,13 @@ import {
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
 import { getSettingsPath } from "../../config/store";
-import type { CodePreviewSettings } from "../../config/schema";
+import type { CodePreviewSettings, CodePreviewStartupSettings } from "../../config/schema";
 import { formatOnOff, formatSettingValue } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
 import { ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {
   SETTING_ITEM_DEFINITIONS,
+  NATIVE_MCP_SETTING,
   type SettingItemDefinition,
   type SettingsUiItemId,
 } from "./registry";
@@ -125,6 +126,7 @@ export function createSettingsCategoryItems(
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
   theme?: Theme,
+  startup?: CodePreviewStartupSettings,
 ): SettingItem[] {
   const groupItem = (definition: SettingsGroupDefinition) =>
     createSettingsGroupItemFromDefinition(definition, current, getCurrent, onSettingChange, theme);
@@ -145,6 +147,15 @@ export function createSettingsCategoryItems(
       submenu: (_currentValue, done) =>
         new ToolPreviewSettingsSubmenu(formatSettingValue(getCurrent(), "tools"), done, theme),
     },
+    ...(startup
+      ? [
+          {
+            ...NATIVE_MCP_SETTING,
+            values: [...NATIVE_MCP_SETTING.values],
+            currentValue: formatOnOff(startup.nativeMcpPreviews),
+          },
+        ]
+      : []),
     groupItem(SETTINGS_CATEGORY_GROUPS[2]),
     groupItem(SETTINGS_CATEGORY_GROUPS[3]),
   ];

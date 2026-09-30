@@ -2,13 +2,16 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { constVoid } from "effect/Function";
 import type { LoadSettingsOptions } from "../config/document-store";
-import type { CodePreviewSettings } from "../config/schema";
+import type { CodePreviewSettings, CodePreviewStartupSettings } from "../config/schema";
+import { defaultCodePreviewStartupSettings } from "../config/defaults";
+import { NATIVE_MCP_SETTING } from "./ui/registry";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
 import {
   flushSettingsSaveQueue,
   formatSettingsSaveError,
   queueSettingsSave,
+  queueStartupSettingsSave,
 } from "../config/store";
 import { initializeShiki } from "../syntax/shiki";
 import { createSettingsCategoryItems, isSettingsGroupItemId } from "./ui/index";
@@ -19,6 +22,8 @@ interface SettingsListControllerOptions {
   done: () => void;
   loadOptions: LoadSettingsOptions;
   effects?: SettingsPanelSaveEffects;
+  startupSettings?: CodePreviewStartupSettings;
+  signal?: AbortSignal | undefined;
 }
 
 export interface SettingsPanelSaveEffects {
@@ -27,6 +32,10 @@ export interface SettingsPanelSaveEffects {
     options: LoadSettingsOptions,
   ) => Promise<void>;
   readonly initializeSyntax: (theme: CodePreviewSettings["shikiTheme"]) => Promise<void>;
+  readonly queueStartupSave?: (
+    settings: CodePreviewStartupSettings,
+    signal?: AbortSignal,
+  ) => Promise<CodePreviewStartupSettings>;
 }
 
 const liveSettingsPanelSaveEffects: SettingsPanelSaveEffects = {
@@ -59,19 +68,60 @@ export function createCodePreviewSettingsModel({
   loadOptions,
   theme,
   effects,
+  startupSettings = defaultCodePreviewStartupSettings,
+  signal,
 }: SettingsListControllerOptions): CodePreviewSettingsModel {
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
   let revision = 0;
+  let draftStartup = { ...startupSettings };
+  let committedStartup = { ...startupSettings };
+  let startupRevision = 0;
+  let committedStartupRevision = 0;
+  let pendingStartup = Promise.resolve();
+  const sync = (list: SettingsList) => syncSettingsListValues(list, draftSettings, draftStartup);
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
+    if (id === NATIVE_MCP_SETTING.id) {
+      if (signal?.aborted) return;
+      if (value !== "on" && value !== "off") {
+        sync(list);
+        return;
+      }
+      const changeRevision = ++startupRevision;
+      draftStartup = { nativeMcpPreviews: value === "on" };
+      sync(list);
+      const save = (effects?.queueStartupSave ?? queueStartupSettingsSave)(draftStartup, signal)
+        .then((saved) => {
+          if (signal?.aborted) return;
+          if (changeRevision > committedStartupRevision) {
+            committedStartupRevision = changeRevision;
+            committedStartup = { ...saved };
+          }
+          if (startupRevision === changeRevision) {
+            draftStartup = { ...saved };
+            sync(list);
+            notify("Native MCP preview changes require /reload", "info");
+          }
+        })
+        .catch((error) => {
+          if (signal?.aborted) return;
+          if (startupRevision === changeRevision) {
+            draftStartup = { ...committedStartup };
+            sync(list);
+          }
+          notify(formatSettingsSaveError(error), "warning");
+        });
+      pendingStartup = Promise.all([pendingStartup, save]).then(() => undefined);
+      return;
+    }
     if (isSettingsGroupItemId(id)) {
-      syncSettingsListValues(list, draftSettings);
+      sync(list);
       return;
     }
 
     // The reset row asks for a second press: its middle value only arms the reset.
     if (id === "resetToDefaults" && value !== "reset now") {
-      if (value === "keep current") syncSettingsListValues(list, draftSettings);
+      if (value === "keep current") sync(list);
       return;
     }
     const previousTheme = draftSettings.shikiTheme;
@@ -79,7 +129,7 @@ export function createCodePreviewSettingsModel({
     const next = updateSetting(draftSettings, id, value);
     const changeRevision = ++revision;
     draftSettings = next;
-    syncSettingsListValues(list, draftSettings);
+    sync(list);
     void persistSettingsChange(next, previousTheme, loadOptions, effects)
       .then(() => {
         if (resetRequested) notify("Code preview settings restored to defaults", "info");
@@ -89,7 +139,7 @@ export function createCodePreviewSettingsModel({
         // newer serialized save is still able to publish the complete draft.
         if (revision === changeRevision) {
           draftSettings = cloneCodePreviewSettings(codePreviewSettings);
-          syncSettingsListValues(list, draftSettings);
+          sync(list);
         }
         notify(formatSettingsSaveError(error), "warning");
       });
@@ -98,7 +148,13 @@ export function createCodePreviewSettingsModel({
     if (activeList) handleSettingChange(activeList, id, value);
   };
   return {
-    items: createSettingsCategoryItems(draftSettings, () => draftSettings, routeBoundChange, theme),
+    items: createSettingsCategoryItems(
+      draftSettings,
+      () => draftSettings,
+      routeBoundChange,
+      theme,
+      draftStartup,
+    ),
     bind: (list) => {
       activeList = list;
     },
@@ -107,14 +163,25 @@ export function createCodePreviewSettingsModel({
       handleSettingChange(list, id, value);
     },
     onCancel: () => {
-      void flushSettingsSaveQueue()
+      void pendingStartup
+        .then(() => flushSettingsSaveQueue())
         .catch(() => undefined)
         .finally(done);
     },
   };
 }
 
-function syncSettingsListValues(list: SettingsList, settings: typeof codePreviewSettings): void {
-  for (const item of createSettingsCategoryItems(settings, () => settings, constVoid))
+function syncSettingsListValues(
+  list: SettingsList,
+  settings: typeof codePreviewSettings,
+  startup: CodePreviewStartupSettings,
+): void {
+  for (const item of createSettingsCategoryItems(
+    settings,
+    () => settings,
+    constVoid,
+    undefined,
+    startup,
+  ))
     list.updateValue(item.id, item.currentValue);
 }

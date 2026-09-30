@@ -385,6 +385,28 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
   }
 });
 
+test("a display name heads compact rows without changing the registered tool name", () => {
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: "compact",
+    toolCallTiming: false,
+  });
+  const base = { ...createReadToolDefinition("/project"), name: "registered_model_name" };
+  const tool = withCodePreviewShell(base, {
+    mode: "off",
+    displayName: "shown-name",
+    compactSummary: compactProvider,
+  });
+  assert.equal(tool.name, "registered_model_name");
+  assert.equal(tool.execute, base.execute);
+  const h = createToolPresentationHarness(tool);
+  h.call({ path: "file" });
+  h.result(textResult("done"));
+  const text = h.render().join("\n");
+  assert.match(text, /shown-name/u);
+  assert.doesNotMatch(text, /registered_model_name/u);
+});
+
 test("fallback rendering preserves attachment evidence without taking native image ownership", () => {
   const caps = getCapabilities();
   try {

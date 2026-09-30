@@ -4,7 +4,7 @@ Syntax-highlighted previews for pi's built-in tool calls.
 
 The package publishes TypeScript source and runs directly through Pi's Jiti loader; it has no generated distribution or build prerequisite.
 
-`pi-code-previews` makes `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` output easier to scan in the pi TUI without changing what the tools do. If another extension already owns one of those tools, `pi-code-previews` skips that preview instead of conflicting with it. It installs configured renderer replacements but never enables, disables, or reorders Pi's active tool names.
+`pi-code-previews` makes `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` output easier to scan in the pi TUI without changing what the tools do. If another extension already owns one of those tools, `pi-code-previews` skips that preview instead of conflicting with it. Core renderer replacements never enable, disable, or reorder Pi's active tool names. The optional native MCP adapter delegates activation to Pi's own manager.
 
 ## Features
 
@@ -13,6 +13,7 @@ The package publishes TypeScript source and runs directly through Pi's Jiti load
 - Readable `grep` results grouped by file.
 - Compact `find` and `ls` path lists with optional icons.
 - Native `codemode` program previews and neutral nested-call rows, while retaining Pi’s native execution.
+- Opt-in standalone native MCP previews, including resource tools, through Pi's native manager.
 - Optional visual warnings for risky-looking shell commands and secret-looking output.
 - Opt-in one-row collapsed tool calls, including pending and running calls.
 - Tool call duration timing inline in compact summaries, or in result footers and border frames.
@@ -69,11 +70,33 @@ Pi’s first extension registration wins. Ordinary CLI discovery places Code Pre
 
 Native child `ok` uses a muted completion checkmark, without a redundant status label or a confirmed operation outcome. A completed script with handled child errors shows a warning; cancelled/unsettled children leave the overall outcome unconfirmed. A native failure header remains a failure: guest-controlled error names and stacks cannot prove cancellation, so abort diagnostics are retained without asserting a typed stop reason. Malformed historical details fall back conservatively. Expanded views retain the complete original program, native output, errors, recovery paths, and image evidence; call arguments are sanitized, abbreviated native previews, never fabricated nested results. Complete leading paths and targets survive later JSON truncation; cut string values carry an ellipsis. MCP and background-task rows show observed actions and targets, never inferred fields beyond the preview. Rendering reads no saved-output files.
 
-Native MCP calls inside Code Mode show readable `mcp call server / tool` rows from unambiguous registered `mcp__*` aliases, including short collision-hash suffixes. Ambiguous or potentially truncated names remain unchanged rather than guessing the remote identity. Resource read/list/template rows show only observed, sanitized argument targets; cut targets carry an ellipsis. Expansion retains the registered name, abbreviated argument evidence, errors and recovery text alongside the complete program and script output. This uses the existing `codemode` preview toggle and does not change MCP execution, authentication, connections, exposure, or tool activation. Standalone native MCP tools keep Pi's renderers: Pi currently provides no renderer-only hook for them.
+Native MCP calls inside Code Mode show readable `mcp call server / tool` rows from unambiguous registered `mcp__*` aliases, including short collision-hash suffixes. Ambiguous or potentially truncated names remain unchanged rather than guessing the remote identity. Resource read/list/template rows show only observed, sanitized argument targets; cut targets carry an ellipsis. Expansion retains the registered name, abbreviated argument evidence, errors and recovery text alongside the complete program and script output. This uses the existing `codemode` preview toggle and does not change MCP execution, authentication, connections, exposure, or tool activation. Standalone calls can opt into the native MCP factory adapter below; without it, they keep Pi's renderers.
 
 Native presentation keeps five calls collapsed. Preview style shows at most eight wrapped program rows and advertises hidden output or errors. Expansion retains **Program → Calls → Output**, omitting an empty Output section while streaming. Parent and child measured timing obey `toolCallTiming`; live native content animates in both styles and expansion states even with timing disabled.
 
 Call evidence inspects only the latest 256 `details.calls` slots. Invalid records do not erase valid neighbors; omitted or rejected records leave completed outcomes unconfirmed and use **N calls listed**, not an inferred dispatch total. Expanded Calls explains the retained coverage even when the outer header is unknown, and saved-output paths validate independently. These are native metadata records, not richer domain receipts or the persisted `nestedCalls` unavailable to renderers. No older problem records are searched outside the bounded window.
+
+### Standalone native MCP
+
+On Pi versions exposing `createMcpExtension`, open `/code-previews settings` and turn on **Native MCP previews**. This separate, global-only control is marked **requires reload**. You can also use `/code-previews settings nativeMcpPreviews on` (or `off`). The status command distinguishes the configured preference from the running preview adapter; saving never switches managers immediately.
+
+Alternatively, edit the global `$PI_CODING_AGENT_DIR/code-previews.json`:
+
+```json
+{
+  "nativeMcpPreviews": true
+}
+```
+
+Preserve your other settings, then run `/reload`. For a temporary trial, use `CODE_PREVIEW_NATIVE_MCP=1 pi`. Global `settings.json` also accepts `codePreview.nativeMcpPreviews`; the flat package file takes precedence over it and the environment default. Project settings never control this startup-only opt-in. Invalid or unreadable startup settings leave it off. Turning it off also requires reload and restores builtin rendering, without disabling MCP servers. Manage servers with native `/mcp`. Ordinary preview resets leave this option unchanged.
+
+Code Previews composes **Pi's native MCP factory**, not a custom MCP implementation. Registering its native `/mcp` during extension loading replaces the default, replaceable builtin; there is no second manager. Native configuration, credentials, authentication, connection handling, permissions hooks, exposure, tool activation, resources and shutdown remain native. Each fresh tool registration receives the preview shell without changing execution, schemas, result objects or images. Presentation failures leave definitions unstyled rather than disabling MCP.
+
+Rows show readable server/tool or resource targets, progress and short issues. A completed call is a neutral return, not proof of domain success. Expansion preserves complete arguments, output, recovery text and native images; rendering reads no saved-output files. Both preview and compact styles use the regular appearance settings. The `tools` selection controls core previews and Code Mode, not this separate MCP opt-in.
+
+Pi may display an extension-replacement notice at startup. Tools and `/mcp` are attributed to Code Previews rather than `builtin:mcp`; source-specific permission policies may need adjustment. Do not load another MCP manager alongside the adapter: duplicate or ambiguous `/mcp` ownership prevents this manager from starting. Do not load duplicate copies of Code Previews: ambiguous ownership leaves this adapter inactive. Its registered server-change callback can suppress Pi's usual unhandled-server notice even when admission fails; health reports the conflict. Native MCP now runs at Code Previews' position in the extension list, so later same-named tools and event handlers may observe different precedence. SDK hosts that explicitly load Code Previews with the opt-in enabled also get native MCP, even when they omit builtins. Explicitly disabling `builtin:mcp` does not disable this opted-in adapter.
+
+Check `/code-previews health` for manager ownership and `/mcp` for native server management.
 
 ## Benchmarks
 
