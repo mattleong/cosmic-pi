@@ -22,7 +22,12 @@ import { escapeControlChars } from "../shared/terminal-text";
 import type { CompactAnimationScheduler } from "./compact-summary";
 import { withCodePreviewShell } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import { nativeMcpEvidence, nativeMcpProgress, nativeMcpSummary } from "./native-mcp-summary";
+import {
+  nativeMcpEvidence,
+  nativeMcpHasRecoverableClipping,
+  nativeMcpProgress,
+  nativeMcpSummary,
+} from "./native-mcp-summary";
 import { nativeMcpHeading, nativeMcpIdentity } from "./native-mcp-subject";
 import type { ToolRenderContext } from "./renderers/shared/types";
 
@@ -247,6 +252,12 @@ export function styleNativeMcp(
   ) => {
     if (options.expanded) return renderOutput(result, options, theme, context);
     if (options.isPartial) return renderProgress(result, theme, context);
+    if (!context.isError && nativeMcpHasRecoverableClipping(identity, result))
+      return safeContent(
+        () => new Text(renderExpansionAffordance("output", false, theme), 0, 0),
+        "Output · expand",
+        1,
+      );
     return renderOutputPreview(result, theme, context);
   };
   return withCodePreviewShell(

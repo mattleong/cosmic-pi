@@ -96,16 +96,37 @@ export function renderCompactChildren(
         rows.push(clipToWidth(`${indent ? rail : ""}${line}`, width, ""));
     }
   });
-  if (!flat && omitted > 0)
-    rows.push(
-      clipToWidth(
-        theme.fg("dim", `  ╰─ … ${omitted} more ${calls(omitted)}`) +
-          (hiddenFailed > 0 ? theme.fg("error", ` (${hiddenFailed} failed)`) : ""),
-        width,
-        "",
-      ),
-    );
+  if (!flat && omitted > 0) rows.push(...omissionRows(omitted, hiddenFailed, theme, width));
   return rows;
 }
 
 const calls = (count: number) => (count === 1 ? "call" : "calls");
+
+/** Counts are evidence: wrap overflow instead of clipping their digits or hiding a failure. */
+function omissionRows(
+  omitted: number,
+  hiddenFailed: number,
+  theme: Theme,
+  width: number,
+): string[] {
+  const branch = theme.fg("dim", "  ╰─ ");
+  const more = theme.fg("dim", `… ${omitted} more ${calls(omitted)}`);
+  const failed = hiddenFailed > 0 ? theme.fg("error", `${hiddenFailed} failed`) : "";
+  const single = branch + more + (failed ? ` (${failed})` : "");
+  if (visibleWidth(single) <= width) return [single];
+
+  const rows: string[] = [];
+  const branchWidth = visibleWidth(branch);
+  const indent = width - branchWidth >= 8 ? branchWidth : 0;
+  for (const [index, line] of wrapTextWithAnsi(more, width - indent).entries())
+    rows.push(
+      clipToWidth(`${indent ? (index === 0 ? branch : " ".repeat(indent)) : ""}${line}`, width, ""),
+    );
+  if (failed) {
+    // Drop decoration before splitting a complete failure fact that fits unadorned.
+    const failureIndent = width - branchWidth >= visibleWidth(failed) ? branchWidth : 0;
+    for (const line of wrapTextWithAnsi(failed, width - failureIndent))
+      rows.push(clipToWidth(`${" ".repeat(failureIndent)}${line}`, width, ""));
+  }
+  return rows;
+}

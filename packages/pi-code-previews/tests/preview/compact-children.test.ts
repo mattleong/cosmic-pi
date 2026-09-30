@@ -103,6 +103,30 @@ describe("compact child selection", () => {
     expect(quiet).not.toContain("failed");
   });
 
+  it("preserves complete omitted and failed counts even when active calls fill the tree", () => {
+    for (const hiddenFailed of [1, 12]) {
+      const entries: CompactChild[] = [
+        ...Array.from(
+          { length: hiddenFailed },
+          (): CompactChild => ({ label: "old", status: "error" }),
+        ),
+        ...Array.from({ length: 5 }, (): CompactChild => ({ label: "active", status: "running" })),
+      ];
+      const total = hiddenFailed === 1 ? 6 : 129;
+      const selected = selectCompactChildren({ entries, total });
+      expect(selected.entries).toEqual(entries.slice(hiddenFailed));
+      expect(selected.hiddenFailed).toBe(hiddenFailed);
+      expect(selected.omitted).toBe(total - 5);
+      for (const width of [1, 2, 4, 8, 12, 16, 24, 40, 80]) {
+        const rows = plain(compactChildren(entries, width, { total }));
+        expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+        const evidence = rows.slice(selected.entries.length).join("").replace(/\s/gu, "");
+        expect(evidence).toContain(`${selected.hiddenFailed}failed`);
+        expect(evidence).toContain(String(selected.omitted));
+      }
+    }
+  });
+
   it("bounds even all-active batches without manufacturing omitted entries", () => {
     const entries = Array.from(
       { length: 32 },

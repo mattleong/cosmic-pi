@@ -187,6 +187,30 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
+    title: "native hidden failure survives a narrow tree",
+    args: { code: "await Promise.allSettled(checks);" },
+    phase: "running",
+    narrow: true,
+    result: {
+      content: [],
+      details: {
+        calls: [
+          {
+            ...nativeArgumentCall("mcp__docs__lookup", { query: "Getting started" }),
+            status: "error",
+            error: "Lookup failed\nRetained diagnostic detail",
+          },
+          ...Array.from({ length: 5 }, (_, index) => ({
+            ...nativeCall("running"),
+            id: `private/active-${index}`,
+            args: JSON.stringify({ path: `/project/active-${index}.ts` }),
+          })),
+        ],
+      },
+    },
+  },
+  {
+    tool: "codemode",
     title: "native measured timing and cost",
     durationMs: 3400,
     args: { code: "await runChecks();" },
@@ -473,6 +497,41 @@ const scenarios: ReadonlyArray<
     result: mcpResult(
       "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nhead…tail\n\n[Full output: /tmp/pi-mcp-1a2b.txt (read it with offset/limit)]",
       { server: "docs", tool: "lookup", fullOutputPath: "/tmp/pi-mcp-1a2b.txt" },
+    ),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP clipped output without recovery",
+    args: { query: "everything" },
+    result: mcpResult(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nhead…tail",
+    ),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP full output could not be saved",
+    args: { query: "everything" },
+    result: mcpResult(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nhead…tail\n\n[Could not save the full output: Disk full]",
+    ),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "native MCP clipped error preserves attention",
+    args: { query: "everything" },
+    isError: true,
+    result: mcpResult(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nRequest failed…diagnostic tail\n\n[Full output: /tmp/pi-mcp-error.txt (read it with offset/limit)]",
+      { server: "docs", tool: "lookup", fullOutputPath: "/tmp/pi-mcp-error.txt" },
+    ),
+  },
+  {
+    tool: "list_mcp_resources",
+    title: "native MCP saved aggregate remains unverified",
+    args: {},
+    result: mcpResult(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nhead…tail\n\n[Full output: /tmp/pi-mcp-list.txt (read it with offset/limit)]",
+      { server: "", tool: "list_mcp_resources", fullOutputPath: "/tmp/pi-mcp-list.txt" },
     ),
   },
   {

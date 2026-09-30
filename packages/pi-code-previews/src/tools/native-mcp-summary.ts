@@ -137,6 +137,23 @@ const TRUNCATED =
   /^Warning: truncated output \(original token count: \d+\)\nTotal output lines: \d+\n\n/;
 const SAVE_FAILED = "\n\n[Could not save the full output: ";
 
+/** Only an owned, recognized, recoverable envelope may replace the raw collapsed preview. */
+export function nativeMcpHasRecoverableClipping(
+  identity: NativeMcpIdentity,
+  result: AgentToolResult<unknown>,
+): boolean {
+  const evidence = nativeMcpEvidence(result.details);
+  const first = result.content[0];
+  return Boolean(
+    evidence?.fullOutputPath &&
+    belongsTo(identity, evidence) &&
+    first?.type === "text" &&
+    TRUNCATED.test(first.text) &&
+    !first.text.includes(SAVE_FAILED) &&
+    !result.content.slice(1).some((part) => part.type === "text"),
+  );
+}
+
 /** Native middle truncation and where, or whether, the full output was saved. */
 function outputIssues(
   result: AgentToolResult<unknown>,

@@ -225,6 +225,9 @@ for (const style of ["compact", "preview"] as const)
       for (const frame of harness.cycle({ query: "QUERY_MARKER" }, value)) {
         const text = stripAnsi(frame.text);
         assert.equal(text.includes(clipping.message), frame.expanded || !saved);
+        for (const marker of ["Warning: truncated output", "Total output lines:"])
+          assert.equal(text.includes(marker), frame.expanded || (style === "preview" && !saved));
+        if (saved && !frame.expanded) assert.equal(text.includes("/tmp/RECOVERABLE_OUTPUT"), false);
         if (frame.expanded)
           for (const marker of [
             "QUERY_MARKER",
