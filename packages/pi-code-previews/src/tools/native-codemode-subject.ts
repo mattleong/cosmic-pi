@@ -36,19 +36,44 @@ const mcpActions = new Map([
   ["resources.subscriptions", "subscriptions"],
 ]);
 
-/** Argument-only targets; feature packages depend on previews, so never import their internals. */
+const nativeResourceActions = new Map([
+  ["read_mcp_resource", "read resource"],
+  ["list_mcp_resources", "list resources"],
+  ["list_mcp_resource_templates", "list templates"],
+]);
+
+/** Argument/name-only targets; never inspect results, foreign definitions, or provider state. */
 export function nativeCodemodeCallSubject(
   name: string,
   preview: NativeArgumentPreview | undefined,
   cwd: string,
-): Pick<CompactChild, "subject" | "action"> {
-  if (!preview) return { subject: "" };
+): Pick<CompactChild, "subject" | "action"> & { readonly label?: string } {
+  // These are registered aliases, not recovered remote identifiers or proof of native ownership.
+  // Extra delimiters, ambiguous underscore boundaries, and potentially truncated separators
+  // retain the original name. A full-length hash suffix may have replaced the real separator.
+  const nativeName =
+    name.length <= 64 && !(name.length === 64 && /_[0-9a-f]{8}$/.test(name))
+      ? /^mcp__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)$/.exec(name)
+      : null;
+  if (nativeName)
+    return { label: "mcp", action: "call", subject: `${nativeName[1]} / ${nativeName[2]}` };
+  const resourceAction = nativeResourceActions.get(name);
+  if (!preview)
+    return resourceAction ? { label: "mcp", action: resourceAction, subject: "" } : { subject: "" };
   const text = (key: string): string => {
     const value = preview.values[key];
     return Predicate.isString(value) && value
       ? `${value}${preview.partialFields.has(key) ? "…" : ""}`
       : "";
   };
+  if (resourceAction)
+    return {
+      label: "mcp",
+      action: resourceAction,
+      subject: [text("server"), name === "read_mcp_resource" ? text("uri") : ""]
+        .filter(Boolean)
+        .join(" / "),
+    };
   const action = preview.partialFields.has("action") ? "" : text("action");
   if (builtinNames.has(name)) {
     if (preview.complete) {

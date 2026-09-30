@@ -27,6 +27,15 @@ import { step } from "../support/effect-test";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 
+const projectionTools = [
+  "mcp",
+  "background_task",
+  "mcp__docs__lookup",
+  "read_mcp_resource",
+  "list_mcp_resources",
+  "list_mcp_resource_templates",
+];
+
 for (const earlierBuiltin of [false, true])
   it.live(
     `native SDK ${earlierBuiltin ? "explicit builtin first reports conflict" : "owned presentation preserves native execution/store/hooks"}`,
@@ -139,10 +148,11 @@ for (const earlierBuiltin of [false, true])
                     });
                   },
                 });
-                for (const name of ["mcp", "background_task"]) {
+                for (const name of projectionTools) {
                   pi.registerTool({
                     name,
                     label: name,
+                    exposure: name === "mcp" || name === "background_task" ? "direct" : "codemode",
                     description: "Owned argument-projection fixture",
                     parameters: {
                       type: "object",
@@ -181,7 +191,7 @@ for (const earlierBuiltin of [false, true])
                         return Effect.runPromise(
                           Effect.gen(function* () {
                             if (name !== "echo") {
-                              assert.ok(["edit", "bash", "mcp", "background_task"].includes(name));
+                              assert.ok(["edit", "bash", ...projectionTools].includes(name));
                               const input = yield* Schema.decodeUnknownEffect(
                                 Schema.Record(Schema.String, Schema.MutableJson),
                               )(rawArgs);
@@ -388,6 +398,10 @@ for (const earlierBuiltin of [false, true])
           await tools.bash({command: 'printf test; '.repeat(40)});
           await tools.background_task({action: 'start', name: 'Verify targets', command: 'pnpm test; '.repeat(40)});
           await tools.mcp({action: 'tools.call', server: 'docs', tool: 'lookup', arguments: {text: 'x'.repeat(400)}});
+          await tools.mcp__docs__lookup({query: 'x'.repeat(400)});
+          await tools.read_mcp_resource({server: 'docs', uri: 'docs://guide/start', padding: 'x'.repeat(400)});
+          await tools.list_mcp_resources({server: 'docs'});
+          await tools.list_mcp_resource_templates({});
         `),
         );
         const targetRows = summarize(targets)?.children?.entries;
@@ -397,6 +411,12 @@ for (const earlierBuiltin of [false, true])
         assert.ok(targetRows[1]?.subject?.endsWith("…"));
         assert.equal(targetRows[2]?.subject, "Verify targets");
         assert.equal(targetRows[3]?.subject, "docs / lookup");
+        assert.equal(targetRows[4]?.label, "mcp");
+        assert.equal(targetRows[4]?.subject, "docs / lookup");
+        assert.equal(targetRows[5]?.subject, "docs / docs://guide/start");
+        assert.equal(targetRows[6]?.subject, "docs");
+        assert.equal(targetRows[7]?.subject, "");
+        assert.equal(targetRows[7]?.action, "list templates");
         const unchanged = yield* step(() => run("return load('answer');"));
         assert.ok(unchanged.content.some((part) => part.type === "text" && part.text === "41"));
         const image = yield* step(() =>

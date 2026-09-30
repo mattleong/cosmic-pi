@@ -232,6 +232,61 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
+    title: "native MCP registered aliases and ambiguous names",
+    args: { code: "await tools.mcp__docs__lookup({query: 'Effect services'});" },
+    narrow: true,
+    result: nativeResult("completed", [
+      nativeArgumentCall("mcp__docs__lookup", { query: "Effect services" }),
+      nativeArgumentCall("mcp__docs__lookup_1234abcd", { query: "Registered alias" }),
+      nativeArgumentCall("mcp__team__docs__lookup", { query: "Ambiguous identity" }),
+      nativeArgumentCall(`mcp__${"x".repeat(49)}__c2936b33`, { query: "Truncated identity" }),
+    ]),
+  },
+  {
+    tool: "codemode",
+    title: "native MCP resources retain observed targets",
+    args: {
+      code: "text(await tools.read_mcp_resource({server: 'docs', uri: 'docs://guide/start'}));\ntext(await tools.list_mcp_resources({server: 'docs'}));\ntext(await tools.list_mcp_resource_templates({}));",
+    },
+    result: nativeResult("completed", [
+      nativeArgumentCall("read_mcp_resource", {
+        server: "docs",
+        uri: "docs://guide/" + "chapter/".repeat(40),
+      }),
+      nativeArgumentCall("list_mcp_resources", { server: "docs" }),
+      nativeArgumentCall("list_mcp_resource_templates", {}),
+    ]),
+  },
+  {
+    tool: "codemode",
+    title: "native MCP handled sign-in failure preserves recovery",
+    args: { code: "text(await tools.mcp__docs__lookup({query: 'Effect services'}));" },
+    result: nativeResult(
+      "completed",
+      [
+        {
+          ...nativeArgumentCall("mcp__docs__lookup", { query: "Effect services" }),
+          status: "error",
+          error: "MCP server docs requires sign-in. Run /mcp to sign in.",
+        },
+      ],
+      "The call returned an MCP error",
+    ),
+  },
+  {
+    tool: "codemode",
+    title: "native MCP unexplained failure remains visible",
+    args: { code: "text(await tools.mcp__docs__lookup({}));" },
+    result: nativeResult("completed", [
+      {
+        ...nativeArgumentCall("mcp__docs__lookup", {}),
+        status: "error",
+        error: "MCP tool docs/lookup returned an error",
+      },
+    ]),
+  },
+  {
+    tool: "codemode",
     title: "native script failure retains partial output",
     args: { code: "text('Partial output'); throw new Error('Failed to finish');" },
     isError: true,

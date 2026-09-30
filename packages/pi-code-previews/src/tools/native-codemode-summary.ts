@@ -33,9 +33,9 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
   const preview = nativeArgumentPreview(call.args);
   const target = nativeCodemodeCallSubject(call.name, preview, cwd);
   const entry: CompactChild = {
-    label: sanitizeDiagnosticError(call.name, { maximumLength: 100 }),
-    showTiming: true,
     ...target,
+    label: sanitizeDiagnosticError(target.label ?? call.name, { maximumLength: 100 }),
+    showTiming: true,
     subject: target.subject ? sanitizeDiagnosticError(target.subject, { maximumLength: 200 }) : "",
     // Native dispatch return remains semantically neutral, even with a completion checkmark.
     status:
@@ -45,6 +45,16 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
           ? "uncertain"
           : call.status,
     issues: [
+      ...(target.label || call.name.startsWith("mcp__")
+        ? [
+            {
+              code: "native-call-name",
+              severity: "info" as const,
+              message: "Registered tool",
+              detail: sanitizeDiagnosticContent(call.name),
+            },
+          ]
+        : []),
       ...(call.status === "error"
         ? [issue("native-child-error", call.error ?? "The nested call failed")]
         : []),
