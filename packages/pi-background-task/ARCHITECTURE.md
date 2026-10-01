@@ -90,8 +90,11 @@ decoding allocates the detached result. The producer-owned output codec rejects 
 removes undeclared keys, and the provider freezes the accepted value before returning it.
 
 Each `TaskRecord` owns one mutable `LogBuffer` under the registry semaphore. Its offset-backed
-store compacts amortized dead prefixes; consumers retain only cached detached event slices.
-Appending or evicting logs never changes an earlier slice or its events.
+store compacts amortized dead prefixes; events freeze at creation and consumers retain cached,
+detached frozen event slices. Reads freeze their envelope and selected arrays, including clipped
+tail events. Projection publication freezes detached scalar rows, their task array, and its envelope
+while structurally sharing immutable log events. Consumer mutation and later appends or evictions
+cannot change earlier snapshots, authoritative logs, or byte accounting.
 
 The UI and host footer project immutable service snapshots; neither owns subprocesses. Extensions exchange only the public plain tool-definition protocol.
 

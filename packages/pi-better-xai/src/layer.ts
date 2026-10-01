@@ -10,16 +10,21 @@ export interface XaiSessionInput {
   readonly cwd: string;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly projectTrusted: boolean;
+  readonly publicationOwner: MutableRef.MutableRef<boolean>;
 }
 
 /** Compose the complete Better xAI application dependency graph for one Pi session. */
 export const makeXaiApplicationLayer = (
-  { cwd, context, projectTrusted }: XaiSessionInput,
+  { cwd, context, projectTrusted, publicationOwner }: XaiSessionInput,
   options: Required<Pick<XaiUsageServiceOptions, "projection" | "onChange" | "isUsageVisible">>,
 ) =>
-  XaiUsageService.layer({ ...options, cwd, context, projectTrusted }).pipe(
-    Layer.provide(Layer.merge(nodePlatformLayer, AgentDirectory.layerFromHost(getAgentDir))),
-  );
+  XaiUsageService.layer({
+    ...options,
+    cwd,
+    context,
+    projectTrusted,
+    canPublish: () => MutableRef.get(publicationOwner),
+  }).pipe(Layer.provide(Layer.merge(nodePlatformLayer, AgentDirectory.layerFromHost(getAgentDir))));
 
 export type XaiApplicationLayer = ReturnType<typeof makeXaiApplicationLayer>;
 export type XaiApplication = Layer.Success<XaiApplicationLayer>;

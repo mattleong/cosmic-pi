@@ -23,6 +23,7 @@ export interface CosmicUiSessionInput {
   readonly releaseSignal: () => void;
   readonly initialTotals: FooterTotals;
   readonly projectTrusted: boolean;
+  readonly publicationOwner: MutableRef.MutableRef<boolean>;
 }
 
 export interface CosmicUiApplicationLayerOptions {
@@ -34,7 +35,7 @@ export interface CosmicUiApplicationLayerOptions {
 
 /** Compose the complete Cosmic UI dependency graph for one Pi session. */
 export const makeCosmicUiApplicationLayer = (
-  { context, cwd, initialTotals, projectTrusted }: CosmicUiSessionInput,
+  { context, cwd, initialTotals, projectTrusted, publicationOwner }: CosmicUiSessionInput,
   options: CosmicUiApplicationLayerOptions,
 ) => {
   const callbackBoundary = HostCallbackBoundary.layer(options.callbacks);
@@ -55,6 +56,7 @@ export const makeCosmicUiApplicationLayer = (
         projection: options.projection,
         projectTrusted,
         onChange: options.requestRender,
+        canPublish: () => MutableRef.get(publicationOwner),
       });
     }),
   ).pipe(Layer.provide(Layer.merge(configStore, callbackBoundary)));

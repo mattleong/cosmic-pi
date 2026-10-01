@@ -6,6 +6,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Scheduler from "effect/Scheduler";
+import * as core from "pi-cosmic-core";
+import { vi } from "vitest";
 import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
@@ -18,11 +21,13 @@ import {
   deferredPromise,
   extensionContextFixture,
   makeInMemoryDocuments,
+  pausedScheduler,
+  yieldUntil,
 } from "pi-cosmic-core/testing";
 import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { abortablePendingExec, execOk, execResult, type ExecResult } from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
-import { CosmicUiService, makeProjection } from "../src/protocol/service.ts";
+import { CosmicUiService, makeProjection, resetProjection } from "../src/protocol/service.ts";
 import { makePiExec } from "../src/boundary/host-exec.ts";
 
 function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
@@ -42,6 +47,8 @@ function serviceLayer(
     store?: ReturnType<typeof documents>;
     omitProjectTrust?: boolean;
     projectTrusted?: boolean;
+    canPublish?: () => boolean;
+    onChange?: () => void;
   } = {},
 ) {
   const projection = makeProjection();
@@ -55,7 +62,8 @@ function serviceLayer(
     cwd: "/project",
     exec: makePiExec(options.exec ?? (() => execOk())),
     projection,
-    onChange() {},
+    onChange: options.onChange ?? (() => undefined),
+    canPublish: options.canPublish,
     startPolling: options.startPolling ?? false,
   };
   const serviceOptions = options.omitProjectTrust
@@ -263,6 +271,76 @@ describe("Cosmic UI host service", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("branch invalidation cannot clear state ahead of a post-validation Git commit", () =>
+    Effect.gen(function* () {
+      const paused = pausedScheduler();
+      let armed = false;
+      let validated = false;
+      let stopped = false;
+      const makeRefresh = core.makeSubscriptionRefresh;
+      const observedRefresh: typeof makeRefresh = (options) =>
+        makeRefresh({
+          ...options,
+          commit: (value, request) => {
+            // Record the owned engine's actual commit admission, after its final key comparison.
+            if (armed) validated = true;
+            return options.commit(value, request);
+          },
+        });
+      const boundary = vi
+        .spyOn(core, "makeSubscriptionRefresh")
+        .mockImplementation(observedRefresh);
+      const contextRef = MutableRef.make(context());
+      const { layer, projection } = serviceLayer({
+        context: contextRef,
+        exec: () => execOk("## same-branch\n"),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* CosmicUiService;
+        yield* service.refreshGit(true);
+        const before = MutableRef.get(projection).gitStatus;
+        expect(before).toBeDefined();
+        armed = true;
+        const scheduler = {
+          ...paused.scheduler,
+          shouldYield: () => {
+            if (!validated || stopped) return false;
+            stopped = true;
+            return true;
+          },
+        };
+        const refresh = yield* service
+          .refreshGit(true)
+          .pipe(
+            Effect.provideService(Scheduler.Scheduler, scheduler),
+            Effect.forkScoped({ startImmediately: true }),
+          );
+        try {
+          yield* yieldUntil(() => stopped);
+          const invalidated = yield* Deferred.make<void>();
+          const invalidation = yield* service.invalidateProbes.pipe(
+            Effect.andThen(Deferred.succeed(invalidated, undefined)),
+            Effect.forkScoped,
+          );
+          for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+          expect(yield* Deferred.isDone(invalidated)).toBe(false);
+          expect(MutableRef.get(projection).gitStatus).toEqual(before);
+          expect(MutableRef.get(projection).probeRevision).toBe(0);
+          paused.resume();
+          yield* Fiber.join(refresh);
+          yield* Fiber.join(invalidation);
+          expect(MutableRef.get(projection).gitStatus).toBeUndefined();
+          expect(MutableRef.get(projection).probeRevision).toBe(1);
+          yield* service.refreshAll(true);
+          expect(MutableRef.get(projection).gitStatus).toBeDefined();
+        } finally {
+          paused.resume();
+          boundary.mockRestore();
+        }
+      }).pipe(provideBuiltLayer(layer));
+    }),
+  );
+
   it.effect("serializes rapid visibility edits against the latest document", () => {
     const configPath = "/project/.pi/extensions/pi-cosmic-ui.json";
     const {
@@ -336,6 +414,46 @@ describe("Cosmic UI host service", () => {
         expect(MutableRef.get(projection).config?.footer.density).toBe("compact");
       }).pipe(Effect.scoped, provideBuiltLayer(layer));
     }),
+  );
+
+  it.effect(
+    "a revoked session keeps a masked config commit durable without republishing or repainting",
+    () =>
+      Effect.gen(function* () {
+        const configPath = "/project/.pi/extensions/pi-cosmic-ui.json";
+        const memory = makeInMemoryDocuments({
+          [configPath]: { footer: { density: "comfortable" } },
+        });
+        let current = true;
+        let changes = 0;
+        const { layer, projection } = serviceLayer({
+          store: { layer: memory.layer, values: memory.documents },
+          canPublish: () => current,
+          onChange: () => {
+            changes++;
+          },
+        });
+        const committed = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        yield* Effect.gen(function* () {
+          const service = yield* CosmicUiService;
+          memory.blockNextUpdateAtCommit(committed, release);
+          const update = yield* service
+            .updateFooterConfig({ density: "compact" })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(committed);
+          current = false;
+          resetProjection(projection);
+          const reset = MutableRef.get(projection);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(update);
+          expect(memory.documents.get(configPath)).toMatchObject({
+            footer: { density: "compact" },
+          });
+          expect(MutableRef.get(projection)).toBe(reset);
+          expect(changes).toBe(0);
+        }).pipe(provideBuiltLayer(layer));
+      }),
   );
 
   it.effect("polls on the Effect clock and recovers from failures", () => {

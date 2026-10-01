@@ -21,6 +21,7 @@ import {
 } from "../src/application.ts";
 import betterXai from "../src/extension.ts";
 import * as usageRequests from "../src/usage/request.ts";
+import * as configStore from "../src/config/store.ts";
 import { usageSnapshot } from "./support/fixtures.ts";
 
 afterEach(() => {
@@ -140,6 +141,70 @@ const throwOnRead = <Target extends object>(
 };
 
 layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
+  for (const ending of ["shutdown", "failed replacement"] as const) {
+    it.effect(
+      `${ending} revokes an admitted settings commit without resurrection or stale notifications`,
+      () =>
+        Effect.gen(function* () {
+          let starts = 0;
+          const h = yield* harness({
+            startupEffect: () =>
+              ++starts === 1 ? Effect.void : Effect.die("replacement unavailable"),
+          });
+          const committed = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const modify = configStore.modifyConfig;
+          const gatedModify: typeof modify = (path, update) =>
+            modify(path, (raw) => {
+              const modification = update(raw);
+              return {
+                ...modification,
+                afterCommit: Deferred.succeed(committed, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(modification.afterCommit ?? Effect.void),
+                ),
+              };
+            });
+          vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+          yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+          const pending = h.commands.get("xai")?.("settings usage.showResetTimes false", h.ctx);
+          yield* Deferred.await(committed);
+          h.notify.mockClear();
+          const removal =
+            ending === "shutdown"
+              ? h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx)
+              : h.handlers.get("session_start")?.({}, { ...h.ctx });
+          yield* Deferred.succeed(release, undefined);
+          yield* invoke(pending);
+          yield* invoke(removal);
+          if (ending === "shutdown") expect(h.notify).not.toHaveBeenCalled();
+          else expect(h.notify).toHaveBeenCalledOnce(); // Only the current startup failure.
+          h.setStatus.mockClear();
+          h.handlers.get("turn_end")?.({}, h.ctx);
+          yield* Effect.yieldNow;
+          expect(h.setStatus).not.toHaveBeenCalled();
+        }),
+    );
+  }
+
+  it.effect("an interrupted usage command cannot warn after session retirement", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      vi.spyOn(usageRequests, "requestXaiUsage").mockReturnValue(
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      const h = yield* harness();
+      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      const pending = h.commands.get("xai")?.("usage", h.ctx);
+      yield* Deferred.await(started);
+      h.notify.mockClear();
+      const shutdown = h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx);
+      yield* invoke(pending);
+      yield* invoke(shutdown);
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("contains hostile terminal-UI getters without aborting activation", () =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -471,11 +536,8 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      h.notify.mockImplementation(() => {
-        throw new Error("host-notification-secret");
-      });
       yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).not.toHaveBeenCalled();
     }),
   );
 

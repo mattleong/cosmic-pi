@@ -3,6 +3,7 @@ import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import {
   invokeHostCallback,
   redactDiagnosticValue,
@@ -43,6 +44,7 @@ export function registerSettingsController(
     formatDebugStatus(ctx: ExtensionContext): string;
     fastProjection: MutableRef.MutableRef<FastSnapshot>;
     resetFastRoutingTransport(ctx: ExtensionContext): void;
+    captureAuthority?: () => () => boolean;
     run<A, E>(
       effect: Effect.Effect<A, E, OpenAIUsageService | FastModeService>,
       signal?: AbortSignal,
@@ -75,32 +77,49 @@ export function registerSettingsController(
       safeHostSignal(ctx),
     );
 
-  command.add(
+  const createCommand = (isCurrent: () => boolean) =>
     settingsSubcommand({
       root: "openai",
       description: "Configure Better OpenAI",
       title: "Better OpenAI",
+      isCurrent,
       descriptors,
       examples: ["fast.enabled true", "usage.refreshIntervalMs 30000"],
-      config,
+      config: () => (isCurrent() ? config() : undefined),
       status: formatDebugStatus,
-      onInvoke: updateContext,
+      onInvoke: (ctx) => {
+        if (isCurrent()) updateContext(ctx);
+      },
       signal: "optional",
-      apply: (ctx, id, value, signal) =>
-        run(
+      apply: (ctx, id, value, signal) => {
+        const stale = () => Result.fail({ message: "", stale: true });
+        if (!isCurrent()) return Promise.resolve(stale());
+        return run(
           Effect.gen(function* () {
             if (id !== "fast.enabled")
               return yield* OpenAIUsageService.use((service) => service.updateSetting(id, value));
             yield* FastModeService.use((service) => service.setDesired(ctx, value === "true"));
-            yield* Effect.sync(() => resetFastRoutingTransport(ctx));
+            yield* Effect.sync(() => {
+              if (isCurrent()) resetFastRoutingTransport(ctx);
+            });
           }).pipe(Effect.result),
           signal,
-        ),
-      afterApply: updateFooter,
+        ).then(
+          (result) => (isCurrent() ? result : stale()),
+          (error) => {
+            if (!isCurrent()) return stale();
+            throw error;
+          },
+        );
+      },
+      afterApply: (ctx) => {
+        if (isCurrent()) updateFooter(ctx);
+      },
       open: (ctx, session) =>
         readRedactedConfig(ctx)
           .catch(() => ({}))
           .then((initialRedactedConfig) => {
+            if (!isCurrent()) return { _tag: "Settled", value: undefined } as const;
             let redactedConfig = initialRedactedConfig;
             const initialConfig = session.config();
             if (!initialConfig) return { _tag: "Blocked" } as const;
@@ -229,6 +248,7 @@ export function registerSettingsController(
                   );
                 const reconcilePicker = () =>
                   invokeHostCallback(() => {
+                    if (!isCurrent()) return;
                     cfg = session.config() ?? cfg;
                     if (outerList)
                       for (const section of sections())
@@ -237,10 +257,12 @@ export function registerSettingsController(
                   }, undefined);
                 function writeSetting(id: string, value: string): Promise<void> {
                   return session.apply(id, value).then(() => {
+                    if (!isCurrent()) return;
                     reconcilePicker();
                     void readRedactedConfig(ctx)
                       .catch(() => redactedConfig)
                       .then((nextRedactedConfig) => {
+                        if (!isCurrent()) return;
                         redactedConfig = nextRedactedConfig;
                         safeHostUi(() => tui.requestRender());
                       })
@@ -276,6 +298,13 @@ export function registerSettingsController(
               },
             });
           }),
-    }),
-  );
+    });
+  const registered = createCommand(() => true);
+  command.add({
+    ...registered,
+    handler: (args, ctx) => {
+      const isCurrent = options.captureAuthority?.() ?? (() => true);
+      return createCommand(isCurrent).handler(args, ctx);
+    },
+  });
 }

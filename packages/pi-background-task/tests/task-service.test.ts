@@ -205,6 +205,56 @@ const awaitState = (state: BackgroundTaskState) => {
 };
 
 describe("BackgroundTaskService", () => {
+  it.effect(
+    "consumer mutations cannot alter task projections, retained logs or byte accounting",
+    () => {
+      let latest: BackgroundTaskProjection = { tasks: [] };
+      const harness = serviceHarness(
+        { logBufferBytesPerTask: 4_096, totalLogBufferBytes: 8_192 },
+        (projection) => void (latest = projection),
+      );
+      return harness.run(function* (service) {
+        const started = yield* service.start(taskInput());
+        const text = "a".repeat(4_096);
+        const first = yield* emitAndRead(service, harness.controls[0], started.id, 0, text);
+        const retained = latest;
+        const row = retained.tasks[0]!;
+        expect(Reflect.set(retained, "tasks", [])).toBe(false);
+        expect(Reflect.set(retained.tasks, "length", 0)).toBe(false);
+        expect(Reflect.set(row, "state", "failed")).toBe(false);
+        expect(Reflect.set(row, "logs", [])).toBe(false);
+        expect(Reflect.set(row.logs, "length", 0)).toBe(false);
+        expect(Reflect.set(row.logs[0]!, "bytes", 0)).toBe(false);
+        expect(Reflect.set(row.logs[0]!, "text", "corrupted")).toBe(false);
+        expect(Reflect.set(first.events[0]!, "bytes", 0)).toBe(false);
+        expect((yield* service.status(started.id)).state).toBe("running");
+        expect((yield* service.logs({ id: started.id, afterCursor: 0 })).events[0]?.text).toBe(
+          text,
+        );
+
+        const replacement = "🙂".repeat(1_024);
+        const second = yield* emitAndRead(
+          service,
+          harness.controls[0],
+          started.id,
+          first.nextCursor,
+          replacement,
+        );
+        expect(second).toMatchObject({
+          droppedBytes: 4_096,
+          earliestAvailableCursor: 2,
+          events: [{ cursor: 2, text: replacement, bytes: 4_096 }],
+        });
+        yield* service.stop(started.id);
+        expect(latest.tasks[0]).toMatchObject({ state: "stopped", droppedLogBytes: 4_096 });
+        expect(latest.tasks[0]?.logs.map((event) => event.text)).toEqual([replacement]);
+        expect(retained.tasks[0]).toMatchObject({ state: "running", droppedLogBytes: 0 });
+        expect(row.logs.map((event) => event.text)).toEqual([text]);
+        expect(first).toMatchObject({ droppedBytes: 0, nextCursor: 1 });
+      });
+    },
+  );
+
   for (const outcome of ["exit", "output", "timeout", "interrupt"] as const) {
     it.effect(`clears awaited activity after ${outcome}`, () => {
       const admitted = Deferred.makeUnsafe<void>();

@@ -46,6 +46,7 @@ interface OpenAIUsageServiceOptions {
   readonly cwd: string;
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
   readonly onChange: () => void;
+  readonly canPublish?: () => boolean;
   readonly startPolling?: boolean;
   readonly isUsageVisible?: () => boolean;
   readonly projectTrusted?: boolean;
@@ -70,6 +71,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         cwd,
         projection: options.projection,
         onChange: options.onChange,
+        canPublish: options.canPublish,
         startPolling: options.startPolling,
         backgroundEnabled: options.isUsageVisible,
         projectTrusted: options.projectTrusted,
@@ -135,12 +137,10 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
               return {
                 value: nextConfig,
                 document: committed,
+                // Fast-only writes do not pulse usage polling; changed usage settings do.
                 afterCommit: controller
-                  .updateState((latest) => ({ ...latest, config: nextConfig }))
-                  .pipe(
-                    Effect.andThen(controller.synchronize(clearUsage)),
-                    Effect.andThen(afterCommit),
-                  ),
+                  .installConfig(nextConfig, clearUsage, clearUsage)
+                  .pipe(Effect.andThen(afterCommit)),
               };
             });
           }),

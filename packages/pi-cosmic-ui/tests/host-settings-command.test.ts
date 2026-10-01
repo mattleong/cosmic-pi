@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { deferredPromise, extensionContextFixture, yieldUntil } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   settingsSubcommand,
@@ -61,6 +62,66 @@ const harness = (
 };
 
 describe("provider settings command shell", () => {
+  for (const outcome of ["success", "typed failure", "rejection"] as const) {
+    it.effect(
+      `retired ${outcome} cannot notify, redraw or run afterApply on a frozen host context`,
+      () =>
+        Effect.gen(function* () {
+          let current = true;
+          const pending = deferredPromise<Awaited<ReturnType<Options["apply"]>>>();
+          const afterApply = vi.fn();
+          const h = harness({ isCurrent: () => current, afterApply });
+          Object.freeze(h.ctx.ui);
+          Object.freeze(h.ctx);
+          h.apply.mockReturnValueOnce(pending.promise);
+          const work = yield* h.invoke("mode on").pipe(Effect.forkScoped);
+          yield* yieldUntil(() => h.apply.mock.calls.length === 1);
+          current = false;
+          if (outcome === "rejection") pending.reject(new Error("unavailable"));
+          else
+            pending.resolve(
+              outcome === "success"
+                ? Result.succeed(undefined)
+                : Result.fail({ message: "unavailable" }),
+            );
+          yield* Fiber.join(work);
+          expect(h.notify).not.toHaveBeenCalled();
+          expect(afterApply).not.toHaveBeenCalled();
+        }),
+    );
+  }
+
+  for (const operation of ["status", "picker"] as const) {
+    it.effect(`retirement suppresses a delayed ${operation} notification`, () =>
+      Effect.gen(function* () {
+        let current = true;
+        let started = false;
+        const status = deferredPromise<string>();
+        const picker = deferredPromise<Awaited<ReturnType<Options["open"]>>>();
+        const h = harness({
+          isCurrent: () => current,
+          status: () => {
+            started = true;
+            return status.promise;
+          },
+          open: () => {
+            started = true;
+            return picker.promise;
+          },
+        });
+        const work = yield* h
+          .invoke(operation === "status" ? "status" : "")
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => started);
+        current = false;
+        status.resolve("diagnostics");
+        picker.resolve({ _tag: "Failed", cause: undefined });
+        yield* Fiber.join(work);
+        expect(h.notify).not.toHaveBeenCalled();
+      }),
+    );
+  }
+
   it.effect("answers help, status, and invalid input without config or apply", () =>
     Effect.gen(function* () {
       let failStatus = false;

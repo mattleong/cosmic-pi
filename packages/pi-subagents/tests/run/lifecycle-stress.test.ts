@@ -7,15 +7,17 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Scheduler from "effect/Scheduler";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import {
   contactParentFrame,
   fakeChildLayer,
   fakeWriterLeaseLayer,
+  leaseCounts,
   localServiceFixture,
   request,
   serviceLayer,
@@ -25,6 +27,62 @@ import {
 const cycles = 4;
 
 describe("SubagentService lifecycle stress", () => {
+  it.effect(
+    "compensates pre-backend cancellation checkpoints before writer reuse and shutdown",
+    () =>
+      Effect.gen(function* () {
+        for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
+          const leases = leaseCounts();
+          const fake = fakeChildLayer();
+          let projection: SubagentProjection | undefined;
+          const layer = serviceLayer(
+            { publish: (value) => void (projection = value) },
+            undefined,
+            fakeWriterLeaseLayer({ counts: leases }),
+          ).pipe(Layer.provide(fake.layer));
+          const owner = yield* Scope.fork(yield* Effect.scope);
+          const context = yield* Layer.buildWithScope(layer, owner);
+          const service = Context.get(context, SubagentService);
+          let checkpoints = 0;
+          let cancelled = false;
+          const scheduler = interruptingScheduler(() => {
+            if (leases.mark === 0 || fake.controls.length > 0) return false;
+            cancelled = ++checkpoints === interruptAt || cancelled;
+            return checkpoints === interruptAt;
+          });
+          const starting = yield* service
+            .start(request({ writeIntent: "writer" }))
+            .pipe(Effect.provideService(Scheduler.Scheduler, scheduler), Effect.forkScoped);
+          yield* yieldUntil(() => starting.pollUnsafe() !== undefined);
+          const result = yield* Fiber.await(starting);
+          if (cancelled) {
+            expect(Exit.isFailure(result), `interruption checkpoint ${interruptAt}`).toBe(true);
+            expect(projection?.runs[0]?.state).toBe("stopped");
+            // A cancellation inside the driver's masked acquisition may already
+            // own a backend; it must be released before compensation settles.
+            expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
+            expect(leases.release).toBe(1);
+            const spawnedBeforeStop = fake.controls.length;
+            yield* service.stop(projection!.runs[0]!.id);
+            expect(fake.controls).toHaveLength(spawnedBeforeStop);
+          } else if (Exit.isSuccess(result)) yield* service.stop(result.value.id);
+          else return yield* Effect.failCause(result.cause);
+
+          const replacement = yield* service.start(request({ writeIntent: "writer" }));
+          if (interruptAt % 2 === 0) yield* service.stop(replacement.id);
+          let disposed = false;
+          const shutdown = yield* Scope.close(owner, Exit.void).pipe(
+            Effect.tap(() => Effect.sync(() => void (disposed = true))),
+            Effect.forkScoped,
+          );
+          yield* yieldUntil(() => disposed);
+          yield* Fiber.join(shutdown);
+          expect(leases.release).toBe(leases.acquire);
+          expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
+        }
+      }),
+  );
+
   it.effect("joins terminal descendant cleanup without replacing its outcome", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>();

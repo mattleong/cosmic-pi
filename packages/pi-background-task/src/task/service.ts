@@ -152,15 +152,21 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     record.wake = Deferred.makeUnsafe<void>();
     Deferred.doneUnsafe(current, Effect.void);
   };
-  const currentProjection = (): BackgroundTaskProjection => ({
-    tasks: sortTasksByActivity(
-      [...tasks.values()].map((record) => ({
-        ...record.snapshot,
-        logs: record.logs.events,
-        awaited: record.awaiters > 0,
-      })),
-    ),
-  });
+  // Rows detach scalar task state while sharing the buffer's immutable events.
+  const currentProjection = (): BackgroundTaskProjection =>
+    Object.freeze({
+      tasks: Object.freeze(
+        sortTasksByActivity(
+          [...tasks.values()].map((record) =>
+            Object.freeze({
+              ...record.snapshot,
+              logs: record.logs.events,
+              awaited: record.awaiters > 0,
+            }),
+          ),
+        ),
+      ),
+    });
   let outputPublishPending = false;
   let outputPublishDeadline = 0;
   const outputPublishWake = yield* Latch.make();

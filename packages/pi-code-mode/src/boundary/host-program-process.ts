@@ -85,7 +85,8 @@ export const programEnvironment = (source: Readonly<Record<string, string | unde
 
 export interface ProgramProcessOptions {
   readonly cwd: string;
-  /** Upper bound for one reply write; the execution deadline governs overall. */
+  /** Acquisition and individual write caps; the engine owns the shared execution deadline. */
+  readonly startTimeoutMs: number;
   readonly writeTimeoutMs: number;
   readonly onCleanup: (confirmed: boolean) => void;
 }
@@ -107,6 +108,6 @@ export const openProgramProcess = (
     writeTimeoutMs: options.writeTimeoutMs,
     maxStderrBytes: PROGRAM_OUTPUT_BYTES + 1,
     maxStderrQueueBytes: PROGRAM_OUTPUT_BYTES + 1,
-    startTimeoutMs: 10_000,
+    startTimeoutMs: options.startTimeoutMs,
     onCleanup: options.onCleanup,
   });

@@ -34,6 +34,7 @@ export interface XaiUsageServiceOptions {
   readonly cwd: string;
   readonly projection: MutableRef.MutableRef<XaiProjection>;
   readonly onChange: () => void;
+  readonly canPublish?: () => boolean;
   readonly startPolling?: boolean;
   readonly isUsageVisible?: () => boolean;
   readonly agentDir?: string;
@@ -62,6 +63,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
         cwd: options.cwd,
         projection: options.projection,
         onChange: options.onChange,
+        canPublish: options.canPublish,
         startPolling: options.startPolling,
         backgroundEnabled: options.isUsageVisible,
         agentDir: options.agentDir,

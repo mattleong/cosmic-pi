@@ -1,13 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import type { CodeModeResult } from "../../src/engine/diagnostic.ts";
 import type { ToolCallLifecycleEvent } from "../../src/engine/dispatch.ts";
 import { executeProgram, type ExecutionLimits } from "../../src/engine/execute.ts";
 import { makeTool, toolError } from "../../src/engine/tool.ts";
-import { temporaryDirectory } from "pi-cosmic-core/testing";
+import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
+import { childFrame, programProcessFixture } from "../support/execute.ts";
 
 const limits: ExecutionLimits = { timeoutMs: 10_000, maxToolCalls: 32, maxOutputBytes: 50_000 };
 
@@ -61,6 +65,579 @@ const terminal = (events: ReadonlyArray<ToolCallLifecycleEvent>) =>
       ? []
       : [`${event.name}:${event.status}`],
   );
+
+const returned = childFrame({
+  type: "result",
+  ok: true,
+  format: "text",
+  text: "done",
+  totalBytes: 4,
+});
+
+type DemoCallInput = { readonly text: string } | Record<string, never>;
+
+const called = (seq: number, tool: "echo" | "pending", input: DemoCallInput) =>
+  childFrame({ type: "call", seq, path: ["demo", tool], args: [input] });
+
+const parentFrameText = (bytes: Uint8Array) => new TextDecoder().decode(bytes.subarray(4));
+
+describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "owned execution lifetime",
+  () => {
+    for (const stage of ["before acquisition", "acquired readiness", "start write"] as const) {
+      it.effect(
+        `times out during ${stage} without releasing its pause or dispatching late work`,
+        () =>
+          Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            const pause = Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+            );
+            let acquired = 0;
+            let released = 0;
+            const writes: Array<string> = [];
+            const events: Array<ToolCallLifecycleEvent> = [];
+            const captures: Array<CodeModeResult> = [];
+            const fiber = yield* executeProgram({
+              code: "return 'done';",
+              cwd: process.cwd(),
+              tools,
+              limits: { ...limits, timeoutMs: 10 },
+              onResult: (result) => void captures.push(result),
+              onToolCallLifecycle: (event) => Effect.sync(() => void events.push(event)),
+              openProcess: (options) =>
+                Effect.gen(function* () {
+                  if (stage === "before acquisition") yield* pause;
+                  const child = yield* Effect.acquireRelease(
+                    Effect.sync(() => {
+                      acquired++;
+                      return programProcessFixture({
+                        stdout: Stream.make(called(0, "echo", { text: "late" }), returned),
+                        write: (bytes) =>
+                          Effect.gen(function* () {
+                            if (
+                              stage === "start write" &&
+                              parentFrameText(bytes).includes('"type":"start"')
+                            )
+                              yield* pause;
+                            writes.push(parentFrameText(bytes));
+                          }),
+                      });
+                    }),
+                    () =>
+                      Effect.sync(() => {
+                        released++;
+                        options.onCleanup(true);
+                      }),
+                  );
+                  if (stage === "acquired readiness") yield* pause;
+                  return child;
+                }),
+            }).pipe(Effect.forkChild);
+            yield* Deferred.await(entered);
+            yield* TestClock.adjust(10);
+            yield* yieldUntil(() => fiber.pollUnsafe() !== undefined);
+            const result = yield* Fiber.join(fiber);
+            expect(failed(result).error.kind).toBe("TimeoutExceeded");
+            expect(acquired).toBe(stage === "before acquisition" ? 0 : 1);
+            expect(released).toBe(acquired);
+            expect(writes).toEqual([]);
+            expect(events).toEqual([]);
+            expect(captures).toEqual([result]);
+            yield* Deferred.succeed(release, undefined);
+            yield* Effect.yieldNow;
+            expect(writes).toEqual([]);
+            expect(events).toEqual([]);
+            expect(captures).toEqual([result]);
+            expect(released).toBe(acquired);
+          }),
+      );
+    }
+
+    it.effect("refuses an already expired start even when a successful result is buffered", () =>
+      Effect.gen(function* () {
+        let opened = 0;
+        const result = yield* executeProgram({
+          code: "return 'done';",
+          cwd: process.cwd(),
+          tools,
+          limits: { ...limits, timeoutMs: 0 },
+          openProcess: () =>
+            Effect.sync(() => {
+              opened++;
+              return programProcessFixture({ stdout: Stream.make(returned) });
+            }),
+        });
+        expect(failed(result).error.kind).toBe("TimeoutExceeded");
+        expect(opened).toBe(0);
+      }),
+    );
+
+    it.effect("bounds delayed finish delivery with a separate post-result output allowance", () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let released = 0;
+        let finishDelivered = false;
+        const captures: Array<CodeModeResult> = [];
+        const fiber = yield* executeProgram({
+          code: "return 'done';",
+          cwd: process.cwd(),
+          tools,
+          limits: { ...limits, timeoutMs: 10 },
+          onResult: (result) => void captures.push(result),
+          openProcess: () =>
+            Effect.acquireRelease(
+              Effect.succeed(
+                programProcessFixture({
+                  stdout: Stream.make(returned),
+                  write: (bytes) =>
+                    parentFrameText(bytes).includes('"type":"finish"')
+                      ? Deferred.succeed(entered, undefined).pipe(
+                          Effect.andThen(Deferred.await(release)),
+                          Effect.andThen(
+                            Effect.sync(() => {
+                              finishDelivered = true;
+                            }),
+                          ),
+                        )
+                      : Effect.void,
+                }),
+              ),
+              () =>
+                Effect.sync(() => {
+                  released++;
+                }),
+            ),
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust(10);
+        expect(fiber.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust(240);
+        yield* yieldUntil(() => fiber.pollUnsafe() !== undefined);
+        const result = yield* Fiber.join(fiber);
+        expect(result).toEqual({ ok: true, value: "done" });
+        expect(released).toBe(1);
+        expect(finishDelivered).toBe(false);
+        expect(captures).toEqual([result]);
+        yield* Deferred.succeed(release, undefined);
+        yield* Effect.yieldNow;
+        expect(finishDelivered).toBe(false);
+        expect(captures).toEqual([result]);
+      }),
+    );
+
+    it.effect(
+      "refuses a late start after masked acquisition settles and releases ownership once",
+      () =>
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let writes = 0;
+          let released = 0;
+          const fiber = yield* executeProgram({
+            code: "return 'done';",
+            cwd: process.cwd(),
+            tools,
+            limits: { ...limits, timeoutMs: 10 },
+            openProcess: () =>
+              Effect.uninterruptible(
+                Effect.gen(function* () {
+                  const child = yield* Effect.acquireRelease(
+                    Effect.succeed(
+                      programProcessFixture({
+                        stdout: Stream.make(returned),
+                        write: () =>
+                          Effect.sync(() => {
+                            writes++;
+                          }),
+                      }),
+                    ),
+                    () =>
+                      Effect.sync(() => {
+                        released++;
+                      }),
+                  );
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  return child;
+                }),
+              ),
+          }).pipe(Effect.forkChild);
+          yield* Deferred.await(entered);
+          yield* TestClock.adjust(10);
+          expect(fiber.pollUnsafe()).toBeUndefined();
+          yield* Deferred.succeed(release, undefined);
+          expect(failed(yield* Fiber.join(fiber)).error.kind).toBe("TimeoutExceeded");
+          expect(writes).toBe(0);
+          expect(released).toBe(1);
+        }),
+    );
+
+    it.effect(
+      "keeps finalization outside the deadline and retains uncertain cleanup evidence",
+      () =>
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const cleanupEntered = yield* Deferred.make<void>();
+          const cleanupRelease = yield* Deferred.make<void>();
+          const captures: Array<CodeModeResult> = [];
+          let releases = 0;
+          const fiber = yield* executeProgram({
+            code: "return 'done';",
+            cwd: process.cwd(),
+            tools,
+            limits: { ...limits, timeoutMs: 10 },
+            onResult: (result) => void captures.push(result),
+            openProcess: (options) =>
+              Effect.acquireRelease(
+                Effect.succeed(
+                  programProcessFixture({
+                    write: () =>
+                      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+                  }),
+                ),
+                () =>
+                  Effect.gen(function* () {
+                    releases++;
+                    yield* Deferred.succeed(cleanupEntered, undefined);
+                    yield* Deferred.await(cleanupRelease);
+                    options.onCleanup(false);
+                  }),
+              ),
+          }).pipe(Effect.forkChild);
+          yield* Deferred.await(entered);
+          yield* TestClock.adjust(10);
+          yield* Deferred.await(cleanupEntered);
+          yield* TestClock.adjust(10_000);
+          expect(fiber.pollUnsafe()).toBeUndefined();
+          expect(captures).toEqual([]);
+          yield* Deferred.succeed(cleanupRelease, undefined);
+          const result = yield* Fiber.join(fiber);
+          expect(failed(result).error.kind).toBe("TimeoutExceeded");
+          expect(result.logs?.join(" ")).toContain("could not confirm");
+          expect(releases).toBe(1);
+          expect(captures).toEqual([result]);
+        }),
+    );
+
+    for (const ending of ["EOF", "malformed frame"] as const) {
+      it.effect(`reports ${ending} and cancels pending dispatch before the deadline`, () =>
+        Effect.gen(function* () {
+          const completed = yield* Deferred.make<void>();
+          const pending = yield* Deferred.make<void>();
+          const events: Array<ToolCallLifecycleEvent> = [];
+          let released = 0;
+          const stdout = Stream.make(called(0, "echo", { text: "retained" })).pipe(
+            Stream.concat(Stream.fromEffect(Deferred.await(completed)).pipe(Stream.drain)),
+            Stream.concat(Stream.make(called(1, "pending", {}))),
+            Stream.concat(Stream.fromEffect(Deferred.await(pending)).pipe(Stream.drain)),
+            Stream.concat(
+              ending === "EOF" ? Stream.empty : Stream.make(new Uint8Array([0, 0, 0, 1, 255])),
+            ),
+          );
+          const fiber = yield* executeProgram({
+            code: "await tools.demo.pending({});",
+            cwd: process.cwd(),
+            limits,
+            tools: {
+              demo: {
+                echo: tools.demo.echo,
+                pending: makeTool({
+                  description: "Pending dispatch",
+                  input: Schema.Struct({}),
+                  run: () =>
+                    Deferred.succeed(pending, undefined).pipe(Effect.andThen(Effect.never)),
+                }),
+              },
+            },
+            onToolCallLifecycle: (event) =>
+              Effect.sync(() => void events.push(event)).pipe(
+                Effect.andThen(
+                  event.name === "demo.echo" && event.status === "succeeded"
+                    ? Effect.asVoid(Deferred.succeed(completed, undefined))
+                    : Effect.void,
+                ),
+              ),
+            openProcess: () =>
+              Effect.acquireRelease(
+                Effect.succeed(
+                  programProcessFixture({
+                    stdout,
+                    exit: Effect.succeed({ code: 3, signal: null }),
+                  }),
+                ),
+                () =>
+                  Effect.sync(() => {
+                    released++;
+                  }),
+              ),
+          }).pipe(Effect.forkChild);
+          yield* Deferred.await(pending);
+          yield* yieldUntil(() => fiber.pollUnsafe() !== undefined);
+          const result = failed(yield* Fiber.join(fiber));
+          expect(result.error.kind).toBe("ExecutionFailure");
+          expect(result.error.message).toContain(
+            ending === "EOF" ? "exit code 3" : "invalid Code Mode message",
+          );
+          expect(result.completed).toEqual([{ tool: "tools.demo.echo", text: "echo:retained" }]);
+          expect(terminal(events)).toEqual(["demo.echo:succeeded", "demo.pending:cancelled"]);
+          expect(yield* Clock.currentTimeMillis).toBe(0);
+          expect(released).toBe(1);
+        }),
+      );
+    }
+
+    for (const stalled of ["exit", "stderr"] as const) {
+      it.effect(`cancels running and queued calls on EOF before the stalled ${stalled} tail`, () =>
+        Effect.gen(function* () {
+          const running = yield* Deferred.make<void>();
+          const queued = yield* Deferred.make<void>();
+          const eof = yield* Deferred.make<void>();
+          const tailEntered = yield* Deferred.make<void>();
+          const events: Array<ToolCallLifecycleEvent> = [];
+          let started = 0;
+          let sideEffects = 0;
+          let releases = 0;
+          const fiber = yield* executeProgram({
+            code: "await tools.demo.pending({});",
+            cwd: process.cwd(),
+            limits,
+            tools: {
+              demo: {
+                pending: makeTool({
+                  description: "Side effect after a delay",
+                  input: Schema.Struct({}),
+                  run: () =>
+                    Effect.gen(function* () {
+                      started++;
+                      if (started === 8) yield* Deferred.succeed(running, undefined);
+                      yield* Effect.sleep(100);
+                      sideEffects++;
+                    }),
+                }),
+              },
+            },
+            onToolCallLifecycle: (event) =>
+              Effect.sync(() => void events.push(event)).pipe(
+                Effect.andThen(
+                  event.id === 8 && event.status === "queued"
+                    ? Effect.asVoid(Deferred.succeed(queued, undefined))
+                    : Effect.void,
+                ),
+              ),
+            openProcess: () =>
+              Effect.acquireRelease(
+                Effect.succeed(
+                  programProcessFixture({
+                    stdout: Stream.make(
+                      ...Array.from({ length: 9 }, (_, id) => called(id, "pending", {})),
+                    ).pipe(
+                      Stream.concat(Stream.fromEffect(Deferred.await(eof)).pipe(Stream.drain)),
+                    ),
+                    stderr: Stream.fromEffect(Effect.never),
+                    exit: Deferred.succeed(tailEntered, undefined).pipe(
+                      Effect.andThen(
+                        stalled === "exit"
+                          ? Effect.never
+                          : Effect.succeed({ code: 3, signal: null }),
+                      ),
+                    ),
+                  }),
+                ),
+                () =>
+                  Effect.sync(() => {
+                    releases++;
+                  }),
+              ),
+          }).pipe(Effect.forkChild);
+          yield* Deferred.await(running);
+          yield* Deferred.await(queued);
+          expect(started).toBe(8);
+          yield* Deferred.succeed(eof, undefined);
+          // Cancellation is observable before advancing any output-tail time.
+          yield* yieldUntil(() => terminal(events).length === 9);
+          yield* Deferred.await(tailEntered);
+          expect(events.filter((event) => event.status === "running")).toHaveLength(8);
+          expect(terminal(events)).toEqual(Array(9).fill("demo.pending:cancelled"));
+          expect(yield* Clock.currentTimeMillis).toBe(0);
+          expect(fiber.pollUnsafe()).toBeUndefined();
+          expect(releases).toBe(0);
+          yield* TestClock.adjust(100);
+          expect(sideEffects).toBe(0);
+          expect(started).toBe(8);
+          expect(fiber.pollUnsafe()).toBeUndefined();
+          yield* TestClock.adjust(150);
+          const result = failed(yield* Fiber.join(fiber));
+          expect(result.error.kind).toBe("ExecutionFailure");
+          expect(result.error.message).toContain("exited before returning a result");
+          expect(sideEffects).toBe(0);
+          expect(started).toBe(8);
+          expect(releases).toBe(1);
+        }),
+      );
+    }
+
+    it.effect("preserves EOF through delayed dispatch finalization outside both time budgets", () =>
+      Effect.gen(function* () {
+        const running = yield* Deferred.make<void>();
+        const queued = yield* Deferred.make<void>();
+        const eof = yield* Deferred.make<void>();
+        const finalizerEntered = yield* Deferred.make<void>();
+        const finalizerRelease = yield* Deferred.make<void>();
+        const tailEntered = yield* Deferred.make<void>();
+        const events: Array<ToolCallLifecycleEvent> = [];
+        const captures: Array<CodeModeResult> = [];
+        let started = 0;
+        let finalizations = 0;
+        let releases = 0;
+        const fiber = yield* executeProgram({
+          code: "await tools.demo.pending({});",
+          cwd: process.cwd(),
+          limits: { ...limits, timeoutMs: 10 },
+          tools: {
+            demo: {
+              pending: makeTool({
+                description: "Owned dispatch with a delayed finalizer",
+                input: Schema.Struct({}),
+                run: () =>
+                  Effect.suspend(() => {
+                    const first = started++ === 0;
+                    return (
+                      started === 8
+                        ? Effect.asVoid(Deferred.succeed(running, undefined))
+                        : Effect.void
+                    ).pipe(
+                      Effect.andThen(Effect.never),
+                      Effect.ensuring(
+                        Effect.sync(() => {
+                          finalizations++;
+                        }).pipe(
+                          Effect.andThen(
+                            first
+                              ? Deferred.succeed(finalizerEntered, undefined).pipe(
+                                  Effect.andThen(Deferred.await(finalizerRelease)),
+                                )
+                              : Effect.void,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+              }),
+            },
+          },
+          onResult: (result) => void captures.push(result),
+          onToolCallLifecycle: (event) =>
+            Effect.sync(() => void events.push(event)).pipe(
+              Effect.andThen(
+                event.id === 8 && event.status === "queued"
+                  ? Effect.asVoid(Deferred.succeed(queued, undefined))
+                  : Effect.void,
+              ),
+            ),
+          openProcess: (options) =>
+            Effect.acquireRelease(
+              Effect.succeed(
+                programProcessFixture({
+                  stdout: Stream.make(
+                    ...Array.from({ length: 9 }, (_, id) => called(id, "pending", {})),
+                  ).pipe(Stream.concat(Stream.fromEffect(Deferred.await(eof)).pipe(Stream.drain))),
+                  stderr: Stream.fromEffect(Effect.never),
+                  exit: Deferred.succeed(tailEntered, undefined).pipe(Effect.andThen(Effect.never)),
+                }),
+              ),
+              () =>
+                Effect.sync(() => {
+                  releases++;
+                  options.onCleanup(false);
+                }),
+            ),
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(running);
+        yield* Deferred.await(queued);
+        yield* Deferred.succeed(eof, undefined);
+        yield* Deferred.await(finalizerEntered);
+        // A slow active finalizer cannot let the queued ninth call acquire a freed permit.
+        yield* yieldUntil(() =>
+          events.some((event) => event.id === 8 && event.status === "cancelled"),
+        );
+        yield* TestClock.adjust(10_000);
+        expect(started).toBe(8);
+        expect(finalizations).toBe(8);
+        expect(fiber.pollUnsafe()).toBeUndefined();
+        expect(releases).toBe(0);
+        expect(captures).toEqual([]);
+        expect(yield* Deferred.isDone(tailEntered)).toBe(false);
+        yield* Deferred.succeed(finalizerRelease, undefined);
+        yield* Deferred.await(tailEntered);
+        yield* TestClock.adjust(250);
+        const result = failed(yield* Fiber.join(fiber));
+        expect(result.error.kind).toBe("ExecutionFailure");
+        expect(result.error.message).toContain("exited before returning a result");
+        expect(result.logs?.join(" ")).toContain("could not confirm");
+        expect(terminal(events)).toEqual(Array(9).fill("demo.pending:cancelled"));
+        expect(started).toBe(8);
+        expect(finalizations).toBe(8);
+        expect(releases).toBe(1);
+        expect(captures).toEqual([result]);
+      }),
+    );
+
+    it.effect(
+      "joins pending sibling dispatches for a valid result instead of cancelling them",
+      () =>
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const resultSent = yield* Deferred.make<void>();
+          const events: Array<ToolCallLifecycleEvent> = [];
+          const fiber = yield* executeProgram({
+            code: "return 'done';",
+            cwd: process.cwd(),
+            limits,
+            tools: {
+              demo: {
+                pending: makeTool({
+                  description: "Pending sibling",
+                  input: Schema.Struct({}),
+                  run: () =>
+                    Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.as("sibling"),
+                    ),
+                }),
+              },
+            },
+            onToolCallLifecycle: (event) => Effect.sync(() => void events.push(event)),
+            openProcess: () =>
+              Effect.succeed(
+                programProcessFixture({
+                  stdout: Stream.make(called(0, "pending", {})).pipe(
+                    Stream.concat(
+                      Stream.fromEffect(
+                        Deferred.await(entered).pipe(
+                          Effect.andThen(Deferred.succeed(resultSent, undefined)),
+                          Effect.as(returned),
+                        ),
+                      ),
+                    ),
+                  ),
+                }),
+              ),
+          }).pipe(Effect.forkChild);
+          yield* Deferred.await(resultSent);
+          yield* Effect.yieldNow;
+          expect(fiber.pollUnsafe()).toBeUndefined();
+          expect(terminal(events)).toEqual([]);
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(fiber)).toEqual({ ok: true, value: "done" });
+          expect(terminal(events)).toEqual(["demo.pending:succeeded"]);
+        }),
+    );
+  },
+);
 
 describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
   "native program execution",

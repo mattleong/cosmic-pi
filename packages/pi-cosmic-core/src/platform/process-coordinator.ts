@@ -19,18 +19,22 @@ export const withProcessLock = <A, E, R>(
   key: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
-  Effect.suspend(() => {
-    const existing = processLocks.get(key);
-    const lock = existing ?? { semaphore: Semaphore.makeUnsafe(1), users: 0 };
-    if (existing === undefined) processLocks.set(key, lock);
-    lock.users++;
+  Effect.uninterruptibleMask((restore) =>
+    Effect.suspend(() => {
+      const existing = processLocks.get(key);
+      const lock = existing ?? { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+      if (existing === undefined) processLocks.set(key, lock);
+      lock.users++;
 
-    return lock.semaphore.withPermit(effect).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          lock.users--;
-          if (lock.users === 0 && processLocks.get(key) === lock) processLocks.delete(key);
-        }),
-      ),
-    );
-  });
+      // Admission owns a registry reference before the permit is acquired. Install
+      // its release handler masked, then restore interruption for waiting and work.
+      return restore(lock.semaphore.withPermit(effect)).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            lock.users--;
+            if (lock.users === 0 && processLocks.get(key) === lock) processLocks.delete(key);
+          }),
+        ),
+      );
+    }),
+  );

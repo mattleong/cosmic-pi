@@ -20,6 +20,11 @@ export interface SubscriptionRefreshOptions<Key, Value, E, R> {
 export interface SubscriptionRefresh<E, R> {
   readonly request: (request: RefreshRequest) => Effect.Effect<void, E, R>;
   readonly invalidate: Effect.Effect<void>;
+  /** Consumer invalidation and stale validation/publication share the same reentrant gate. */
+  readonly invalidateWith: <A, E2, R2>(
+    effect: Effect.Effect<A, E2, R2>,
+    wakePolling?: boolean,
+  ) => Effect.Effect<A, E2, R2>;
   readonly startPolling: (request: RefreshRequest) => Effect.Effect<void, E, R>;
 }
 
@@ -44,10 +49,14 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
 
     const wake = Latch.release(wakeLatch).pipe(Effect.asVoid);
 
-    const invalidate = withCommitPermit(Ref.update(revisionRef, (revision) => revision + 1)).pipe(
-      Effect.andThen(wake),
-      Effect.asVoid,
-    );
+    const invalidateWith: SubscriptionRefresh<E, R>["invalidateWith"] = (
+      effect,
+      wakePolling = true,
+    ) =>
+      withCommitPermit(
+        Ref.update(revisionRef, (revision) => revision + 1).pipe(Effect.andThen(effect)),
+      ).pipe(Effect.tap(() => (wakePolling ? wake : Effect.void)));
+    const invalidate = invalidateWith(Effect.void);
 
     const perform = Effect.fn(spanName)(function* (request: RefreshRequest) {
       const capturedRevision = yield* Ref.get(revisionRef);
@@ -73,5 +82,5 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
         }
       });
 
-    return { request, invalidate, startPolling };
+    return { request, invalidate, invalidateWith, startPolling };
   });

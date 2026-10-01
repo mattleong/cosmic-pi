@@ -16,12 +16,16 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
 - Use `Effect.promise` only when rejection is impossible by contract. Ordinary third-party and
   Node Promises use `Effect.tryPromise`; cleanup failures are mapped to a redacted typed error
   before they are propagated or deliberately recovered.
-- Register a finalizer only after the acquisition has established ownership. Generated names,
+- Register a resource finalizer only after acquisition establishes ownership. Generated names,
   candidate paths, and other intentions to acquire are not resources; exclusive file creation,
-  opened handles, subscriptions, and child scopes are.
+  opened handles, subscriptions, and child scopes are. For an ownership claim, install its
+  settlement handler before admission, with no-op cleanup while unclaimed, or narrowly mask the
+  claim-to-handler handoff. Permit waiting and driver work remain interruptible.
 - Default host and third-party Promises to interruptible. An ordered finalizer or irreversible
   commit region may be uninterruptible only when it is narrowly documented, ownership is already
   established, exact-once state publication is included, and the liveness tradeoff is explicit.
+  A memoized cleanup must protect the returned cached effect's first-caller handoff as well as
+  its body; otherwise interruption can become the permanent cached outcome before cleanup starts.
   When a foreign API cannot be cancelled and ordering does not require waiting for settlement,
   detach Effect ownership on interruption and arrange safe late cleanup instead of blocking scope
   closure indefinitely.
@@ -46,9 +50,11 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
   `BackgroundTaskService` use this pattern; new services should prefer `SynchronizedRef`
   unless they have the same shape.
 - Shared refresh admission stays masked from owner registration through cleanup installation. Owner work and joiner waiting remain interruptible; identity-checked cleanup settles the shared Deferred and releases admission on interruption.
-- Keep stale-result validation and its commit inside the same serialized transition. Likewise,
-  persistence plus authoritative projection publication is one serialized commit whenever
-  concurrent callers could otherwise publish an older read after a newer write.
+- Keep stale-result validation, its commit, and consumer context/configuration invalidation
+  inside the same serialized transition. Likewise, persistence, private state replacement, and
+  projection publication share one commit whenever interruption or concurrent callers could
+  otherwise separate them. Publishing inside an effectful `SynchronizedRef` modification callback
+  alone does not protect the backing assignment that follows the callback.
 - For atomic file replacement, complete creation, writing, validation, and permissions before a
   narrow uninterruptible rename commit. Nothing fallible follows the rename; owned temporary
   cleanup is best effort and cannot change the committed result.
@@ -112,7 +118,7 @@ No extension owns a telemetry exporter or process-wide Effect runtime. Sharp dec
 
 ## State and projection contract
 
-The shared projection primitive serializes a private authoritative `Ref` with a private `Semaphore`. Lock waiting, transition work, and cloned, deeply frozen snapshot preparation remain interruptible. External publication, internal snapshot publication, and authoritative state replacement share one narrow uninterruptible commit; rejected preparation or publication leaves state and the internal snapshot unchanged. Better OpenAI, Better xAI, Cosmic UI, code-preview settings/write state, background-task state, subagent runs, and Code Mode configuration state publish immutable snapshots while retaining synchronous renderer boundaries and pre-session snapshots. Code Mode's frozen `CodeModeState` (resolved config, per-field provenance, trust, and availability) is published into a boundary `MutableRef` only while that session's private publication owner remains true, and republished as the no-fail `afterCommit` action of each atomic settings commit. Code-preview syntax state uses one `SynchronizedRef` plus bounded ingress and publishes immutable metadata with only the current Shiki highlighter capability required by synchronous tokenization. Pure reducers, formatting, parsing of already trusted values, diffing, word matching, and TUI layout stay synchronous.
+The shared projection primitive serializes a private authoritative `Ref` with a private `Semaphore`. Lock waiting, transition work, and cloned, deeply frozen snapshot preparation remain interruptible. External publication, internal snapshot publication, and authoritative state replacement share one narrow uninterruptible commit; rejected preparation or publication leaves state and the internal snapshot unchanged. Better OpenAI, Better xAI, Cosmic UI, code-preview settings/write state, background-task state, subagent runs, and Code Mode configuration state publish immutable snapshots while retaining synchronous renderer boundaries and pre-session snapshots. Better OpenAI, Better xAI, and Cosmic UI revoke each session's publication authority synchronously before cleanup. Already-admitted durable commits may finish updating private state, but cannot republish a cleared boundary projection or call the retired owner's host callbacks. Authority checks run in the same synchronous callback as publication or delivery, not before a yielded Effect or Promise continuation. Immutable log events and frozen cached slices may be structurally shared; projection envelopes and scalar rows still detach and freeze. Code Mode's frozen `CodeModeState` (resolved config, per-field provenance, trust, and availability) is published into a boundary `MutableRef` only while that session's private publication owner remains true, and republished as the no-fail `afterCommit` action of each atomic settings commit. Code-preview syntax state uses one `SynchronizedRef` plus bounded ingress and publishes immutable metadata with only the current Shiki highlighter capability required by synchronous tokenization. Pure reducers, formatting, parsing of already trusted values, diffing, word matching, and TUI layout stay synchronous.
 
 ## Observability contract
 

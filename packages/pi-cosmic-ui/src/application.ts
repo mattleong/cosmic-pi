@@ -125,6 +125,16 @@ export function registerCosmicUiApplication(
     return read;
   };
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
+  let currentPublicationOwner: MutableRef.MutableRef<boolean> | undefined;
+  const revokePublication = () => {
+    if (currentPublicationOwner) MutableRef.set(currentPublicationOwner, false);
+    currentPublicationOwner = undefined;
+  };
+  const captureAuthority = () => {
+    const owner = currentPublicationOwner;
+    return () =>
+      owner === undefined ? currentPublicationOwner === undefined : MutableRef.get(owner);
+  };
   let subscriptions: Array<() => void> = [];
   const ownsUsageContext = (ctx: ExtensionContext) =>
     callbacks.invoke(
@@ -202,7 +212,9 @@ export function registerCosmicUiApplication(
         signal,
       );
     },
-    onDeactivated: ({ context, releaseSignal }, token) => {
+    onDeactivated: ({ context, releaseSignal, publicationOwner }, token) => {
+      MutableRef.set(publicationOwner, false);
+      if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
       releaseSignal();
       if (currentContext === context) currentContext = undefined;
       workingRow.deactivate();
@@ -215,7 +227,9 @@ export function registerCosmicUiApplication(
       }
       publishHostState();
     },
-    onStartFailure: ({ ctx, releaseSignal }) => {
+    onStartFailure: ({ ctx, releaseSignal, publicationOwner }) => {
+      MutableRef.set(publicationOwner, false);
+      if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
       releaseSignal();
       notifyStartFailure(ctx);
     },
@@ -312,10 +326,13 @@ export function registerCosmicUiApplication(
     updateContext,
     update: footerInstallation.update,
     run: slot.run,
+    captureAuthority,
     callbacks,
   });
 
   pi.on("session_start", (_event, ctx) => {
+    // Revoke before resetting projections or awaiting disposal, including pending starts.
+    revokePublication();
     const generation = ++lifecycleGeneration;
     stopUsageTicker?.();
     stopUsageTicker = undefined;
@@ -343,6 +360,8 @@ export function registerCosmicUiApplication(
     resetProjection(projection, initialTotals);
     const context = MutableRef.make(ctx);
     currentContext = context;
+    const publicationOwner = MutableRef.make(true);
+    currentPublicationOwner = publicationOwner;
     return slot
       .start(
         {
@@ -353,6 +372,7 @@ export function registerCosmicUiApplication(
           releaseSignal: abort.release,
           initialTotals,
           projectTrusted,
+          publicationOwner,
         },
         abort.signal,
       )
@@ -365,6 +385,8 @@ export function registerCosmicUiApplication(
             });
           }
           if (token === undefined) {
+            MutableRef.set(publicationOwner, false);
+            if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
             // A superseded start never activates: stop publishing this dead context
             // unless a newer start already replaced it.
             if (currentContext === context) currentContext = undefined;
@@ -372,6 +394,8 @@ export function registerCosmicUiApplication(
           }
         },
         () => {
+          MutableRef.set(publicationOwner, false);
+          if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
           if (currentContext === context) currentContext = undefined;
           abort.release();
           notifyStartFailure(ctx);
@@ -464,6 +488,7 @@ export function registerCosmicUiApplication(
     workingRow.pauseOutput();
   });
   pi.on("session_shutdown", () => {
+    revokePublication();
     const generation = ++lifecycleGeneration;
     stopUsageTicker?.();
     stopUsageTicker = undefined;

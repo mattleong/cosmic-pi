@@ -143,6 +143,35 @@ it.effect("serializes final validation and commit with invalidation", () =>
   }).pipe(Effect.scoped),
 );
 
+it.effect("gated consumer invalidation may omit a polling wake", () =>
+  Effect.gen(function* () {
+    const waiting = yield* Deferred.make<void>();
+    let calls = 0;
+    let state = 0;
+    const refresh = yield* makeSubscriptionRefresh({
+      currentKey: Effect.succeed("key"),
+      interval: Deferred.succeed(waiting, undefined).pipe(Effect.as(1_000)),
+      fetch: () => Effect.sync(() => ++calls),
+      commit: () => Effect.void,
+    });
+    const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
+    yield* Deferred.await(waiting);
+    yield* Effect.yieldNow;
+    yield* refresh.invalidateWith(
+      Effect.sync(() => {
+        state++;
+      }),
+      false,
+    );
+    expect(state).toBe(1);
+    yield* TestClock.adjust("999 millis");
+    expect(calls).toBe(0);
+    yield* TestClock.adjust("1 millis");
+    expect(calls).toBe(1);
+    yield* Fiber.interrupt(poller);
+  }),
+);
+
 it.effect("allows a commit to invalidate the refresh without deadlocking its gate", () =>
   Effect.gen(function* () {
     const committed = yield* Deferred.make<void>();

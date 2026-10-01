@@ -14,7 +14,7 @@ const COMPACTION_MIN_DEAD_EVENTS = 32;
  *
  * The service mutates this buffer under its registry semaphore. An offset-backed
  * store makes appends and trims amortized O(1). Consumers retain only cached,
- * detached `events` slices; existing events are never modified.
+ * detached frozen `events` slices sharing events frozen at creation.
  */
 export class LogBuffer {
   private snapshot: ReadonlyArray<BackgroundLogEvent> | undefined;
@@ -25,7 +25,7 @@ export class LogBuffer {
   nextCursor = 1;
 
   get events(): ReadonlyArray<BackgroundLogEvent> {
-    return (this.snapshot ??= this.store.slice(this.start));
+    return (this.snapshot ??= Object.freeze(this.store.slice(this.start)));
   }
 
   get oldestEvent(): BackgroundLogEvent | undefined {
@@ -44,14 +44,16 @@ export class LogBuffer {
     const tail = utf8Tail(text, maxBytes);
     if (tail.text) {
       this.snapshot = undefined;
-      this.store.push({
-        cursor: this.nextCursor,
-        stream,
-        text: tail.text,
-        timestamp,
-        bytes: tail.bytes,
-        ...((droppedBefore || tail.bytes < originalBytes) && { droppedBefore: true }),
-      });
+      this.store.push(
+        Object.freeze({
+          cursor: this.nextCursor,
+          stream,
+          text: tail.text,
+          timestamp,
+          bytes: tail.bytes,
+          ...((droppedBefore || tail.bytes < originalBytes) && { droppedBefore: true as const }),
+        }),
+      );
     }
     this.bytes += tail.bytes;
     this.droppedBytes += originalBytes - tail.bytes;
@@ -100,7 +102,7 @@ function tailEvents(
   const parts = first.text.split("\n");
   const excess = lines - lineLimit;
   const text = parts.slice(Math.min(excess, parts.length - 1)).join("\n");
-  return [{ ...first, text, bytes: utf8ByteLength(text) }, ...selected.slice(1)];
+  return [Object.freeze({ ...first, text, bytes: utf8ByteLength(text) }), ...selected.slice(1)];
 }
 
 export function readLogBuffer(
@@ -113,12 +115,12 @@ export function readLogBuffer(
     options.afterCursor === undefined
       ? tailEvents(buffer.events, options.tailLines ?? 200)
       : buffer.events.filter((event) => event.cursor > options.afterCursor!);
-  return {
+  return Object.freeze({
     id,
-    events: filtered,
+    events: Object.freeze(filtered),
     nextCursor: buffer.nextCursor - 1,
     earliestAvailableCursor: buffer.oldestEvent?.cursor ?? buffer.nextCursor,
     droppedBytes: buffer.droppedBytes,
     state,
-  };
+  });
 }

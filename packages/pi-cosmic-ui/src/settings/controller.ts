@@ -121,88 +121,101 @@ export function registerSettingsCommand(
     update(ctx: ExtensionContext): void;
     run<A, E>(effect: Effect.Effect<A, E, CosmicUiService>, signal?: AbortSignal): Promise<A>;
     callbacks: HostCallbackBoundaryContract;
+    captureAuthority?: () => () => boolean;
   },
 ): void {
   const hostQuery = <A>(callback: () => A, fallback: A) =>
     options.callbacks.invoke("host-query", callback, fallback);
-  const settings = settingsSubcommand<ResolvedCosmicUiConfig>({
-    root: "cosmic-ui",
-    description: "Configure the Cosmic UI footer",
-    title: "Cosmic UI",
-    descriptors: settingDescriptors,
-    examples: ["density compact", "visible:git false"],
-    config: () => options.config(),
-    status: () => {
-      const config = options.config();
-      return [
-        "Cosmic UI settings",
-        ...settingDescriptors.map(
-          (descriptor) => `  ${descriptor.id} = ${descriptor.currentValue(config)}`,
-        ),
-      ].join("\n");
-    },
-    onInvoke: (ctx) => options.updateContext(ctx),
-    apply: (_ctx, id, value, signal) => {
-      const change = decodeCosmicUiSettingChange(id, value);
-      if (!change) return Promise.resolve(Result.fail({ message: `Unknown setting: ${id}` }));
-      const update = CosmicUiService.use((service) =>
-        change._tag === "SetVisibility"
-          ? service.setFooterVisibility(change.id, change.visible)
-          : service.updateFooterConfig(change.patch),
-      );
-      // Any failed write, including an unavailable runtime, rolls the row back with one error.
-      return options.run(update, signal).then(
-        () => Result.succeed(undefined),
-        () => Result.fail({ message: "Couldn't save Cosmic UI settings" }),
-      );
-    },
-    afterApply: (ctx) => options.update(ctx),
-    open: (ctx, session) => {
-      const generations = settingsRowGenerations();
-      const config = options.config();
-      const items: SettingItem[] = settingDescriptors.map((descriptor) => ({
-        id: descriptor.id,
-        label: descriptor.label,
-        description: descriptor.description,
-        currentValue: descriptor.currentValue(config),
-        values: [...descriptor.values],
-      }));
-      return openOwnedSurfacePromise<undefined>(ctx, {
-        placement: "inline",
-        closedValue: undefined,
-        create: ({ tui, theme, keybindings, finish }) =>
-          createSettingsListSurface({
-            header: new Text(theme.fg("accent", theme.bold("Cosmic UI settings")), 1, 1),
-            items,
-            height: Math.min(14, items.length + 2),
-            listTheme: managerSettingsTheme(theme),
-            // The list shows the chosen value at once; each apply shows the committed or
-            // restored value, and an older apply never overwrites a newer choice.
-            onChange: (id, value, list) => {
-              if (!decodeCosmicUiSettingChange(id, value)) return;
-              const generation = generations.begin(id);
-              void session.apply(id, value, (current) => {
-                if (!generations.isCurrent(id, generation)) return false;
-                hostQuery(() => {
-                  list.updateValue(id, current);
-                  tui.requestRender();
-                }, undefined);
-                return true;
-              });
-            },
-            onCancel: () => finish(undefined),
-            matchesKeybinding: Predicate.isFunction(keybindings?.matches)
-              ? (data, id) => hostQuery(() => keybindings.matches(data, id), false)
-              : undefined,
-            requestRender: () => hostQuery(() => tui.requestRender(), undefined),
-            dim: (text) => hostQuery(() => theme.fg("dim", text), text),
-            // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
-            // behind this package's host-callback boundary.
-            bridge: { invoke: (callback, fallback) => hostQuery(callback, fallback) },
-          }).surface,
-      });
-    },
-  });
+  const createSettings = (isCurrent: () => boolean) =>
+    settingsSubcommand<ResolvedCosmicUiConfig>({
+      root: "cosmic-ui",
+      description: "Configure the Cosmic UI footer",
+      title: "Cosmic UI",
+      isCurrent,
+      descriptors: settingDescriptors,
+      examples: ["density compact", "visible:git false"],
+      config: () => options.config(),
+      status: () => {
+        const config = options.config();
+        return [
+          "Cosmic UI settings",
+          ...settingDescriptors.map(
+            (descriptor) => `  ${descriptor.id} = ${descriptor.currentValue(config)}`,
+          ),
+        ].join("\n");
+      },
+      onInvoke: (ctx) => {
+        if (isCurrent()) options.updateContext(ctx);
+      },
+      apply: (_ctx, id, value, signal) => {
+        const change = decodeCosmicUiSettingChange(id, value);
+        if (!change) return Promise.resolve(Result.fail({ message: `Unknown setting: ${id}` }));
+        const update = CosmicUiService.use((service) =>
+          change._tag === "SetVisibility"
+            ? service.setFooterVisibility(change.id, change.visible)
+            : service.updateFooterConfig(change.patch),
+        );
+        // Any failed write, including an unavailable runtime, rolls the row back with one error.
+        return options.run(update, signal).then(
+          () => Result.succeed(undefined),
+          () => Result.fail({ message: "Couldn't save Cosmic UI settings" }),
+        );
+      },
+      afterApply: (ctx) => {
+        if (isCurrent()) options.update(ctx);
+      },
+      open: (ctx, session) => {
+        const generations = settingsRowGenerations();
+        const config = options.config();
+        const items: SettingItem[] = settingDescriptors.map((descriptor) => ({
+          id: descriptor.id,
+          label: descriptor.label,
+          description: descriptor.description,
+          currentValue: descriptor.currentValue(config),
+          values: [...descriptor.values],
+        }));
+        return openOwnedSurfacePromise<undefined>(ctx, {
+          placement: "inline",
+          closedValue: undefined,
+          create: ({ tui, theme, keybindings, finish }) =>
+            createSettingsListSurface({
+              header: new Text(theme.fg("accent", theme.bold("Cosmic UI settings")), 1, 1),
+              items,
+              height: Math.min(14, items.length + 2),
+              listTheme: managerSettingsTheme(theme),
+              // The list shows the chosen value at once; each apply shows the committed or
+              // restored value, and an older apply never overwrites a newer choice.
+              onChange: (id, value, list) => {
+                if (!decodeCosmicUiSettingChange(id, value)) return;
+                const generation = generations.begin(id);
+                void session.apply(id, value, (current) => {
+                  if (!isCurrent() || !generations.isCurrent(id, generation)) return false;
+                  hostQuery(() => {
+                    list.updateValue(id, current);
+                    tui.requestRender();
+                  }, undefined);
+                  return true;
+                });
+              },
+              onCancel: () => finish(undefined),
+              matchesKeybinding: Predicate.isFunction(keybindings?.matches)
+                ? (data, id) => hostQuery(() => keybindings.matches(data, id), false)
+                : undefined,
+              requestRender: () => hostQuery(() => tui.requestRender(), undefined),
+              dim: (text) => hostQuery(() => theme.fg("dim", text), text),
+              // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
+              // behind this package's host-callback boundary.
+              bridge: { invoke: (callback, fallback) => hostQuery(callback, fallback) },
+            }).surface,
+        });
+      },
+    });
+  const registered = createSettings(() => true);
+  const settings = {
+    ...registered,
+    handler: (...args: Parameters<typeof registered.handler>) =>
+      createSettings(options.captureAuthority?.() ?? (() => true)).handler(...args),
+  };
   registerExtensionCommand(pi, {
     name: "cosmic-ui",
     description: "Cosmic UI footer settings",

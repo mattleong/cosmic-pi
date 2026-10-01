@@ -44,6 +44,40 @@ describe("background log buffer", () => {
     expect(buffer.nextCursor).toBe(258);
   });
 
+  it("rejects consumer mutations without corrupting later reads or eviction accounting", () => {
+    const buffer = new LogBuffer().append("stdout", "one\ntwo\n", 1, 8);
+    const cached = buffer.events;
+    const full = readLogBuffer("task-1", buffer, "running", { afterCursor: 0 });
+    const tail = readLogBuffer("task-1", buffer, "running", { tailLines: 1 });
+    const empty = readLogBuffer("task-1", buffer, "running", { tailLines: 0 });
+    for (const events of [cached, full.events, tail.events, empty.events]) {
+      expect(Reflect.set(events, "0", { text: "corrupted", bytes: 999 })).toBe(false);
+      expect(Reflect.set(events, "length", 0)).toBe(false);
+    }
+    for (const event of [buffer.oldestEvent!, full.events[0]!, tail.events[0]!]) {
+      expect(Reflect.set(event, "bytes", 999)).toBe(false);
+      expect(Reflect.set(event, "text", "corrupted")).toBe(false);
+      expect(Reflect.set(event, "cursor", 999)).toBe(false);
+      expect(Reflect.set(event, "timestamp", 999)).toBe(false);
+    }
+    expect(Reflect.set(full, "droppedBytes", 999)).toBe(false);
+    expect(buffer.bytes).toBe(8);
+    expect(buffer.events).toEqual([
+      { cursor: 1, stream: "stdout", text: "one\ntwo\n", timestamp: 1, bytes: 8 },
+    ]);
+    expect(tail.events[0]).toMatchObject({ text: "two\n", bytes: 4 });
+    buffer.append("stderr", "🙂🙂", 2, 8);
+    expect(readLogBuffer("task-1", buffer, "running", { afterCursor: 0 })).toMatchObject({
+      events: [{ cursor: 2, text: "🙂🙂", bytes: 8 }],
+      earliestAvailableCursor: 2,
+      droppedBytes: 8,
+    });
+    expect(buffer.bytes).toBe(8);
+    expect(cached[0]?.text).toBe("one\ntwo\n");
+    expect(full).toMatchObject({ nextCursor: 1, droppedBytes: 0 });
+    expect(tail.events[0]?.text).toBe("two\n");
+  });
+
   it("returns a bounded line tail when no cursor is supplied", () => {
     const buffer = new LogBuffer();
     buffer.append("stdout", "one\ntwo\n", 1, 1024);

@@ -41,6 +41,8 @@ function settingsHarness() {
   const updates: Array<Deferred.Deferred<unknown, Error>> = [];
   const modal = deferredPromise<unknown>();
   const notify = vi.fn();
+  const afterApply = vi.fn();
+  let current = true;
   const requestRender = vi.fn();
   const tui: TUI = opaqueFixture({ requestRender });
   const keybindings: KeybindingsManager = opaqueFixture({ matches: () => false });
@@ -71,7 +73,8 @@ function settingsHarness() {
   registerSettingsCommand(pi, {
     config: () => config,
     updateContext: () => undefined,
-    update: () => undefined,
+    update: afterApply,
+    captureAuthority: () => () => current,
     run: <A, E>(
       _effect: Effect.Effect<A, E, CosmicUiService>,
       _signal?: AbortSignal,
@@ -118,6 +121,10 @@ function settingsHarness() {
     notify,
     open,
     requestRender,
+    afterApply,
+    retire: () => {
+      current = false;
+    },
     setDensity,
     setEnabled,
     setUsageVisible,
@@ -137,6 +144,27 @@ const withSettings = <A, E>(body: (h: ReturnType<typeof settingsHarness>) => Eff
   });
 
 describe("Cosmic UI settings controller", () => {
+  for (const outcome of ["success", "failure"] as const) {
+    it.effect(`retired picker ${outcome} cannot notify, repaint or run afterApply`, () =>
+      withSettings((h) =>
+        Effect.gen(function* () {
+          h.input();
+          expect(h.updates).toHaveLength(1);
+          h.notify.mockClear();
+          h.requestRender.mockClear();
+          h.afterApply.mockClear();
+          h.retire();
+          if (outcome === "success") yield* Deferred.succeed(h.updates[0]!, undefined);
+          else yield* Deferred.fail(h.updates[0]!, new Error("unavailable"));
+          yield* flushSettlements;
+          expect(h.notify).not.toHaveBeenCalled();
+          expect(h.requestRender).not.toHaveBeenCalled();
+          expect(h.afterApply).not.toHaveBeenCalled();
+        }),
+      ),
+    );
+  }
+
   it.effect(
     "settles automatic and hidden usage choices against the single visibility preference",
     () =>

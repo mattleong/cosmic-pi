@@ -81,35 +81,45 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
     return Effect.gen(function* () {
       yield* prepareBackendSpawn(record);
       const spawnSettled = yield* Deferred.make<void>();
-      const spawnClaimed = yield* withLock(
-        Effect.sync(() => {
-          if (
-            record.scope !== scope ||
-            record.closingScope === scope ||
-            record.stoppedByParent ||
-            record.view.state === "stopping" ||
-            record.view.state === "stopped" ||
-            record.backendSpawnAttempt !== undefined
-          )
-            return false;
-          record.backendSpawnAttempt = { scope, settled: spawnSettled };
-          return true;
-        }),
-      );
-      if (!spawnClaimed)
-        return yield* new InvalidSubagentRequestError({
-          code: "start_cancelled",
-          message: `Subagent ${record.view.id} was stopped before backend spawn.`,
-        });
-      const process = yield* record.driver.spawn(record.launch).pipe(
-        Effect.provideService(Scope.Scope, scope),
+      let spawnClaimed = false;
+      // Install settlement before admission so permit waiting and driver work stay
+      // interruptible without leaving cleanup waiting on an abandoned spawn claim.
+      const process = yield* Effect.gen(function* () {
+        yield* withLock(
+          Effect.sync(() => {
+            if (
+              record.scope !== scope ||
+              record.closingScope === scope ||
+              record.stoppedByParent ||
+              record.view.state === "stopping" ||
+              record.view.state === "stopped" ||
+              record.backendSpawnAttempt !== undefined
+            )
+              return;
+            record.backendSpawnAttempt = { scope, settled: spawnSettled };
+            spawnClaimed = true;
+          }),
+        );
+        if (!spawnClaimed)
+          return yield* new InvalidSubagentRequestError({
+            code: "start_cancelled",
+            message: `Subagent ${record.view.id} was stopped before backend spawn.`,
+          });
+        return yield* Effect.suspend(() => record.driver.spawn(record.launch)).pipe(
+          Effect.provideService(Scope.Scope, scope),
+        );
+      }).pipe(
         Effect.ensuring(
-          withLock(
-            Effect.sync(() => {
-              if (record.backendSpawnAttempt?.settled === spawnSettled)
-                record.backendSpawnAttempt = undefined;
-              Deferred.doneUnsafe(spawnSettled, Effect.void);
-            }),
+          Effect.suspend(() =>
+            spawnClaimed
+              ? withLock(
+                  Effect.sync(() => {
+                    if (record.backendSpawnAttempt?.settled === spawnSettled)
+                      record.backendSpawnAttempt = undefined;
+                    Deferred.doneUnsafe(spawnSettled, Effect.void);
+                  }),
+                )
+              : Effect.void,
           ),
         ),
       );

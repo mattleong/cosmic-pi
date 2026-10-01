@@ -6,6 +6,10 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Scheduler from "effect/Scheduler";
+import { pausedScheduler } from "../testing.ts";
+import * as subscriptionRefresh from "../src/coordination/subscription-refresh.ts";
+import { vi } from "vitest";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "../index.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
@@ -196,6 +200,210 @@ it.effect("a request completing after usage is hidden cannot publish its stale r
     yield* Deferred.succeed(finish, 42);
     yield* Fiber.join(pending);
     expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
+  }).pipe(provideBuiltLayer(testLayer)),
+);
+
+for (const invalidation of ["context", "settings"] as const) {
+  it.effect(`serializes ${invalidation} clearing after the refresh's final key validation`, () =>
+    Effect.gen(function* () {
+      const paused = pausedScheduler();
+      let validated = false;
+      let stopped = false;
+      const makeRefresh = subscriptionRefresh.makeSubscriptionRefresh;
+      const observedRefresh: typeof makeRefresh = (options) =>
+        makeRefresh({
+          ...options,
+          commit: (value, request) => {
+            validated = true;
+            return options.commit(value, request);
+          },
+        });
+      const boundary = vi
+        .spyOn(subscriptionRefresh, "makeSubscriptionRefresh")
+        .mockImplementation(observedRefresh);
+      const scheduler = {
+        ...paused.scheduler,
+        shouldYield: () => {
+          if (!validated || stopped) return false;
+          stopped = true;
+          return true;
+        },
+      };
+      let durableConfig = config;
+      const nextConfig = {
+        ...config,
+        usage: { ...config.usage, refreshIntervalMs: 30_000 },
+      };
+      let mutations = 0;
+      let requests = 0;
+      const h = yield* fixture({
+        ...fetching(Effect.sync(() => ++requests)),
+        decodeSettingUpdate: () => Effect.succeed((raw) => raw),
+        store: {
+          resolveConfig: () => Effect.succeed(durableConfig),
+          readRawConfig: () => Effect.succeed({}),
+          resolveCommittedConfig: () => nextConfig,
+          modifyConfig: (_path, modify) =>
+            Effect.suspend(() => {
+              const modification = modify({});
+              return Effect.uninterruptible(
+                Effect.sync(() => {
+                  mutations++;
+                  durableConfig = nextConfig;
+                }).pipe(
+                  Effect.andThen(modification.afterCommit ?? Effect.void),
+                  Effect.as(modification.value),
+                ),
+              );
+            }),
+        },
+      });
+      yield* h.controller.updateState((current) => ({ ...current, snapshot: 7 }));
+      const refresh = yield* h.controller
+        .refresh({ force: true })
+        .pipe(
+          Effect.provideService(Scheduler.Scheduler, scheduler),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+      try {
+        yield* yieldUntil(() => stopped);
+        const invalidated = yield* Deferred.make<void>();
+        const action =
+          invalidation === "context"
+            ? h.controller.contextChanged(true)
+            : h.controller.updateSetting("usage.refreshIntervalMs", "30000");
+        const competing = yield* action.pipe(
+          Effect.andThen(Deferred.succeed(invalidated, undefined)),
+          Effect.forkScoped,
+        );
+        for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+        if (invalidation === "settings") expect(mutations).toBe(1);
+        expect(yield* Deferred.isDone(invalidated)).toBe(false);
+        // The engine gate is still held: consumer state must not clear ahead of it.
+        expect(MutableRef.get(h.projection).snapshot).toBe(7);
+        const interruption =
+          invalidation === "settings"
+            ? yield* Fiber.interrupt(competing).pipe(Effect.forkScoped)
+            : undefined;
+        paused.resume();
+        yield* Fiber.join(refresh);
+        if (interruption) yield* Fiber.join(interruption);
+        else yield* Fiber.join(competing);
+        expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
+        expect((yield* h.controller.getState).snapshot).toBeUndefined();
+        if (invalidation === "settings")
+          expect(MutableRef.get(h.projection).config?.usage.refreshIntervalMs).toBe(30_000);
+        // The interrupted durable commit and invalidation leave refresh reusable.
+        yield* h.controller.refresh({ force: true });
+        expect(MutableRef.get(h.projection).snapshot).toBe(2);
+      } finally {
+        paused.resume();
+        boundary.mockRestore();
+      }
+    }).pipe(provideBuiltLayer(testLayer)),
+  );
+}
+
+it.effect(
+  "revoked publication authority leaves durable/private settings reusable but never republishes or notifies",
+  () =>
+    Effect.gen(function* () {
+      let live = true;
+      let durable = config;
+      const nextConfig = {
+        ...config,
+        usage: { ...config.usage, refreshIntervalMs: 30_000 },
+      };
+      let changes = 0;
+      const committed = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const h = yield* fixture({
+        ...fetching(Effect.succeed(42)),
+        canPublish: () => live,
+        onChange: () => {
+          changes++;
+        },
+        decodeSettingUpdate: () => Effect.succeed((raw) => raw),
+        store: {
+          resolveConfig: () => Effect.succeed(durable),
+          readRawConfig: () => Effect.succeed({}),
+          resolveCommittedConfig: () => nextConfig,
+          modifyConfig: (_path, modify) =>
+            Effect.suspend(() => {
+              const modification = modify({});
+              return Effect.uninterruptible(
+                Effect.sync(() => {
+                  durable = nextConfig;
+                }).pipe(
+                  Effect.andThen(Deferred.succeed(committed, undefined)),
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(modification.afterCommit ?? Effect.void),
+                  Effect.as(modification.value),
+                ),
+              );
+            }),
+        },
+      });
+      const pending = yield* h.controller
+        .updateSetting("usage.refreshIntervalMs", "30000")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(committed);
+      live = false;
+      const reset = initialUsageProjection<UsageControllerConfig, number>();
+      MutableRef.set(h.projection, reset);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(pending);
+      expect(durable.usage.refreshIntervalMs).toBe(30_000);
+      expect((yield* h.controller.getState).config?.usage.refreshIntervalMs).toBe(30_000);
+      yield* h.controller.refresh({ notify: true, force: true });
+      expect(MutableRef.get(h.projection)).toBe(reset);
+      expect(changes).toBe(0);
+      expect(h.notifications).toEqual([]);
+    }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("publication authority is checked adjacent to the actual host callback", () =>
+  Effect.gen(function* () {
+    let live = true;
+    let checked = false;
+    let revoked = false;
+    const liveAtNotification: boolean[] = [];
+    let published: MutableRef.MutableRef<Projection> | undefined;
+    const paused = pausedScheduler();
+    const h = yield* fixture({
+      ...fetching(Effect.succeed(42)),
+      canPublish: () => {
+        if (published && MutableRef.get(published).snapshot === 42) checked = true;
+        return live;
+      },
+      onChange: () => {
+        liveAtNotification.push(live);
+      },
+    });
+    published = h.projection;
+    const scheduler = {
+      ...paused.scheduler,
+      shouldYield: () => {
+        if (!checked || revoked) return false;
+        live = false;
+        revoked = true;
+        return true;
+      },
+    };
+    const pending = yield* h.controller
+      .refresh({ force: true })
+      .pipe(
+        Effect.provideService(Scheduler.Scheduler, scheduler),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+    try {
+      yield* yieldUntil(() => revoked);
+      paused.resume();
+      yield* Fiber.join(pending);
+      expect(liveAtNotification.every(Boolean)).toBe(true);
+    } finally {
+      paused.resume();
+    }
   }).pipe(provideBuiltLayer(testLayer)),
 );
 

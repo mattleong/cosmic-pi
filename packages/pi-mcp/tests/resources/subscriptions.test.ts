@@ -3,12 +3,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
+import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { SUBSCRIPTION_ID_META_KEY } from "@modelcontextprotocol/client";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import { McpExecution } from "../../src/tools/service.ts";
 import type { ConnectionOwner } from "../../src/connection/registry.ts";
 import type { McpConnection } from "../../src/client/model.ts";
@@ -73,6 +74,40 @@ const resourceOwner = (
     });
     return { owner, counts, identities, subscriptions, connection };
   });
+
+it.effect(
+  "first cached-close cancellation checkpoints remain retryable and release leases once",
+  () =>
+    Effect.gen(function* () {
+      for (let interruptAt = 1; interruptAt <= 80; interruptAt++) {
+        const { owner, counts, subscriptions, connection } = yield* resourceOwner();
+        yield* subscriptions.subscribe(owner, connection, "test://one");
+        let checkpoints = 0;
+        const scheduler = interruptingScheduler(() => ++checkpoints === interruptAt);
+        const closing = yield* subscriptions
+          .unsubscribe("fixture", "test://one")
+          .pipe(Effect.provideService(Scheduler.Scheduler, scheduler), Effect.forkScoped);
+        yield* Fiber.await(closing);
+        const retry = yield* subscriptions
+          .unsubscribe("fixture", "test://one")
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => retry.pollUnsafe() !== undefined);
+        expect(
+          Exit.isSuccess(yield* Fiber.await(retry)),
+          `interruption checkpoint ${interruptAt}`,
+        ).toBe(true);
+        expect(counts).toEqual({ opened: 1, closed: 1 });
+        expect(owner.leases).toBe(0);
+        expect(owner.uncertain).toBe(false);
+        expect((yield* subscriptions.status("fixture")).subscriptions).toEqual([]);
+        // Reacquisition at the same URI must not replay the interrupted close.
+        yield* subscriptions.subscribe(owner, connection, "test://one");
+        yield* Scope.close(owner.scope, Exit.void);
+        expect(counts).toEqual({ opened: 2, closed: 2 });
+        expect(owner.leases).toBe(0);
+      }
+    }),
+);
 
 // Public Scope state exposes the live cleanup footprint. This regression bounds
 // retained cleanup closures across real subscribe/unsubscribe cycles, not an exact

@@ -2,10 +2,11 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Scheduler from "effect/Scheduler";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
@@ -806,6 +807,90 @@ it.effect(
       expect(f.state.closes).toBe(1);
     });
   },
+);
+
+it.effect(
+  "a failing owner finalizer settles disconnect as unconfirmed and blocks replacement",
+  () => {
+    let closed = false;
+    const f = fixture({
+      open: () =>
+        Effect.addFinalizer(() => Effect.die("fixture owner cleanup failed")).pipe(
+          Effect.andThen(
+            fakeConnection({
+              health: Effect.sync(() => ({ closed, cleanupUnconfirmed: false })),
+              close: Effect.sync(() => void (closed = true)),
+            }),
+          ),
+        ),
+    });
+    return f.run(function* (c) {
+      yield* c.connect("a");
+      const disconnecting = yield* c.disconnect("a").pipe(Effect.forkScoped);
+      yield* yieldUntil(() => disconnecting.pollUnsafe() !== undefined);
+      expect(yield* Fiber.join(disconnecting)).toMatchObject({ cleanup: "unconfirmed" });
+      expect(closed).toBe(true);
+      expect((yield* c.status).servers[0]).toMatchObject({
+        state: "blocked",
+        blockedReason: "cleanup-unconfirmed",
+      });
+      expect(yield* c.connect("a").pipe(Effect.result)).toMatchObject({
+        failure: { kind: "cleanup" },
+      });
+      expect((yield* c.disconnect("a")).cleanup).toBe("unconfirmed");
+      expect(f.state.opens).toBe(1);
+    });
+  },
+);
+
+it.effect(
+  "cached subscription-close cancellation cannot strand disconnect or session shutdown",
+  () =>
+    Effect.gen(function* () {
+      for (let interruptAt = 1; interruptAt <= 80; interruptAt++) {
+        const subscriptions = { opened: 0, closed: 0 };
+        const f = fixture({
+          subscribeResource: (_, identity = Symbol("fixture resource")) =>
+            Effect.gen(function* () {
+              subscriptions.opened++;
+              const ended = yield* Deferred.make<void>();
+              const close = yield* Effect.cached(
+                Effect.sync(() => {
+                  subscriptions.closed++;
+                  Deferred.doneUnsafe(ended, Effect.void);
+                }),
+              );
+              yield* Effect.addFinalizer(() => Effect.uninterruptible(close));
+              return { identity, close, closed: Deferred.await(ended) };
+            }),
+        });
+        yield* f.run(function* (c) {
+          yield* subscribe(c);
+          let checkpoints = 0;
+          const scheduler = interruptingScheduler(() => ++checkpoints === interruptAt);
+          const closing = yield* c
+            .unsubscribeResource("a", "test://one")
+            .pipe(Effect.provideService(Scheduler.Scheduler, scheduler), Effect.forkScoped);
+          yield* Fiber.await(closing);
+          const disconnecting = yield* c.disconnect("a").pipe(Effect.forkScoped);
+          yield* yieldUntil(() => disconnecting.pollUnsafe() !== undefined);
+          expect(
+            yield* Fiber.join(disconnecting),
+            `interruption checkpoint ${interruptAt}`,
+          ).toMatchObject({
+            cleanup: "confirmed",
+          });
+          expect((yield* c.status).servers[0]?.state).toBe("disconnected");
+          expect(subscriptions).toEqual({ opened: 1, closed: 1 });
+          yield* c.unsubscribeResource("a", "test://one");
+          yield* subscribe(c);
+          // Leave the replacement lease to session disposal, not explicit unsubscribe.
+        });
+        expect(subscriptions).toEqual({ opened: 2, closed: 2 });
+        expect(f.state.opens).toBe(2);
+        expect(f.state.closes).toBe(2);
+      }
+    }),
 );
 
 it.effect("failed acquisition cleanup allows a later explicit attempt without replay", () => {

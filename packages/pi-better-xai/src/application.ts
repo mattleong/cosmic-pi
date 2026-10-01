@@ -48,6 +48,12 @@ export function registerBetterXaiApplication(
 ): void {
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
+  let currentPublicationOwner: MutableRef.MutableRef<boolean> | undefined;
+  const captureAuthority = () => {
+    const owner = currentPublicationOwner;
+    return () =>
+      owner === undefined ? currentPublicationOwner === undefined : MutableRef.get(owner);
+  };
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-xai");
 
   const config = () => MutableRef.get(projection).config;
@@ -95,12 +101,16 @@ export function registerBetterXaiApplication(
         { agentDirectory: getAgentDir, packageName: "pi-better-xai" },
       ),
     startup: () => dependencies.startupEffect(),
-    onActivated: ({ ctx, context }) => {
+    onActivated: ({ ctx, context, publicationOwner }) => {
       currentContext = context;
+      currentPublicationOwner = publicationOwner;
       cosmicUiWatch.start();
       updateFooter(ctx);
     },
-    onDeactivated: ({ context }) => {
+    onDeactivated: ({ context, publicationOwner }) => {
+      // Masked durable commits may finish, but no retired session may republish.
+      MutableRef.set(publicationOwner, false);
+      if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
       if (currentContext === context) {
         setStatus(MutableRef.get(context), undefined);
         currentContext = undefined;
@@ -122,9 +132,10 @@ export function registerBetterXaiApplication(
     name: "usage",
     description: "Show xAI subscription usage",
     handler: (_args, ctx) => {
+      const isCurrent = captureAuthority();
       const capturedSignal = captureHostSignal(ctx);
       if (capturedSignal._tag === "Unavailable") {
-        notifyAtHostBoundary(ctx, "Couldn't check xAI usage", "warning");
+        if (isCurrent()) notifyAtHostBoundary(ctx, "Couldn't check xAI usage", "warning");
         return Promise.resolve();
       }
       return slot
@@ -132,7 +143,10 @@ export function registerBetterXaiApplication(
           XaiUsageService.use((service) => service.refresh({ notify: true, force: true })),
           capturedSignal.signal,
         )
-        .catch(() => notifyAtHostBoundary(ctx, "Couldn't check xAI usage", "warning"));
+        .catch(() => {
+          if (isCurrent() && !capturedSignal.signal?.aborted)
+            notifyAtHostBoundary(ctx, "Couldn't check xAI usage", "warning");
+        });
     },
   });
 
@@ -141,11 +155,10 @@ export function registerBetterXaiApplication(
     updateFooter,
     formatDebugStatus: (ctx) => formatDebug(projection, ctx),
     run: slot.run,
+    captureAuthority,
   });
 
   pi.on("session_start", (_event, ctx) => {
-    cosmicUi.shutdown();
-    resetProjection(projection);
     const capturedHost = captureSessionHost(ctx);
     if (capturedHost._tag === "Unavailable") {
       notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
@@ -162,6 +175,7 @@ export function registerBetterXaiApplication(
           cwd: capturedHost.cwd,
           context,
           projectTrusted: isProjectTrusted(ctx),
+          publicationOwner: MutableRef.make(true),
         },
         capturedHost.signal,
       )

@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { expect, it, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -35,11 +36,13 @@ import { registerOpenAIImage } from "../src/image/register.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
 import { waitUntil } from "./helpers.ts";
 import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
+import * as configStore from "../src/config/store.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 interface TestConfigDocument {
@@ -226,6 +229,106 @@ it.effect("image command and tool results keep one base64 payload", () =>
 );
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
+  for (const setting of ["image.enabled", "fast.enabled"] as const) {
+    it.effect(
+      `shutdown revokes publication and notifications from an admitted ${setting} commit`,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* harness(undefined, { persistState: true });
+          const committed = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let armed = false;
+          const modify = configStore.modifyConfig;
+          const gatedModify: typeof modify = (path, update) =>
+            modify(path, (raw) => {
+              const modification = update(raw);
+              if (!armed) return modification;
+              return {
+                ...modification,
+                afterCommit: Deferred.succeed(committed, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(modification.afterCommit ?? Effect.void),
+                ),
+              };
+            });
+          vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+          yield* h.emit("session_start");
+          armed = true;
+          const pending = h.commands.get("openai")?.(`settings ${setting} true`, h.ctx);
+          yield* Deferred.await(committed);
+          vi.mocked(h.ctx.ui.notify).mockClear();
+          const shutdown = yield* h
+            .emit("session_shutdown")
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Effect.yieldNow;
+          yield* Deferred.succeed(release, undefined);
+          yield* invoke(pending);
+          yield* Fiber.join(shutdown);
+          expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+          vi.mocked(h.ctx.ui.setStatus).mockClear();
+          yield* h.emit("agent_start");
+          expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
+          const requestHook = h.handlers.get("before_provider_request")?.[0];
+          const injection = () =>
+            Effect.promise(() => Promise.resolve(requestHook?.({ payload: {} }, h.ctx)));
+          expect(yield* injection()).toBeUndefined();
+          // The committed setting is durable, and a later session may legitimately use it.
+          armed = false;
+          yield* h.emit("session_start");
+          if (setting === "fast.enabled") {
+            expect(yield* injection()).toBeDefined();
+          }
+          yield* h.emit("session_shutdown");
+        }),
+    );
+  }
+
+  it.effect("a failed replacement cannot regain the retired session's publication authority", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const committed = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let armed = false;
+      const modify = configStore.modifyConfig;
+      const gatedModify: typeof modify = (path, update) =>
+        modify(path, (raw) => {
+          const modification = update(raw);
+          if (!armed) return modification;
+          return {
+            ...modification,
+            afterCommit: Deferred.succeed(committed, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(modification.afterCommit ?? Effect.void),
+            ),
+          };
+        });
+      vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+      yield* h.emit("session_start");
+      armed = true;
+      const pending = h.commands.get("openai")?.("settings image.enabled true", h.ctx);
+      yield* Deferred.await(committed);
+      vi.spyOn(configStore, "resolveConfig").mockReturnValue(
+        Effect.fail(
+          new configStore.OpenAIConfigError({
+            operation: "read",
+            path: "test",
+            message: "unavailable",
+          }),
+        ),
+      );
+      const replacement = yield* h
+        .emit("session_start", {}, { ...h.ctx })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.succeed(release, undefined);
+      yield* invoke(pending);
+      yield* Fiber.join(replacement);
+      vi.mocked(h.ctx.ui.setStatus).mockClear();
+      yield* h.emit("agent_start");
+      expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
+      yield* h.emit("session_shutdown");
+    }),
+  );
+
   it.effect(
     "repairs the full context hook with prompt and tools, and aborts a mismatched native prefix",
     () =>

@@ -175,7 +175,9 @@ code 1; stopped the program`) when it is the only matching row and the collapsed
   `tests/support/presentation.ts` serves the shell conformance suites. Host casts, deferred
   promises and the plain theme come from `pi-cosmic-core/testing`; `tests/support/host.ts` keeps
   only the Code Mode state fixture, and behavior-specific fixtures stay in each suite.
-  `tests/engine/` exercises the engine against real processes.
+  `tests/engine/` exercises real processes plus Deferred/TestClock process-boundary seams for
+  opening, start delivery, result joins and owned cleanup; execution tests keep operation receipts
+  through EOF/protocol failure and late foreign settlement.
 
 ## Trust and configuration
 
@@ -307,9 +309,21 @@ unchanged. Pi holds at most 64 MiB of queued and running inputs.
 When the program returns or throws, the child refuses new calls, waits for every started call's
 reply, serializes the result, lets Node report unhandled rejections, flushes its output and sends
 `result`. Pi never cancels started calls for that; `Promise.race` losers and `Promise.all`
-siblings finish. After `result`, Pi sends `finish`, gives the process 250 ms to exit and close its
-output, then sweeps the group. Only the deadline and interruption stop work early: the scope
-interrupts in-flight calls and kills the process group. Unconfirmed cleanup adds a log line.
+siblings finish. Pi joins dispatch fibers only for a valid `result`. EOF clears the owned dispatch
+set outside the execution deadline before exit/output draining: every queued and running call is
+signalled before any dispatch finalizer is awaited, so freed permits cannot admit queued work.
+Slow dispatch cleanup preserves EOF's original failure rather than becoming a timeout. Broken
+framing returns directly to scope closure without output grace. Completed output and
+completed/uncertain operation receipts remain evidence, never permission to replay.
+
+One Clock deadline owns an interruptible region spanning process opening, `start` delivery,
+result waiting and valid-result call joins. Boundary startup/write caps use the remaining budget;
+expiry checks also prohibit late `start` dispatch and acceptance of buffered results after delayed
+acquisition or delivery. Acquired resources belong to the outer scope. After a timely result,
+`finish`, exit and output draining share a separate 250 ms allowance, then the scope sweeps the
+group. Deadline, broken connection and caller interruption cancel in-flight calls. Finalization
+is outside both time budgets and retains process ownership; masked native acquisition or uncertain
+OS cleanup may delay settlement rather than abandon the process. Unconfirmed cleanup adds a log line.
 
 `engine/failure.ts` turns what the child reports into diagnostics. A tool failure that escaped
 keeps the diagnostic Pi recorded for that request plus the call site's line; a `tools.x is not a

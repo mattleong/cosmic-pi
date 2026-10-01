@@ -1,7 +1,7 @@
 /**
  * Runs one Code Mode program in a fresh Node process. Pi dispatches the program's tool calls,
- * lets started calls finish when the program ends, and stops early only at the deadline or on
- * interruption, which kill the process group and interrupt calls still in flight.
+ * lets started calls finish for a valid result, and interrupts them on a lost process connection,
+ * deadline or caller interruption. The outer resource scope always owns process-group cleanup.
  */
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -78,6 +78,14 @@ type Outcome =
   | { readonly _tag: "exited" }
   | { readonly _tag: "timeout" }
   | { readonly _tag: "broken"; readonly diagnostic: CodeModeDiagnostic };
+
+type ProcessOutcome =
+  | Extract<Outcome, { readonly _tag: "broken" | "timeout" }>
+  | (Extract<Outcome, { readonly _tag: "result" | "exited" }> & {
+      readonly child: ProgramProcess;
+      readonly outputReader: Fiber.Fiber<void>;
+      readonly dispatches: FiberSet.FiberSet<void, never>;
+    });
 
 const failure = (error: CodeModeDiagnostic): CodeModeResult => ({ ok: false, error });
 
@@ -195,146 +203,185 @@ export const executeProgram = <R>(
         };
       };
 
-      const opened = yield* Effect.result(
-        openProcess({
-          cwd: options.cwd,
-          writeTimeoutMs: limits.timeoutMs + 5_000,
-          onCleanup: (confirmed) => {
-            cleanupConfirmed = confirmed;
-          },
-        }),
-      );
-      if (opened._tag === "Failure") {
-        return failure(executionFailure("Code Mode could not start a Node.js process."));
-      }
-      const child = opened.success;
-      const fibers = yield* FiberSet.make<void, never>();
-      const outputReader = yield* child.stderr.pipe(
-        Stream.runForEach((chunk) => Effect.sync(() => output.append(chunk))),
-        Effect.forkScoped,
-      );
-      const write = (message: ParentMessage) => child.write(encodeFrame(message));
-
-      const deliver =
-        (seq: number) =>
-        (reply: CallReply): Effect.Effect<CodeModeDiagnostic | undefined> =>
-          Effect.gen(function* () {
-            if (!reply.ok) {
-              callFailures.set(seq, reply.error);
-              yield* Effect.ignore(
-                write({
-                  type: "reply",
-                  seq,
-                  ok: false,
-                  kind: reply.error.kind,
-                  message: reply.error.message,
-                }),
-              );
-              return reply.error;
-            }
-            const valueText = encodeValue(reply.value);
-            if (valueText === undefined) {
-              const error: CodeModeDiagnostic = {
-                kind: "InvalidToolOutput",
-                message: `Invalid output from tool '${reply.name}': the result is not JSON data. The tool ran, but its result was not returned to the program.`,
-                facts: { tool: reply.name },
-              };
-              callFailures.set(seq, error);
-              yield* Effect.ignore(
-                write({ type: "reply", seq, ok: false, kind: error.kind, message: error.message }),
-              );
-              return error;
-            }
-            const written = yield* Effect.result(child.write(encodeReplyFrame(seq, valueText)));
-            if (written._tag === "Failure") {
-              return executionFailure("The program ended before this result was delivered.");
-            }
-            completed.record(reply.name, Predicate.isString(reply.value) ? reply.value : valueText);
-            return undefined;
-          });
-
-      let inFlightBytes = 0;
-      const decoder = makeFrameDecoder(MAX_CHILD_FRAME_BYTES);
-      const receive = (frame: Uint8Array) =>
-        Effect.gen(function* () {
-          const message = yield* decodeChildMessage(frame);
-          if (message.type !== "call") return Option.some(message);
-          inFlightBytes += frame.byteLength;
-          if (inFlightBytes > MAX_IN_FLIGHT_INPUT_BYTES) {
-            return yield* new ProtocolError({ reason: "in-flight" });
+      // Resources acquired here belong to the outer scope, not the timeout's racing fiber.
+      // Acquisition/dispatch/waiting are interruptible; owned finalization is not time-limited.
+      const execute: Effect.Effect<ProcessOutcome, never, R | Scope.Scope> = Effect.gen(
+        function* () {
+          const remaining = deadline - (yield* Clock.currentTimeMillis);
+          if (remaining <= 0) return { _tag: "timeout" };
+          const opened = yield* Effect.result(
+            openProcess({
+              cwd: options.cwd,
+              startTimeoutMs: Math.max(1, Math.ceil(remaining)),
+              writeTimeoutMs: Math.max(1, Math.ceil(remaining)),
+              onCleanup: (confirmed) => {
+                cleanupConfirmed = confirmed;
+              },
+            }),
+          );
+          // A masked acquisition may settle after expiry; it must never dispatch a late start.
+          if ((yield* Clock.currentTimeMillis) >= deadline) return { _tag: "timeout" };
+          if (opened._tag === "Failure") {
+            return {
+              _tag: "broken",
+              diagnostic: executionFailure("Code Mode could not start a Node.js process."),
+            };
           }
-          yield* FiberSet.run(
-            fibers,
-            dispatcher.call(message.path, message.args, deliver(message.seq)).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  inFlightBytes -= frame.byteLength;
-                }),
-              ),
+          const child = opened.success;
+          const fibers = yield* FiberSet.make<void, never>();
+          const outputReader = yield* child.stderr.pipe(
+            Stream.runForEach((chunk) => Effect.sync(() => output.append(chunk))),
+            Effect.forkScoped,
+          );
+          const write = (message: ParentMessage) => child.write(encodeFrame(message));
+
+          const deliver =
+            (seq: number) =>
+            (reply: CallReply): Effect.Effect<CodeModeDiagnostic | undefined> =>
+              Effect.gen(function* () {
+                if (!reply.ok) {
+                  callFailures.set(seq, reply.error);
+                  yield* Effect.ignore(
+                    write({
+                      type: "reply",
+                      seq,
+                      ok: false,
+                      kind: reply.error.kind,
+                      message: reply.error.message,
+                    }),
+                  );
+                  return reply.error;
+                }
+                const valueText = encodeValue(reply.value);
+                if (valueText === undefined) {
+                  const error: CodeModeDiagnostic = {
+                    kind: "InvalidToolOutput",
+                    message: `Invalid output from tool '${reply.name}': the result is not JSON data. The tool ran, but its result was not returned to the program.`,
+                    facts: { tool: reply.name },
+                  };
+                  callFailures.set(seq, error);
+                  yield* Effect.ignore(
+                    write({
+                      type: "reply",
+                      seq,
+                      ok: false,
+                      kind: error.kind,
+                      message: error.message,
+                    }),
+                  );
+                  return error;
+                }
+                const written = yield* Effect.result(child.write(encodeReplyFrame(seq, valueText)));
+                if (written._tag === "Failure") {
+                  return executionFailure("The program ended before this result was delivered.");
+                }
+                completed.record(
+                  reply.name,
+                  Predicate.isString(reply.value) ? reply.value : valueText,
+                );
+                return undefined;
+              });
+
+          let inFlightBytes = 0;
+          const decoder = makeFrameDecoder(MAX_CHILD_FRAME_BYTES);
+          const receive = (frame: Uint8Array) =>
+            Effect.gen(function* () {
+              const message = yield* decodeChildMessage(frame);
+              if (message.type !== "call") return Option.some(message);
+              inFlightBytes += frame.byteLength;
+              if (inFlightBytes > MAX_IN_FLIGHT_INPUT_BYTES) {
+                return yield* new ProtocolError({ reason: "in-flight" });
+              }
+              yield* FiberSet.run(
+                fibers,
+                dispatcher.call(message.path, message.args, deliver(message.seq)).pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      inFlightBytes -= frame.byteLength;
+                    }),
+                  ),
+                ),
+              );
+              return Option.none<ResultMessage>();
+            });
+
+          const awaitResult: Effect.Effect<Outcome, never, R> = child.stdout.pipe(
+            Stream.mapEffect((chunk) =>
+              Effect.try({
+                try: () => decoder(chunk),
+                catch: (error) =>
+                  error instanceof ProtocolError
+                    ? error
+                    : new ProtocolError({ reason: "malformed" }),
+              }),
+            ),
+            Stream.flattenIterable,
+            Stream.mapEffect(receive),
+            Stream.filter(Option.isSome),
+            Stream.runHead,
+            Effect.map(Option.flatten),
+            Effect.map(
+              (message): Outcome =>
+                Option.isSome(message)
+                  ? { _tag: "result", message: message.value }
+                  : { _tag: "exited" },
+            ),
+            Effect.catch((error) =>
+              Effect.succeed<Outcome>({
+                _tag: "broken",
+                diagnostic: !(error instanceof ProtocolError)
+                  ? executionFailure("Code Mode lost its connection to the program's process.")
+                  : error.reason === "in-flight"
+                    ? executionFailure(
+                        "The program sent more tool input at once than Code Mode holds (64 MiB across queued and running calls).",
+                      )
+                    : error.reason === "oversize"
+                      ? executionFailure(
+                          "The program's process sent a message larger than Code Mode accepts.",
+                        )
+                      : executionFailure(
+                          "The program's process sent an invalid Code Mode message.",
+                        ),
+              }),
+            ),
+            // Only a valid result promises settled replies. EOF/protocol failure must not hide
+            // its known diagnostic behind a pending call; cancellation runs outside this deadline.
+            Effect.tap((outcome) =>
+              outcome._tag === "result" ? FiberSet.awaitEmpty(fibers) : Effect.void,
             ),
           );
-          return Option.none<ResultMessage>();
-        });
 
-      const awaitResult: Effect.Effect<Outcome, never, R> = child.stdout.pipe(
-        Stream.mapEffect((chunk) =>
-          Effect.try({
-            try: () => decoder(chunk),
-            catch: (error) =>
-              error instanceof ProtocolError ? error : new ProtocolError({ reason: "malformed" }),
-          }),
-        ),
-        Stream.flattenIterable,
-        Stream.mapEffect(receive),
-        Stream.filter(Option.isSome),
-        Stream.runHead,
-        Effect.map(Option.flatten),
-        Effect.map(
-          (message): Outcome =>
-            Option.isSome(message)
-              ? { _tag: "result", message: message.value }
-              : { _tag: "exited" },
-        ),
-        Effect.catch((error) =>
-          Effect.succeed<Outcome>({
-            _tag: "broken",
-            diagnostic: !(error instanceof ProtocolError)
-              ? executionFailure("Code Mode lost its connection to the program's process.")
-              : error.reason === "in-flight"
-                ? executionFailure(
-                    "The program sent more tool input at once than Code Mode holds (64 MiB across queued and running calls).",
-                  )
-                : error.reason === "oversize"
-                  ? executionFailure(
-                      "The program's process sent a message larger than Code Mode accepts.",
-                    )
-                  : executionFailure("The program's process sent an invalid Code Mode message."),
-          }),
-        ),
-        // The child sends its result only after every reply settled; join the dispatch fibers.
-        Effect.tap(() => FiberSet.awaitEmpty(fibers)),
-      );
-
-      const started = yield* Effect.result(
-        write({
-          type: "start",
-          source: options.code,
-          tools: dispatcher.paths,
-          resultLimit: MAX_RESULT_BYTES,
-        }),
-      );
-      const outcome: Outcome =
-        started._tag === "Failure"
-          ? {
+          if ((yield* Clock.currentTimeMillis) >= deadline) return { _tag: "timeout" };
+          const started = yield* Effect.result(
+            write({
+              type: "start",
+              source: options.code,
+              tools: dispatcher.paths,
+              resultLimit: MAX_RESULT_BYTES,
+            }),
+          );
+          if ((yield* Clock.currentTimeMillis) >= deadline) return { _tag: "timeout" };
+          if (started._tag === "Failure") {
+            return {
               _tag: "broken",
               diagnostic: executionFailure("Code Mode could not start the program."),
-            }
-          : yield* awaitResult.pipe(
-              Effect.timeoutOrElse({
-                duration: Math.max(0, deadline - (yield* Clock.currentTimeMillis)),
-                orElse: () => Effect.succeed<Outcome>({ _tag: "timeout" }),
-              }),
-            );
+            };
+          }
+          const outcome = yield* awaitResult;
+          // Buffered results cannot win a zero-duration timeout after a delayed start/join.
+          if ((yield* Clock.currentTimeMillis) >= deadline) return { _tag: "timeout" };
+          return outcome._tag === "result" || outcome._tag === "exited"
+            ? { ...outcome, child, outputReader, dispatches: fibers }
+            : outcome;
+        },
+      );
+      const outcome = yield* execute.pipe(
+        Effect.interruptible,
+        Effect.timeoutOrElse({
+          duration: Math.max(0, deadline - (yield* Clock.currentTimeMillis)),
+          orElse: () => Effect.succeed<ProcessOutcome>({ _tag: "timeout" }),
+        }),
+      );
 
       if (outcome._tag === "timeout") {
         return withDetails(
@@ -347,10 +394,22 @@ export const executeProgram = <R>(
       }
       // A broken connection gets no grace: the scope kills the process and keeps what arrived.
       if (outcome._tag === "broken") return withDetails(failure(outcome.diagnostic));
-      // Let the process exit on its own so its last output arrives, then sweep its group.
-      if (outcome._tag === "result") yield* Effect.ignore(write({ type: "finish" }));
-      const exit = yield* child.exit.pipe(Effect.timeoutOption(OUTPUT_TAIL_MS));
-      yield* Fiber.await(outputReader).pipe(Effect.timeoutOption(OUTPUT_TAIL_MS));
+      // EOF revokes dispatch before output draining. clear signals every running/queued fiber
+      // before awaiting finalizers; this owned cleanup must not turn EOF into a deadline failure.
+      if (outcome._tag === "exited")
+        yield* Effect.uninterruptible(FiberSet.clear(outcome.dispatches));
+      // Finish/exit/output draining share a separate post-result allowance. Process cleanup
+      // still runs outside both budgets, retaining ownership until confirmation or uncertainty.
+      const { child, outputReader } = outcome;
+      const tailDeadline = (yield* Clock.currentTimeMillis) + OUTPUT_TAIL_MS;
+      const tail = <A, E, R2>(effect: Effect.Effect<A, E, R2>) =>
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          effect.pipe(Effect.timeoutOption(Math.max(0, tailDeadline - now))),
+        );
+      if (outcome._tag === "result")
+        yield* Effect.ignore(tail(child.write(encodeFrame({ type: "finish" }))));
+      const exit = yield* tail(child.exit);
+      yield* tail(Fiber.await(outputReader));
 
       if (outcome._tag === "exited") {
         const status = Option.match(exit, {

@@ -1,14 +1,24 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import { executeProgram } from "../src/engine/execute.ts";
 import { RESULT_MAX_ENTRIES } from "../src/results/model.ts";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
 import type { CodeModeToolDetails } from "../src/tools/format.ts";
-import { opaqueFixture } from "pi-cosmic-core/testing";
+import { opaqueFixture, yieldUntil } from "pi-cosmic-core/testing";
 import { codeModeStateFixture } from "./support/host.ts";
-import { executeHarness, textOf, type ExecuteHarnessOptions } from "./support/execute.ts";
+import {
+  childFrame,
+  executeHarness,
+  programProcessFixture,
+  textOf,
+  type ExecuteHarnessOptions,
+} from "./support/execute.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 import { utf8ByteLength } from "../src/tools/limits.ts";
 import type { CodeModeInput } from "../src/tools/result-read.ts";
@@ -75,6 +85,261 @@ function harness(
     failure: () => failure,
   };
 }
+
+type BashCallInput = { readonly command: string };
+type NativeCallInput = { readonly path: string; readonly content: string } | BashCallInput;
+
+describe("broken program receipt settlement", () => {
+  for (const ending of ["EOF", "malformed frame"] as const) {
+    it.effect(
+      `retains ${ending} diagnostics and operation certainty while cancelling pending dispatch`,
+      () =>
+        Effect.gen(function* () {
+          const context = yield* Effect.context<never>();
+          const runPromise = Effect.runPromiseWith(context);
+          const delivered = yield* Deferred.make<void>();
+          const pending = yield* Deferred.make<void>();
+          const late = yield* Deferred.make<void>();
+          let writes = 0;
+          let releases = 0;
+          let nativeSignal: AbortSignal | undefined;
+          let nativePromise:
+            | Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }>
+            | undefined;
+          const call = (seq: number, name: "write" | "bash", input: NativeCallInput) =>
+            childFrame({ type: "call", seq, path: ["pi", name], args: [input] });
+          const stdout = Stream.make(call(0, "write", { path: "x", content: "body" })).pipe(
+            Stream.concat(Stream.fromEffect(Deferred.await(delivered)).pipe(Stream.drain)),
+            Stream.concat(Stream.make(call(1, "bash", { command: "pending" }))),
+            Stream.concat(Stream.fromEffect(Deferred.await(pending)).pipe(Stream.drain)),
+            Stream.concat(
+              ending === "EOF" ? Stream.empty : Stream.make(new Uint8Array([0, 0, 0, 1, 255])),
+            ),
+          );
+          const h = executeHarness({
+            runPromise,
+            config: { timeoutMs: 10_000, maxOutputBytes: 3000 },
+            retainFailureDetails: true,
+            definitions: nestedToolDefinitionsFixture({
+              write: {
+                execute: () => {
+                  writes++;
+                  return Promise.resolve({
+                    content: [{ type: "text", text: "written" }],
+                    details: {},
+                  });
+                },
+              },
+              bash: {
+                execute: (_id: string, _input: BashCallInput, signal: AbortSignal | undefined) => {
+                  nativeSignal = signal;
+                  // A foreign operation may ignore abort. Its late settlement cannot change receipts.
+                  nativePromise = runPromise(
+                    Deferred.succeed(pending, undefined).pipe(
+                      Effect.andThen(Deferred.await(late)),
+                      Effect.as({
+                        content: [{ type: "text" as const, text: "late" }],
+                        details: {},
+                      }),
+                    ),
+                  );
+                  return nativePromise;
+                },
+              },
+            }),
+            executeCodeMode: (options) =>
+              executeProgram({
+                ...options,
+                onToolCallLifecycle: (event) =>
+                  (options.onToolCallLifecycle?.(event) ?? Effect.void).pipe(
+                    Effect.andThen(
+                      event.name === "pi.write" && event.status === "succeeded"
+                        ? Effect.asVoid(Deferred.succeed(delivered, undefined))
+                        : Effect.void,
+                    ),
+                  ),
+                openProcess: () =>
+                  Effect.acquireRelease(
+                    Effect.succeed(
+                      programProcessFixture({
+                        stdout,
+                        exit: Effect.succeed({ code: 3, signal: null }),
+                      }),
+                    ),
+                    () =>
+                      Effect.sync(() => {
+                        releases++;
+                      }),
+                  ),
+              }),
+          });
+          const fiber = yield* Effect.tryPromise(() => h.run("unused")).pipe(
+            Effect.result,
+            Effect.forkChild,
+          );
+          yield* Deferred.await(pending);
+          yield* yieldUntil(() => fiber.pollUnsafe() !== undefined);
+          const settled = yield* Fiber.join(fiber);
+          expect(settled._tag).toBe("Failure");
+          if (settled._tag === "Success") throw new Error("expected a failed execution");
+          const diagnostic = ending === "EOF" ? "exit code 3" : "invalid Code Mode message";
+          expect(String(settled.failure.cause)).toContain(diagnostic);
+          expect(String(settled.failure.cause)).toContain("written");
+          expect(String(settled.failure.cause)).toContain(
+            "Do not replay completed or uncertain operations",
+          );
+          expect(nativeSignal?.aborted).toBe(true);
+          const details = h.retention.consume("call")!;
+          expect(details.executionReceipts).toMatchObject({
+            total: 2,
+            completed: 1,
+            unknown: 1,
+            notSent: 0,
+          });
+          expect(details.executionReceipts?.calls).toMatchObject([
+            { tool: "pi.write", certainty: "completed", delivery: "delivered" },
+            { tool: "pi.bash", certainty: "unknown", delivery: "not-delivered" },
+          ]);
+          expect(details.toolCalls.map((entry) => entry.status)).toEqual([
+            "completed",
+            "cancelled",
+          ]);
+          expect(details.failure?.kind).toBe("ExecutionFailure");
+          expect(yield* Clock.currentTimeMillis).toBe(0);
+          expect(releases).toBe(1);
+          const before = yield* Schema.encodeEffect(json)(details.executionReceipts);
+          yield* Deferred.succeed(late, undefined);
+          yield* Effect.promise(() => nativePromise!);
+          expect(yield* Schema.encodeEffect(json)(details.executionReceipts)).toBe(before);
+          expect(h.guestValue()).toBeUndefined();
+          expect(writes).toBe(1);
+          expect(releases).toBe(1);
+        }),
+    );
+  }
+  it.effect("retains unknown native receipts through EOF cleanup before the output tail", () =>
+    Effect.gen(function* () {
+      const context = yield* Effect.context<never>();
+      const runPromise = Effect.runPromiseWith(context);
+      const pending = yield* Deferred.make<void>();
+      const cancelled = yield* Deferred.make<void>();
+      const finalizerRelease = yield* Deferred.make<void>();
+      const tailEntered = yield* Deferred.make<void>();
+      const late = yield* Deferred.make<void>();
+      let releases = 0;
+      let dispatches = 0;
+      let nativeSignal: AbortSignal | undefined;
+      let nativePromise:
+        | Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }>
+        | undefined;
+      const h = executeHarness({
+        runPromise,
+        config: { timeoutMs: 10, maxOutputBytes: 3000 },
+        retainFailureDetails: true,
+        definitions: nestedToolDefinitionsFixture({
+          bash: {
+            execute: (_id: string, _input: BashCallInput, signal: AbortSignal | undefined) => {
+              dispatches++;
+              nativeSignal = signal;
+              nativePromise = runPromise(
+                Deferred.succeed(pending, undefined).pipe(
+                  Effect.andThen(Deferred.await(late)),
+                  Effect.as({
+                    content: [{ type: "text" as const, text: "late" }],
+                    details: {},
+                  }),
+                ),
+              );
+              return nativePromise;
+            },
+          },
+        }),
+        executeCodeMode: (options) =>
+          executeProgram({
+            ...options,
+            onToolCallLifecycle: (event) =>
+              (options.onToolCallLifecycle?.(event) ?? Effect.void).pipe(
+                Effect.andThen(
+                  event.status === "cancelled"
+                    ? Deferred.succeed(cancelled, undefined).pipe(
+                        Effect.andThen(Deferred.await(finalizerRelease)),
+                      )
+                    : Effect.void,
+                ),
+              ),
+            openProcess: (options) =>
+              Effect.acquireRelease(
+                Effect.succeed(
+                  programProcessFixture({
+                    stdout: Stream.make(
+                      childFrame({
+                        type: "call",
+                        seq: 0,
+                        path: ["pi", "bash"],
+                        args: [{ command: "pending" }],
+                      }),
+                    ).pipe(
+                      Stream.concat(Stream.fromEffect(Deferred.await(pending)).pipe(Stream.drain)),
+                    ),
+                    stderr: Stream.fromEffect(Effect.never),
+                    exit: Deferred.succeed(tailEntered, undefined).pipe(
+                      Effect.andThen(Effect.never),
+                    ),
+                  }),
+                ),
+                () =>
+                  Effect.sync(() => {
+                    releases++;
+                    options.onCleanup(false);
+                  }),
+              ),
+          }),
+      });
+      const fiber = yield* Effect.tryPromise(() => h.run("unused")).pipe(
+        Effect.result,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(cancelled);
+      expect(nativeSignal?.aborted).toBe(true);
+      expect(yield* Clock.currentTimeMillis).toBe(0);
+      yield* TestClock.adjust(10_000);
+      expect(fiber.pollUnsafe()).toBeUndefined();
+      expect(releases).toBe(0);
+      expect(yield* Deferred.isDone(tailEntered)).toBe(false);
+      yield* Deferred.succeed(finalizerRelease, undefined);
+      yield* Deferred.await(tailEntered);
+      yield* TestClock.adjust(250);
+      yield* yieldUntil(() => fiber.pollUnsafe() !== undefined);
+      const settled = yield* Fiber.join(fiber);
+      expect(settled._tag).toBe("Failure");
+      if (settled._tag === "Success") throw new Error("expected a failed execution");
+      expect(String(settled.failure.cause)).toContain("exited before returning a result");
+      expect(String(settled.failure.cause)).toContain("could not confirm");
+      expect(String(settled.failure.cause)).toContain(
+        "Do not replay completed or uncertain operations",
+      );
+      const details = h.retention.consume("call")!;
+      expect(details.failure?.kind).toBe("ExecutionFailure");
+      expect(details.executionReceipts).toMatchObject({
+        total: 1,
+        completed: 0,
+        unknown: 1,
+        notSent: 0,
+        calls: [{ tool: "pi.bash", certainty: "unknown", delivery: "not-delivered" }],
+      });
+      expect(details.toolCalls.map((entry) => entry.status)).toEqual(["cancelled"]);
+      expect(dispatches).toBe(1);
+      expect(releases).toBe(1);
+      const before = yield* Schema.encodeEffect(json)(details.executionReceipts);
+      yield* Deferred.succeed(late, undefined);
+      yield* Effect.promise(() => nativePromise!);
+      expect(yield* Schema.encodeEffect(json)(details.executionReceipts)).toBe(before);
+      expect(h.guestValue()).toBeUndefined();
+      expect(dispatches).toBe(1);
+      expect(releases).toBe(1);
+    }),
+  );
+});
 
 describe("output recovery without replay", () => {
   it.effect(

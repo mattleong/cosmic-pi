@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -23,25 +24,40 @@ export function registerSettingsController(
     config(ctx: ExtensionContext): ResolvedConfig | undefined;
     updateFooter(ctx: ExtensionContext): void;
     formatDebugStatus(ctx: ExtensionContext): string;
+    captureAuthority?: () => () => boolean;
     run<A, E>(effect: Effect.Effect<A, E, XaiUsageService>, signal?: AbortSignal): Promise<A>;
   },
 ): void {
-  command.add(
+  const createCommand = (isCurrent: () => boolean) =>
     settingsSubcommand({
       root: "xai",
       description:
         "Configure xAI usage refresh details; footer visibility is in /cosmic-ui settings",
       title: "Better xAI",
+      isCurrent,
       descriptors: SETTINGS_OPTION_DESCRIPTORS,
       examples: ["usage.refreshIntervalMs 30000", "usage.showResetTimes true"],
-      config: options.config,
+      config: (ctx) => (isCurrent() ? options.config(ctx) : undefined),
       status: options.formatDebugStatus,
-      apply: (_ctx, id, value, signal) =>
-        options.run(
-          XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(Effect.result),
-          signal,
-        ),
-      afterApply: options.updateFooter,
+      apply: (_ctx, id, value, signal) => {
+        const stale = () => Result.fail({ message: "", stale: true });
+        if (!isCurrent()) return Promise.resolve(stale());
+        return options
+          .run(
+            XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(Effect.result),
+            signal,
+          )
+          .then(
+            (result) => (isCurrent() ? result : stale()),
+            (error) => {
+              if (!isCurrent()) return stale();
+              throw error;
+            },
+          );
+      },
+      afterApply: (ctx) => {
+        if (isCurrent()) options.updateFooter(ctx);
+      },
       open: (ctx, session) => {
         const cfg = session.config();
         if (!cfg) return Promise.resolve({ _tag: "Blocked" });
@@ -62,7 +78,7 @@ export function registerSettingsController(
               onChange: (id, value, list) => {
                 const generation = pickerGenerations.begin(id);
                 void session.apply(id, value, (currentValue) => {
-                  if (!pickerGenerations.isCurrent(id, generation)) return false;
+                  if (!isCurrent() || !pickerGenerations.isCurrent(id, generation)) return false;
                   list.updateValue(id, currentValue);
                   tui.requestRender();
                   return true;
@@ -83,6 +99,13 @@ export function registerSettingsController(
             }).surface,
         });
       },
-    }),
-  );
+    });
+  const registered = createCommand(() => true);
+  command.add({
+    ...registered,
+    handler: (args, ctx) => {
+      const isCurrent = options.captureAuthority?.() ?? (() => true);
+      return createCommand(isCurrent).handler(args, ctx);
+    },
+  });
 }

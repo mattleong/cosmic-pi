@@ -68,6 +68,7 @@ export interface CosmicUiServiceOptions {
   readonly initialTotals?: FooterTotals;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly onChange: () => void;
+  readonly canPublish?: (() => boolean) | undefined;
   readonly startPolling?: boolean;
   readonly projectTrusted?: boolean;
 }
@@ -92,7 +93,9 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           homeDirectory: Option.getOrUndefined(home),
         },
         (current) => current,
-        (published) => MutableRef.set(options.projection, published),
+        (published) => {
+          if (options.canPublish?.() !== false) MutableRef.set(options.projection, published);
+        },
       );
       const updateState = (f: (current: CosmicUiLiveState) => CosmicUiLiveState) =>
         state
@@ -100,7 +103,9 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           .pipe(Effect.orDie);
       // `onChange` is total by construction (invoke-wrapped render requests), so a throw
       // would be a violated invariant, not an expected failure.
-      const notifyChanged = Effect.sync(options.onChange);
+      const notifyChanged = Effect.sync(() => {
+        if (options.canPublish?.() !== false) options.onChange();
+      });
       let lastKnownCwd = options.cwd;
       const currentCwd = () =>
         callbacks.invoke(
@@ -181,17 +186,21 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           concurrency: 2,
           discard: true,
         });
-      const invalidate = updateState((current) => ({
-        ...current,
-        gitStatus: undefined,
-        pullRequestNumber: undefined,
-        pullRequestCheckedAt: 0,
-        probeRevision: current.probeRevision + 1,
-      })).pipe(
-        Effect.andThen(gitRefresh.invalidate),
-        Effect.andThen(pullRefresh.invalidate),
-        Effect.andThen(notifyChanged),
-      );
+      // Both refresh engines must exclude validation/publication while branch state
+      // changes. Commits hold only their own gate; invalidation always takes git then PR.
+      const invalidate = gitRefresh
+        .invalidateWith(
+          pullRefresh.invalidateWith(
+            updateState((current) => ({
+              ...current,
+              gitStatus: undefined,
+              pullRequestNumber: undefined,
+              pullRequestCheckedAt: 0,
+              probeRevision: current.probeRevision + 1,
+            })),
+          ),
+        )
+        .pipe(Effect.andThen(notifyChanged));
       const setTotals = (totals: FooterTotals) =>
         updateState((current) => ({ ...current, totals })).pipe(Effect.andThen(notifyChanged));
       const installConfig = (next: ResolvedCosmicUiConfig) =>

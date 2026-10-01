@@ -35,24 +35,28 @@ export const containCommandFailure = <A, E extends { readonly message: string },
     readonly unexpected: string;
     readonly defect: string;
   },
+  isCurrent: () => boolean = () => true,
 ): Effect.Effect<Option.Option<A>, never, R> =>
   effect.pipe(
     Effect.asSome,
     Effect.catch((error) =>
-      Effect.sync(() =>
+      Effect.sync(() => {
+        if (!isCurrent()) return;
         notifyAtHostBoundary(
           ctx,
           messages.failed(sanitizeDiagnosticError(error.message)),
           "warning",
-        ),
-      ).pipe(Effect.as(Option.none())),
+        );
+      }).pipe(Effect.as(Option.none())),
     ),
     Effect.catchCause((cause) =>
       Cause.hasInterruptsOnly(cause)
         ? Effect.succeedNone
         : Effect.logError(messages.defect).pipe(
             Effect.andThen(
-              Effect.sync(() => notifyAtHostBoundary(ctx, messages.unexpected, "warning")),
+              Effect.sync(() => {
+                if (isCurrent()) notifyAtHostBoundary(ctx, messages.unexpected, "warning");
+              }),
             ),
             Effect.as(Option.none()),
           ),

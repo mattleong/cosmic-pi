@@ -6,6 +6,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as MutableRef from "effect/MutableRef";
+import { CosmicUiConfigStore, CosmicUiConfigError } from "../src/config/store.ts";
+import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
+import { CosmicUiService, type CosmicUiProjection } from "../src/protocol/service.ts";
 import { vi } from "vitest";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import cosmicUi from "../index.ts";
@@ -211,6 +215,80 @@ const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
   });
 
 describe("Cosmic UI extension", () => {
+  it.effect(
+    "a retired masked config commit cannot republish after replacement initialization fails",
+    () =>
+      Effect.gen(function* () {
+        const committed = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let failed = false;
+        let durable = makeDefaultResolvedCosmicUiConfig();
+        let observed: MutableRef.MutableRef<CosmicUiProjection> | undefined;
+        const projection = () => observed;
+        const store = CosmicUiConfigStore.of({
+          resolve: () =>
+            failed
+              ? Effect.fail(
+                  new CosmicUiConfigError({
+                    operation: "read",
+                    path: "test",
+                    message: "unavailable",
+                  }),
+                )
+              : Effect.succeed(durable),
+          updateFooter: () => Effect.die("unexpected footer update"),
+          setVisibility: (_cwd, id, visible, _trusted, afterCommit) =>
+            Effect.gen(function* () {
+              const next = {
+                ...durable,
+                footer: { ...durable.footer, hidden: visible ? [] : [id] },
+              };
+              yield* Effect.sync(() => {
+                durable = next;
+              });
+              yield* Deferred.succeed(committed, undefined);
+              yield* Deferred.await(release);
+              yield* afterCommit?.(next) ?? Effect.void;
+              return next;
+            }).pipe(Effect.uninterruptible),
+        });
+        const makeService = CosmicUiService.make;
+        const boundary = vi.spyOn(CosmicUiService, "make").mockImplementation((options) => {
+          observed = options.projection;
+          return makeService({ ...options, startPolling: false }).pipe(
+            Effect.provideService(CosmicUiConfigStore, store),
+          );
+        });
+        const h = harness();
+        try {
+          yield* emit(h, "session_start");
+          const command = h.pi.registerCommand.mock.calls.find(
+            ([name]) => name === "cosmic-ui",
+          )?.[1].handler;
+          expect(command).toBeDefined();
+          const pending = command?.("settings visible:openai.usage hidden", h.ctx);
+          yield* Deferred.await(committed);
+          h.ctx.ui.notify.mockClear();
+          failed = true;
+          const replacement = yield* emit(h, "session_start", {}, withSession(h.ctx, {})).pipe(
+            Effect.forkScoped({ startImmediately: true }),
+          );
+          yield* Deferred.succeed(release, undefined);
+          yield* Effect.promise(() => Promise.resolve(pending));
+          yield* Fiber.join(replacement);
+          expect(durable.footer.hidden).toEqual(["openai.usage"]);
+          const retired = projection();
+          expect(retired).toBeDefined();
+          expect(retired && MutableRef.get(retired).config).toBeUndefined();
+          expect(h.ctx.ui.notify).toHaveBeenCalledOnce(); // Only the current startup failure.
+        } finally {
+          yield* Deferred.succeed(release, undefined);
+          yield* emit(h, "session_shutdown");
+          boundary.mockRestore();
+        }
+      }),
+  );
+
   it.effect("normalizes hostile protocol getters once and isolates throwing reads", () =>
     Effect.gen(function* () {
       const h = harness();

@@ -81,7 +81,7 @@ export const makeResourceSubscriptions = (hooks: Hooks) =>
               };
               yield* hooks.lease(owner, 1);
               entries.set(key(owner, uri), entry);
-              entry.close = yield* Effect.cached(
+              const cachedClose = yield* Effect.cached(
                 Effect.uninterruptible(
                   Effect.gen(function* () {
                     entry.closing = true;
@@ -108,6 +108,9 @@ export const makeResourceSubscriptions = (hooks: Hooks) =>
                   }),
                 ),
               );
+              // Mask the cache's first-caller handoff too: caching an interrupted
+              // start would make every later close replay incomplete cleanup.
+              entry.close = Effect.uninterruptible(cachedClose);
               return { entry, fresh: true };
             }),
           );

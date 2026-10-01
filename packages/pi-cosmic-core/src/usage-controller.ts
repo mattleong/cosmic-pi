@@ -83,6 +83,8 @@ export interface UsageRefreshControllerOptions<
   readonly cwd: string;
   readonly projection: MutableRef.MutableRef<P>;
   readonly onChange: () => void;
+  /** Revoked synchronously by the originating session before reset and disposal. */
+  readonly canPublish?: (() => boolean) | undefined;
   readonly startPolling?: boolean | undefined;
   /** Presentation owner controls automatic requests; explicit notified requests still fetch. */
   readonly backgroundEnabled?: (() => boolean) | undefined;
@@ -143,6 +145,11 @@ export interface UsageRefreshController<
   /** Extension seams for provider-specific config mutations sharing the same serialization. */
   readonly getState: Effect.Effect<P>;
   readonly updateState: (f: (current: P) => P) => Effect.Effect<P>;
+  readonly installConfig: (
+    config: Resolved,
+    clearUsage?: boolean,
+    wakePolling?: boolean,
+  ) => Effect.Effect<void>;
   readonly synchronize: (
     clearUsage?: boolean,
   ) => Effect.Effect<void, never, UsageProviderRequirements | R>;
@@ -199,7 +206,9 @@ export const makeUsageRefreshController = <
     const state = yield* makeFrozenProjection<P, P>(
       mergeState(options.initialProjection(), { config, authPath }),
       (current) => current,
-      (published) => MutableRef.set(projection, published),
+      (published) => {
+        if (options.canPublish?.() !== false) MutableRef.set(projection, published);
+      },
     );
     const settingUpdates = yield* Semaphore.make(1);
     const updateState = (f: (current: P) => P) =>
@@ -211,7 +220,9 @@ export const makeUsageRefreshController = <
         .pipe(Effect.orDie);
     // Best-effort host UI adapter: a failing host callback is logged, never propagated.
     const notifyHost = <Result>(operation: string, action: () => Result) =>
-      Effect.try(action).pipe(
+      Effect.try(() => {
+        if (options.canPublish?.() !== false) action();
+      }).pipe(
         Effect.catch(() => Effect.logWarning(`${logLabel} UI recovery: ${operation}_failed.`)),
         Effect.asVoid,
       );
@@ -267,7 +278,8 @@ export const makeUsageRefreshController = <
           const ctx = MutableRef.get(context);
           const current = yield* state.getState;
           const cfg = current.config;
-          if (!cfg || !hostHasUi(ctx)) return { _tag: "Skipped" } as const;
+          if (options.canPublish?.() === false || !cfg || !hostHasUi(ctx))
+            return { _tag: "Skipped" } as const;
           const now = yield* Clock.currentTimeMillis;
           if (!notify && options.backgroundEnabled?.() === false)
             return { _tag: "Disabled", notify } as const;
@@ -341,8 +353,15 @@ export const makeUsageRefreshController = <
     const refresh = (request: RefreshRequest = {}) =>
       provideDependencies(refreshEngine.request(request));
     const contextChanged = (clearUsage = false) =>
+      provideDependencies(refreshEngine.invalidateWith(synchronize(clearUsage)));
+    const installConfig = (config: Resolved, clearUsage = true, wakePolling = true) =>
       provideDependencies(
-        synchronize(clearUsage).pipe(Effect.andThen(refreshEngine.invalidate), Effect.asVoid),
+        refreshEngine.invalidateWith(
+          updateState((latest) => mergeState(latest, { config })).pipe(
+            Effect.andThen(synchronize(clearUsage)),
+          ),
+          wakePolling,
+        ),
       );
     const readGlobalFallback = Effect.fn(`${options.spanPrefix}.readGlobalFallback`)(function* (
       current: Resolved,
@@ -368,14 +387,11 @@ export const makeUsageRefreshController = <
               return {
                 value: nextConfig,
                 document: committed,
-                afterCommit: updateState((latest) =>
-                  mergeState(latest, { config: nextConfig }),
-                ).pipe(Effect.andThen(synchronize(true))),
+                afterCommit: installConfig(nextConfig),
               };
             });
           }),
         );
-        yield* refreshEngine.invalidate;
         yield* refresh({ force: true });
       },
     );
@@ -394,6 +410,7 @@ export const makeUsageRefreshController = <
       agentDir,
       getState: state.getState,
       updateState,
+      installConfig,
       synchronize,
       withSettingsPermit: (effect) => settingUpdates.withPermit(effect),
       readGlobalFallback,

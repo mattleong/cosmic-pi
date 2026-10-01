@@ -24,6 +24,8 @@ export interface SettingsCommandOptions<Config> {
   readonly description: string;
   /** The extension name used in messages, such as `Better xAI`. */
   readonly title: string;
+  /** Captured originating invocation/session authority; defaults to always current. */
+  readonly isCurrent?: () => boolean;
   readonly descriptors: ReadonlyArray<
     Pick<SettingsOptionDescriptor<Config>, "id" | "description" | "values" | "currentValue"> & {
       /** Values beyond `values` are accepted and validated by `apply`, such as integers. */
@@ -110,6 +112,10 @@ export function settingsSubcommand<Config>(
   const scopes = options.scopes ?? [];
   const scopeNames = scopes.map((scope) => scope.name);
   const unavailable = `${title} settings aren't available right now`;
+  const isCurrent = options.isCurrent ?? (() => true);
+  const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") => {
+    if (isCurrent()) notifyAtHostBoundary(ctx, message, level);
+  };
   const readConfig = (ctx: ExtensionContext) =>
     invokeHostCallback(() => options.config(ctx), undefined);
   const invoked = (ctx: ExtensionContext) =>
@@ -130,6 +136,7 @@ export function settingsSubcommand<Config>(
     show?: (value: string) => boolean | void,
     scope = scopeNames[0],
   ): Promise<void> => {
+    if (!isCurrent()) return Promise.resolve();
     invoked(ctx);
     const descriptor = descriptors.find((entry) => entry.id === id);
     const persisted = (): string | undefined => {
@@ -145,46 +152,42 @@ export function settingsSubcommand<Config>(
     const before = show ? persisted() : undefined;
     /** False only when the picker says a newer choice replaced this one. */
     const display = (current: string | undefined): boolean =>
-      !show ||
-      current === undefined ||
-      invokeHostCallback(() => show(current), undefined) !== false;
+      isCurrent() &&
+      (!show ||
+        current === undefined ||
+        invokeHostCallback(() => show(current), undefined) !== false);
     // Checked for pickers too, right before the write, since trust can change while one is open.
     const blocked =
       scope === undefined
         ? undefined
         : invokeHostCallback(() => options.scopeBlocked?.(ctx, scope), undefined);
     if (blocked) {
-      if (display(before)) notifyAtHostBoundary(ctx, blocked, "warning");
+      if (display(before)) notify(ctx, blocked, "warning");
       return Promise.resolve();
     }
     return options.apply(ctx, id, value, signal, scope).then(
       (settlement) => {
         if (Result.isFailure(settlement)) {
           if (display(persisted() ?? before) && settlement.failure.stale !== true)
-            notifyAtHostBoundary(ctx, settlement.failure.message, "error");
+            notify(ctx, settlement.failure.message, "error");
           return;
         }
         const current = persisted() ?? value;
         if (show) display(current);
         else
-          notifyAtHostBoundary(
-            ctx,
-            `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`,
-            "info",
-          );
-        invokeHostCallback(() => options.afterApply(ctx, id, scope), undefined);
+          notify(ctx, `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`, "info");
+        if (isCurrent()) invokeHostCallback(() => options.afterApply(ctx, id, scope), undefined);
       },
       () => {
         const current = display(persisted() ?? before);
-        if (current && (!optionalSignal || !signal?.aborted))
-          notifyAtHostBoundary(ctx, unavailable, "warning");
+        if (current && (!optionalSignal || !signal?.aborted)) notify(ctx, unavailable, "warning");
       },
     );
   };
 
   const openInteractive = (ctx: ExtensionContext) => {
     const captured = captureSignal(ctx);
-    if (captured._tag === "Unavailable") return notifyAtHostBoundary(ctx, unavailable, "warning");
+    if (captured._tag === "Unavailable") return notify(ctx, unavailable, "warning");
     return options
       .open(ctx, {
         config: () => readConfig(ctx),
@@ -200,9 +203,8 @@ export function settingsSubcommand<Config>(
           ),
       })
       .then((outcome) => {
-        if (outcome._tag === "Blocked") notifyAtHostBoundary(ctx, unavailable, "warning");
-        if (outcome._tag === "Failed")
-          notifyAtHostBoundary(ctx, `Couldn't open ${title} settings`, "warning");
+        if (outcome._tag === "Blocked") notify(ctx, unavailable, "warning");
+        if (outcome._tag === "Failed") notify(ctx, `Couldn't open ${title} settings`, "warning");
       });
   };
 
@@ -228,10 +230,11 @@ export function settingsSubcommand<Config>(
       ...options.examples.map((example) => `  /${command} ${example}`),
       ...(notes.length > 0 ? ["", ...notes] : []),
     ];
-    notifyAtHostBoundary(ctx, lines.join("\n"), "info");
+    notify(ctx, lines.join("\n"), "info");
   };
 
   const handle = (args: string, ctx: ExtensionContext) => {
+    if (!isCurrent()) return;
     invoked(ctx);
     const dispatch = dispatchSettingsCommand(args, descriptors, scopeNames);
     switch (dispatch._tag) {
@@ -241,13 +244,15 @@ export function settingsSubcommand<Config>(
         return showHelp(ctx);
       case "Status":
         return Promise.resolve()
-          .then(() => options.status(ctx))
+          .then(() => (isCurrent() ? options.status(ctx) : undefined))
           .then(
-            (text) => notifyAtHostBoundary(ctx, text, "info"),
-            () => notifyAtHostBoundary(ctx, unavailable, "warning"),
+            (text) => {
+              if (text !== undefined) notify(ctx, text, "info");
+            },
+            () => notify(ctx, unavailable, "warning"),
           );
       case "Invalid":
-        return notifyAtHostBoundary(
+        return notify(
           ctx,
           dispatch.reason === "invalid-value"
             ? `${dispatch.id} must be one of: ${dispatch.allowedValues.join(", ")}`
@@ -258,8 +263,7 @@ export function settingsSubcommand<Config>(
         );
       case "Apply": {
         const captured = captureSignal(ctx);
-        if (captured._tag === "Unavailable")
-          return notifyAtHostBoundary(ctx, unavailable, "warning");
+        if (captured._tag === "Unavailable") return notify(ctx, unavailable, "warning");
         return applySetting(
           ctx,
           dispatch.id,

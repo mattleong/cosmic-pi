@@ -1,5 +1,8 @@
 import { createEventBus, type AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import type { ProgramProcess } from "../../src/boundary/host-program-process.ts";
+import type { ChildMessage } from "../../src/engine/protocol.ts";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import type { CodeModeResult } from "../../src/engine/diagnostic.ts";
 import { executeProgram } from "../../src/engine/execute.ts";
@@ -86,6 +89,27 @@ export const executeHarness = (options: ExecuteHarnessOptions = {}) => {
     /** The last guest value execution returned, before host framing. */
     guestValue: () => (latest?.ok ? latest.value : undefined),
   };
+};
+
+/** Owned process boundary fixture; the caller installs and probes its acquisition finalizer. */
+export const programProcessFixture = (overrides: Partial<ProgramProcess> = {}): ProgramProcess => ({
+  pid: 1,
+  stdout: Stream.empty,
+  stderr: Stream.empty,
+  write: () => Effect.void,
+  exit: Effect.succeed({ code: 0, signal: null }),
+  close: Effect.void,
+  cleanupState: Effect.succeed("confirmed"),
+  ...overrides,
+});
+
+/** Guest frame for deterministic owned-boundary execution tests. */
+export const childFrame = (message: ChildMessage): Uint8Array => {
+  const body = new TextEncoder().encode(JSON.stringify(message));
+  const frame = new Uint8Array(4 + body.byteLength);
+  new DataView(frame.buffer).setUint32(0, body.byteLength);
+  frame.set(body, 4);
+  return frame;
 };
 
 /** Model-visible text: text blocks only, newline-joined. */

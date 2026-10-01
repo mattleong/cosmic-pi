@@ -27,6 +27,7 @@ import {
 } from "./presentation.ts";
 import { imageResultText } from "./result-text.ts";
 import { OpenAIImageService } from "./service.ts";
+import { OpenAIBoundaryError } from "../usage/controller.ts";
 import {
   TOOL_PARAMS,
   type CodexImageDetails,
@@ -45,10 +46,19 @@ export function registerOpenAIImage(
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
   updateContext: (ctx: ExtensionContext) => void,
   scheduleAnimation?: CompactAnimationScheduler,
+  isCurrent: () => boolean = () => true,
 ) {
   const generateEffect = (params: ToolParams) =>
     OpenAIImageService.use((service) => service.generate(params));
+  const retired = () =>
+    Promise.reject(
+      new OpenAIBoundaryError({
+        operation: "runtime",
+        message: "Better OpenAI session has not started.",
+      }),
+    );
   const generate = (params: ToolParams, ctx: ExtensionContext, signal?: AbortSignal) => {
+    if (!isCurrent()) return retired();
     updateContext(ctx);
     return run(generateEffect(params), signal);
   };
@@ -66,6 +76,8 @@ export function registerOpenAIImage(
     arguments: "<prompt>",
     description: "Generate an image with OpenAI Codex image generation",
     handler: (args, ctx) => {
+      // A retained command closure belongs to its registration's session, not the live slot.
+      if (!isCurrent()) return Promise.resolve();
       const prompt = args.trim();
       if (!prompt) {
         notifyAtHostBoundary(ctx, "Usage: /openai image <prompt>", "warning");
@@ -75,19 +87,27 @@ export function registerOpenAIImage(
       updateContext(ctx);
       noteCwd(ctx);
       const signal = safeHostSignal(ctx);
-      const request = containCommandFailure(generateEffect({ prompt }), ctx, {
-        failed: (message) =>
-          `Couldn't generate the image: ${isSignInFailure(message) ? "sign in with /login openai-codex" : failureMessage(message, "unknown error")}`,
-        unexpected: "Couldn't generate the image",
-        defect: "Better OpenAI image command raised an unexpected defect.",
-      });
+      const canDeliver = () => isCurrent() && !signal?.aborted;
+      const request = containCommandFailure(
+        generateEffect({ prompt }),
+        ctx,
+        {
+          failed: (message) =>
+            `Couldn't generate the image: ${isSignInFailure(message) ? "sign in with /login openai-codex" : failureMessage(message, "unknown error")}`,
+          unexpected: "Couldn't generate the image",
+          defect: "Better OpenAI image command raised an unexpected defect.",
+        },
+        canDeliver,
+      );
       return run(request, signal)
         .then((result) => {
           if (Option.isNone(result)) return undefined;
           const image = result.value;
           const details = imageDetails(image);
           return Promise.resolve()
-            .then(() =>
+            .then(() => {
+              // Promise delivery has a separate microtask: recheck immediately beside send.
+              if (!canDeliver()) return;
               pi.sendMessage({
                 customType: "openai-image",
                 content: [
@@ -96,14 +116,15 @@ export function registerOpenAIImage(
                 ],
                 display: true,
                 details,
-              }),
-            )
+              });
+            })
             .catch(() => {
-              notifyAtHostBoundary(ctx, "Couldn't show the generated image", "warning");
+              if (canDeliver())
+                notifyAtHostBoundary(ctx, "Couldn't show the generated image", "warning");
             });
         })
         .catch(() => {
-          if (!signal?.aborted) notifyAtHostBoundary(ctx, "Couldn't generate the image", "warning");
+          if (canDeliver()) notifyAtHostBoundary(ctx, "Couldn't generate the image", "warning");
         });
     },
   });
@@ -122,6 +143,7 @@ export function registerOpenAIImage(
     renderResult: (result, options, theme, context) =>
       renderImageResult(result, options, theme, context),
     execute(_id, params, signal, onUpdate, ctx) {
+      if (!isCurrent()) return retired();
       noteCwd(ctx);
       const projectionText = `Requesting OpenAI image_generation via ${ctx.model?.id ?? "configured model"}…`;
       onUpdate?.({ content: [{ type: "text", text: projectionText }], details: undefined });

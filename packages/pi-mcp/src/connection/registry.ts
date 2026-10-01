@@ -103,12 +103,14 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     Effect.gen(function* () {
       // Join acquisition and its finalizers before reading the captured connection.
       // Cleanup owns its lifetime independently of the disconnect waiter.
-      yield* Scope.close(owner.scope, Exit.void);
-      let uncertain = false;
+      const scopeClosed = yield* Effect.exit(Scope.close(owner.scope, Exit.void));
+      // Scope closure cannot be retried after a finalizer fails. Still attempt the
+      // connection close and settle waiters, retaining a fail-closed tombstone.
+      let uncertain = Exit.isFailure(scopeClosed);
       if (owner.connection) {
         const result = yield* Effect.exit(owner.connection.close);
         const health = yield* owner.connection.health;
-        uncertain = Exit.isFailure(result) || health.cleanupUnconfirmed || !health.closed;
+        uncertain ||= Exit.isFailure(result) || health.cleanupUnconfirmed || !health.closed;
       }
       yield* withLock(
         Effect.sync(() => {

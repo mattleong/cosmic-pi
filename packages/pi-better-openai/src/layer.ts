@@ -18,6 +18,7 @@ export interface OpenAISessionInput {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;
   readonly projectTrusted: boolean;
+  readonly publicationOwner: MutableRef.MutableRef<boolean>;
 }
 
 export interface OpenAIApplicationLayerOptions {
@@ -29,7 +30,7 @@ export interface OpenAIApplicationLayerOptions {
 
 /** Compose the complete Better OpenAI dependency graph for one Pi session. */
 export const makeOpenAIApplicationLayer = (
-  { context, cwd, projectTrusted }: OpenAISessionInput,
+  { context, cwd, projectTrusted, publicationOwner }: OpenAISessionInput,
   options: OpenAIApplicationLayerOptions,
 ) => {
   const usage = OpenAIUsageService.layer({
@@ -37,12 +38,14 @@ export const makeOpenAIApplicationLayer = (
     cwd,
     projection: options.projection,
     projectTrusted,
+    canPublish: () => MutableRef.get(publicationOwner),
     onChange: () => options.onUsageChange(context),
     isUsageVisible: options.isUsageVisible,
   });
-  const fast = FastModeService.layer({ projection: options.fastProjection }).pipe(
-    Layer.provideMerge(usage),
-  );
+  const fast = FastModeService.layer({
+    projection: options.fastProjection,
+    canPublish: () => MutableRef.get(publicationOwner),
+  }).pipe(Layer.provideMerge(usage));
   const image = OpenAIImageService.layer({ context, projection: options.projection }).pipe(
     Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
   );

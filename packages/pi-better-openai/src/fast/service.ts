@@ -3,7 +3,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeSynchronousIngress } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
@@ -18,6 +19,7 @@ export type FastInjectionIngress = (event: FastInjectionEvent) => void;
 
 interface FastModeServiceOptions {
   readonly projection: MutableRef.MutableRef<FastSnapshot>;
+  readonly canPublish?: () => boolean;
 }
 
 type FastInitializationConfig = Pick<ResolvedConfig, "persistState" | "desiredActive">;
@@ -29,28 +31,30 @@ export class FastModeService extends Context.Service<FastModeService>()(
       Effect.gen(function* () {
         const usage = yield* OpenAIUsageService;
         const initialState = initialFastSnapshot();
-        const state = yield* SynchronizedRef.make(initialState);
-        yield* Effect.sync(() => MutableRef.set(options.projection, initialState));
-        const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
-          SynchronizedRef.updateEffect(state, (current) =>
-            Effect.sync(() => {
-              const snapshot = freezeSnapshot(update(current));
-              MutableRef.set(options.projection, snapshot);
-              return snapshot;
-            }),
+        const state = yield* Ref.make(initialState);
+        const transitions = yield* Semaphore.make(1);
+        const publish = (snapshot: FastSnapshot) => {
+          if (options.canPublish?.() !== false) MutableRef.set(options.projection, snapshot);
+        };
+        yield* Effect.sync(() => publish(initialState));
+        // The permit is already held. Commit the private Ref and boundary together,
+        // including from durable afterCommit, without reacquiring this same lock.
+        const commit = (snapshot: FastSnapshot) =>
+          Effect.uninterruptible(
+            Effect.sync(() => publish(snapshot)).pipe(Effect.andThen(Ref.set(state, snapshot))),
           );
+        const prepare = (update: (current: FastSnapshot) => FastSnapshot) =>
+          Ref.get(state).pipe(Effect.map((current) => freezeSnapshot(update(current))));
+        const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
+          transitions.withPermit(prepare(update).pipe(Effect.flatMap(commit)));
         const persistTransition = (update: (current: FastSnapshot) => FastSnapshot) =>
-          SynchronizedRef.updateEffect(state, (current) => {
-            const snapshot = freezeSnapshot(update(current));
-            return Effect.as(
-              usage.persistFast(
-                snapshot.active,
-                snapshot.desiredActive,
-                Effect.sync(() => MutableRef.set(options.projection, snapshot)),
+          transitions.withPermit(
+            prepare(update).pipe(
+              Effect.flatMap((snapshot) =>
+                usage.persistFast(snapshot.active, snapshot.desiredActive, commit(snapshot)),
               ),
-              snapshot,
-            );
-          });
+            ),
+          );
         const ingress = yield* makeSynchronousIngress({
           capacity: 16,
           overflow: "coalesce-latest",

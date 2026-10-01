@@ -92,6 +92,12 @@ export function betterOpenAIWithDependencies(
   const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
   let recordFastInjection: FastInjectionIngress = () => undefined;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
+  let currentPublicationOwner: MutableRef.MutableRef<boolean> | undefined;
+  const captureAuthority = () => {
+    const owner = currentPublicationOwner;
+    return () =>
+      owner === undefined ? currentPublicationOwner === undefined : MutableRef.get(owner);
+  };
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
@@ -198,13 +204,26 @@ export function betterOpenAIWithDependencies(
           ),
         ),
       ),
-    onActivated: ({ ctx, context }, token, { injectionIngress, scheduler }) => {
+    onActivated: ({ ctx, context, publicationOwner }, token, { injectionIngress, scheduler }) => {
       currentContext = context;
+      currentPublicationOwner = publicationOwner;
       recordFastInjection = injectionIngress;
-      registerOpenAIImage(pi, command, run, updateContext, (intervalMs, tick) =>
-        currentContext === context && slot.isCurrent(token)
-          ? scheduler.schedule(intervalMs, tick)
-          : undefined,
+      const isCurrent = () => MutableRef.get(publicationOwner) && slot.isCurrent(token);
+      registerOpenAIImage(
+        pi,
+        command,
+        (effect, signal) =>
+          isCurrent()
+            ? run(effect, signal)
+            : Promise.reject(
+                new OpenAIBoundaryError({
+                  operation: "runtime",
+                  message: "Better OpenAI session has not started.",
+                }),
+              ),
+        updateContext,
+        (intervalMs, tick) => (isCurrent() ? scheduler.schedule(intervalMs, tick) : undefined),
+        isCurrent,
       );
       cosmicUiWatch.start();
       updateFooter(ctx);
@@ -213,7 +232,10 @@ export function betterOpenAIWithDependencies(
         notifyAtHostBoundary(ctx, unsupportedRequestMessage(ctx), "warning");
       if (isFastActive(ctx, fast)) notifyAtHostBoundary(ctx, fastStateText(ctx, fast), "info");
     },
-    onDeactivated: ({ context }) => {
+    onDeactivated: ({ context, publicationOwner }) => {
+      // Revocation must precede reset and disposal: admitted durable commits may finish.
+      MutableRef.set(publicationOwner, false);
+      if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
       if (currentContext === context) {
         setStatus(MutableRef.get(context), undefined);
         currentContext = undefined;
@@ -249,19 +271,26 @@ export function betterOpenAIWithDependencies(
     operation: "fast mode" | "usage",
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
-  ) =>
-    run(
-      containCommandFailure(effect, ctx, {
-        failed: (message) =>
-          `Couldn't ${COMMAND_VERBS[operation]}: ${failureMessage(message, "unknown error")}`,
-        unexpected: `Couldn't ${COMMAND_VERBS[operation]}`,
-        defect: `Better OpenAI ${operation} raised an unexpected defect.`,
-      }).pipe(Effect.asVoid),
+  ) => {
+    const isCurrent = captureAuthority();
+    return run(
+      containCommandFailure(
+        effect,
+        ctx,
+        {
+          failed: (message) =>
+            `Couldn't ${COMMAND_VERBS[operation]}: ${failureMessage(message, "unknown error")}`,
+          unexpected: `Couldn't ${COMMAND_VERBS[operation]}`,
+          defect: `Better OpenAI ${operation} raised an unexpected defect.`,
+        },
+        () => isCurrent() && !signal?.aborted,
+      ).pipe(Effect.asVoid),
       signal,
     ).catch(() => {
-      if (!signal?.aborted)
+      if (isCurrent() && !signal?.aborted)
         notifyAtHostBoundary(ctx, `Couldn't ${COMMAND_VERBS[operation]}`, "warning");
     });
+  };
 
   command.add({
     name: "usage",
@@ -285,23 +314,30 @@ export function betterOpenAIWithDependencies(
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
+      const isCurrent = captureAuthority();
       const signal = safeHostSignal(ctx);
       const update = FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
         Effect.tap(() =>
           Effect.gen(function* () {
-            yield* Effect.sync(() => resetProviderTransport(ctx));
-            yield* ignoreHostUi(() => updateFooter(ctx));
+            if (!isCurrent()) return;
+            yield* Effect.sync(() => {
+              if (isCurrent()) resetProviderTransport(ctx);
+            });
+            yield* ignoreHostUi(() => {
+              if (isCurrent()) updateFooter(ctx);
+            });
             const fast = MutableRef.get(fastProjection);
             const active = isFastActive(ctx, fast);
-            yield* Effect.sync(() =>
+            yield* Effect.sync(() => {
+              if (!isCurrent()) return;
               notifyAtHostBoundary(
                 ctx,
                 fast.desiredActive && !active
                   ? unsupportedRequestMessage(ctx)
                   : fastStateText(ctx, fast),
                 fast.desiredActive && !active ? "warning" : "info",
-              ),
-            );
+              );
+            });
           }),
         ),
       );
@@ -329,6 +365,7 @@ export function betterOpenAIWithDependencies(
     formatDebugStatus,
     fastProjection,
     resetFastRoutingTransport: resetProviderTransport,
+    captureAuthority,
     run,
   });
 
@@ -341,9 +378,6 @@ export function betterOpenAIWithDependencies(
     const { cwd, signal } = captured;
     const projectTrusted = isProjectTrusted(ctx);
     resetProviderTransport(ctx);
-    cosmicUi.shutdown();
-    resetProjection(projection);
-    MutableRef.set(fastProjection, initialFastSnapshot());
     const context = MutableRef.make(ctx);
     return slot
       .start(
@@ -352,6 +386,7 @@ export function betterOpenAIWithDependencies(
           context,
           cwd,
           projectTrusted,
+          publicationOwner: MutableRef.make(true),
         },
         signal,
       )

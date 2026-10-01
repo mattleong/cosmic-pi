@@ -23,7 +23,7 @@ Adds xAI subscription-usage refresh, settings, status commands, and footer outpu
 
 ## State and resources
 
-`XaiUsageService` owns refresh state and publishes an immutable synchronous projection. `XaiUsageService` and `ModelRegistryAuth` infer their contracts from their `Context.Service` make Effects, while `layer.ts` and each service keep explicit Layers.
+`XaiUsageService` owns refresh state and publishes an immutable synchronous projection. Context invalidation and durable config installation share the refresh engine's validation/publication gate. Each session input owns publication authority revoked synchronously before projection reset and disposal; admitted durable/private commits may finish without publishing or notifying. Settings capture the originating authority for admission and delayed host callbacks, including the shared shell's notifier. The usage command captures both authority and its signal before submission, keeping a retired or cancelled Promise rejection silent. `XaiUsageService` and `ModelRegistryAuth` infer their contracts from their `Context.Service` make Effects, while `layer.ts` and each service keep explicit Layers.
 
 Omitted project-trust input is treated as untrusted by the shared usage controller, so project-local configuration requires literal-true trust. The session runtime owns polling, auth/HTTP work, and cleanup. Renderers never run Effects.
 
@@ -32,5 +32,5 @@ Omitted project-trust input is treated as untrusted by the shared usage controll
 ```text
 Pi session_start -> extension -> application -> layer -> XaiUsageService
 Pi event/command -> runtime slot -> service transition -> frozen projection -> footer/UI
-Pi session_shutdown -> runtime disposal -> projection reset
+Pi session_shutdown -> publication revoked + projection reset -> runtime disposal
 ```
