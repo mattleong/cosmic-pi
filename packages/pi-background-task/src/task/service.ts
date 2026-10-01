@@ -746,7 +746,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         ),
       );
       // Partition isolates typed failures; interruption and defects still interrupt the batch.
-      const [failures, settled] = yield* Effect.partition(
+      const [settled, failures] = yield* Effect.partition(
         ids,
         (id) =>
           requestStop(id, force).pipe(

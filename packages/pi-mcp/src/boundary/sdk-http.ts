@@ -7,7 +7,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
-import { FetchHttpClient } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import type * as Scope from "effect/Scope";
 import { McpBoundaryError, boundaryError } from "../client/errors.ts";
 import { requireSecureBearerDestination } from "../auth/policy.ts";

@@ -329,7 +329,8 @@ data rather than live state. Live status is authoritative only for its invocatio
 registration-only catalog budget. The guest catalog is fixed: it does not import arbitrary
 registered tools or treat MCP discovery as permission to add guest leaves. `engine/tool-schema.ts`
 renders signatures and owns input/output decoding; guest inputs that the plain schema rejects get a
-second chance through its JSON codec.
+second chance through its JSON codec. Tool definitions carry explicit input/output parse options;
+closed guest inputs apply the same excess-property policy to both decoding attempts.
 
 ## Tool execution and limits
 

@@ -531,7 +531,7 @@ const pausedScheduler = () => {
   const tasks: Array<() => void> = [];
   const scheduler: Scheduler.Scheduler = {
     executionMode: "async",
-    shouldYield: (fiber) => fiber.currentOpCount >= fiber.maxOpsBeforeYield,
+    shouldYield: (fiber) => fiber.currentOpCount >= fiber.cache.maxOpsBeforeYield,
     makeDispatcher: () => ({
       scheduleTask: (task) => {
         tasks.push(task);

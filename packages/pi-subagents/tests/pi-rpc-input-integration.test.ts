@@ -16,8 +16,8 @@ describe("installed Pi RPC input hooks", () => {
     "transforms and handles steer/follow_up through source rpc without credentials or inference",
     () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.string("TMPDIR").pipe(Config.withDefault("/tmp"));
-        const executablePath = yield* Config.string("PATH").pipe(Config.withDefault(""));
+        const temporaryRoot = yield* Config.String("TMPDIR").pipe(Config.withDefault("/tmp"));
+        const executablePath = yield* Config.String("PATH").pipe(Config.withDefault(""));
         const directory = yield* Effect.acquireRelease(
           Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-rpc-input-"))),
           (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),

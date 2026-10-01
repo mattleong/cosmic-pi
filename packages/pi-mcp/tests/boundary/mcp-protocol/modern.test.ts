@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
-import { HttpServerResponse } from "effect/unstable/http";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { vi } from "vitest";
 import { makeMcpLayer } from "../../../src/layer.ts";

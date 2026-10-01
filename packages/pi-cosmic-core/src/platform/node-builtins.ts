@@ -1,3 +1,6 @@
+import { synchronousRandomHex } from "./native-crypto.ts";
+import { sha256Text } from "../security/sha256.ts";
+
 // Raw Node builtin access for adapters whose contracts the Effect FileSystem and
 // Path services cannot express: O_NOFOLLOW opens, inode identity checks, and
 // native platform path semantics. Duplex processes use the child-process door
@@ -25,12 +28,10 @@ export const nodeLockFs = {
   unlinkSync: nodeFsModule.unlinkSync,
   rmdirSync: nodeFsModule.rmdirSync,
 };
-const nodeCryptoModule = process.getBuiltinModule("node:crypto");
 const nodeOsModule = process.getBuiltinModule("node:os");
-if (!nodeCryptoModule || !nodeOsModule) throw new Error("Node crypto/os builtins are unavailable.");
-export const nodeLockRandomToken = () => nodeCryptoModule.randomBytes(32).toString("hex");
-export const nodeLockHash = (value: string) =>
-  nodeCryptoModule.createHash("sha256").update(value).digest("hex");
+if (!nodeOsModule) throw new Error("Node OS builtins are unavailable.");
+export const nodeLockRandomToken = () => synchronousRandomHex(32);
+export const nodeLockHash = sha256Text;
 /** OS account lookup, deliberately independent of HOME and Pi's agent directory. */
 export const nodeHomeDirectory = () => nodeOsModule.userInfo().homedir;
 /** The home directory users see in paths, which follows HOME. Display only, never ownership. */

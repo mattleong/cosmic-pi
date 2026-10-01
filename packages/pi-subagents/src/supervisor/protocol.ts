@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import * as Rpc from "effect/rpc/Rpc";
+import * as RpcGroup from "effect/rpc/RpcGroup";
 import type { BackendEvent } from "../backend/model.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
 import {

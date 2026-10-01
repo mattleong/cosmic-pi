@@ -2,10 +2,12 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { nodeHttpServerLayer } from "pi-cosmic-core";
 import type { McpEffectiveServer, McpOAuthConfig } from "../../src/config/model.ts";
 
@@ -60,7 +62,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
   Effect.gen(function* () {
     const services = yield* Layer.build(nodeHttpServerLayer({ host: "127.0.0.1", port: 0 }));
     const server = Context.get(services, HttpServer.HttpServer);
-    if (server.address._tag !== "TcpAddress")
+    if (server.address._tag !== "InetAddressV4")
       return yield* Effect.die("OAuth fixture requires TCP.");
     const origin = `http://127.0.0.1:${server.address.port}`;
     const resource = options.resourceRoot ? `${origin}/` : `${origin}/mcp`;
@@ -230,7 +232,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
           const code = input.get("code") ?? "";
           const saved = codes.get(code);
           codes.delete(code);
-          const challenge = Encoding.encodeBase64Url(
+          const challenge = Base64Url.encode(
             yield* crypto.digest(
               "SHA-256",
               new TextEncoder().encode(input.get("code_verifier") ?? ""),

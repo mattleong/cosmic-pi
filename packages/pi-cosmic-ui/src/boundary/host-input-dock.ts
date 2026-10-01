@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { synchronousRandomUuid } from "pi-cosmic-core";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
 /** The drawing widget and keyboard-only overlay of one owned-surface `dock` opening. */
 export const createInputDock = (ui: ExtensionUIContext) => {
-  const widgetKey = `cosmic-input-dock-${randomUUID()}`;
+  const widgetKey = `cosmic-input-dock-${synchronousRandomUuid()}`;
   let tui: TUI | undefined;
   let dialog: (Component & Partial<Focusable>) | undefined;
   let mounted = false;

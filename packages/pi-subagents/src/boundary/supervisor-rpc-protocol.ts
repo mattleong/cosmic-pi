@@ -11,8 +11,11 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { RpcMessage, RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { Socket, SocketServer } from "effect/unstable/socket";
+import * as RpcMessage from "effect/rpc/RpcMessage";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as RpcServer from "effect/rpc/RpcServer";
+import * as Socket from "effect/socket/Socket";
+import * as SocketServer from "effect/socket/SocketServer";
 
 const MAX_ACTIVE_REQUESTS = 32;
 const MAX_PENDING_WRITES = 32;
@@ -23,6 +26,7 @@ export interface SupervisorRpcConnectionContract {
   readonly close: () => void;
   readonly clientId: number;
   accepted: boolean;
+  closed: boolean;
 }
 
 export class SupervisorRpcConnection extends Context.Service<
@@ -146,9 +150,13 @@ export const makeSupervisorRpcServerProtocol = (
           const activeRequests = new Set<string | number>();
           const guard: SupervisorRpcConnectionContract = {
             authenticated: Deferred.makeUnsafe<void>(),
-            close: () => netSocket.destroy(),
+            close: () => {
+              guard.closed = true;
+              netSocket.destroy();
+            },
             clientId,
             accepted: false,
+            closed: false,
           };
           const parser = serialization.makeUnsafe();
           const client: ClientTransport = {
@@ -161,6 +169,7 @@ export const makeSupervisorRpcServerProtocol = (
           clientIds.add(clientId);
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
+              guard.closed = true;
               clients.delete(clientId);
               clientIds.delete(clientId);
               Queue.endUnsafe(output);
@@ -170,7 +179,7 @@ export const makeSupervisorRpcServerProtocol = (
 
           const writeRaw = yield* socket.writer;
           yield* Stream.fromQueue(output).pipe(
-            Stream.runForEach(writeRaw),
+            Stream.runForEach(writeRaw.write),
             Effect.catchCause(() =>
               Effect.sync(() => {
                 guard.close();
@@ -190,8 +199,8 @@ export const makeSupervisorRpcServerProtocol = (
             Effect.forkScoped,
           );
 
-          yield* socket
-            .runRaw((data) => {
+          yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
+            Stream.runForEach((data) => {
               const decoded = Result.try({
                 // SAFETY: The Effect RPC serialization service owns decoding into its declared client envelope.
                 try: () => parser.decode(data) as ReadonlyArray<RpcMessage.FromClientEncoded>,
@@ -231,8 +240,9 @@ export const makeSupervisorRpcServerProtocol = (
                 },
                 { discard: true },
               );
-            })
-            .pipe(Effect.catchTag("SocketError", () => Effect.void));
+            }),
+            Effect.catchTag("SocketError", () => Effect.void),
+          );
         }),
       );
 

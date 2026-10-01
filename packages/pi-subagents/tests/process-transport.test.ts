@@ -1,7 +1,6 @@
 // Fault injection stays at owned Node/process-tree boundaries; no provider executable runs.
 import { EventEmitter } from "node:events";
 import type { NodeChildProcess } from "./support/node-builtins.ts";
-import { PassThrough, Writable } from "node:stream";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import { describe, expect, it } from "@effect/vitest";
@@ -51,19 +50,29 @@ const nativeRequest = {
 const acquireNative = () => acquireLocalCliTransport(nativeRequest, boundary);
 const notification = { method: "initialized" as const };
 
+class TransportPipe extends EventEmitter {
+  destroyed = false;
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.emit("close");
+  }
+}
+
 const fixture = () => {
-  // SAFETY: This fixture supplies the Node streams and emitter methods used by the transport.
+  // SAFETY: The fixture implements the exact event/write/destroy contract of the owned adapter.
   const child = new EventEmitter() as NodeChildProcess;
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
+  const stdout = new TransportPipe();
+  const stderr = new TransportPipe();
   const writes: string[] = [];
   let stalled = false;
   let completeWrite: ((error?: Error | null) => void) | undefined;
-  const stdin = new Writable({
-    write(chunk, _encoding, callback) {
-      writes.push(chunk.toString());
+  const stdin = Object.assign(new TransportPipe(), {
+    write(chunk: string, callback: (error?: Error | null) => void) {
+      writes.push(chunk);
       if (stalled) completeWrite = callback;
       else callback();
+      return !stalled;
     },
   });
   Object.assign(child, { pid: 4242, stdin, stdout, stderr });

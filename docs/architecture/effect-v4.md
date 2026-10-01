@@ -58,18 +58,20 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
 
 ## Version policy
 
-Jointly released Effect packages use synchronized exact catalog pins in `pnpm-workspace.yaml`. Independently versioned tooling is pinned separately. Do not use ranges or moving tags for these dependencies. Keep prerelease upgrades isolated, treat them as potentially breaking, and run the full validation gate.
+Jointly released Effect packages use synchronized exact catalog pins in `pnpm-workspace.yaml`. Independently versioned tooling is pinned separately. Do not use ranges or moving tags for these dependencies. The workspace pins stable `4.0.0`; use its published domain subpaths (`effect/http`, `effect/process`, `effect/rpc`, `effect/socket`, and `effect/encoding`), not the former `effect/unstable/*` paths. Domain APIs may still be marked unstable within a stable release, so review their pinned declarations on upgrades. Keep Effect upgrades isolated and run the full validation gate.
 
-## RC-specific rules
+## V4 API rules
 
-Pinned declarations are the source of truth when older documentation disagrees:
+Use Effect v4 documentation; pinned declarations are the source of truth when documentation disagrees:
 
 - Services are `Context.Service`, not `ServiceMap.Service`.
 - Schema-backed yieldable errors use `Schema.TaggedError`; the earlier `Schema.TaggedErrorClass` name was removed before the RC.
 - Layer-owned resources use `Layer.effect` with `Effect.acquireRelease`; there is no `Layer.scoped` constructor.
 - `ManagedRuntime.make(layer, { memoMap })` uses an options object.
-- HTTP is imported from `effect/unstable/http` and provided separately by a Node HTTP layer. Streaming JSON bodies are encoded through a caller-supplied Codec; true streaming responses expose explicitly named raw bytes and discard operations.
-- `@effect/vitest` RC provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
+- Pass parser policy (for example `onExcessProperty: "error"`) explicitly to schema decoders; `parseOptions` annotations no longer apply that policy.
+- `Effect.partition` returns successes first, then failures.
+- HTTP is imported from `effect/http` and provided separately by a Node HTTP layer. Streaming JSON bodies are encoded through a caller-supplied Codec; true streaming responses expose explicitly named raw bytes and discard operations.
+- `@effect/vitest` v4 requires Vitest 5 and provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
 
 ## Package navigation
 

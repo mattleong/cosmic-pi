@@ -6,8 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { runBoundedProcessNode } from "pi-cosmic-core";
-import { randomBytes } from "node:crypto";
+import { synchronousRandomHex, runBoundedProcessNode } from "pi-cosmic-core";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { claudeArgv, claudeSettings } from "../backend/claude-policy.ts";
@@ -178,7 +177,7 @@ const prepareOwnedHarness = <Harness>(
       const safeDirectory = yield* restore(prepareStep(() => safeAgentDirectory(agentDirectory)));
       const packageRoot = join(safeDirectory, "subagents");
       const root = join(packageRoot, rootName);
-      const directory = join(root, `${namePrefix}-${randomBytes(12).toString("hex")}`);
+      const directory = join(root, `${namePrefix}-${synchronousRandomHex(12)}`);
       yield* restore(prepareStep(() => ensurePrivateDirectory(packageRoot)));
       yield* restore(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));

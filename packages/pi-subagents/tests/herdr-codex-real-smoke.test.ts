@@ -1,9 +1,8 @@
 // Optional no-inference smoke requires an explicitly separate disposable Herdr server.
-import { randomBytes } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
 import { HerdrCli } from "../src/boundary/herdr-cli.ts";
@@ -61,7 +60,7 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
         expect(before.panes.some((pane) => pane.paneId === environment.HERDR_PANE_ID)).toBe(true);
         const herdr = yield* HerdrHost;
         const supervisors = yield* SupervisorChannel;
-        const runId = `real-herdr-codex-${randomBytes(4).toString("hex")}`;
+        const runId = `real-herdr-codex-${synchronousRandomHex(4)}`;
         const request: BackendLaunchRequest = {
           runId,
           name: runId,

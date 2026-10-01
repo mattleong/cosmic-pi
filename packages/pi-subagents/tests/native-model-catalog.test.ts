@@ -28,7 +28,7 @@ const setupEffect = Effect.gen(function* () {
   yield* step(() =>
     fs.writeFile(join(cwd, ".claude", "settings.json"), '{"model":"project-model"}'),
   );
-  const path = yield* Config.string("PATH").pipe(Effect.orDie);
+  const path = yield* Config.String("PATH").pipe(Effect.orDie);
   return {
     home,
     cwd,

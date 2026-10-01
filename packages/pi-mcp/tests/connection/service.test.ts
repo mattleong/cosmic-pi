@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { HttpServerResponse } from "effect/unstable/http";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
 import type { McpAuthRejection } from "../../src/auth/model.ts";

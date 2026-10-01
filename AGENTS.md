@@ -80,9 +80,9 @@ Mock owned domain boundaries, not external provider protocols. Test command hand
 
 ## Effect architecture
 
-- The workspace uses exact Effect v4 prerelease versions pinned in `pnpm-workspace.yaml`.
+- The workspace uses exact Effect v4 stable versions pinned in `pnpm-workspace.yaml`.
 - Read `docs/architecture/` before changing application architecture.
-- Treat pinned Effect declarations as authoritative over older docs. Reassess this policy when the pin changes or Effect v4 becomes stable.
+- Use Effect v4 documentation and treat pinned declarations as authoritative when they differ. Review release notes and run the full validation gate on every Effect upgrade.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
 - Do not import Zod, define schemas with it, or declare it as a direct workspace dependency. Third-party packages may use Zod internally through transitive dependencies. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.

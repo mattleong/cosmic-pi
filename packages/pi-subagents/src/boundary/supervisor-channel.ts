@@ -1,6 +1,6 @@
 // Private loopback supervisor RPC transport and agent-directory state live at this boundary.
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
-import { randomBytes } from "node:crypto";
+import { makeTokenVerifier, synchronousRandomHex } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import * as Cause from "effect/Cause";
@@ -13,7 +13,9 @@ import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import { makeSupervisorRpcSerialization } from "./supervisor-rpc-serialization.ts";
+import * as RpcServer from "effect/rpc/RpcServer";
 import {
   isSupervisorRunId,
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
@@ -205,7 +207,7 @@ const prepareStateDirectory = (
     const channelRoot = join(packageRoot, CHANNEL_ROOT);
     yield* privateStateOperation("prepare-package-root", () => ensurePrivateDirectory(packageRoot));
     yield* privateStateOperation("prepare-channel-root", () => ensurePrivateDirectory(channelRoot));
-    const stateDirectory = join(channelRoot, `${runId}-${randomBytes(12).toString("hex")}`);
+    const stateDirectory = join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
     const prepared = {
       stateDirectory,
       connectionConfigPath: join(stateDirectory, CONNECTION_CONFIG_FILE),
@@ -300,6 +302,19 @@ const acquireNodeChannelEffect = (
       });
 
       return yield* Effect.gen(function* () {
+        const cryptoUnavailable = () =>
+          channelError(
+            "authenticate",
+            "crypto_unavailable",
+            "Supervisor authentication could not be prepared.",
+          );
+        const token = yield* Effect.try({
+          try: () => Redacted.make(SupervisorAuthTokenSchema.make(synchronousRandomHex(32))),
+          catch: cryptoUnavailable,
+        });
+        const verifyToken = yield* restore(
+          makeTokenVerifier(Redacted.value(token)).pipe(Effect.mapError(cryptoUnavailable)),
+        );
         const prepared = yield* restore(
           prepareStateDirectory(
             options.agentDirectory,
@@ -330,7 +345,7 @@ const acquireNodeChannelEffect = (
             ),
           ),
         );
-        if (baseServer.address._tag !== "TcpAddress")
+        if (baseServer.address._tag !== "InetAddressV4")
           return yield* channelError(
             "listen",
             "invalid_listener_address",
@@ -341,10 +356,12 @@ const acquireNodeChannelEffect = (
           prepared.stateDirectory,
           prepared.connectionConfigPath,
         );
-        const token = Redacted.make(
-          SupervisorAuthTokenSchema.make(randomBytes(32).toString("hex")),
-        );
-        const session = yield* makeSupervisorChannelSession({ runId, token, events, allowPiProxy });
+        const session = yield* makeSupervisorChannelSession({
+          runId,
+          verifyToken,
+          events,
+          allowPiProxy,
+        });
         // Cache the whole release so interruption cannot separate session shutdown from resources.
         const close = yield* Effect.cached(
           Effect.uninterruptible(
@@ -368,9 +385,7 @@ const acquireNodeChannelEffect = (
         );
         const handle: SupervisorChannelHandle = { metadata, events, ...session.controls, close };
         acquisition.handle = handle;
-        const serialization = RpcSerialization.makeNdjson({
-          maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
-        });
+        const serialization = makeSupervisorRpcSerialization(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
         const protocol = yield* makeSupervisorRpcServerProtocol({
           server: baseServer,
           authTimeoutMillis: options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS,

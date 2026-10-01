@@ -1,3 +1,4 @@
+import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -38,16 +39,12 @@ export const readExistingFileForPreviewEffect = Effect.fn("CodePreviewWrite.read
       Effect.gen(function* () {
         const file = yield* fs.open(resolved, { flag: "r" });
         const fileStat = yield* file.stat;
+        const size = ByteSize.toBigInt(fileStat.size);
         if (fileStat.type !== "File")
-          return skippedExistingFile("previous path is not a regular file", Number(fileStat.size));
-        if (fileStat.size > BigInt(maxBytes))
-          return skippedExistingFile(
-            "previous file too large",
-            Number(fileStat.size),
-            true,
-            maxBytes,
-          );
-        const allocation = yield* file.readAlloc(BigInt(maxBytes + 1));
+          return skippedExistingFile("previous path is not a regular file", Number(size));
+        if (size > BigInt(maxBytes))
+          return skippedExistingFile("previous file too large", Number(size), true, maxBytes);
+        const allocation = yield* file.readAlloc(maxBytes + 1);
         const bytes = Option.getOrUndefined(allocation);
         if (!bytes) return { kind: "content", content: "" } as const;
         if (bytes.byteLength > maxBytes)

@@ -6,7 +6,10 @@ import * as Queue from "effect/Queue";
 import * as Predicate from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { Readable, Writable } from "node:stream";
+import type { DuplexProcessChild } from "./node-builtins.ts";
+
+type Readable = DuplexProcessChild["stdout"];
+type Writable = DuplexProcessChild["stdin"];
 import { invokeHostCallback } from "../host-session.ts";
 import { duplexProcessError, type DuplexProcessError } from "./duplex-process-close.ts";
 

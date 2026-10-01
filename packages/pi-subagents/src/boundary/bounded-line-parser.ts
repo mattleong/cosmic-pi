@@ -48,6 +48,16 @@ export function makeByteBoundedQueueRoom<A extends object, E>(
   };
 }
 
+/** Only the native event subscription contract is needed; this parser does not control flow. */
+export interface BoundedLineInput {
+  on(event: "data", listener: (value: Buffer | string) => void): void;
+  once(event: "end" | "close", listener: () => void): void;
+  off(
+    event: "data" | "end" | "close",
+    listener: ((value: Buffer | string) => void) | (() => void),
+  ): void;
+}
+
 export interface BoundedLineParserOptions {
   readonly maxLineBytes: number;
   readonly maxQueuedBytes: number;
@@ -62,7 +72,7 @@ export interface BoundedLineParserOptions {
  * are bounded. The decoder tail and a final unterminated frame are flushed on end/close.
  */
 export function attachBoundedLineParser(
-  stream: NodeJS.ReadableStream,
+  stream: BoundedLineInput,
   options: BoundedLineParserOptions,
 ): () => void {
   const decoder = new StringDecoder("utf8");

@@ -50,7 +50,7 @@ const asyncSnapshotFields = {
 };
 
 // Historical expanded replay accepts any string ID. Compact identity needs a bounded, nonempty ID.
-const compactIdentity = Schema.String.check(Schema.isLengthBetween(1, 256));
+const compactIdentity = Schema.String.check(Schema.isBetweenLength(1, 256));
 export const compactAsyncSnapshot = Schema.Struct({
   ...asyncSnapshotFields,
   requestId: compactIdentity,

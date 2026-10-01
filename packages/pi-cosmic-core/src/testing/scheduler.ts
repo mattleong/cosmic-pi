@@ -7,7 +7,7 @@ export const pausedScheduler = () => {
   let resumed = false;
   const scheduler: Scheduler.Scheduler = {
     executionMode: "async",
-    shouldYield: (fiber) => fiber.currentOpCount >= fiber.maxOpsBeforeYield,
+    shouldYield: (fiber) => fiber.currentOpCount >= fiber.cache.maxOpsBeforeYield,
     makeDispatcher: () => ({
       scheduleTask: (task, priority) => {
         if (resumed) dispatcher.scheduleTask(task, priority);

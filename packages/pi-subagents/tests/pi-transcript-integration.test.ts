@@ -26,7 +26,7 @@ describe("installed Pi transcript reconstruction", () => {
     "uses child prompt/tools and restores executable membership when navigating branches",
     () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.string("TMPDIR").pipe(Config.withDefault("/tmp"));
+        const temporaryRoot = yield* Config.String("TMPDIR").pipe(Config.withDefault("/tmp"));
         const directory = yield* Effect.acquireRelease(
           Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-transcript-"))),
           (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),

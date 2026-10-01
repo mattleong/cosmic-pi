@@ -7,7 +7,9 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import { HttpClient, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { expect } from "vitest";
 import { nodeHttpServerLayer } from "../src/platform/http-server.ts";
 
@@ -19,7 +21,7 @@ it.live("closes an active HTTP request without a preemptive grace wait when disa
       nodeHttpServerLayer({ host: "127.0.0.1", port: 0, disablePreemptiveShutdown: true }),
     ).pipe(Effect.provideService(Scope.Scope, owner));
     const server = Context.get(context, HttpServer.HttpServer);
-    if (server.address._tag !== "TcpAddress") return yield* Effect.die("Expected TCP listener.");
+    if (server.address._tag !== "InetAddressV4") return yield* Effect.die("Expected TCP listener.");
     yield* server
       .serve(
         Deferred.succeed(entered, undefined).pipe(
@@ -45,7 +47,7 @@ it.live("owns an ephemeral listener and closes it with its scope", () =>
       Effect.gen(function* () {
         const context = yield* Layer.build(nodeHttpServerLayer({ host: "127.0.0.1", port: 0 }));
         const server = Context.get(context, HttpServer.HttpServer);
-        if (server.address._tag !== "TcpAddress")
+        if (server.address._tag !== "InetAddressV4")
           return yield* Effect.die("Expected TCP listener.");
         yield* server
           .serve(Effect.succeed(HttpServerResponse.text("owned")))

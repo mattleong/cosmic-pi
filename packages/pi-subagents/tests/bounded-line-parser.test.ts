@@ -1,6 +1,5 @@
-// Test-owned Node streams exercise the process boundary room.
-import { once } from "node:events";
-import { PassThrough } from "node:stream";
+// Test-owned event ingress exercises the parser without assuming Node stream internals.
+import { EventEmitter, once } from "node:events";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import { describe, expect, it, vi } from "vitest";
@@ -9,8 +8,21 @@ import {
   makeByteBoundedQueueRoom,
 } from "../src/boundary/bounded-line-parser.ts";
 
+const inputStream = () => {
+  const events = new EventEmitter();
+  const write = (data: Buffer | string) =>
+    events.emit("data", Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
+  return Object.assign(events, {
+    write,
+    end: (data?: Buffer | string) => {
+      if (data !== undefined) write(data);
+      events.emit("end");
+    },
+  });
+};
+
 const collect = (maxLineBytes: number, maxQueuedBytes: number) => {
-  const stream = new PassThrough();
+  const stream = inputStream();
   const lines: string[] = [];
   const overflow = vi.fn();
   const detach = attachBoundedLineParser(stream, {
@@ -57,7 +69,7 @@ describe("bounded child line parser", () => {
   });
 
   it("bounds ordinary sequential line backlog until downstream acknowledgement", () => {
-    const stream = new PassThrough();
+    const stream = inputStream();
     const queue = Effect.runSync(Queue.dropping<object>(512));
     const retained: object[] = [];
     const overflow = vi.fn();
@@ -84,7 +96,7 @@ describe("bounded child line parser", () => {
   });
 
   it("fails one parser room safely when re-entrant chunks overflow", () => {
-    const stream = new PassThrough();
+    const stream = inputStream();
     const lines: string[] = [];
     const overflow = vi.fn();
     attachBoundedLineParser(stream, {

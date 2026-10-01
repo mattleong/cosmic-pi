@@ -49,7 +49,7 @@ const blockedFailure = (block: AuthBlock): McpBoundaryError => {
   );
 };
 const envToken = (name: string) =>
-  Config.nonEmptyString(name).pipe(
+  Config.NonEmptyString(name).pipe(
     Effect.mapError(authFailure),
     Effect.filterOrFail(
       (token) => token.length <= 32768 && !hasControlCharacter(token) && !/\s/.test(token),

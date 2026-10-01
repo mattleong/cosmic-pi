@@ -62,8 +62,8 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         const safeFile = yield* SafeFile;
         const sharp = yield* SharpAdapter;
         const agentDir = yield* AgentDirectory;
-        const customSaveDir = yield* Config.option(Config.string("PI_IMAGE_SAVE_DIR"));
-        const homeDirectory = yield* Config.option(Config.string("HOME"));
+        const customSaveDir = yield* Config.option(Config.String("PI_IMAGE_SAVE_DIR"));
+        const homeDirectory = yield* Config.option(Config.String("HOME"));
 
         const readInputs = makeImageInputReader({ fs, path, safeFile, sharp });
         const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });

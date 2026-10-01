@@ -1,9 +1,8 @@
 // Optional live reproduction. This invokes the installed Claude CLI and can incur
 // provider usage; it is excluded unless the caller sets the explicit gate.
-import { randomBytes } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
@@ -26,7 +25,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
     const environment = { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "1" };
     const processes = makeLocalCliProcess({ agentDirectory, environment });
     const launch = backendLaunch({
-      runId: `real-local-claude-${randomBytes(4).toString("hex")}`,
+      runId: `real-local-claude-${synchronousRandomHex(4)}`,
       name: "real-local-claude-replay",
       model,
       effort: "low",

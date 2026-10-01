@@ -1,12 +1,13 @@
 // One supervisor tool dispatch over the private Effect RPC client, shared by the native MCP helper
 // and delegated Pi so decoding, bounds, acknowledgements, result texts, and failures cannot drift.
-import { randomUUID } from "node:crypto";
+import { synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { RpcClient, RpcClientError } from "effect/unstable/rpc";
+import type * as RpcClient from "effect/rpc/RpcClient";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
   isSupervisorMcpMessageArguments,
   isSupervisorMcpProxyArguments,
@@ -101,7 +102,7 @@ export const runSupervisorTool = (
         message: "Private supervisor channel is unavailable or has no active assignment.",
       });
     const { rpc, auth } = client;
-    const requestId = SupervisorChannelIdSchema.make(randomUUID());
+    const requestId = SupervisorChannelIdSchema.make(synchronousRandomUuid());
     const ok = (text: string, isError = false): SupervisorToolResult => ({ text, isError });
     switch (call.kind) {
       case "report": {

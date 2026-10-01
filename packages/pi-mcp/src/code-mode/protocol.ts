@@ -15,13 +15,10 @@ export const MCP_CODE_MODE_QUERY = "pi-mcp:v1:code-mode:query";
 export const MCP_CODE_MODE_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 export const MCP_CODE_MODE_MAX_INPUT_BYTES = 1024 * 1024;
 
-/** These codecs share the gateway contract, but reject fields outside the selected action. */
-export const McpCodeModeInputSchema = McpDataRequestSchema.annotate({
-  parseOptions: { onExcessProperty: "error" },
-});
-export const McpCodeModeOutputSchema = McpGatewayReplySchema.annotate({
-  parseOptions: { onExcessProperty: "error" },
-});
+/** Pass these options to protocol decoders to reject fields outside the selected action. */
+export const MCP_CODE_MODE_PARSE_OPTIONS = { onExcessProperty: "error" } as const;
+export const McpCodeModeInputSchema = McpDataRequestSchema;
+export const McpCodeModeOutputSchema = McpGatewayReplySchema;
 export type McpCodeModeInput = typeof McpCodeModeInputSchema.Type;
 export type McpCodeModeOutput = typeof McpCodeModeOutputSchema.Type;
 

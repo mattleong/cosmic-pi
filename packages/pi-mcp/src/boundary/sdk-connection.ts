@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
-import { FetchHttpClient } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
 import type { McpEffectiveServer, McpSettings } from "../config/model.ts";
@@ -49,7 +49,7 @@ const resolveInterpolatedValue = (
       resolved +=
         match[0] === "$$"
           ? "$"
-          : yield* Config.string(match[1]!).parse(provider).pipe(Effect.mapError(configFailure));
+          : yield* Config.String(match[1]!).parse(provider).pipe(Effect.mapError(configFailure));
       if (resolved.length > 8_192) return yield* Effect.fail(configFailure());
       offset = match.index + match[0].length;
     }
@@ -113,7 +113,7 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
                   environment: {
                     // PATH alone is sufficient for executable lookup. HOME and TMPDIR must
                     // be explicit entries; no Pi credentials or other parent env is copied.
-                    PATH: yield* Config.string("PATH")
+                    PATH: yield* Config.String("PATH")
                       .pipe(Config.withDefault(DEFAULT_PATH))
                       .parse(provider)
                       .pipe(Effect.mapError(configFailure)),
@@ -130,7 +130,7 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
                   token:
                     token ??
                     (definition.auth.type === "env"
-                      ? yield* Config.string(definition.auth.env)
+                      ? yield* Config.String(definition.auth.env)
                           .parse(provider)
                           .pipe(Effect.mapError(configFailure))
                       : undefined),

@@ -3,7 +3,8 @@ import type { FetchLike } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { makeSynchronousIngress, NetworkAddresses, pinnedNetworkLookup } from "pi-cosmic-core";
 import {
   deniedAuth,

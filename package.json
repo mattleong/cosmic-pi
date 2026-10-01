@@ -36,7 +36,7 @@
     "version:set": "node scripts/set-version.mjs"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.39.1",
+    "@effect/tsgo": "0.47.2",
     "@modelcontextprotocol/conformance": "0.1.16",
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",

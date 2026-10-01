@@ -63,7 +63,7 @@ Better xAI now runs each started Pi session through an Effect v4 managed runtime
 
 Configuration updates preserve unknown fields. Malformed known fields fall back to documented defaults. The minimum refresh interval remains 5 seconds.
 
-The package has runtime dependencies on the exact workspace Effect v4 prerelease and `pi-cosmic-core`. These versions are intentionally synchronized by the cosmic-pi release process.
+The package has runtime dependencies on the exact workspace Effect v4 stable release and `pi-cosmic-core`. These versions are intentionally synchronized by the cosmic-pi release process.
 
 ## Caveats
 

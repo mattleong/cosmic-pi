@@ -1,6 +1,7 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -51,7 +52,7 @@ const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
   Effect.gen(function* () {
     if (!(yield* fs.exists(logPath))) return;
     const info = yield* fs.stat(logPath);
-    if (info.size < BigInt(MAX_HOST_LOG_BYTES)) return;
+    if (ByteSize.toBigInt(info.size) < BigInt(MAX_HOST_LOG_BYTES)) return;
     const previous = `${logPath}.1`;
     yield* fs.remove(previous).pipe(Effect.ignore);
     yield* fs.rename(logPath, previous);

@@ -5,7 +5,11 @@ import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
-import type { Duplex, Readable, Writable } from "node:stream";
+import type { DuplexProcessChild } from "./node-builtins.ts";
+
+type Readable = DuplexProcessChild["stdout"];
+type Writable = DuplexProcessChild["stdin"];
+type Duplex = Readable & Writable;
 import { nodeSpawn } from "./node-builtins.ts";
 import { signalProcessGroup } from "./process-tree.ts";
 import {

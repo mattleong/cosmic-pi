@@ -1,6 +1,5 @@
 // Node process and session-file ownership is intentionally isolated at this boundary.
-import { synchronousNow } from "pi-cosmic-core";
-import { createHash, randomUUID } from "node:crypto";
+import { sha256Text, synchronousRandomUuid, synchronousNow } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
@@ -90,7 +89,7 @@ export interface ChildProcessContract {
 
 export function safeSubagentDirectorySegment(value: string): string {
   if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;
-  return `id-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+  return `id-${sha256Text(value).slice(0, 32)}`;
 }
 
 export const subagentRunDirectory = (
@@ -241,7 +240,7 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       return yield* Effect.fail(
         processError("fork parent session", "The selected parent session branch is empty."),
       );
-    const sessionId = randomUUID();
+    const sessionId = synchronousRandomUuid();
     const sessionFile = join(runDir, `session-${sessionId}.jsonl`);
     const header = {
       type: "session" as const,

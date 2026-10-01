@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { synchronousRandomHex } from "pi-cosmic-core";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
@@ -330,7 +330,7 @@ const prepareHarness = (
       const root = join(packageRoot, HARNESS_ROOT);
       yield* restore(attemptPromise(() => ensurePrivateDirectory(packageRoot)));
       yield* restore(attemptPromise(() => ensurePrivateDirectory(root)));
-      const nonce = randomBytes(12).toString("hex");
+      const nonce = synchronousRandomHex(12);
       const directory = join(root, `${runtime}-${request.runId}-${nonce}`);
       yield* attemptPromise(() => fs.mkdir(directory, { mode: 0o700 }));
 

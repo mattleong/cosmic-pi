@@ -407,10 +407,10 @@ const jsonCodec = (schema: Schema.Decoder<unknown>): Schema.Decoder<unknown> => 
 export const decodeInput = <R, Value>(definition: Definition<R>, value: Value) => {
   const input = definition.input;
   try {
-    return Schema.decodeUnknownSync(input)(value);
+    return Schema.decodeUnknownSync(input, definition.inputParseOptions)(value);
   } catch (plainError) {
     try {
-      return Schema.decodeUnknownSync(jsonCodec(input))(value);
+      return Schema.decodeUnknownSync(jsonCodec(input), definition.inputParseOptions)(value);
     } catch {
       throw plainError;
     }
@@ -422,4 +422,6 @@ export const decodeInput = <R, Value>(definition: Definition<R>, value: Value) =
  * without an output schema pass the host value through unchanged.
  */
 export const decodeOutput = <R, Value>(definition: Definition<R>, value: Value) =>
-  definition.output === undefined ? value : Schema.decodeUnknownSync(definition.output)(value);
+  definition.output === undefined
+    ? value
+    : Schema.decodeUnknownSync(definition.output, definition.outputParseOptions)(value);

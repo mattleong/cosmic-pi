@@ -23,6 +23,13 @@ describe("decodeUnknownOrUndefined", () => {
     expect(decodeUnknownOrUndefined(Point, { x: "1" })).toBeUndefined();
     expect(decodeUnknownOrUndefined(Point, hostile)).toBeUndefined();
   });
+
+  it("applies explicit strict decoder policy without changing tolerant defaults", () => {
+    const Point = Schema.Struct({ x: Schema.Number });
+    const value = { x: 1, credential: "unexpected" };
+    expect(decodeUnknownOrUndefined(Point, value)).toEqual({ x: 1 });
+    expect(decodeUnknownOrUndefined(Point, value, { onExcessProperty: "error" })).toBeUndefined();
+  });
 });
 
 describe("session capability queries", () => {

@@ -1,7 +1,7 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpServer } from "effect/unstable/http";
+import * as HttpServer from "effect/http/HttpServer";
 import { nodeCreateHttpServer } from "./node-builtins.ts";
 
 /** Scoped Node listener. Consumers own routing, bind policy, and graceful shutdown options. */

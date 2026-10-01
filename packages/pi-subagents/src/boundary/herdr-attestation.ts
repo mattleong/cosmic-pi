@@ -1,5 +1,5 @@
 // Private filesystem receipts causally attest protected Herdr pane startup commands.
-import { randomBytes } from "node:crypto";
+import { synchronousRandomHex } from "pi-cosmic-core";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { processError, SubagentProcessError } from "../run/errors.ts";
@@ -165,7 +165,7 @@ export const prepareHerdrStartupAttestation = (
   const pollAttempts = options.pollAttempts ?? DEFAULT_POLL_ATTEMPTS;
   const pollDelayMillis = options.pollDelayMillis ?? DEFAULT_POLL_DELAY_MILLIS;
   const plans = RECEIPT_PHASES.map((phase): ReceiptPlan => {
-    const pathNonce = randomBytes(RECEIPT_PATH_NONCE_BYTES).toString("hex");
+    const pathNonce = synchronousRandomHex(RECEIPT_PATH_NONCE_BYTES);
     const path = join(directory, `.startup-${phase}-${pathNonce}.receipt`);
     const temporaryPath = join(directory, `.startup-${phase}-${pathNonce}.tmp`);
     if (path.length > MAX_PATH_CHARS || temporaryPath.length > MAX_PATH_CHARS)
@@ -174,7 +174,7 @@ export const prepareHerdrStartupAttestation = (
       phase,
       path,
       temporaryPath,
-      expected: randomBytes(RECEIPT_TOKEN_BYTES).toString("hex"),
+      expected: synchronousRandomHex(RECEIPT_TOKEN_BYTES),
     };
   });
   if (

@@ -1,5 +1,5 @@
 /** Deterministic, readable preference filenames derived from the canonical working directory. */
-import { createHash } from "node:crypto";
+import { sha256Text } from "pi-cosmic-core";
 
 const MAX_SLUG_CHARS = 48;
 const HASH_CHARS = 12;
@@ -15,7 +15,7 @@ function readableDirectorySlug(basename: string): string {
 }
 
 function shortPathHash(canonicalCwd: string): string {
-  return createHash("sha256").update(canonicalCwd).digest("hex").slice(0, HASH_CHARS);
+  return sha256Text(canonicalCwd).slice(0, HASH_CHARS);
 }
 
 export function preferenceFilename(canonicalCwd: string, basename: string): string {

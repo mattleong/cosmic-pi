@@ -43,7 +43,7 @@ function documentLayer(initial: Readonly<Record<string, string>>, chunkBytes = 6
             const file: FileSystem.File = {
               [FileSystem.FileTypeId]: FileSystem.FileTypeId,
               stat: Effect.die("bounded reads must not stat"),
-              seek: () => Effect.succeed(FileSystem.Size(0)),
+              seek: () => Effect.succeed(0n),
               sync: Effect.void,
               read: () => Effect.die("unexpected file read"),
               readAlloc: (size) =>

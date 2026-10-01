@@ -1,10 +1,10 @@
 // Writer ownership adapts pi-cosmic-core's CrossProcessLock; Node supplies stable cwd identity.
-import { createHash } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import {
+  sha256Text,
   CrossProcessLock,
   type CrossProcessLease,
   type CrossProcessLockContract,
@@ -88,7 +88,7 @@ interface Ownership {
   phase: OwnershipPhase;
 }
 
-const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+const digest = (value: string): string => sha256Text(value);
 
 const validFilesystemIdentity = (cwd: CanonicalWriterCwd): boolean =>
   cwd.filesystemIdentity.length <= MAX_FILESYSTEM_IDENTITY_CHARS &&

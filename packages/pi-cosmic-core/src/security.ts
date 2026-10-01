@@ -1,4 +1,4 @@
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -114,7 +114,7 @@ const redactSensitiveText = (message: string, extraPatterns: readonly RegExp[] =
 
 export function decodeJwtPayloadText(token: string): string | undefined {
   const payload = token.split(".")[1];
-  return payload ? Result.getOrUndefined(Encoding.decodeBase64UrlString(payload)) : undefined;
+  return payload ? Result.getOrUndefined(Base64Url.decodeString(payload)) : undefined;
 }
 
 /**

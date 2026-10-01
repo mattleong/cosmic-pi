@@ -235,6 +235,13 @@ export {
   type DuplexProcessOptions,
 } from "./src/platform/duplex-process.ts";
 export { synchronousNow } from "./src/platform/native-clock.ts";
+export { synchronousRandomHex, synchronousRandomUuid } from "./src/platform/native-crypto.ts";
+export { sha256Text } from "./src/security/sha256.ts";
+export {
+  makeTokenVerifier,
+  TokenVerificationError,
+  type TokenVerifier,
+} from "./src/platform/token-verifier.ts";
 export {
   makeNativeContext,
   NativeContextError,

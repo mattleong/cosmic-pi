@@ -203,7 +203,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const workspaceEngine = yield* Effect.serviceOption(WorkspaceService);
   const initialProfiles = yield* profileService.capture;
   const ownerScope = yield* Effect.scope;
-  // Keyed parent-proxy executions for the `${runId}:${requestId}` identity. Effect rc.112
+  // Keyed parent-proxy executions for the `${runId}:${requestId}` identity. Effect v4
   // FiberMap.make registers one acquireRelease finalizer on the service scope that marks the
   // map Closed and then interrupts every managed fiber; because it is acquired before the
   // leaf-first shutdown finalizer below, LIFO finalizer order runs that shutdown first and
@@ -528,7 +528,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       (orderedIds) =>
         Effect.gen(function* () {
           // Every target is attempted in order; the first typed failure wins afterwards.
-          const [failures, stopped] = yield* Effect.partition(orderedIds, (targetId) =>
+          const [stopped, failures] = yield* Effect.partition(orderedIds, (targetId) =>
             controls.stop(targetId),
           );
           if (failures[0]) return yield* failures[0];

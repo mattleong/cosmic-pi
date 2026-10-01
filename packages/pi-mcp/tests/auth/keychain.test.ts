@@ -255,7 +255,7 @@ describe("Keychain native mutation ownership", () => {
 // then deletes that exact entry in a finalizer. It never enumerates Keychain.
 it.live("round-trips a disposable macOS Keychain grant only when explicitly enabled", () =>
   Effect.gen(function* () {
-    const enabled = yield* Config.string("PI_MCP_KEYCHAIN_INTEGRATION").pipe(
+    const enabled = yield* Config.String("PI_MCP_KEYCHAIN_INTEGRATION").pipe(
       Config.withDefault("0"),
     );
     if (enabled !== "1" || process.platform !== "darwin") return;

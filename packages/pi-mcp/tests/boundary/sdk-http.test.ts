@@ -10,7 +10,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpServerResponse } from "effect/unstable/http";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { openSdkHttp } from "../../src/boundary/sdk-http.ts";

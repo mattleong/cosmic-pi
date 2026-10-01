@@ -105,7 +105,7 @@ const forEachOutcome = <R>(
         ),
       ),
     { concurrency: 8 },
-  ).pipe(Effect.map(([actionFailures, runs]) => ({ runs, actionFailures })));
+  ).pipe(Effect.map(([runs, actionFailures]) => ({ runs, actionFailures })));
 
 const requiredField = (
   value: string,

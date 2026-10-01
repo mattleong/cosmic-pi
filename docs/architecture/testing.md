@@ -2,14 +2,14 @@
 
 ## Test APIs
 
-Effectful tests use the exact RC-compatible `@effect/vitest` API:
+Effectful tests use the pinned stable `@effect/vitest` v4 API with Vitest 5:
 
 - `it.effect` for deterministic Effect tests with test services and Scope,
 - `it.live` only when live time or live platform behavior is intentional,
 - `layer(...)` for a shared test Layer,
 - ordinary Vitest tests for total deterministic functions.
 
-Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0-rc.112`.
+Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0`.
 
 ## Required coverage
 
@@ -71,4 +71,4 @@ pnpm --filter <package> lint
 pnpm validate
 ```
 
-`pnpm typecheck` checks every workspace project with the unmodified TypeScript 7 compiler, while `pnpm effect:diagnostics` runs `@effect/tsgo`'s dedicated diagnostics command for each package. Keeping the gates separate prevents duplicate Effect output and leaves suggestion-level messages visible without turning them into TypeScript failures. `strictEffectProvide` is enforced for production source; test files are Effect entry points and intentionally provide complete test Layers. TypeScript, Oxlint, Effect diagnostics, tests, and review are complemented by narrow repository guards: `pnpm layout:check` checks package/test placement and declared nested packages; `pnpm diagnostics:guard` rejects source suppressions and disabled diagnostic configuration. Other architecture conventions remain guidance rather than custom static-analysis rules. Pi/Jiti loads workspace and packed package TypeScript source directly; focused and root gates never depend on generated distributions or mutate shared build output.
+`pnpm typecheck` checks every workspace project with the unmodified TypeScript 7 compiler, while `pnpm effect:diagnostics` runs `@effect/tsgo`'s dedicated diagnostics command for each package. Keeping the gates separate prevents duplicate Effect output and leaves suggestion-level messages visible without turning them into TypeScript failures. `@effect/tsgo@0.47.2` also reports upstream `unstableApiUsage` warnings for Effect HTTP, process, RPC, socket, and SSE APIs; these stay enabled and visible. A stable Effect package version does not stabilize those marked APIs, so exact pins, owned adapters, and lifecycle/compatibility tests remain required. `strictEffectProvide` is enforced for production source; test files are Effect entry points and intentionally provide complete test Layers. TypeScript, Oxlint, Effect diagnostics, tests, and review are complemented by narrow repository guards: `pnpm layout:check` checks package/test placement and declared nested packages; `pnpm diagnostics:guard` rejects source suppressions and disabled diagnostic configuration. Other architecture conventions remain guidance rather than custom static-analysis rules. Pi/Jiti loads workspace and packed package TypeScript source directly; focused and root gates never depend on generated distributions or mutate shared build output.

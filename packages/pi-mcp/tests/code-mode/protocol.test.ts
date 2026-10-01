@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   MCP_CODE_MODE_VERSION,
+  MCP_CODE_MODE_PARSE_OPTIONS,
   McpCodeModeInputSchema,
   mcpCodeModeJsonFits,
   mcpCodeModeHasBinary,
@@ -22,7 +23,11 @@ describe("MCP Code Mode protocol admission", () => {
       { action: "status", token: "secret" },
       { action: "tools.call", server: "fixture", tool: "x", method: "anything" },
     ])
-      expect(Option.isNone(Schema.decodeUnknownOption(McpCodeModeInputSchema)(input))).toBe(true);
+      expect(
+        Option.isNone(
+          Schema.decodeUnknownOption(McpCodeModeInputSchema, MCP_CODE_MODE_PARSE_OPTIONS)(input),
+        ),
+      ).toBe(true);
   });
 
   it("exempts only exact description schema roots, never embedded action or origin claims", () => {

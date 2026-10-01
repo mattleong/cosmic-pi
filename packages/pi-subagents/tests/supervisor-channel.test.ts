@@ -10,12 +10,10 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import {
-  RpcClient as EffectRpcClient,
-  RpcClientError,
-  RpcSerialization,
-} from "effect/unstable/rpc";
-import { Socket as EffectSocket } from "effect/unstable/socket";
+import * as EffectRpcClient from "effect/rpc/RpcClient";
+import * as RpcClientError from "effect/rpc/RpcClientError";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as EffectSocket from "effect/socket/Socket";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect } from "vitest";
 import { effectTest, step } from "./support/effect-test.ts";

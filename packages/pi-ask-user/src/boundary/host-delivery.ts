@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { synchronousRandomUuid, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AsyncDelivery } from "../questionnaire/async-service.ts";
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
@@ -19,7 +18,7 @@ const decodeReceipt = Schema.decodeUnknownOption(
 );
 const metadata = <Input>(value: Input) => decodeUnknownOrUndefined(Metadata, value);
 
-export const createQuestionnaireGeneration = (): string => randomUUID();
+export const createQuestionnaireGeneration = (): string => synchronousRandomUuid();
 
 /** A queued message cannot establish its own provenance after branch replacement. */
 export const captureHistoricalDeliveries = (ctx: ExtensionContext): ReadonlySet<string> => {

@@ -1,7 +1,7 @@
 // Opt-in, metadata-only Claude protocol ledger. It retains no message text,
 // UUIDs, session IDs, paths, tool inputs, or raw foreign frames. The bounded
 // tail is written to private agent state only when the owning scope closes.
-import { createHash, randomBytes } from "node:crypto";
+import { sha256Text, synchronousRandomHex } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -168,7 +168,7 @@ const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
   for (const entry of owned.slice(0, Math.max(0, owned.length - MAX_RETAINED_LEDGERS + 1)))
     yield* diagnosticIo(() => fs.rm(entry.directory, { recursive: true, force: false }));
 
-  const directory = join(root, `claude-${runIdentity}-${randomBytes(8).toString("hex")}`);
+  const directory = join(root, `claude-${runIdentity}-${synchronousRandomHex(8)}`);
   yield* diagnosticIo(() => fs.mkdir(directory, { mode: 0o700 }));
   const header = `{"kind":"ledger","dropped":${safeInteger(state.dropped)}}\n`;
   const available = MAX_LEDGER_BYTES - Buffer.byteLength(header, "utf8");
@@ -205,7 +205,7 @@ export const acquireLocalClaudeDebug = Effect.fn("LocalClaudeDebug.acquire")(fun
   const lock = yield* Semaphore.make(1);
   const withLock = lock.withPermits(1);
   const state: LedgerState = { lines: [], bytes: 0, dropped: 0 };
-  const runIdentity = createHash("sha256").update(options.runId, "utf8").digest("hex").slice(0, 12);
+  const runIdentity = sha256Text(options.runId).slice(0, 12);
   const record = (entry: LocalClaudeDebugEntry): Effect.Effect<void> =>
     withLock(Effect.sync(() => appendBounded(state, encodeEntry(entry)))).pipe(Effect.ignoreCause);
   yield* Effect.addFinalizer(() =>

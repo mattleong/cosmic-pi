@@ -1,6 +1,5 @@
 // Opt-in installed-CLI timing probe. This can incur provider usage; never retry it
 // automatically. Capture `claude --version` separately before a live invocation.
-import { randomBytes } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -10,7 +9,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
@@ -246,7 +245,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
       const supervisors = yield* SupervisorChannel;
       const driver = makeLocalClaudeBackendDriver(traced, supervisors);
       const launch = backendLaunch({
-        runId: `real-steering-${randomBytes(4).toString("hex")}`,
+        runId: `real-steering-${synchronousRandomHex(4)}`,
         parentSessionId: `real-steering-${process.pid}`,
         name: "real-local-claude-steering",
         model,

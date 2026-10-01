@@ -1,5 +1,4 @@
 import { fileURLToPath } from "node:url";
-import { PassThrough } from "node:stream";
 import { expect, it } from "@effect/vitest";
 import { describe, vi } from "vitest";
 import * as Cause from "effect/Cause";
@@ -68,7 +67,10 @@ const collect = (stream: Stream.Stream<Uint8Array, DuplexProcessError>) =>
 
 const collectUntil = (stream: Stream.Stream<Uint8Array, DuplexProcessError>, length: number) =>
   stream.pipe(
-    Stream.scan("", (text, bytes) => text + decode(bytes)),
+    Stream.scan(
+      () => "",
+      (text, bytes) => text + decode(bytes),
+    ),
     Stream.takeUntil((text) => text.length >= length),
     Stream.runLast,
     Effect.map(Option.getOrThrow),
@@ -464,14 +466,14 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
 
 it.effect("uses one total cleanup deadline instead of sequential wait budgets", () =>
   Effect.gen(function* () {
-    // The owned cleanup-boundary fake uses real streams without OS handles.
+    // The cleanup owner needs process identity and exit evidence, not stdio handles.
     const child = {
       pid: 2_147_483_647,
       exitCode: null,
       signalCode: null,
-      stdin: new PassThrough(),
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
+      stdin: { end: vi.fn(), destroy: vi.fn() },
+      stdout: { destroy: vi.fn() },
+      stderr: { destroy: vi.fn() },
     };
     const signals: Array<string | number | undefined> = [];
     yield* scopedSpy(() => {

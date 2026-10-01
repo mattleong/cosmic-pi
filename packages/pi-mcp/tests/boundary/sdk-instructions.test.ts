@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpServerResponse } from "effect/unstable/http";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { openSdkHttp } from "../../src/boundary/sdk-http.ts";
 import { openSdkStdio } from "../../src/boundary/sdk-stdio.ts";
 import type { McpConnection } from "../../src/client/model.ts";

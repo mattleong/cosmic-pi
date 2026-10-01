@@ -124,7 +124,7 @@ const ENVIRONMENT_KEYS: readonly EnvironmentKey[] = [
 export const loadCodePreviewEnvironment = Config.all(
   // SAFETY: ENVIRONMENT_KEYS enumerates every CodePreviewEnvironment key.
   Object.fromEntries(
-    ENVIRONMENT_KEYS.map((key) => [key, Config.string(key).pipe(Config.withDefault(undefined))]),
+    ENVIRONMENT_KEYS.map((key) => [key, Config.String(key).pipe(Config.withDefault(undefined))]),
   ) as { [K in EnvironmentKey]: Config.Config<string | undefined> },
 ).pipe(Effect.map((values): CodePreviewEnvironment => Object.freeze(values)));
 

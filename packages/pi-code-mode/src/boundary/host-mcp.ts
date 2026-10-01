@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  MCP_CODE_MODE_PARSE_OPTIONS,
   MCP_CODE_MODE_MAX_INPUT_BYTES,
   MCP_CODE_MODE_QUERY,
   MCP_CODE_MODE_VERSION,
@@ -24,8 +25,11 @@ import {
 import { invokeHostCallback, querySessionCapability } from "pi-cosmic-core";
 import { toolError, type ToolError } from "../engine/tool.ts";
 
-const decodeInput = Schema.decodeUnknownEffect(McpCodeModeInputSchema);
-const decodeOutput = Schema.decodeUnknownEffect(Schema.fromJsonString(McpCodeModeOutputSchema));
+const decodeInput = Schema.decodeUnknownEffect(McpCodeModeInputSchema, MCP_CODE_MODE_PARSE_OPTIONS);
+const decodeOutput = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(McpCodeModeOutputSchema),
+  MCP_CODE_MODE_PARSE_OPTIONS,
+);
 export type McpDispatch = (input: McpCodeModeInput) => Effect.Effect<McpCodeModeOutput, ToolError>;
 
 /** Only checked, bounded metadata enters the catchable message. Raw causes never enter the guest. */

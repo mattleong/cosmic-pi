@@ -1,21 +1,18 @@
 // Private authenticated session state for the loopback supervisor channel.
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { synchronousRandomHex, type TokenVerifier } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Latch from "effect/Latch";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
 import {
   SUPERVISOR_CHANNEL_VERSION,
   SupervisorChannelIdSchema,
-  type SupervisorAuthToken,
   type SupervisorChannelId,
   type SupervisorDeliveryId,
   type SupervisorEvent,
@@ -109,27 +106,14 @@ export const channelError = (operation: string, code: string, message: string) =
   new SupervisorChannelError({ operation, code, message });
 const rpcFailure = (code: string, message: string) => new SupervisorRpcFailure({ code, message });
 
-const authenticatedToken = <ValueInput>(
-  expected: Redacted.Redacted<SupervisorAuthToken>,
-  value: ValueInput,
-): boolean => {
-  const expectedBytes = Buffer.from(Redacted.value(expected), "utf8");
-  const supplied = Predicate.isString(value) ? Buffer.from(value, "utf8") : Buffer.alloc(0);
-  if (supplied.length !== expectedBytes.length) {
-    timingSafeEqual(expectedBytes, expectedBytes);
-    return false;
-  }
-  return timingSafeEqual(expectedBytes, supplied);
-};
-
 export const makeSupervisorChannelSession = ({
   runId,
-  token,
+  verifyToken,
   events,
   allowPiProxy,
 }: {
   readonly runId: SupervisorRunId;
-  readonly token: Redacted.Redacted<SupervisorAuthToken>;
+  readonly verifyToken: TokenVerifier;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
   readonly allowPiProxy: boolean;
 }) =>
@@ -249,24 +233,26 @@ export const makeSupervisorChannelSession = ({
       clientId: number,
       payload: AuthenticatedRequest,
     ): Effect.Effect<SupervisorRpcConnectionContract, SupervisorRpcFailure> =>
-      Effect.flatMap(currentConnectionGuard, (guard) => {
-        if (
-          closed ||
-          payload.runId !== runId ||
-          !authenticatedToken(token, payload.token) ||
-          guard.clientId !== clientId
-        ) {
-          guard.close();
-          return Effect.fail(
-            rpcFailure("authentication_failed", "Supervisor authentication failed."),
+      Effect.flatMap(currentConnectionGuard, (guard) =>
+        Effect.gen(function* () {
+          const refuse = () => {
+            guard.close();
+            return rpcFailure("authentication_failed", "Supervisor authentication failed.");
+          };
+          if (closed || guard.closed || payload.runId !== runId || guard.clientId !== clientId)
+            return yield* refuse();
+          const authenticated = yield* verifyToken(payload.token).pipe(
+            Effect.catch(() => Effect.succeed(false)),
           );
-        }
-        if (!guard.accepted) {
-          guard.accepted = true;
-          Deferred.doneUnsafe(guard.authenticated, Effect.void);
-        }
-        return Effect.succeed(guard);
-      });
+          // Native verification may settle after timeout, disconnect, or logical shutdown.
+          if (!authenticated || closed || guard.closed) return yield* refuse();
+          if (!guard.accepted) {
+            guard.accepted = true;
+            Deferred.doneUnsafe(guard.authenticated, Effect.void);
+          }
+          return guard;
+        }),
+      );
 
     const authorizePeer = (
       clientId: number,
@@ -662,9 +648,7 @@ export const makeSupervisorChannelSession = ({
         return yield* Effect.gen(function* () {
           let delivered = 0;
           for (const peer of watchingPeers) {
-            const updateId = SupervisorChannelIdSchema.make(
-              `epoch-${randomBytes(16).toString("hex")}`,
-            );
+            const updateId = SupervisorChannelIdSchema.make(`epoch-${synchronousRandomHex(16)}`);
             epochAcknowledgements.set(updateId, {
               epoch,
               peerId: peer.clientId,
@@ -746,9 +730,7 @@ export const makeSupervisorChannelSession = ({
             "supervisor_helper_unavailable",
             "No authenticated delegated Pi helper is connected.",
           );
-        const updateId = SupervisorChannelIdSchema.make(
-          `notification-${randomBytes(16).toString("hex")}`,
-        );
+        const updateId = SupervisorChannelIdSchema.make(`notification-${synchronousRandomHex(16)}`);
         const acknowledgement = Deferred.makeUnsafe<void, SupervisorChannelError>();
         notificationAcknowledgements.set(updateId, {
           peerId: peer.clientId,

@@ -2,7 +2,9 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpServer, HttpServerRequest, type HttpServerResponse } from "effect/unstable/http";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import type * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 export interface HttpRequestRecord {
   readonly method: string;
@@ -32,7 +34,7 @@ export const startHttpServer = (handler: HttpServerHandler) =>
         return yield* handler(record);
       }).pipe(Effect.interruptible),
     );
-    if (server.address._tag !== "TcpAddress") {
+    if (server.address._tag !== "InetAddressV4" && server.address._tag !== "InetAddressV6") {
       return yield* Effect.die("Owned HTTP fixture did not expose a TCP address.");
     }
     return {

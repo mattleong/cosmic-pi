@@ -22,7 +22,7 @@ export function benchTable(rows: ReadonlyArray<BenchTableRow>): void {
 }
 
 function readBenchEnvironment(name: string): string | undefined {
-  return Option.getOrUndefined(Effect.runSync(Config.option(Config.string(name))));
+  return Option.getOrUndefined(Effect.runSync(Config.option(Config.String(name))));
 }
 
 export type BenchResult = {

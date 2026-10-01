@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -14,8 +14,7 @@ const CALLER_WAIT = "10 seconds";
 const STEERING_ACK_WATCHDOG = "5 minutes";
 
 /** Digest identity is diagnostic evidence only; it never authorizes a replay. */
-export const userContentDigest = (text: string): string =>
-  createHash("sha256").update(text, "utf8").digest("hex");
+export const userContentDigest = (text: string): string => sha256Text(text);
 
 export interface PendingUserReplay {
   readonly uuid: string;
@@ -140,7 +139,7 @@ export const makeLocalClaudeInputDelivery = (
             ),
           );
         const input: PendingUserReplay = {
-          uuid: randomUUID(),
+          uuid: synchronousRandomUuid(),
           sequence: ++sequence,
           operation,
           epoch,

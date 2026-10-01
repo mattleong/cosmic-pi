@@ -1,5 +1,5 @@
 // Synthetic stream-input UUIDs are plain-crypto identity, not Effect resources.
-import { randomUUID } from "node:crypto";
+import { synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -530,7 +530,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             // causal subturns of the active assignment. Older frames may omit
             // their UUID; 2.1.259 command-queue replays may instead omit the
             // synthetic/origin flags. A private identity owns the result FIFO.
-            const syntheticUuid = event.uuid ?? `synthetic:${randomUUID()}`;
+            const syntheticUuid = event.uuid ?? `synthetic:${synchronousRandomUuid()}`;
             if (event.uuid !== undefined) correlation.rememberInternalReplayUuid(event.uuid);
             correlation.register(
               { uuid: syntheticUuid, kind: "synthetic", epoch: assignmentEpoch },

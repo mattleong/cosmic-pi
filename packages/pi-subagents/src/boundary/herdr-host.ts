@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Text } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -86,12 +86,10 @@ interface OwnedRun {
 
 const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime): string => {
   const prefix = `psa-${runtime}-`;
-  const digest = createHash("sha256")
-    .update(request.parentSessionId)
-    .update("\0")
-    .update(request.runId)
-    .digest("hex")
-    .slice(0, AGENT_NAME_DIGEST_CHARS);
+  const digest = sha256Text(`${request.parentSessionId}\0${request.runId}`).slice(
+    0,
+    AGENT_NAME_DIGEST_CHARS,
+  );
   const readableLimit = MAX_AGENT_NAME_CHARS - prefix.length - digest.length - 1;
   const readable = request.runId
     .toLowerCase()

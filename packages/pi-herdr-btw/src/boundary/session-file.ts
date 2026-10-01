@@ -5,19 +5,17 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { synchronousRandomUuid } from "pi-cosmic-core";
 import { parseHerdrBtwSessionId } from "../btw/marker.ts";
 
 // Synchronous host-boundary validation needs raw Node fs semantics. Effect
 // FileSystem cannot express this pre-runtime, never-mutating no-follow probe.
 const nodeFs = process.getBuiltinModule("node:fs");
 const nodePath = process.getBuiltinModule("node:path");
-const nodeCrypto = process.getBuiltinModule("node:crypto");
-if (!nodeFs || !nodePath || !nodeCrypto)
-  throw new Error("Node fs/path/crypto builtins are unavailable.");
+if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
 const { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, writeFileSync } =
   nodeFs;
 const { isAbsolute, join, normalize } = nodePath;
-const { randomUUID } = nodeCrypto;
 
 const MAX_SESSION_PATH_CHARS = 4_096;
 const MAX_HEADER_LINE_BYTES = 256 * 1024;
@@ -140,7 +138,7 @@ export type BlankChildSessionFileResult =
   | { readonly _tag: "invalid" };
 
 /** Cryptographically strong preassigned child ID compatible with Pi session IDs. */
-export const createChildSessionId = (): string => randomUUID();
+export const createChildSessionId = (): string => synchronousRandomUuid();
 
 const createBlankChildSessionFileAt = (
   input: BlankChildSessionFileInput,

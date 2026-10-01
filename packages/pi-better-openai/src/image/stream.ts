@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Sse from "effect/unstable/encoding/Sse";
+import * as Sse from "effect/encoding/Sse";
 import { sanitizeDiagnosticError, type StreamingHttpError } from "pi-cosmic-core";
 import { decodeImageStreamEvent } from "./protocol.ts";
 import { OpenAIImageError, fail, type ExtractedImageResult } from "./types.ts";

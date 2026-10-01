@@ -120,6 +120,10 @@ The activity protocol uses a host-activation nonce and producer registration ide
 
 Ask User owns a bounded FIFO shared by blocking, async, local-extension forms, and explicitly routed Pi-child questionnaires. Child relays carry structured requests through the authenticated subagent coordinator, which supplies assignment ownership. Parent-agent coordination questions remain separate. The root capability exposes exact-owner cancellation acknowledgement, so subagent cleanup joins questionnaire/editor finalizers without making the answer wait uninterruptible. Native supervisor and async child questionnaires are not routed by this protocol.
 
+## Cryptographic boundaries
+
+Core owns synchronous Web Crypto entropy/UUID generation for Pi callbacks and indivisible native ownership commits. SHA-256 text identities use a pure UTF-8 implementation so existing persistence keys, leases, and replay hashes do not gain an asynchronous gap. Supervisor authentication instead uses Effect-owned native HMAC verification; it rechecks logical shutdown and connection revocation after the native wait and before publishing authentication. No Node crypto import is hidden through reflection, and no diagnostic severity is reduced for these boundaries.
+
 ## Imperative boundaries
 
 Effect runners are intentionally localized to these call owners:

@@ -11,7 +11,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import { NetworkAddresses } from "pi-cosmic-core";
 import type { McpLoginOptions, McpLoginUi } from "../auth/model.ts";
@@ -188,7 +188,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
               reused = clientId;
             },
           }).pipe(Effect.provideService(NetworkAddresses, network));
-          const state = Encoding.encodeBase64Url(
+          const state = Base64Url.encode(
             yield* crypto.randomBytes(32).pipe(Effect.mapError(deniedAuth)),
           );
           const attempt = yield* Effect.tryPromise({

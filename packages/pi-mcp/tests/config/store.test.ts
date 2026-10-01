@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
+import * as ByteSize from "effect/ByteSize";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -48,7 +49,9 @@ const rawDocuments = (initial: Record<string, string>) => {
       read(path).pipe(
         Effect.map((source) => {
           const bytes = new TextEncoder().encode(source);
-          return Stream.make(bytes.subarray(0, Number(options?.bytesToRead ?? bytes.length)));
+          if (options === undefined || options.bytesToRead === undefined) return Stream.make(bytes);
+          const limit = ByteSize.fromInputUnsafe(options.bytesToRead);
+          return Stream.make(bytes.subarray(0, ByteSize.toNumberUnsafe(limit)));
         }),
         Stream.unwrap,
       ),

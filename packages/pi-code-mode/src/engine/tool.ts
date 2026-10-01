@@ -3,6 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import type * as SchemaAST from "effect/SchemaAST";
 
 /** Safe operational refusal from a tool, reported to the program as `ToolFailure`. */
 export class ToolError extends Schema.TaggedError<ToolError>()("ToolError", {
@@ -48,7 +49,9 @@ export interface Definition<R = never> {
   readonly _tag: "CodeModeTool";
   readonly description: string;
   readonly input: Schema.Decoder<unknown> & Schema.Top;
+  readonly inputParseOptions?: SchemaAST.ParseOptions;
   readonly output: (Schema.Decoder<unknown> & Schema.Top) | undefined;
+  readonly outputParseOptions?: SchemaAST.ParseOptions;
   /** Runs with input already decoded by `input`. */
   readonly run: <Input>(input: Input) => Effect.Effect<unknown, ToolError, R>;
 }
@@ -71,7 +74,9 @@ export const makeTool = <
 >(options: {
   readonly description: string;
   readonly input: I;
+  readonly inputParseOptions?: SchemaAST.ParseOptions;
   readonly output?: O;
+  readonly outputParseOptions?: SchemaAST.ParseOptions;
   readonly run: (
     input: I["Type"],
   ) => Effect.Effect<O extends Schema.Decoder<unknown> ? O["Encoded"] : unknown, E, R>;
@@ -79,7 +84,11 @@ export const makeTool = <
   _tag: "CodeModeTool",
   description: options.description,
   input: options.input,
+  ...(options.inputParseOptions !== undefined && { inputParseOptions: options.inputParseOptions }),
   output: options.output,
+  ...(options.outputParseOptions !== undefined && {
+    outputParseOptions: options.outputParseOptions,
+  }),
   // SAFETY: the dispatcher decodes `input` with this definition's schema before calling run.
   run: (input) => runHost(options.run(input as I["Type"])),
 });

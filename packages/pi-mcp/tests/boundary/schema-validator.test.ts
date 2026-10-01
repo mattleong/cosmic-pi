@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Schema from "effect/Schema";
-import { HttpServerResponse } from "effect/unstable/http";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { runBoundedProcessNode, type BoundedProcessResult } from "pi-cosmic-core";
 import { startHttpServer } from "../fixtures/http-server.ts";
 import {

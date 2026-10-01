@@ -2,12 +2,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  HttpMiddleware,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import * as HttpMiddleware from "effect/http/HttpMiddleware";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { nodeHttpServerLayer } from "pi-cosmic-core";
 import { callbackRedirect, deniedAuth } from "../auth/policy.ts";
 import { boundaryError } from "../client/errors.ts";
@@ -28,7 +26,7 @@ export const openAuthCallback = (configured?: string) =>
       ),
     );
     const server = Context.get(services, HttpServer.HttpServer);
-    if (server.address._tag !== "TcpAddress") return yield* deniedAuth();
+    if (server.address._tag !== "InetAddressV4") return yield* deniedAuth();
     redirect.port = String(server.address.port);
     let consumed = false;
     // Set once the authorization URL exists. Until then, and for any other state, a

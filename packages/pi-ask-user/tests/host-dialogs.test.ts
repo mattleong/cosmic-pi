@@ -1,5 +1,4 @@
 import { cancelled, defaultQuestion, submitted } from "./support/questionnaire.ts";
-import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
 import { makeTuiHost } from "./support/host.ts";
@@ -132,7 +131,7 @@ describe("RPC questionnaire boundary", () => {
         const select = vi.fn(
           (_title: string, _options: string[], opts?: { signal?: AbortSignal }) => {
             nativeSignal = opts?.signal;
-            return delay(10_000, undefined, { signal: nativeSignal });
+            return Effect.runPromise(Effect.never, opts?.signal ? { signal: opts.signal } : {});
           },
         );
         const controller = new AbortController();

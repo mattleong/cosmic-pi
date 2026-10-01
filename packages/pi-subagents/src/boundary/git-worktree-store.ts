@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { SafeFile } from "pi-cosmic-core";
+import { SafeFile, synchronousRandomUuid } from "pi-cosmic-core";
 import { WorkspaceRecordSchema, type WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
@@ -15,7 +15,7 @@ const MAX_RECORD_BYTES = 64 * 1024 * 1024;
 
 export const newWorkspaceId = () =>
   Effect.try({
-    try: () => process.getBuiltinModule("node:crypto").randomUUID(),
+    try: synchronousRandomUuid,
     catch: () => workspaceFailure("identity", "Unable to allocate workspace identity."),
   });
 export const validWorkspaceId = (id: string) => /^[a-f0-9-]{36}$/u.test(id);

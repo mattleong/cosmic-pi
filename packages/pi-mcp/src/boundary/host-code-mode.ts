@@ -7,6 +7,7 @@ import {
   MCP_CODE_MODE_MAX_OUTPUT_BYTES,
   MCP_CODE_MODE_QUERY,
   MCP_CODE_MODE_VERSION,
+  MCP_CODE_MODE_PARSE_OPTIONS,
   McpCodeModeInputSchema,
   McpCodeModeOutputSchema,
   mcpCodeModeError,
@@ -95,7 +96,11 @@ export const makeMcpCodeModeHost = (events: ExtensionAPI["events"]): McpCodeMode
                 throw mcpCodeModeError("invalid-input", "not-sent");
               if (!mcpCodeModeJsonFits(input, MCP_CODE_MODE_MAX_INPUT_BYTES))
                 throw mcpCodeModeError("invalid-input", "not-sent");
-              const decoded = decodeUnknownOrUndefined(McpCodeModeInputSchema, input);
+              const decoded = decodeUnknownOrUndefined(
+                McpCodeModeInputSchema,
+                input,
+                MCP_CODE_MODE_PARSE_OPTIONS,
+              );
               if (!decoded) throw mcpCodeModeInputError(input);
               if (!available()) throw mcpCodeModeError("unavailable", "not-sent");
               const allowance = Math.min(maxOutputBytes, MCP_CODE_MODE_MAX_OUTPUT_BYTES);
@@ -109,6 +114,7 @@ export const makeMcpCodeModeHost = (events: ExtensionAPI["events"]): McpCodeMode
                 const reply = decodeUnknownOrUndefined(
                   Schema.fromJsonString(McpCodeModeOutputSchema),
                   JSON.stringify(output),
+                  MCP_CODE_MODE_PARSE_OPTIONS,
                 );
                 if (
                   !reply ||

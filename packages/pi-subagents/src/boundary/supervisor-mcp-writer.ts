@@ -12,7 +12,7 @@ export class McpWriteFailure extends Data.TaggedError("McpWriteFailure")<{
 }> {}
 
 export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerializedWriter")(
-  function* (stream: NodeJS.WritableStream, maximumWrites = MAX_PENDING_WRITES) {
+  function* (stream: Pick<NodeJS.WritableStream, "write">, maximumWrites = MAX_PENDING_WRITES) {
     const frames = yield* Queue.bounded<{
       readonly line: string;
       readonly ack: Deferred.Deferred<void, McpWriteFailure>;
