@@ -2,14 +2,8 @@ import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
-import { registerCodePreviewsCommand as registerCommand } from "../../src/commands/register";
+import { registerCodePreviewsCommand } from "../../src/commands/register";
 import { effectTest, step } from "../support/effect-test";
-
-const registerCodePreviewsCommand = (pi: ExtensionAPI) =>
-  registerCommand(pi, {
-    loadStartup: () => Promise.resolve({ nativeMcpPreviews: false }),
-    saveStartup: (settings) => Promise.resolve(settings),
-  });
 
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 

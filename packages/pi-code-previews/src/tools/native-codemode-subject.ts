@@ -2,7 +2,7 @@ import * as Predicate from "effect/Predicate";
 import type { CompactChild } from "./compact-summary";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
 import type { NativeArgumentPreview } from "./native-codemode-args";
-import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-subject";
+import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-resource-subject";
 import { formatDisplayPath } from "pi-cosmic-core";
 
 const builtinNames: ReadonlySet<string> = new Set([

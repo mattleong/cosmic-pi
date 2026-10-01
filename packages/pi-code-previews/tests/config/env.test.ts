@@ -94,27 +94,6 @@ it.effect("missing or invalid collapsed style environment defaults keep previews
   }),
 );
 
-it.effect("the native MCP startup default is off unless explicitly enabled", () =>
-  Effect.gen(function* () {
-    const cases: ReadonlyArray<readonly [string | undefined, boolean]> = [
-      [undefined, false],
-      ["invalid", false],
-      ["off", false],
-      ["on", true],
-      [" yes ", true],
-    ];
-    for (const [value, expected] of cases) {
-      yield* CodePreviewEnvironmentService.use((service) =>
-        Effect.sync(() => assert.equal(service.startupDefaults.nativeMcpPreviews, expected)),
-      ).pipe(
-        provideBuiltLayer(
-          CodePreviewEnvironmentService.layerFrom({ CODE_PREVIEW_NATIVE_MCP: value }),
-        ),
-      );
-    }
-  }),
-);
-
 test("boolean environment values recognize explicit true and false forms", () => {
   for (const value of ["1", "true", "ON", " yes "]) assert.equal(parseBoolean(value), true);
   for (const value of ["0", "false", "OFF", " no "]) assert.equal(parseBoolean(value), false);

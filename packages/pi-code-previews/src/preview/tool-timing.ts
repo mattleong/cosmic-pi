@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { synchronousNow, formatDuration } from "pi-cosmic-core";
+import { synchronousNow, formatDuration, invokeHostCallback } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
 import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { codePreviewSettings } from "../config/state";
@@ -101,6 +102,17 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   if (!options.showShortTiming && elapsedMs < TIMING_VISIBLE_MS) return undefined;
   const duration = formatDuration(elapsedMs);
   return { label: `${label} ${duration}`, duration, elapsedMs };
+}
+
+/** Read-only animation projection; malformed or hostile renderer state uses the first frame. */
+export function getCodePreviewAnimationFrame(context: { readonly state: unknown }): number {
+  return invokeHostCallback(() => {
+    const state = context.state;
+    if (!Predicate.isObject(state) || Array.isArray(state)) return 0;
+    const descriptor = Object.getOwnPropertyDescriptor(state, "codePreviewAnimationFrame");
+    const frame = descriptor && "value" in descriptor ? descriptor.value : undefined;
+    return Predicate.isNumber(frame) && Number.isSafeInteger(frame) && frame >= 0 ? frame : 0;
+  }, 0);
 }
 
 export function timingState(context: { state: unknown }): TimingState {

@@ -14,7 +14,6 @@
   },
   "type": "module",
   "scripts": {
-    "code-mode:usage": "node scripts/code-mode-usage.mjs",
     "check": "pnpm layout:check && pnpm diagnostics:guard && pnpm typecheck && pnpm effect:diagnostics && pnpm lint && pnpm format:check",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
@@ -27,8 +26,6 @@
     "typecheck:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop/tsconfig.json",
     "effect:diagnostics": "pnpm --workspace-concurrency=4 --no-sort -r --if-present effect:diagnostics",
     "diagnostics:guard": "node scripts/check-no-disabled-diagnostics.mjs",
-    "mcp:smoke": "node scripts/verify-mcp-compat.mjs",
-    "mcp:conformance": "node scripts/verify-mcp-conformance.mjs",
     "pack:smoke": "node scripts/verify-packed-core.mjs",
     "presentation:gallery": "node scripts/presentation-gallery.mjs",
     "validate": "pnpm version:check && pnpm check && pnpm test && pnpm pack:smoke",
@@ -37,7 +34,6 @@
   },
   "devDependencies": {
     "@effect/tsgo": "0.47.2",
-    "@modelcontextprotocol/conformance": "0.1.16",
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "jiti": "2.7.0",

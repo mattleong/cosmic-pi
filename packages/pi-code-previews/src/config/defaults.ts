@@ -1,5 +1,5 @@
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
-import type { CodePreviewSettings, CodePreviewStartupSettings } from "./schema";
+import type { CodePreviewSettings } from "./schema";
 
 const defaults: CodePreviewSettings = {
   shikiTheme: "dark-plus",
@@ -29,11 +29,6 @@ const defaults: CodePreviewSettings = {
 };
 Object.freeze(defaults.tools);
 export const defaultCodePreviewSettings = Object.freeze(defaults);
-
-/** Startup opt-ins default off; every unknown or failed read also resolves to these values. */
-export const defaultCodePreviewStartupSettings: CodePreviewStartupSettings = Object.freeze({
-  nativeMcpPreviews: false,
-});
 
 const performanceDefaults = {
   asyncRenderChars: 8_000,

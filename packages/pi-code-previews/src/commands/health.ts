@@ -8,27 +8,11 @@ import { codePreviewSettings } from "../config/state";
 import { formatOnOff } from "../config/values";
 import { getSettingsPath } from "../config/store";
 import { getShikiStatus } from "../syntax/render";
-import { getNativeMcpStatus, type NativeMcpState } from "../tools/native-mcp-registration";
 import { formatEnabledCodePreviewTools } from "../tools/selection";
 import {
   formatCodePreviewToolsWithState,
   formatSkippedCodePreviewToolLines,
 } from "../tools/status";
-
-const NATIVE_MCP_STATES = {
-  off: "off",
-  unavailable: "unavailable in this Pi version",
-  failed: "couldn't compose; Pi's built-in MCP is used",
-  composed: "waiting for a session",
-  owned: "managing MCP servers",
-  conflict: "not started; manager ownership is ambiguous",
-} as const satisfies Record<NativeMcpState, string>;
-
-function formatNativeMcpStatus(): string {
-  const { state, presentationFailed } = getNativeMcpStatus();
-  const presentation = state === "owned" && presentationFailed ? " (some tools unstyled)" : "";
-  return `${NATIVE_MCP_STATES[state]}${presentation} · changes require /reload`;
-}
 
 /** `/code-previews health`: renderer health and the settings in effect. */
 export const healthSubcommand: ExtensionSubcommand = {
@@ -63,7 +47,6 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Inactive native tools: ${formatCodePreviewToolsWithState("not-active")}`,
       `Unavailable native tools: ${formatCodePreviewToolsWithState("unavailable")}`,
       ...(pendingTools === "none" ? [] : [`Pending registration: ${pendingTools}`]),
-      `Native MCP previews: ${formatNativeMcpStatus()}`,
       `Cache: ${status.cacheSize}/${status.cacheLimit}`,
       `Loaded languages: ${status.loadedLanguages}`,
       `Pending languages: ${status.pendingLanguages}`,

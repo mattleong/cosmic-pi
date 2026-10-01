@@ -12,12 +12,11 @@ const extensionPackages = [
   "pi-better-xai",
   "pi-better-openai",
   "pi-cosmic-ui",
-  "pi-code-mode",
   "pi-code-previews",
   "pi-directory-models",
   "pi-background-task",
   "pi-subagents",
-  "pi-mcp",
+  "pi-mcp-previews",
 ];
 const packageNames = ["pi-cosmic-core", ...extensionPackages];
 const manifests = new Map();
@@ -77,7 +76,7 @@ try {
   const tarballNames = new Map(
     packageNames.map((packageName) => [
       packageName,
-      tarballs.find((name) => name.startsWith(`${packageName}-`)),
+      tarballs.find((name) => name === `${packageName}-${manifests.get(packageName).version}.tgz`),
     ]),
   );
   if (tarballs.length !== packageNames.length || [...tarballNames.values()].some((name) => !name)) {
@@ -97,6 +96,7 @@ try {
         private: true,
         type: "module",
         dependencies: {
+          "@earendil-works/pi-ai": catalogVersion("@earendil-works/pi-ai"),
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": tuiVersion,
           jiti: "2.7.0",
@@ -132,7 +132,7 @@ try {
   );
   await writeFile(
     join(temporaryDirectory, "mcp-fixture.mjs"),
-    await readFile(join(root, "packages/pi-mcp/tests/fixtures/stdio-server.mjs")),
+    await readFile(join(root, "scripts/fixtures/native-mcp-server.mjs")),
   );
   // Runtime imports and config acquisition must not see the caller's agent directory,
   // credentials, browser profiles, or configured environment values. The only server is our fixture.
@@ -155,20 +155,22 @@ try {
     ].map((directory) => mkdir(directory, { recursive: true })),
   );
   await writeFile(
-    join(agentDirectory, "extensions/pi-mcp.json"),
+    join(agentDirectory, "mcp.json"),
     JSON.stringify({
-      settings: { connectTimeoutMs: 10_000, requestTimeoutMs: 10_000 },
       mcpServers: {
         fixture: {
           command: process.execPath,
-          args: [join(temporaryDirectory, "mcp-fixture.mjs")],
+          args: [
+            join(temporaryDirectory, "mcp-fixture.mjs"),
+            join(temporaryDirectory, "mcp-fixture-state.json"),
+          ],
           cwd: fixtureDirectory,
           env: {},
         },
       },
     }),
   );
-  const sourceImportSmoke = `
+  const sourceImportSmoke = String.raw`
     import { createJiti } from "jiti/static";
     import { readFile, realpath } from "node:fs/promises";
     import { join } from "node:path";
@@ -176,7 +178,7 @@ try {
     const load = (specifier) => jiti.import(specifier);
     const api = await load("pi-cosmic-core");
     const testing = await load("pi-cosmic-core/testing");
-    for (const packageName of ${JSON.stringify(extensionPackages.filter((name) => name !== "pi-code-previews"))}) {
+    for (const packageName of ["pi-ask-user","pi-better-xai","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-background-task","pi-subagents"]) {
       const extension = await load(packageName);
       if (typeof extension.default !== "function") throw new Error("missing " + packageName + " extension export");
     }
@@ -185,71 +187,119 @@ try {
     const manager = await load("pi-cosmic-ui/manager");
     const fastModels = await load("pi-better-openai/fast-models");
     const previews = await load("pi-code-previews");
-    const codeModeRoot = join(process.cwd(), "node_modules/pi-code-mode/src/engine");
-    const { executeProgram } = await load(join(codeModeRoot, "execute.ts"));
-    const { makeTool } = await load(join(codeModeRoot, "tool.ts"));
     if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
     if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
     if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");
-    {
-      // The installed package starts a real program process, calls a tool, and stops a loop.
-      const Effect = await load("effect/Effect");
-      const EffectSchema = await load("effect/Schema");
-      const echo = makeTool({
-        description: "Echo",
-        input: EffectSchema.Struct({ text: EffectSchema.String }),
-        output: EffectSchema.String,
-        run: ({ text }) => Effect.succeed("echo:" + text),
-      });
-      const limits = { timeoutMs: 10_000, maxToolCalls: 4, maxOutputBytes: 10_000 };
-      const run = (code, overrides = {}) =>
-        Effect.runPromise(executeProgram({ code, cwd: process.cwd(), tools: { demo: { echo } }, limits: { ...limits, ...overrides } }));
-      const called = await run('return await tools.demo.echo({ text: "packed" });');
-      if (!called.ok || called.value !== "echo:packed") throw new Error("packed Code Mode program failed: " + JSON.stringify(called));
-      const looped = await run("while (true) {}", { timeoutMs: 500 });
-      if (looped.ok || looped.error.kind !== "TimeoutExceeded") throw new Error("packed Code Mode program did not stop at its deadline");
-    }
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");
     if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
     if (typeof manager.renderResponsiveManagerFooter !== "function") throw new Error("missing Cosmic UI manager export");
     if (typeof fastModels.supportsFastModel !== "function") throw new Error("missing OpenAI fast-model export");
 
-    const mcpRoot = await realpath(join(process.cwd(), "node_modules/pi-mcp"));
+    // Exercise the installed adapter through Pi's public SDK, not private package sources or
+    // mocked native definitions. No prompt/model call is made, and only our stdio fixture exists.
+    // Use Pi's native module instance: its loader gives extensions these same public factories,
+    // whose schema identities native MCP uses for discovery and readiness checks.
+    const Pi = await import("@earendil-works/pi-coding-agent");
+    const { fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai");
+    const agentDir = process.env.PI_CODING_AGENT_DIR;
+    if (Pi.getAgentDir() !== agentDir) throw new Error("Packed smoke must use its disposable agent directory.");
+    const cwd = join(process.cwd(), "mcp-project");
+    const mcpRoot = await realpath(join(process.cwd(), "node_modules/pi-mcp-previews"));
     const mcpManifest = JSON.parse(await readFile(join(mcpRoot, "package.json"), "utf8"));
-    const registeredMcp = await load(join(mcpRoot, mcpManifest.pi.extensions[0]));
-    if (typeof registeredMcp.default !== "function") throw new Error("missing registered MCP extension");
-    const mcpProtocol = await load("pi-mcp/code-mode");
-    const Schema = await load("effect/Schema");
-    const request = Schema.decodeUnknownSync(mcpProtocol.McpCodeModeInputSchema)({
-      action: "tools.call", server: "fixture", tool: "echo", arguments: { text: "packed MCP" },
+    let nativeCodemode;
+    // Capture only the fresh definition produced by our own public native factory; never retrieve
+    // a foreign loaded definition. Codemode is model-only, so it cannot nest itself through executeTool.
+    const nativeFactory = Pi.createCodemodeExtension({ models: false });
+    const resourceLoader = new Pi.DefaultResourceLoader({
+      cwd, agentDir,
+      additionalExtensionPaths: [join(mcpRoot, mcpManifest.pi.extensions[0])],
+      noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [
+        { name: "codemode", builtin: true, replaceable: true, factory: (pi) => nativeFactory({
+          ...pi, registerTool: (definition) => { nativeCodemode = definition; pi.registerTool(definition); },
+        }) },
+        { name: "mcp", factory: Pi.createMcpExtension(), builtin: true, replaceable: true },
+      ],
     });
-    if (process.platform === "darwin") {
-      const { getAgentDir } = await load("@earendil-works/pi-coding-agent");
-      if (getAgentDir() !== process.env.PI_CODING_AGENT_DIR) {
-        throw new Error("Packed MCP smoke must use its disposable agent directory.");
-      }
-      // Resolve pnpm's symlink before importing owned sources so their declared
-      // dependencies resolve beside the physical package, not the consumer root.
-      const mcpSource = await realpath(join(process.cwd(), "node_modules/pi-mcp/src"));
-      const { makeMcpLayer } = await load(join(mcpSource, "layer.ts"));
-      const { McpExecution } = await load(join(mcpSource, "tools/service.ts"));
-      const Effect = await load("effect/Effect");
-      const layer = makeMcpLayer({
-        cwd: join(process.cwd(), "mcp-project"), projectTrusted: true, isTrusted: () => true,
+    await resourceLoader.reload();
+    const loaded = resourceLoader.getExtensions();
+    if (loaded.errors.length !== 0) throw new Error("Packed MCP previews failed to load: " + JSON.stringify(loaded.errors));
+    const settingsManager = Pi.SettingsManager.create(cwd, agentDir);
+    const modelRuntime = await Pi.ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"), modelsPath: null,
+      modelsStorePath: join(agentDir, "models-cache.json"),
+      refreshOnCreate: false, allowModelNetwork: false,
+    });
+    const sessionManager = Pi.SessionManager.inMemory(cwd);
+    sessionManager.appendMessage(fauxAssistantMessage(
+      fauxToolCall("codemode", {}, { id: "packed-native-smoke" }), { stopReason: "toolUse" },
+    ));
+    const { session } = await Pi.createAgentSession({
+      cwd, agentDir, resourceLoader, settingsManager, modelRuntime, sessionManager,
+    });
+    const errors = [];
+    try {
+      await session.bindExtensions({ mode: "print", onError: (error) => errors.push(error) });
+      // Native headless /mcp status waits for background connections without polling or changing
+      // the active set. SDK startup alone does not await non-direct servers.
+      const managerCommand = session.extensionRunner.getRegisteredCommands()
+        .find((command) => command.invocationName === "mcp");
+      if (!managerCommand) throw new Error("Packed native MCP manager is unavailable.");
+      await managerCommand.handler("", session.extensionRunner.createCommandContext());
+      const signal = AbortSignal.timeout(30_000);
+      const input = {
+        code: 'const result = await tools.mcp__fixture__echo({text:"packed MCP"}); text(result); image(result.content[1]);',
+      };
+      // Drive the public top-level tool-call hook: native MCP waits for the named server before
+      // codemode receives its callable tools. No model prompt or forced activation is involved.
+      const blocked = await session.extensionRunner.emitToolCall({
+        type: "tool_call", toolCallId: "packed-native-smoke", toolName: "codemode", input,
       });
-      // Stdio auth is a no-op. No login, token lookup, or native Keychain import is requested.
-      await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-        const execution = yield* McpExecution;
-        const result = yield* execution.execute(request, { maxOutputBytes: 32_768, images: false });
-        const reply = Schema.decodeUnknownSync(mcpProtocol.McpCodeModeOutputSchema)(result.reply);
-        if (reply.outcome !== "completed" || reply.isError ||
-            reply.data.result?.content?.[0]?.text !== "packed MCP" || result.images.length !== 0) {
-          throw new Error("Packed MCP application stdio tool call failed.");
-        }
-      }).pipe(Effect.provide(layer))));
+      if (blocked?.block || !session.getActiveToolNames().includes("codemode")) {
+        throw new Error("Native MCP did not make default-exposure tools reachable: " + JSON.stringify({
+          blocked, active: session.getActiveToolNames(), errors,
+        }));
+      }
+      const context = session.extensionRunner.createToolContext("packed-native-smoke", signal);
+      const called = await nativeCodemode.execute("packed-native-smoke", input, signal, undefined, context);
+      const textBlocks = called.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+      const image = called.content.find((block) => block.type === "image");
+      if (!textBlocks.includes('"text":"packed MCP"') ||
+          !textBlocks.includes('"structuredContent":{"echoed":"packed MCP"}') ||
+          !textBlocks.includes('"isError":false') || image?.mimeType !== "image/png" ||
+          image.data !== "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=") {
+        throw new Error("Packed native MCP content, structured evidence, or image was changed: " + JSON.stringify(called));
+      }
+      const resource = await context.executeTool("read_mcp_resource", {server:"fixture",uri:"fixture://packed"});
+      if (resource.isError || !JSON.stringify(resource.result.content).includes("packed resource")) {
+        throw new Error("Packed native MCP resource execution failed.");
+      }
+      const definitions = session.getAllTools();
+      const echo = definitions.find((tool) => tool.name === "mcp__fixture__echo");
+      // The owned source must be the installed adapter, not the replaceable builtin manager.
+      if (!echo?.sourceInfo?.path || !echo.sourceInfo.path.startsWith(mcpRoot)) {
+        throw new Error("Native fixture tool was not registered by the packed MCP previews adapter.");
+      }
+      if (errors.length !== 0) throw new Error("Packed MCP lifecycle errors: " + JSON.stringify(errors));
+    } finally {
+      // SDK embeddings own shutdown emission; dispose alone removes listeners.
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      session.dispose();
+    }
+    const marker = JSON.parse(await readFile(join(process.cwd(), "mcp-fixture-state.json"), "utf8"));
+    if (marker.state !== "closed") throw new Error("Native MCP fixture did not receive shutdown.");
+    try {
+      process.kill(marker.pid, 0);
+      throw new Error("Native MCP fixture survived manager cleanup.");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
     }
   `;
-  run(process.execPath, ["--input-type=module", "--eval", sourceImportSmoke], temporaryDirectory, {
+  // Native codemode workers inherit Node's execArgv; an --input-type eval parent cannot launch
+  // their file entrypoint. A real ESM file matches ordinary Pi execution and tests source loading.
+  const sourceImportPath = join(temporaryDirectory, "source-import-smoke.mjs");
+  await writeFile(sourceImportPath, sourceImportSmoke, "utf8");
+  run(process.execPath, [sourceImportPath], temporaryDirectory, {
     env: consumerEnvironment,
     timeout: 90_000,
     killSignal: "SIGKILL",
@@ -297,27 +347,6 @@ try {
     throw new Error("Packed Sharp decoder could not validate a tiny PNG in a clean consumer.");
   }
 
-  const validatorSmoke = spawnSync(
-    process.execPath,
-    [join(temporaryDirectory, "node_modules/pi-mcp/src/boundary/schema-validator-helper.mjs")],
-    {
-      cwd: temporaryDirectory,
-      env: {},
-      input: JSON.stringify({ schema: { type: "string" }, data: "packed MCP" }),
-      encoding: "utf8",
-      timeout: 5_000,
-      killSignal: "SIGKILL",
-      maxBuffer: 256,
-    },
-  );
-  if (
-    validatorSmoke.status !== 0 ||
-    validatorSmoke.stdout !== '{"valid":true}' ||
-    validatorSmoke.stderr !== ""
-  ) {
-    throw new Error("Packed MCP schema helper failed in a clean consumer.");
-  }
-
   // Pi and the clean-consumer smoke load TypeScript source directly through Jiti.
   for (const source of [
     "pi-cosmic-core/index.ts",
@@ -325,34 +354,22 @@ try {
     "pi-cosmic-core/src/runtime/runtime.ts",
     "pi-code-previews/index.ts",
     "pi-code-previews/src/extension.ts",
-    "pi-code-mode/src/engine/execute.ts",
-    "pi-code-mode/src/boundary/code-mode-child.mjs",
-    "pi-code-mode/src/boundary/code-mode-watchdog.mjs",
-    "pi-code-mode/THIRD_PARTY_NOTICES.md",
-    "pi-mcp/index.ts",
-    "pi-mcp/src/extension.ts",
-    "pi-mcp/src/layer.ts",
-    "pi-mcp/src/tools/service.ts",
-    "pi-mcp/src/protocol.ts",
-    "pi-mcp/src/code-mode/protocol.ts",
-    "pi-mcp/src/boundary/schema-validator-helper.mjs",
-    "pi-mcp/src/validation/schema-rules.mjs",
+    "pi-mcp-previews/index.ts",
+    "pi-mcp-previews/src/extension.ts",
+    "pi-mcp-previews/src/boundary/host-native-mcp.ts",
   ]) {
     await readFile(join(temporaryDirectory, "node_modules", source));
   }
   // Tests and build tooling remain repository-only. No source-hosted package may regain a
   // generated dist dependency.
   for (const excluded of [
-    "pi-mcp/dist",
-    "pi-mcp/tests",
-    "pi-mcp/tsconfig.json",
-    "pi-mcp/tsdown.config.ts",
+    "pi-mcp-previews/dist",
+    "pi-mcp-previews/tests",
+    "pi-mcp-previews/tsconfig.json",
     "pi-cosmic-core/dist",
     "pi-cosmic-core/tsdown.config.ts",
     "pi-code-previews/dist",
     "pi-code-previews/tsdown.config.ts",
-    "pi-code-mode/runtime",
-    "pi-code-mode/tests",
   ]) {
     const excludedPath = join(temporaryDirectory, "node_modules", excluded);
     const present = await stat(excludedPath).then(
@@ -370,7 +387,7 @@ try {
     packedCoreManifest.dependencies.effect !== expectedEffectVersion ||
     packedCoreManifest.dependencies["@effect/platform-node"] !== expectedEffectVersion
   ) {
-    throw new Error("Packed pi-cosmic-core dependencies do not use the pinned Effect beta.");
+    throw new Error("Packed pi-cosmic-core dependencies do not use the pinned Effect version.");
   }
   for (const packageName of extensionPackages) {
     const packedManifest = JSON.parse(
@@ -385,37 +402,33 @@ try {
     ) {
       throw new Error(`Packed ${packageName} dependencies are not synchronized.`);
     }
-    if (packageName === "pi-mcp") {
-      if (
-        packedManifest.exports?.["."] !== "./index.ts" ||
-        packedManifest.exports?.["./code-mode"] !== "./src/protocol.ts" ||
-        Object.keys(packedManifest.exports).length !== 2 ||
-        packedManifest.pi?.extensions?.length !== 1 ||
-        packedManifest.pi.extensions[0] !== sourceManifest.pi.extensions[0] ||
-        !packedManifest.pi.extensions[0].endsWith(".ts")
-      ) {
+    for (const [dependency, version] of Object.entries(sourceManifest.dependencies)) {
+      const expected =
+        version === "catalog:"
+          ? catalogVersion(dependency)
+          : version === "workspace:*"
+            ? manifests.get(dependency)?.version
+            : version;
+      if (expected === undefined || packedManifest.dependencies[dependency] !== expected) {
         throw new Error(
-          "Packed pi-mcp must expose its Pi extension and Code Mode protocol as source only.",
+          `Packed ${packageName} dependency ${dependency} does not match its source manifest.`,
         );
       }
-      for (const [dependency, version] of Object.entries(sourceManifest.dependencies)) {
-        const expected =
-          version === "catalog:"
-            ? catalogVersion(dependency)
-            : version === "workspace:*"
-              ? manifests.get(dependency)?.version
-              : version;
-        if (expected === undefined || packedManifest.dependencies[dependency] !== expected) {
-          throw new Error(
-            `Packed pi-mcp dependency ${dependency} does not match its source manifest.`,
-          );
-        }
-      }
+    }
+    if (
+      packageName === "pi-mcp-previews" &&
+      (packedManifest.private === true ||
+        packedManifest.exports?.["."] !== "./index.ts" ||
+        packedManifest.pi?.extensions?.length !== 1 ||
+        packedManifest.pi.extensions[0] !== sourceManifest.pi.extensions[0] ||
+        !packedManifest.pi.extensions[0].endsWith(".ts"))
+    ) {
+      throw new Error("Packed pi-mcp-previews must be a public source-only Pi extension.");
     }
   }
 
   console.log(
-    "Packed TypeScript source for core, extensions and previews installs and imports through Jiti in a clean consumer, and Code Mode runs a real program process.",
+    "Packed TypeScript source and dependencies resolve through Jiti in a clean consumer; native Pi MCP tools/resources execute with unchanged results and confirmed fixture cleanup.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

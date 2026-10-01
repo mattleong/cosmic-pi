@@ -97,7 +97,6 @@ function fixture(
         ),
       ),
     registerCommands: () => undefined,
-    loadStartupSettings: () => Promise.resolve({ nativeMcpPreviews: false }),
     loadSettings: () =>
       load(attempt++).pipe(Effect.tap((value) => Effect.sync(() => setCodePreviewSettings(value)))),
     initializeSyntax: () => Effect.void,

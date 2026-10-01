@@ -9,9 +9,8 @@ import {
 import { nodeJoin } from "../boundary/node";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { makeSettingsAdmission, type SettingsAdmission } from "./coordinator";
-import { defaultCodePreviewStartupSettings } from "./defaults";
 import type { LoadSettingsOptions } from "./document-store";
-import type { CodePreviewSettings, CodePreviewStartupSettings } from "./schema";
+import type { CodePreviewSettings } from "./schema";
 import { CodePreviewSettingsService } from "./service";
 import { cloneCodePreviewSettings } from "./state";
 
@@ -73,35 +72,6 @@ export function loadCodePreviewSettings(
   };
   load.then(settle, settle);
   return load.then(cloneCodePreviewSettings);
-}
-
-/**
- * Factory-time global startup opt-ins through the named one-shot boundary. It never consults
- * host settings or commands, and any failure resolves to the default (off).
- */
-export function loadCodePreviewStartupSettings(
-  signal?: AbortSignal,
-): Promise<CodePreviewStartupSettings> {
-  return runOneShotSettingsEffect(
-    CodePreviewSettingsService.use((service) => service.loadStartup),
-    signal,
-  ).then(
-    (startup) => ({ nativeMcpPreviews: startup.nativeMcpPreviews === true }),
-    () => ({ ...defaultCodePreviewStartupSettings }),
-  );
-}
-
-/** Persist startup-only global overrides without changing this session's native manager. */
-export function queueStartupSettingsSave(
-  settings: CodePreviewStartupSettings,
-  signal?: AbortSignal,
-): Promise<CodePreviewStartupSettings> {
-  const admission = makeSettingsAdmission();
-  const next = { ...settings };
-  return runSettingsEffect(
-    CodePreviewSettingsService.use((service) => service.saveStartup(next, admission)),
-    signal,
-  );
 }
 
 /** Synchronous health-panel projection; persistence resolves AgentDirectory in Effect. */

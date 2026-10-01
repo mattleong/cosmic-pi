@@ -18,15 +18,6 @@ export interface SettingItemDefinition {
   values?: CodePreviewSettingValueOptions;
 }
 
-/** Kept separate from ordinary fields and tool selection: this controls startup ownership. */
-export const NATIVE_MCP_SETTING = {
-  id: "nativeMcpPreviews",
-  label: "Native MCP previews",
-  description:
-    "Global only; requires /reload. Uses Pi's native MCP manager. Off restores builtin rendering without disabling servers; manage servers with /mcp.",
-  values: ON_OFF_VALUES,
-} as const;
-
 export const SETTING_ITEM_DEFINITIONS = {
   shikiTheme: {
     label: "Syntax theme",
@@ -167,8 +158,7 @@ export const SETTING_ITEM_DEFINITIONS = {
   },
   resetToDefaults: {
     label: "Restore defaults",
-    description:
-      "Restore appearance and tool defaults; native MCP previews stay unchanged. Press Enter twice to confirm.",
+    description: "Restore appearance and tool defaults. Press Enter twice to confirm.",
     values: ["keep current", "press Enter to reset", "reset now"],
   },
 } as const satisfies Record<SettingsUiItemId, SettingItemDefinition>;

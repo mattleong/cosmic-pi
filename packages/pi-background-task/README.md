@@ -14,18 +14,11 @@ The main Pi footer shows only active tasks, such as `2 background tasks active`,
 
 Set `toolCallCollapsedStyle` to `compact` in `pi-code-previews` settings and reload to hide ordinary output until expansion. Summaries distinguish the management call from the background process state. Failed exits, cancellation, unconfirmed cleanup, wait timeouts, and discarded or truncated output remain visible. Missing or unrecognized details retain the original renderer. The default `preview` style is unchanged.
 
-## Code Mode adapter
+## Local-extension protocol
 
-When `pi-code-mode` is also loaded, a Code Mode program can call
-`tools.session.backgroundTask`. The adapter uses the same action names, task registry, bounded log
-text, wait barriers, and shutdown cleanup as the top-level tool. Structured results include task
-snapshots and cursor metadata so a program does not need to parse display text.
+The reusable `pi-background-task/code-mode` protocol remains available to local extensions. Its provider checks stable Pi session identity, current runtime slot ownership, and top-level `background_task` activation on each call; it shares the same task registry, bounded logs, wait barriers, and shutdown cleanup. It does not expose the service or execute a registered tool definition.
 
-The adapter queries the exported `pi-background-task/code-mode` protocol on each nested call. It
-runs only when both extensions share a stable Pi session id, this runtime's slot token is current,
-and the top-level `background_task` tool remains active. It does not expose the service or execute
-a registered tool definition. A started task may outlive the Code Mode call, but never the Pi
-session.
+The custom `pi-code-mode` extension and its `tools.session.backgroundTask` adapter are retired. Native Pi `codemode` can call the registered `background_task` tool through Pi's native tool pipeline; no custom adapter is installed automatically. Started tasks may outlive a foreground call, but not the Pi session.
 
 ## Lifecycle
 

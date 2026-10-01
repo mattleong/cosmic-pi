@@ -3,21 +3,14 @@ import * as Equal from "effect/Equal";
 import { identity } from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
-  decodeTolerantFields,
   isJsonObject,
   JsonDocumentError,
   JsonDocumentStore,
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
-import { defaultCodePreviewStartupSettings } from "./defaults";
 import { CodePreviewEnvironmentService } from "./env";
-import {
-  CODE_PREVIEW_SETTING_KEYS,
-  CodePreviewSettingsSchema,
-  CodePreviewStartupSettingsSchema,
-  type CodePreviewStartupSettings,
-} from "./schema";
+import { CODE_PREVIEW_SETTING_KEYS, CodePreviewSettingsSchema } from "./schema";
 import { cloneCodePreviewSettings } from "./state";
 import type { CodePreviewSettings } from "./schema";
 import { normalizeSettingsWithDiagnostics } from "./values";
@@ -92,67 +85,6 @@ export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.load
     } satisfies SettingsSaveContext;
   },
 );
-
-/**
- * Global startup opt-ins only: the agent-directory `settings.json` nested `codePreview` object,
- * then the flat `code-previews.json`. Trusted-project settings never contribute. An unreadable
- * document or an invalid present field fails closed to the defaults rather than to a lower layer.
- */
-export const loadStartupSettingsEffect = Effect.fn("CodePreviewSettings.loadStartup")(
-  function* (deps: SettingsDocumentDependencies) {
-    const { path, agentDir, documents, environment } = deps;
-    const sources = [
-      [path.join(agentDir, "settings.json"), nestedCodePreviewSettings],
-      [path.join(agentDir, "code-previews.json"), identity<JsonObject>],
-    ] as const;
-    const startup: CodePreviewStartupSettings = { ...environment.startupDefaults };
-    for (const [candidate, extract] of sources) {
-      const document = yield* documents.readObject(candidate);
-      if (!document) continue;
-      const decoded = decodeTolerantFields(
-        extract(document),
-        CodePreviewStartupSettingsSchema.fields,
-      );
-      if (decoded.diagnostics.length > 0) {
-        yield* Effect.logWarning("Ignored invalid code preview startup settings; they stay off.");
-        return defaultCodePreviewStartupSettings;
-      }
-      Object.assign(startup, decoded.value);
-    }
-    return startup;
-  },
-  Effect.catchTag("JsonDocumentError", () =>
-    Effect.logWarning("Failed to load code preview startup settings; they stay off.").pipe(
-      Effect.as(defaultCodePreviewStartupSettings),
-    ),
-  ),
-);
-
-/** Startup edits touch only their global overrides; ordinary and unknown fields stay intact. */
-export const saveStartupSettingsEffect = Effect.fn("CodePreviewSettings.saveStartup")(function* (
-  deps: SettingsDocumentDependencies,
-  settings: CodePreviewStartupSettings,
-  afterCommit: Effect.Effect<void>,
-) {
-  const settingsPath = deps.path.join(deps.agentDir, "code-previews.json");
-  const next = yield* Schema.decodeEffect(CodePreviewStartupSettingsSchema)(settings).pipe(
-    Effect.mapError(
-      () =>
-        new JsonDocumentError({
-          operation: "validate",
-          path: settingsPath,
-          message: "Code preview startup settings are invalid.",
-        }),
-    ),
-  );
-  return yield* deps.documents.modifyObject(settingsPath, (latest) =>
-    Effect.succeed({
-      document: { ...latest, ...next },
-      value: { ...next },
-      afterCommit,
-    }),
-  );
-});
 
 export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState")(function* (
   deps: SettingsDocumentDependencies,

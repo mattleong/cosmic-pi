@@ -1,7 +1,8 @@
 # Code Mode session audit
 
-> Historical: this describes Code Mode's former in-process interpreter. Programs now run in a
-> fresh Node.js process; see [the plan](plans/pi-code-mode-node-process.md).
+> Historical: this evaluates the retired custom `pi-code-mode` extension, not Pi's native
+> `codemode`. The later custom Node-process runner is also retired. These findings are preserved
+> as historical evidence, not current runtime guidance; see the [migration guide](migrations/native-mcp-codemode.md).
 
 ## Scope
 

@@ -62,10 +62,8 @@ jobs:
         run: |
           set -euo pipefail
           # Publish shared public runtime dependencies before the extension packages that
-          # depend on them (pi-code-mode depends on pi-cosmic-core, pi-cosmic-ui, and
-          # pi-code-previews), then every other top-level package exactly once. Private
-          # packages are skipped below; the nested private runtime is not a top-level
-          # packages/* entry and ships by value inside the pi-code-mode tarball.
+          # depend on them (including public pi-mcp-previews), then every other
+          # top-level package exactly once. Only private pi-herdr-btw is skipped.
           package_dirs=(packages/pi-cosmic-core packages/pi-cosmic-ui packages/pi-code-previews)
           for package_dir in packages/*; do
             already_listed=false

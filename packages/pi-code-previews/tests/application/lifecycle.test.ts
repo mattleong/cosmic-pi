@@ -217,7 +217,6 @@ function harness(options: HarnessOptions = {}) {
   });
   const dependencies: CodePreviewExtensionDependencies = {
     registerCommands: () => undefined,
-    loadStartupSettings: () => Promise.resolve({ nativeMcpPreviews: false }),
     registerRenderers: options.realRenderers
       ? (rendererPi, cwd, rendererOptions) =>
           registerToolRenderers(rendererPi, cwd, { ...rendererOptions, toolOptions: {} })

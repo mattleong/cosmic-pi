@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-herdr-btw` and `pi-mcp` remain local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
+All workspace packages use the synchronized version `0.2.0`. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-mcp-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-herdr-btw` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
 
 ## One-time setup
 
@@ -12,7 +12,7 @@ Before the first release:
    - `pi-background-task`
    - `pi-better-openai`
    - `pi-better-xai`
-   - `pi-code-mode`
+   - `pi-mcp-previews`
    - `pi-code-previews`
    - `pi-cosmic-core`
    - `pi-cosmic-ui`
@@ -26,7 +26,7 @@ Before the first release:
 
 The workflow uses GitHub OIDC and npm provenance. It does not require an `NPM_TOKEN` secret when trusted publishing is configured.
 
-When a new package becomes public (most recently `pi-code-mode`), configure its npm trusted publisher **before tagging** the first release that includes it; a tag pushed first will fail to publish that package until trusted publishing is configured and the workflow is retried.
+When a new package becomes public (most recently `pi-mcp-previews`), configure its npm trusted publisher **before tagging** the first release that includes it; a tag pushed first will fail to publish that package until trusted publishing is configured and the workflow is retried.
 
 ## Prepare a release
 
@@ -93,7 +93,7 @@ npm view pi-ask-user version
 npm view pi-background-task version
 npm view pi-better-openai version
 npm view pi-better-xai version
-npm view pi-code-mode version
+npm view pi-mcp-previews version
 npm view pi-code-previews version
 npm view pi-cosmic-core version
 npm view pi-cosmic-ui version
@@ -114,7 +114,7 @@ Do not create a new version solely because one package published before another 
 ## Important constraints
 
 - Keep the root and every package version synchronized.
-- Keep `pi-herdr-btw` and `pi-mcp` private and local-only; do not publish them to npm.
+- Keep `pi-herdr-btw` private and local-only; do not publish it to npm. `pi-mcp-previews` is public; the retired `pi-mcp` and `pi-code-mode` packages are no longer release targets.
 - Use stable `vMAJOR.MINOR.PATCH` release tags, such as `v0.2.1`.
 - Publish through the GitHub Release workflow rather than running `npm publish` locally.
 - Never reuse or move a tag after npm publication.
