@@ -77,7 +77,7 @@ describe("SubagentService", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const failure = yield* Effect.flip(
-        service.start(request({ host: "herdr", runtime: "claude" })),
+        service.start(request({ host: "local", runtime: "claude" })),
       );
       expect(failure).toMatchObject({
         _tag: "InvalidSubagentRequestError",

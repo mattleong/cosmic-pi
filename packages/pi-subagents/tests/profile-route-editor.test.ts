@@ -65,7 +65,7 @@ const load = (
 
 const threeRoute = [
   candidate("openai/one", { effort: "low" }),
-  candidate("claude-opus-5", { host: "herdr", runtime: "claude", effort: "medium" }),
+  candidate("claude-opus-5", { host: "local", runtime: "claude", effort: "medium" }),
   candidate("gpt-5.6-codex", { runtime: "codex", effort: "xhigh", writeIntent: "writer" }),
 ];
 
@@ -191,7 +191,7 @@ describe("ordered profile-route editor state", () => {
       draft,
       1,
       candidate("claude-sonnet-5", {
-        host: "herdr",
+        host: "local",
         runtime: "claude",
         effort: "high",
       }),
@@ -246,32 +246,25 @@ describe("ordered profile-route editor state", () => {
 });
 
 describe("profile candidate normalization and validation", () => {
-  it("adds all six host/runtime combinations with product-valid defaults", () => {
+  it("adds local runtime combinations with product-valid defaults", () => {
     let draft: ProfileRouteDraft = disableRouteDraft();
     const nativeModels = { claude: "live-claude", codex: "live-codex" } as const;
-    for (const host of ["local", "herdr"] as const) {
+    for (const host of ["local"] as const) {
       for (const runtime of ["pi", "claude", "codex"] as const) {
         let current = candidate("parent", { effort: "default" });
         const runtimeUpdate = updateCandidateControls(
           current,
           { runtime },
           {
-            piModel: "openai-codex/gpt-5.6-sol",
             nativeModel: runtime === "pi" ? undefined : nativeModels[runtime],
           },
         );
         expect(runtimeUpdate.error).toBeUndefined();
         current = runtimeUpdate.candidate!;
-        const hostUpdate = updateCandidateControls(
-          current,
-          { host },
-          { piModel: "openai-codex/gpt-5.6-sol" },
-        );
+        const hostUpdate = updateCandidateControls(current, { host }, {});
         expect(hostUpdate.error).toBeUndefined();
         current = hostUpdate.candidate!;
         expect(candidateValidationError(current), `${host}/${runtime}`).toBeUndefined();
-        if (host === "herdr" && runtime === "pi")
-          expect(current.model).toBe("openai-codex/gpt-5.6-sol");
         if (runtime !== "pi") expect(current.model).toBe(nativeModels[runtime]);
         draft = addRouteCandidate(draft, current)!;
       }
@@ -280,49 +273,24 @@ describe("profile candidate normalization and validation", () => {
       "local/pi",
       "local/claude",
       "local/codex",
-      "herdr/pi",
-      "herdr/claude",
-      "herdr/codex",
     ]);
   });
 
-  it("normalizes controlling fields visibly and never retains an incompatible dependency", () => {
-    const retainedFork = candidate("parent", {
-      context: "fork",
-      host: "herdr",
-      writeIntent: "read-only",
-      closeOnReport: false,
-    });
-    const local = updateCandidateControls(
-      retainedFork,
-      { host: "local" },
-      {
-        piModel: "openai-codex/gpt-5.6-sol",
-      },
-    );
-    expect(local.candidate).toMatchObject({ host: "local", closeOnReport: true });
-    expect(local.notices.join(" ")).toContain("stay open after reporting");
-
+  it("normalizes native dependencies only after selecting a live model", () => {
     const forked = candidate("parent", {
       context: "fork",
       effort: "minimal",
       openaiFastMode: true,
     });
-    // Claude and Codex have no built-in model; the switch waits for one from the live catalog.
     for (const runtime of ["claude", "codex"] as const) {
-      const pending = updateCandidateControls(
-        forked,
-        { runtime },
-        { piModel: "openai-codex/gpt-5.6-sol" },
-      );
+      const pending = updateCandidateControls(forked, { runtime }, {});
       expect(pending.candidate).toBeUndefined();
       expect(pending.error).toBeDefined();
     }
-
     const claude = updateCandidateControls(
       forked,
       { runtime: "claude" },
-      { piModel: "openai-codex/gpt-5.6-sol", nativeModel: "live-claude" },
+      { nativeModel: "live-claude" },
     );
     expect(claude.candidate).toMatchObject({
       runtime: "claude",
@@ -331,47 +299,27 @@ describe("profile candidate normalization and validation", () => {
       effort: "default",
       openaiFastMode: false,
     });
-    expect(claude.notices).toHaveLength(4);
-    expect(claude.notices.join(" ")).toContain("Fast mode");
-
-    const writer = updateCandidateControls(
-      candidate("claude-opus-5", {
-        host: "herdr",
-        runtime: "claude",
-        writeIntent: "read-only",
-        closeOnReport: false,
-      }),
-      { writeIntent: "writer" },
-      { piModel: "openai-codex/gpt-5.6-sol" },
-    );
-    expect(writer.candidate).toMatchObject({ writeIntent: "writer", closeOnReport: true });
+    const pi = updateCandidateControls(claude.candidate!, { runtime: "pi" }, {});
+    expect(pi.candidate).toMatchObject({ runtime: "pi", model: "parent" });
+    expect(forked).toMatchObject({ runtime: "pi", model: "parent", context: "fork" });
   });
 
-  it("keeps retained readers valid while rejecting retained writers, fork, and parent misuse", () => {
+  it("rejects retained local routes and native fork misuse", () => {
+    for (const runtime of ["pi", "claude", "codex"] as const)
+      for (const writeIntent of ["read-only", "writer"] as const) {
+        expect(
+          candidateValidationError(
+            candidate(runtime === "pi" ? "parent" : "native", {
+              runtime,
+              writeIntent,
+              closeOnReport: false,
+            }),
+          ),
+        ).toBeDefined();
+      }
     expect(
-      candidateValidationError(
-        candidate("claude-opus-5", {
-          host: "herdr",
-          runtime: "claude",
-          writeIntent: "read-only",
-          closeOnReport: false,
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      candidateValidationError(
-        candidate("claude-opus-5", {
-          host: "herdr",
-          runtime: "claude",
-          writeIntent: "writer",
-          closeOnReport: false,
-        }),
-      ),
-    ).toContain("Herdr read-only");
-    expect(candidateValidationError(candidate("parent", { host: "herdr" }))).toContain("Local Pi");
-    expect(
-      candidateValidationError(candidate("openai/model", { runtime: "codex", context: "fork" })),
-    ).toContain("Fork");
+      candidateValidationError(candidate("native", { runtime: "codex", context: "fork" })),
+    ).toBeDefined();
   });
 
   it("uses exact runtime capabilities and resets effort or fast mode when a model cannot use them", () => {
@@ -440,8 +388,9 @@ describe("profile candidate normalization and validation", () => {
         undefined,
       );
     }
-    expect(updateCandidateControls(candidate("parent"), { host: "herdr" }, {}).error).toContain(
-      "Check that Pi is signed in",
-    );
+    // SAFETY: A retired host is deliberately supplied through the typed UI boundary.
+    expect(
+      updateCandidateControls(candidate("parent"), { host: "herdr" as never }, {}).error,
+    ).toContain("Unsupported run host");
   });
 });

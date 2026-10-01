@@ -1,17 +1,22 @@
 import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
-import { decodeProfileCandidate, isSupportedConfigVersion } from "./schema.ts";
+import {
+  decodeProfileCandidate,
+  isSupportedConfigVersion,
+  SUBAGENT_CONFIG_VERSION,
+} from "./schema.ts";
 
-/** Validate without normalizing: omission, explicit false, and route array shape are data. */
-export function captureRestoreDeclaration(
-  declaration: JsonObject[string] | undefined,
+function captureDeclaration<ValueInput>(
+  declaration: ValueInput,
   sourceVersion: number,
+  omitUndefinedOptionals: boolean,
 ): { readonly declaration: JsonObject[string] | undefined } | undefined {
   if (!isSupportedConfigVersion(sourceVersion)) return undefined;
-  if (declaration === undefined || declaration === "disabled") return { declaration };
+  if (declaration === undefined) return { declaration: undefined };
+  if (declaration === "disabled") return { declaration: "disabled" };
   try {
-    const candidate = (input: JsonObject[string]): JsonObject | undefined => {
+    const candidate = <CandidateInput>(input: CandidateInput): JsonObject | undefined => {
       if (!hasObjectRuntimeType(input) || input === null || Array.isArray(input)) return undefined;
       if (
         Object.getPrototypeOf(input) !== Object.prototype &&
@@ -26,6 +31,12 @@ export function captureRestoreDeclaration(
         const field = Object.getOwnPropertyDescriptor(input, key);
         if (!field || !field.enumerable || !("value" in field)) return undefined;
         const value: unknown = field.value;
+        if (
+          omitUndefinedOptionals &&
+          value === undefined &&
+          (key === "openaiFastMode" || key === "closeOnReport")
+        )
+          continue;
         if (!Predicate.isString(value) && !Predicate.isBoolean(value)) return undefined;
         copy[key] = value;
       }
@@ -58,6 +69,19 @@ export function captureRestoreDeclaration(
     return undefined;
   }
 }
+
+/** Validate without normalizing: omission, explicit false, and route array shape are data. */
+export const captureRestoreDeclaration = (
+  declaration: JsonObject[string] | undefined,
+  sourceVersion: number,
+): { readonly declaration: JsonObject[string] | undefined } | undefined =>
+  captureDeclaration(declaration, sourceVersion, false);
+
+/** Typed patches permit undefined optional fields, which persistence omits. */
+export const captureProfilePatchDeclaration = <ValueInput>(
+  declaration: ValueInput,
+): { readonly declaration: JsonObject[string] | undefined } | undefined =>
+  captureDeclaration(declaration, SUBAGENT_CONFIG_VERSION, true);
 
 export const isRecord = (value: JsonObject[string] | undefined): value is JsonObject =>
   hasObjectRuntimeType(value) && value !== null && !Array.isArray(value);

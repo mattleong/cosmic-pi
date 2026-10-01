@@ -29,7 +29,7 @@ describe("subagent activity provider", () => {
       revision: 1,
       runs: [
         view({
-          host: "herdr",
+          host: "local",
           runtime: "pi",
           model: "provider/model",
           effort: "high",
@@ -37,7 +37,7 @@ describe("subagent activity provider", () => {
         }),
       ],
     });
-    expect(items[0]?.route).toContain("herdr/pi");
+    expect(items[0]?.route).toContain("local/pi");
     expect(items[0]?.route).toContain("provider/model:high");
   });
   it("keeps active descendants below completed ancestors without inventing missing parents", () => {

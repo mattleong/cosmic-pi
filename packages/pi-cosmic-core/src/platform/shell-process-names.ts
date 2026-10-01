@@ -1,4 +1,4 @@
-// Pure process-name classification shared by the Herdr pane readiness checks.
+// Pure classification of interactive shell process names.
 
 const INTERACTIVE_SHELL_PROCESS_NAMES = new Set([
   "sh",

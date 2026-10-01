@@ -16,7 +16,7 @@ import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 
-const { mkdir, mkdtemp, readFile, rm, writeFile } = nodeFsPromises;
+const { mkdir, mkdtemp, readFile, rm, stat, writeFile } = nodeFsPromises;
 const { join } = nodePath;
 
 const roots: string[] = [];
@@ -85,6 +85,273 @@ const fixture = () =>
   });
 
 describe("SubagentConfigStore v6", () => {
+  effectTest(
+    "fails mixed retired routes closed in every version and scope without load writes",
+    function* () {
+      const paths = yield* step(fixture);
+      const local = declaredCandidate("openai/local");
+      for (const version of [4, 5, 6])
+        for (const scope of ["global", "project"] as const)
+          for (const runtime of ["pi", "claude", "codex"])
+            for (const remoteFirst of [true, false]) {
+              const remote = declaredCandidate(runtime === "pi" ? "openai/remote" : "native", {
+                host: "herdr",
+                runtime,
+              });
+              const profiles = {
+                worker: remoteFirst ? [remote, local] : [local, remote],
+                scout: local,
+              };
+              const raw =
+                version === 6
+                  ? {
+                      version,
+                      defaultProfileSet: "default",
+                      profileSets: { default: { profiles } },
+                    }
+                  : { version, profiles };
+              yield* step(() =>
+                paths.writeGlobal({
+                  version: 6,
+                  defaultProfileSet: "default",
+                  profileSets: { default: { profiles: { worker: local } } },
+                }),
+              );
+              if (scope === "global") yield* step(() => paths.writeGlobal(raw));
+              else yield* step(() => paths.writeProject(raw));
+              const target = scope === "global" ? paths.globalPath : paths.projectPath;
+              const before = yield* step(() => readFile(target, "utf8"));
+              const beforeStat = yield* step(() => stat(target));
+              const config = yield* step(() => paths.load(scope === "project"));
+              expect(config.profiles.worker.candidates).toEqual([]);
+              expect(config.profileSources.worker).toBe(`${scope}-invalid`);
+              expect(config.profiles.scout.candidates[0]?.model).toBe("openai/local");
+              expect(config.profileSources.scout).toBe(scope);
+              expect(yield* step(() => readFile(target, "utf8"))).toBe(before);
+              const afterStat = yield* step(() => stat(target));
+              expect([afterStat.ino, afterStat.mtimeMs]).toEqual([
+                beforeStat.ino,
+                beforeStat.mtimeMs,
+              ]);
+            }
+    },
+  );
+
+  effectTest("persists typed local patches with undefined optional fields", function* () {
+    for (const asArray of [false, true]) {
+      const paths = yield* step(fixture);
+      const document = {
+        version: 6,
+        defaultProfileSet: "default",
+        profileSets: { default: { profiles: {} } },
+      };
+      yield* step(() => paths.writeGlobal(document));
+      const candidate = {
+        ...profileCandidate("openai/local"),
+        openaiFastMode: undefined,
+        closeOnReport: undefined,
+      };
+      yield* step(() =>
+        paths.patchProfile({
+          scope: "global",
+          profileSet: "default",
+          profile: "worker",
+          route: asArray ? [candidate] : candidate,
+          expectedExists: true,
+          expectedDocument: document,
+        }),
+      );
+      const persisted = yield* step(paths.readGlobal);
+      const route = persisted.profileSets.default.profiles.worker;
+      expect(Array.isArray(route)).toBe(asArray);
+      const written = asArray ? route[0] : route;
+      expect(Object.hasOwn(written, "openaiFastMode")).toBe(false);
+      expect(Object.hasOwn(written, "closeOnReport")).toBe(false);
+      const loaded = yield* step(() => paths.load(false));
+      expect(loaded.profileSources.worker).toBe("global");
+      expect(loaded.profiles.worker.candidates[0]).toMatchObject({
+        host: "local",
+        model: "openai/local",
+        closeOnReport: true,
+      });
+    }
+  });
+
+  effectTest(
+    "rejects direct invalid typed patches without changing the raw document",
+    function* () {
+      const paths = yield* step(fixture);
+      const local = declaredCandidate("openai/local");
+      const document = {
+        version: 6,
+        defaultProfileSet: "default",
+        profileSets: { default: { profiles: { worker: local } } },
+      };
+      yield* step(() => paths.writeGlobal(document));
+      let reads = 0;
+      const accessor = { ...local };
+      Object.defineProperty(accessor, "host", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return "herdr";
+        },
+      });
+      const accessorArray = [local];
+      Object.defineProperty(accessorArray, "0", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return local;
+        },
+      });
+      const invalidRoutes = [
+        { ...local, host: "herdr" },
+        { ...local, closeOnReport: false },
+        { ...local, model: undefined },
+        { ...local, unknown: undefined },
+        [local, { ...local, host: "herdr" }],
+        accessor,
+        accessorArray,
+      ];
+      const before = yield* step(() => readFile(paths.globalPath, "utf8"));
+      for (const route of invalidRoutes) {
+        // SAFETY: The public typed store boundary is intentionally supplied unknown invalid input.
+        yield* rejects(
+          () =>
+            paths.patchProfile({
+              scope: "global",
+              profileSet: "default",
+              profile: "worker",
+              route: route as never,
+              expectedExists: true,
+              expectedDocument: document,
+            }),
+          "update",
+          paths.globalPath,
+        );
+        expect(yield* step(() => readFile(paths.globalPath, "utf8"))).toBe(before);
+      }
+      expect(reads).toBe(0);
+    },
+  );
+
+  effectTest(
+    "repairs only the targeted v6 declaration and rejects selecting the still-invalid set",
+    function* () {
+      const paths = yield* step(fixture);
+      const remote = declaredCandidate("openai/remote", { host: "herdr" });
+      const invalid = { not: "a candidate" };
+      const initial = {
+        version: 6,
+        profileSets: {
+          repair: {
+            profiles: {
+              worker: remote,
+              reviewer: [remote, declaredCandidate("openai/local")],
+              scout: invalid,
+            },
+          },
+          other: { profiles: { planner: remote } },
+        },
+      };
+      yield* step(() => paths.writeGlobal(initial));
+      yield* rejects(
+        () =>
+          paths.patchDefaultProfileSet({
+            scope: "global",
+            defaultProfileSet: "repair",
+            expectedExists: true,
+            expectedDocument: initial,
+          }),
+        "update",
+        paths.globalPath,
+      );
+      const local = profileCandidate("openai/repaired");
+      yield* step(() =>
+        paths.patchProfile({
+          scope: "global",
+          profileSet: "repair",
+          profile: "worker",
+          route: local,
+          expectedExists: true,
+          expectedDocument: initial,
+        }),
+      );
+      const { openaiFastMode: _fast, ...persistedLocal } = local;
+      const expected = {
+        ...initial,
+        profileSets: {
+          ...initial.profileSets,
+          repair: { profiles: { ...initial.profileSets.repair.profiles, worker: persistedLocal } },
+        },
+      };
+      expect(yield* step(paths.readGlobal)).toEqual(expected);
+      yield* rejects(
+        () =>
+          paths.patchDefaultProfileSet({
+            scope: "global",
+            defaultProfileSet: "repair",
+            expectedExists: true,
+            expectedDocument: expected,
+          }),
+        "update",
+        paths.globalPath,
+      );
+      expect(yield* step(paths.readGlobal)).toEqual(expected);
+    },
+  );
+
+  effectTest("never migrates legacy remote routes until an explicit complete repair", function* () {
+    const paths = yield* step(fixture);
+    for (const version of [4, 5]) {
+      const remote = declaredCandidate("openai/remote", { host: "herdr" });
+      const initial = { version, profiles: { worker: remote, reviewer: remote } };
+      yield* step(() => paths.writeGlobal(initial));
+      yield* rejects(
+        () =>
+          paths.patchNesting({
+            scope: "global",
+            nesting: { maxDirectChildren: 4, maxDepth: 2 },
+            expectedExists: true,
+            expectedDocument: initial,
+          }),
+        "update",
+        paths.globalPath,
+      );
+      yield* rejects(
+        () =>
+          paths.patchProfile({
+            scope: "global",
+            profileSet: "default",
+            profile: "worker",
+            route: "disabled",
+            expectedExists: true,
+            expectedDocument: initial,
+          }),
+        "update",
+        paths.globalPath,
+      );
+      expect(yield* step(paths.readGlobal)).toEqual(initial);
+      const repairable = { version, profiles: { worker: remote } };
+      yield* step(() => paths.writeGlobal(repairable));
+      yield* step(() =>
+        paths.patchProfile({
+          scope: "global",
+          profileSet: "default",
+          profile: "worker",
+          route: "disabled",
+          expectedExists: true,
+          expectedDocument: repairable,
+        }),
+      );
+      expect(yield* step(paths.readGlobal)).toMatchObject({
+        version: 6,
+        profileSets: { default: { profiles: { worker: "disabled" } } },
+      });
+    }
+  });
+
   effectTest("loads v4 routes with v6 nesting defaults and project inheritance", function* () {
     const paths = yield* step(fixture);
     const worker = declaredCandidate("openai/worker", { writeIntent: "writer" });

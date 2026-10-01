@@ -59,7 +59,6 @@ export const workspaceHarness = (
     target: { kind: "session" },
     initialProfile: "generalist",
     parentEffort: "high",
-    preferredPiModel: () => "test/first",
     getHeight: () => 24,
     requestRender: vi.fn(),
     close,

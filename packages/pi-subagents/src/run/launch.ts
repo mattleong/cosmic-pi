@@ -6,7 +6,6 @@ import * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
-import { isRetainableProfileCandidate } from "../profiles/model.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
@@ -73,10 +72,10 @@ const validateStartRequest = (
         "write_claims_read_only",
         "writes may be supplied only for a writer subagent.",
       );
-    if (request.closeOnReport === false && !isRetainableProfileCandidate(request))
+    if (request.closeOnReport === false)
       return yield* invalidRequest(
         "retained_report_capability_invalid",
-        "closeOnReport=false requires a Herdr-hosted read-only backend.",
+        "closeOnReport=false is unsupported; local subagents close after reporting.",
       );
     if (request.writeIntent === "writer" && platform === "win32")
       return yield* new UnsupportedSafeWriterOwnershipError({

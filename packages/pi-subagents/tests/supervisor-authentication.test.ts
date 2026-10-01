@@ -31,7 +31,6 @@ describe("supervisor authentication publication", () => {
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(completed))),
           runId,
           events,
-          allowPiProxy: false,
         });
         const handlers = yield* session.handlers;
         const open = yield* SupervisorRpcGroup.accessHandler("SupervisorOpenSession").pipe(

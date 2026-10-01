@@ -58,7 +58,6 @@ const baseOptions = (
   target: { kind: "session" },
   initialProfile: "generalist",
   parentEffort: "high",
-  preferredPiModel: () => "openai-codex/gpt-5.6-sol",
   getHeight: () => 30,
   requestRender: () => {},
   close: () => {},
@@ -232,6 +231,24 @@ describe("runtime switches", () => {
     expect(editor.candidates()).toEqual([
       expect.objectContaining({ host: "local", runtime: "codex", model: "live-default" }),
     ]);
+  });
+
+  effectTest("ignores stale remote picker input without changing or loading a draft", function* () {
+    const editor = liveCatalogEditor();
+    editor.chooseRunWith("herdr/codex");
+    yield* step(settleTurn);
+    expect(editor.loadModelPicker).not.toHaveBeenCalled();
+    expect(editor.saveDraft).not.toHaveBeenCalled();
+    expect(editor.candidates()).toEqual([profileCandidate("test/first")]);
+  });
+
+  effectTest("keeps native runtime and model unchanged after failed discovery", function* () {
+    const editor = liveCatalogEditor();
+    editor.loadModelPicker.mockRejectedValueOnce(new Error("Discovery failed"));
+    editor.chooseRunWith("local/codex");
+    yield* step(settleTurn);
+    expect(editor.saveDraft).not.toHaveBeenCalled();
+    expect(editor.candidates()).toEqual([profileCandidate("test/first")]);
   });
 
   effectTest("leaves the route unchanged when the model choice is cancelled", function* () {

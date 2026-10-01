@@ -5,11 +5,11 @@ import * as Fiber from "effect/Fiber";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeChildLayer,
-  fakeRetainedBackendLayer,
+  fakeNativeReportBackendLayer,
   request,
   contactParentFrame,
   localServiceFixture,
-  retainedServiceFixture,
+  nativeReportServiceFixture,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -343,14 +343,14 @@ describe("shared-cwd write claims", () => {
   });
 
   it.effect("stops an interrupt-capable backend that cannot resume", () => {
-    const { backend, projections, layer } = retainedServiceFixture(
-      fakeRetainedBackendLayer({ capabilities: ["interrupt", "rename-display"] }),
+    const { backend, projections, layer } = nativeReportServiceFixture(
+      fakeNativeReportBackendLayer({ capabilities: ["interrupt", "rename-display"] }),
     );
     return withService(layer, function* (service) {
       const run = yield* service.start(
         request({
           name: "non-resumable-writer",
-          host: "herdr",
+          host: "local",
           runtime: "claude",
           writeIntent: "writer",
           writes: ["src/a.ts"],

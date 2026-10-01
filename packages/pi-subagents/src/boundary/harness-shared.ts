@@ -14,25 +14,19 @@ export const MAX_PATH_CHARS = 4_096;
 /** Quotes a value as a TOML basic string (Codex config.toml / channel connection.toml). */
 export const tomlString = (value: string): string => JSON.stringify(value);
 
-/** Quotes a value as one POSIX shell single-quoted word. */
-export const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
-
 export const CODEX_DISABLED_FEATURES =
   "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies".split(
     " ",
   );
 
 /** The Codex `[features]` table: every reviewed feature off except opted-in fast mode. */
-export const codexFeatureLines = (
-  openaiFastMode: boolean,
-  hooks: boolean,
-): ReadonlyArray<string> => [
+export const codexFeatureLines = (openaiFastMode: boolean): ReadonlyArray<string> => [
   "[features]",
   ...CODEX_DISABLED_FEATURES.map(
     (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
   ),
   "multi_agent = true",
-  `hooks = ${hooks}`,
+  "hooks = false",
 ];
 
 export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>

@@ -17,6 +17,7 @@ import {
 } from "../profiles/model.ts";
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
 import {
+  captureProfilePatchDeclaration,
   captureRestoreDeclaration,
   isRecord,
   migrateLegacyRouteJson,
@@ -263,7 +264,16 @@ const applyProfilePatch = (
   patch: SubagentProfilePatch,
   path: string,
 ): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet)) return mutationError(path, "Invalid profile-set name.");
+  if (!isProfileSetName(patch.profileSet) || !PROFILE_IDS.includes(patch.profile))
+    return mutationError(path, "Invalid profile target.");
+  const routeProperty = ownDataProperty(patch, "route");
+  if (!routeProperty.valid) return mutationError(path, "Invalid profile route.");
+  const captured = captureProfilePatchDeclaration(
+    routeProperty.present ? routeProperty.value : undefined,
+  );
+  if (!captured) return mutationError(path, "Invalid profile route.");
+  // SAFETY: The patch capture snapshots and canonically validates every candidate.
+  patch = { ...patch, route: captured.declaration as DeclaredProfileRoute | undefined };
   const legacy = isLegacyConfigVersion(current.version);
   if (legacy && patch.profileSet !== MIGRATED_PROFILE_SET_NAME)
     return mutationError(path, "Legacy configuration can edit only its migrated default set.");
@@ -634,7 +644,10 @@ export const subagentConfigStoreLayer = Layer.effect(
     return SubagentConfigStore.of({
       load,
       inspect,
-      patchProfile: patchWithReceipt(applyProfilePatch, (patch) => patch.route === undefined),
+      patchProfile: patchWithReceipt(applyProfilePatch, (patch) => {
+        const route = ownDataProperty(patch, "route");
+        return route.valid && (!route.present || route.value === undefined);
+      }),
       restoreProfileDeclaration: patchWithReceipt(applyProfileRestore),
       patchDefaultProfileSet: patchVoid(
         applyDefaultProfileSetPatch,

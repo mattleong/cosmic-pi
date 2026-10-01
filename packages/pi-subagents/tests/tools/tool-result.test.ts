@@ -12,7 +12,6 @@ import * as Schema from "effect/Schema";
 import { effectTest, step } from "../support/effect-test.ts";
 import { registerSubagentApplication } from "../../src/application/register.ts";
 import { registerSubagentChildBridge } from "../../src/boundary/host-child.ts";
-import registerSupervisorBridge from "../../src/boundary/host-pi-supervisor-extension.ts";
 import { registerSubagentErrorReceipts } from "../../src/boundary/host-tool-result.ts";
 import type { LocalPiChildIpcHandlers } from "../../src/boundary/local-pi-ipc.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
@@ -452,41 +451,35 @@ effectTest(
   },
 );
 
-describe.each(["local", "delegated"] as const)("%s Pi serialized proxy", (kind) => {
+describe("local Pi serialized proxy", () => {
   effectTest(
     "marks decoded final failures, not the source identity, and revokes shutdown receipts",
     function* () {
       const h = host();
       let response: AgentToolResult<unknown> = failed();
       let listener: LocalPiChildIpcHandlers | undefined;
-      if (kind === "local")
-        registerSubagentChildBridge(h.pi, {
-          loadSettings: () => Promise.resolve(),
-          openIpc: () => ({
-            listen: (handlers) => {
-              listener = handlers;
-              return () => {
-                listener = undefined;
-              };
-            },
-            sendContact: (contact) =>
-              Effect.sync(() => {
-                if (contact.type === "proxy_request")
-                  listener!.onControl({
-                    channel: "pi-subagents",
-                    type: "proxy_response",
-                    requestId: contact.requestId,
-                    ok: true,
-                    payloadJson: serializeResult(response),
-                  });
-              }),
-          }),
-        });
-      else
-        registerSupervisorBridge(h.pi, {
-          openBridge: () =>
-            Effect.succeed({ call: () => Effect.succeed(serializeResult(response)) }),
-        });
+      registerSubagentChildBridge(h.pi, {
+        loadSettings: () => Promise.resolve(),
+        openIpc: () => ({
+          listen: (handlers) => {
+            listener = handlers;
+            return () => {
+              listener = undefined;
+            };
+          },
+          sendContact: (contact) =>
+            Effect.sync(() => {
+              if (contact.type === "proxy_request")
+                listener!.onControl({
+                  channel: "pi-subagents",
+                  type: "proxy_response",
+                  requestId: contact.requestId,
+                  ok: true,
+                  payloadJson: serializeResult(response),
+                });
+            }),
+        }),
+      });
       try {
         yield* h.emit("session_start");
         const tool = h.tools.get("subagent_send")!;

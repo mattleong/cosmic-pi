@@ -387,13 +387,6 @@ export interface CodexTextInput {
   readonly text_elements: ReadonlyArray<never>;
 }
 
-/** Herdr hook-trust requests on the same app-server; the hook boundary validates each result. */
-export interface CodexHookRequest {
-  readonly id: string;
-  readonly method: "hooks/list" | "config/batchWrite";
-  readonly params: Schema.MutableJson;
-}
-
 export type CodexRequest =
   | CodexInitializeRequest
   | CodexThreadStartRequest

@@ -21,7 +21,7 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
 export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
 export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
-/** Competing orchestrators stay disabled even when the root session has them active. */
+/** External competing orchestrators stay disabled, independent of the installed backend adapters. */
 export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES = [
   "herdr_agent_start",
   "herdr_agent_list",

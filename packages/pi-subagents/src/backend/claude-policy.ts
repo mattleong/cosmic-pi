@@ -169,7 +169,7 @@ export interface ClaudeHarnessPaths {
   readonly promptPath: string;
 }
 
-/** The policy flags shared by the local and Herdr Claude launches. */
+/** The policy flags for local Claude launches. */
 export const claudePolicyArgv = (
   launch: ClaudeLaunchPolicyRequest,
   harness: ClaudeHarnessPaths,

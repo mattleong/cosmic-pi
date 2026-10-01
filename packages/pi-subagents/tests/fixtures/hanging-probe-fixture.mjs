@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 const pidPath =
   process.env.PI_SUBAGENT_TEST_PID ??
-  process.env.HERDR_CONFIG_PATH ??
   (process.env.HOME?.includes("pi-subagents-probe-")
     ? join(process.env.HOME, "probe.pid")
     : undefined);

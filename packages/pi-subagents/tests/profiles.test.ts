@@ -13,7 +13,6 @@ import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
 import {
   isLocalPiProfileCandidate,
   isNativeProfileModelSelector,
-  isRetainableProfileCandidate,
   normalizeProfileCandidate,
   PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES,
   PROFILE_IDS,
@@ -133,6 +132,29 @@ const environment = {
 };
 
 describe("subagent v6 profile configuration and resolution", () => {
+  it("requires local host and close-after-report across current and legacy candidate decoders", () => {
+    for (const version of [4, 5, 6])
+      for (const runtime of ["pi", "claude", "codex"] as const) {
+        const input = {
+          host: "local",
+          runtime,
+          model: runtime === "pi" ? "openai/local" : "native",
+          effort: "default",
+          context: "fresh",
+          writeIntent: "read-only",
+        };
+        expect(decodeProfileCandidate(input, version)).toMatchObject({
+          host: "local",
+          closeOnReport: true,
+        });
+        expect(decodeProfileCandidate({ ...input, closeOnReport: true }, version)).toBeDefined();
+        expect(decodeProfileCandidate({ ...input, closeOnReport: false }, version)).toBeUndefined();
+        expect(decodeProfileCandidate({ ...input, host: "herdr" }, version)).toBeUndefined();
+        const { host: _host, ...missingHost } = input;
+        expect(decodeProfileCandidate(missingHost, version)).toBeUndefined();
+      }
+  });
+
   it("ships seven explicit local Pi parent routes preserving profile defaults", () => {
     const config = resolveTestConfig(document());
     for (const id of PROFILE_IDS) {
@@ -178,7 +200,7 @@ describe("subagent v6 profile configuration and resolution", () => {
           scout: candidate(),
           worker: [
             candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
-            candidate({ host: "herdr", runtime: "claude", model: "sonnet", closeOnReport: false }),
+            candidate({ runtime: "claude", model: "sonnet", closeOnReport: true }),
           ],
           reviewer: "disabled",
         },
@@ -196,7 +218,7 @@ describe("subagent v6 profile configuration and resolution", () => {
         writeIntent: "writer",
         closeOnReport: true,
       }),
-      candidate({ host: "herdr", runtime: "claude", model: "sonnet", closeOnReport: false }),
+      candidate({ runtime: "claude", model: "sonnet", closeOnReport: true }),
     ]);
   });
 
@@ -397,11 +419,10 @@ describe("subagent v6 profile configuration and resolution", () => {
     },
   );
 
-  it("owns exhaustive ordered candidate issues and accepts valid local/retained shapes", () => {
+  it("owns ordered issues and requires closure for readers and writers", () => {
     const issues = profileCandidateValidationIssues(
       normalizeProfileCandidate(
         candidate({
-          host: "herdr",
           runtime: "claude",
           model: "parent",
           effort: "minimal",
@@ -418,21 +439,24 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(isLocalPiProfileCandidate(localPi)).toBe(true);
     expect(profileCandidateValidationIssues(localPi)).toEqual([]);
 
-    const retained = normalizeProfileCandidate(
-      candidate({
-        host: "herdr",
-        runtime: "claude",
-        model: "sonnet",
-        effort: "high",
-        closeOnReport: false,
-      }),
-    );
-    expect(isRetainableProfileCandidate(retained)).toBe(true);
-    expect(profileCandidateValidationIssues(retained)).toEqual([]);
+    for (const runtime of ["pi", "claude", "codex"] as const) {
+      for (const writeIntent of ["read-only", "writer"] as const) {
+        const input = candidate({
+          runtime,
+          model: runtime === "pi" ? "parent" : "native",
+          writeIntent,
+          closeOnReport: false,
+        });
+        expect(decodeProfileCandidate(input)).toBeUndefined();
+        expect(profileCandidateValidationIssues(normalizeProfileCandidate(input))).toEqual([
+          { code: "close_after_report_required" },
+        ]);
+      }
+    }
   });
 
-  it("accepts every host/runtime name syntactically and bounded native selectors", () => {
-    for (const host of ["local", "herdr"] as const)
+  it("accepts local runtimes and bounded native selectors", () => {
+    for (const host of ["local"] as const)
       for (const runtime of ["pi", "claude", "codex"] as const) {
         const model = runtime === "pi" ? "openai/gpt-5" : `${runtime}-native-model`;
         const decoded = decodeSubagentConfig(
@@ -506,7 +530,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       document({
         profiles: {
           scout: { ...candidate(), execution: "background" },
-          researcher: candidate({ host: "herdr", runtime: "pi", model: "parent" }),
+          researcher: { ...candidate(), host: "herdr" },
           planner: candidate({ runtime: "claude", model: "sonnet", context: "fork" }),
           worker: candidate({ closeOnReport: false, writeIntent: "writer" }),
           reviewer: candidate({ closeOnReport: false }),
@@ -567,12 +591,12 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(untrusted.profiles.worker.candidates).toHaveLength(2);
   });
 
-  it("plans unsupported host/runtime candidates without claiming adapter availability", () => {
+  it("plans local runtimes without claiming adapter availability", () => {
     const config = resolveTestConfig(
       document({
         profiles: {
           reviewer: [
-            candidate({ host: "herdr", runtime: "claude", model: "sonnet" }),
+            candidate({ host: "local", runtime: "claude", model: "sonnet" }),
             candidate({ runtime: "codex", model: "gpt-5.4" }),
             candidate({ model: "openai/gpt-review", effort: "medium" }),
           ],
@@ -582,7 +606,7 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
       kind: "resolved",
       attempts: [
-        { candidateIndex: 0, host: "herdr", runtime: "claude", model: "sonnet" },
+        { candidateIndex: 0, host: "local", runtime: "claude", model: "sonnet" },
         { candidateIndex: 1, host: "local", runtime: "codex", model: "gpt-5.4" },
         { candidateIndex: 2, host: "local", runtime: "pi", model: "openai/gpt-review" },
       ],
@@ -861,9 +885,7 @@ describe("subagent v6 profile configuration and resolution", () => {
         model: "m",
         closeOnReport: false,
       }),
-    ).toMatchObject({
-      closeOnReport: false,
-    });
+    ).toBeUndefined();
   });
 
   it("validates per-version root bodies strictly", () => {

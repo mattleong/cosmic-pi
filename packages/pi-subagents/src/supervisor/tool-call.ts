@@ -1,5 +1,4 @@
-// One supervisor tool dispatch over the private Effect RPC client, shared by the native MCP helper
-// and delegated Pi so decoding, bounds, acknowledgements, result texts, and failures cannot drift.
+// Native supervisor tool dispatch over the private Effect RPC client.
 import { synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -10,10 +9,8 @@ import type * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
   isSupervisorMcpMessageArguments,
-  isSupervisorMcpProxyArguments,
   isSupervisorMcpReportArguments,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
-  SUPERVISOR_MCP_PROXY_TOOL_NAME,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "./mcp-contract.ts";
 import {
@@ -49,8 +46,7 @@ export interface SupervisorToolClient {
 
 export type SupervisorToolCall =
   | { readonly kind: (typeof MESSAGE_KINDS)[number]; readonly message: string }
-  | { readonly kind: "report"; readonly deliveryId: SupervisorDeliveryId; readonly report: string }
-  | { readonly kind: "proxy"; readonly tool: string; readonly argumentsJson: string };
+  | { readonly kind: "report"; readonly deliveryId: SupervisorDeliveryId; readonly report: string };
 
 export interface SupervisorToolResult {
   readonly text: string;
@@ -62,10 +58,6 @@ export const decodeSupervisorToolCall = <ArgumentsInput>(
   name: string,
   args: ArgumentsInput,
 ): SupervisorToolCall | undefined => {
-  if (name === SUPERVISOR_MCP_PROXY_TOOL_NAME)
-    return isSupervisorMcpProxyArguments(args)
-      ? { kind: "proxy", tool: args.tool, argumentsJson: args.arguments_json }
-      : undefined;
   if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
     if (!isSupervisorMcpReportArguments(args)) return undefined;
     const deliveryId = SupervisorDeliveryIdSchema.makeOption(args.delivery_id);
@@ -113,11 +105,6 @@ export const runSupervisorTool = (
         return ok(
           `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
         );
-      }
-      case "proxy": {
-        const { tool, argumentsJson } = call;
-        const result = yield* rpc.SupervisorProxy({ ...auth, requestId, tool, argumentsJson });
-        return ok(result.payloadJson, !result.ok);
       }
       case "question":
         // The reply acknowledgement for this question's epoch outlives caller interruption.

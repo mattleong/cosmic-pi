@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  IncompatibleProfileReloadHandoffError,
   makeProfileReloadHandoff,
   profileReloadSessionKey,
 } from "../src/application/profile-reload-handoff.ts";
@@ -25,6 +26,49 @@ const completeSeed = (revision = 0) => ({
 });
 
 describe("profile reload handoff", () => {
+  it.each([1, 2])(
+    "preserves incompatible version-%i same-session handoffs across module replacements",
+    (version) => {
+      for (const location of ["override", "baseline"] as const) {
+        const baseline = completeBaseline("global");
+        const remote = { ...candidate("openai/remote"), host: "herdr" };
+        const seed =
+          location === "override"
+            ? { ...completeSeed(7), overrides: { worker: { candidates: [remote] } } }
+            : {
+                ...completeSeed(7),
+                baseline: {
+                  ...baseline,
+                  profiles: { ...baseline.profiles, worker: { candidates: [remote] } },
+                },
+              };
+        const envelope = { version, sessionKey: "session-one", seed };
+        processState[reloadSlot] = envelope;
+        for (let replacement = 0; replacement < 3; replacement += 1) {
+          expect(() => makeProfileReloadHandoff().capture("session-one")).toThrow(
+            IncompatibleProfileReloadHandoffError,
+          );
+          expect(processState[reloadSlot]).toBe(envelope);
+          makeProfileReloadHandoff().clear("session-one");
+          expect(processState[reloadSlot]).toBe(envelope);
+        }
+        expect(makeProfileReloadHandoff().capture("session-two")).toBeUndefined();
+        expect(slotPresent()).toBe(false);
+      }
+    },
+  );
+
+  it("isolates malformed and foreign envelopes without activating their seed", () => {
+    for (const envelope of [
+      { malformed: true },
+      { version: 99, sessionKey: "session-one", seed: completeSeed() },
+      { version: 2, sessionKey: "different-session", seed: { revision: -1, overrides: {} } },
+    ]) {
+      processState[reloadSlot] = envelope;
+      expect(handoff.capture("session-one")).toBeUndefined();
+      expect(slotPresent()).toBe(false);
+    }
+  });
   it("publishes a complete isolated baseline for only the matching Pi session", () => {
     const seed = {
       revision: 4,
@@ -53,8 +97,8 @@ describe("profile reload handoff", () => {
       sessionKey: "session-one",
       seed: { revision: 2, overrides: {} },
     };
-    expect(handoff.capture("session-one")).toBeUndefined();
-    expect(slotPresent()).toBe(false);
+    expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
+    expect(slotPresent()).toBe(true);
   });
 
   it.each([
@@ -78,14 +122,14 @@ describe("profile reload handoff", () => {
         baseline: completeBaseline("global"),
       },
     },
-  ])("rejects and removes a malformed $label reload envelope", ({ seed }) => {
+  ])("keeps an undecodable matching $label handoff fail-closed", ({ seed }) => {
     processState[reloadSlot] = {
       version: 2,
       sessionKey: "session-one",
       seed,
     };
-    expect(handoff.capture("session-one")).toBeUndefined();
-    expect(slotPresent()).toBe(false);
+    expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
+    expect(slotPresent()).toBe(true);
   });
 
   it("rejects candidate accessors in captured and published seeds without invoking them", () => {
@@ -109,10 +153,10 @@ describe("profile reload handoff", () => {
       seed: accessorSeed,
     };
 
-    expect(() => handoff.capture("session-one")).not.toThrow();
-    expect(handoff.capture("session-one")).toBeUndefined();
+    expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(candidateReads).toBe(0);
-    expect(slotPresent()).toBe(false);
+    expect(slotPresent()).toBe(true);
+    handoff.clear();
 
     expect(() => handoff.publish("session-one", accessorSeed)).not.toThrow();
     expect(candidateReads).toBe(0);
@@ -142,9 +186,9 @@ describe("profile reload handoff", () => {
       },
     };
 
-    expect(handoff.capture("session-one")).toBeUndefined();
+    expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(candidateElementReads).toBe(0);
-    expect(slotPresent()).toBe(false);
+    expect(slotPresent()).toBe(true);
   });
 
   it("contains hostile process-slot accessors and deletion failures", () => {

@@ -2,16 +2,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { makeHerdrBackendDriver } from "./backend/herdr.ts";
 import { makeLocalClaudeBackendDriver } from "./backend/local-claude.ts";
 import { makeLocalCodexBackendDriver } from "./backend/local-codex.ts";
 import { makeLocalPiBackendDriver } from "./backend/local-pi.ts";
 import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
-import { HerdrCli } from "./boundary/herdr-cli.ts";
-import { captureHerdrEnvironment } from "./boundary/herdr-environment.ts";
-import { HerdrHarness } from "./boundary/herdr-harness.ts";
-import { HerdrHost } from "./boundary/herdr-host.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
 import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
@@ -29,21 +24,17 @@ import {
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 
-/** One memoized registry owns all six implemented drivers and their shared boundary services. */
+/** One memoized registry owns the three local drivers and their shared boundary services. */
 const subagentBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
   Effect.gen(function* () {
     const children = yield* ChildProcess;
     const localCli = yield* LocalCliProcess;
     const supervisor = yield* SupervisorChannel;
-    const herdr = yield* HerdrHost;
     return makeSubagentBackendRegistry([
       makeLocalPiBackendDriver(children),
       makeLocalClaudeBackendDriver(localCli, supervisor),
       makeLocalCodexBackendDriver(localCli, supervisor),
-      makeHerdrBackendDriver("pi", herdr, supervisor),
-      makeHerdrBackendDriver("claude", herdr, supervisor),
-      makeHerdrBackendDriver("codex", herdr, supervisor),
     ]);
   }),
 );
@@ -60,20 +51,10 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   // The store remains the single persistence door and is exposed for the human settings command.
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
-  const herdrEnvironment = captureHerdrEnvironment();
-  const herdrBoundaries = Layer.merge(
-    HerdrCli.layer({ environment: herdrEnvironment }),
-    HerdrHarness.layer({
-      agentDirectory: options.agentDirectory,
-      environment: herdrEnvironment,
-    }),
-  );
-  const herdrHost = HerdrHost.layer.pipe(Layer.provide(herdrBoundaries));
   const backendBoundaries = Layer.mergeAll(
     ChildProcess.layer({ agentDirectory: options.agentDirectory }),
     LocalCliProcess.layer({ agentDirectory: options.agentDirectory }),
     SupervisorChannel.layer({ agentDirectory: options.agentDirectory }),
-    herdrHost,
   );
   const backend = subagentBackendRegistryLayer.pipe(Layer.provide(backendBoundaries));
   const nativeModelCatalog = NativeModelCatalog.layer({

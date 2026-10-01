@@ -14,9 +14,9 @@ import type { StartSubagentRequest } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
-  fakeRetainedBackendLayer,
-  retainedServiceFixture,
-  retainedRequest,
+  fakeNativeReportBackendLayer,
+  nativeReportServiceFixture,
+  nativeReportRequest,
   request,
   localServiceFixture,
   withService,
@@ -61,12 +61,12 @@ describe("explicit profile-route retry", () => {
     it.effect(
       `terminal unresolved steering blocks retry and notifications with ${cleanupFailure ? "quarantined" : "confirmed"} cleanup`,
       () => {
-        const backend = fakeRetainedBackendLayer();
+        const backend = fakeNativeReportBackendLayer();
         const registry = cleanupFailure
           ? Layer.effect(
               SubagentBackendRegistry,
               SubagentBackendRegistry.use((registry) =>
-                registry.resolve({ host: "herdr", runtime: "claude", context: "fresh" }).pipe(
+                registry.resolve({ host: "local", runtime: "claude", context: "fresh" }).pipe(
                   Effect.map((driver) =>
                     makeSubagentBackendRegistry([
                       {
@@ -95,13 +95,13 @@ describe("explicit profile-route retry", () => {
               ),
             ).pipe(Layer.provide(backend.layer))
           : backend.layer;
-        const { layer, projections, notifications } = retainedServiceFixture({
+        const { layer, projections, notifications } = nativeReportServiceFixture({
           ...backend,
           layer: registry,
         });
         return withService(layer, function* (service) {
           const run = yield* service.start(
-            retainedRequest({
+            nativeReportRequest({
               closeOnReport: true,
               profile: "reviewer",
               routeContinuation: continuation(0),
@@ -157,10 +157,10 @@ describe("explicit profile-route retry", () => {
   it.effect(
     "typed exit uncertainty blocks retry even when pending delivery metadata never drained",
     () => {
-      const { backend, layer, projections } = retainedServiceFixture();
+      const { backend, layer, projections } = nativeReportServiceFixture();
       return withService(layer, function* (service) {
         const run = yield* service.start(
-          retainedRequest({
+          nativeReportRequest({
             closeOnReport: true,
             profile: "reviewer",
             routeContinuation: continuation(0),
@@ -190,10 +190,10 @@ describe("explicit profile-route retry", () => {
   );
 
   it.effect("resolved transient steering does not poison assignment retry eligibility", () => {
-    const { backend, layer, projections } = retainedServiceFixture();
+    const { backend, layer, projections } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(
-        retainedRequest({
+        nativeReportRequest({
           closeOnReport: true,
           profile: "reviewer",
           routeContinuation: continuation(0),
@@ -453,7 +453,7 @@ describe("explicit profile-route retry", () => {
       const claim = yield* service.claimRetryContinuation(failedRun.id);
       const failure = yield* service
         .startRetrySessionOwned({
-          ...request({ host: "herdr", runtime: "claude" }),
+          ...request({ host: "local", runtime: "claude" }),
           supersedes: { runId: failedRun.id, claimToken: claim.claimToken },
         })
         .pipe(Effect.flip);

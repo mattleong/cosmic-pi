@@ -188,17 +188,37 @@ const baselineFromConfig = (config: ResolvedSubagentConfig): SessionProfileBasel
     profileSources: config.profileSources,
   });
 
-const decodeRoute = (route: {
-  readonly candidates: ReadonlyArray<unknown>;
-}): ProfileRoute | undefined => {
-  if (route.candidates.length > MAX_PROFILE_CANDIDATES) return undefined;
-  const candidates: ProfileCandidate[] = [];
-  for (const input of route.candidates) {
-    const candidate = decodeProfileCandidate(input);
-    if (!candidate) return undefined;
-    candidates.push(candidate);
+const isCandidateCount = <ValueInput>(value: ValueInput): value is ValueInput & number =>
+  Predicate.isNumber(value) &&
+  Number.isSafeInteger(value) &&
+  value >= 0 &&
+  value <= MAX_PROFILE_CANDIDATES;
+
+/** Snapshots the unknown route without invoking route or candidate-array accessors. */
+const decodeRoute = <ValueInput>(route: ValueInput): ProfileRoute | undefined => {
+  try {
+    if (!Predicate.isObjectKeyword(route) || Array.isArray(route)) return undefined;
+    const keys = Reflect.ownKeys(route);
+    if (keys.length !== 1 || keys[0] !== "candidates") return undefined;
+    const field = ownDataProperty(route, "candidates");
+    if (!field.valid || !field.present || !Array.isArray(field.value)) return undefined;
+    const inputs = field.value;
+    if (Object.getPrototypeOf(inputs) !== Array.prototype) return undefined;
+    const length = ownDataProperty(inputs, "length");
+    if (!length.valid || !length.present || !isCandidateCount(length.value)) return undefined;
+    if (Reflect.ownKeys(inputs).length !== length.value + 1) return undefined;
+    const candidates: ProfileCandidate[] = [];
+    for (let index = 0; index < length.value; index += 1) {
+      const input = ownDataProperty(inputs, String(index));
+      if (!input.valid || !input.present) return undefined;
+      const candidate = decodeProfileCandidate(input.value);
+      if (!candidate) return undefined;
+      candidates.push(candidate);
+    }
+    return { candidates };
+  } catch {
+    return undefined;
   }
-  return { candidates };
 };
 
 /** A named origin needs a valid set name; an unnamed one survives only as an invalid default. */
@@ -378,6 +398,24 @@ export const patchSessionProfileSnapshot = (
       patch.expectedRevision,
       "Session profile settings changed while this page was open; refresh the profile workspace and try again.",
     );
+  const routeProperty = ownDataProperty(patch, "route");
+  if (!PROFILE_IDS.includes(patch.profile) || !routeProperty.valid)
+    return conflict(
+      snapshot,
+      patch.expectedRevision,
+      "The profile route is invalid and was not applied.",
+    );
+  let validated: ProfileRoute | undefined;
+  if (routeProperty.present && routeProperty.value !== undefined) {
+    validated = decodeRoute(routeProperty.value);
+    if (!validated)
+      return conflict(
+        snapshot,
+        patch.expectedRevision,
+        "The profile route is invalid and was not applied.",
+      );
+  }
+  patch = { ...patch, route: validated };
   const current = snapshot.overrides[patch.profile];
   if (patch.route === undefined && current === undefined) return Effect.succeed(snapshot);
   if (patch.route !== undefined && current !== undefined && sameProfileRoute(current, patch.route))

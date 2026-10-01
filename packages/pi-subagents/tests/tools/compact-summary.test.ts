@@ -82,7 +82,7 @@ const awaitReceipt = (
 describe("subagent compact semantic policy", () => {
   it("treats pending and unresolved steering as delivery uncertainty, not worker failure", () => {
     for (const steeringDelivery of ["pending", "unresolved"] as const) {
-      for (const state of ["running", "reported", "completed"] as const) {
+      for (const state of ["running", "completed"] as const) {
         const run = view({ steeringDelivery, state });
         const status = makeCompactToolDetails({ action: "status", runs: [run] });
         const summary = summarize("status", status);
@@ -979,7 +979,7 @@ describe("subagent compact semantic policy", () => {
     ]) {
       const projected = makeCompactToolDetails({
         action: "status",
-        runs: [view({ ...overrides, state: "reported", finalText: "report" })],
+        runs: [view({ ...overrides, state: "completed", finalText: "report" })],
       });
       const summary = summarize("status", projected);
       const isolated = overrides.writerWorkspaceMode === "worktree";
@@ -994,7 +994,7 @@ describe("subagent compact semantic policy", () => {
     }
     const details = makeCompactToolDetails({
       action: "status",
-      runs: [view({ state: "reported" })],
+      runs: [view({ state: "completed" })],
     });
     expect(summarize("status", details)?.metadata).not.toContain("1 report");
   });
@@ -1092,7 +1092,7 @@ describe("subagent compact semantic policy", () => {
       issues?.some(
         (issue) => issue.severity === "warning" && issue.detail?.includes(skipped.reason),
       );
-    for (const state of ["completed", "reported"] as const) {
+    for (const state of ["completed"] as const) {
       const projected = makeCompactToolDetails({
         action: "status",
         runs: [view({ state, selection })],
@@ -1104,7 +1104,7 @@ describe("subagent compact semantic policy", () => {
       expect(summary?.metadata).toEqual([]);
       expect(summarize("status", projected, "running")?.metadata).toEqual([]);
       for (const patch of [
-        { warning: "Herdr to local fallback" },
+        { warning: "Declared local candidate fallback" },
         { selection: { ...selection, warning: "Explicit selection warning" } },
         {
           selection: {
@@ -1182,7 +1182,7 @@ describe("subagent compact semantic policy", () => {
         (steeringDelivery) => ({ steeringDelivery }),
       ),
       {
-        state: "reported",
+        state: "completed",
         finalText: "Done",
         writeIntent: "writer",
         writerWorkspaceMode: "worktree",
@@ -1359,7 +1359,7 @@ describe("subagent compact semantic policy", () => {
         action: "list",
         runs: [
           view({ id: "a", state: "completed", finalText: "report" }),
-          view({ id: "b", state: "reported", finalText: "report" }),
+          view({ id: "b", state: "completed", finalText: "report" }),
           view({ id: "c", state: "failed", error: "Rate limit exceeded" }),
         ],
       }),

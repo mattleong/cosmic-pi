@@ -51,7 +51,11 @@ import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
-import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
+import {
+  IncompatibleProfileReloadHandoffError,
+  makeProfileReloadHandoff,
+  profileReloadSessionKey,
+} from "./profile-reload-handoff.ts";
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
@@ -129,6 +133,7 @@ export function registerSubagentApplication(
   const profileOverrideHandoff = makeProfileOverrideHandoff();
   const profileReloadHandoff = makeProfileReloadHandoff();
   let hasRegisteredTools = false;
+  let incompatibleReload = false;
 
   const rememberDisabledTools = (names: ReadonlyArray<string>): void => {
     startupFailureTools = [...new Set([...startupFailureTools, ...names])];
@@ -146,10 +151,18 @@ export function registerSubagentApplication(
         if (!activation.preserveSessionOverrides) profileOverrideHandoff.clear();
         const generation = ++profileGeneration;
         activeProfileGeneration = generation;
-        const restoredReload =
-          activation.restoreReloadHandoff && activation.sessionKey
-            ? profileReloadHandoff.capture(activation.sessionKey)
-            : undefined;
+        const restoreReload = activation.restoreReloadHandoff || incompatibleReload;
+        incompatibleReload = false;
+        let restoredReload: SessionProfileOverrideSeed | undefined;
+        try {
+          restoredReload =
+            restoreReload && activation.sessionKey
+              ? profileReloadHandoff.capture(activation.sessionKey)
+              : undefined;
+        } catch (error) {
+          incompatibleReload = error instanceof IncompatibleProfileReloadHandoffError;
+          throw error;
+        }
         if (restoredReload) profileOverrideHandoff.publish(generation, generation, restoredReload);
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
         const sessionOverrides = restoredReload ?? profileOverrideHandoff.capture();
@@ -290,7 +303,9 @@ export function registerSubagentApplication(
         rememberDisabledTools(deactivateSubagentTools(pi));
         notifyActivationFailure(
           activation.ctx,
-          "Subagents couldn't start; check pi-subagents.json, then run /reload",
+          incompatibleReload
+            ? "Subagents cannot restore this session's profile settings; start a fresh Pi session"
+            : "Subagents couldn't start; check pi-subagents.json, then run /reload",
         );
       },
     });

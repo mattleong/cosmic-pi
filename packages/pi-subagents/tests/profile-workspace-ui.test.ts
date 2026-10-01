@@ -14,7 +14,7 @@ import {
   type ProfileSettingsInspection,
 } from "../src/settings/profile-route-editor.ts";
 import {
-  candidateFieldChoices,
+  selectCandidateField,
   candidateFieldRows,
 } from "../src/settings/ui/profile-workspace-model.ts";
 import {
@@ -30,7 +30,7 @@ import {
 
 const route = [
   profileCandidate("openai/primary"),
-  profileCandidate("claude-fallback", { host: "herdr", runtime: "claude" }),
+  profileCandidate("claude-fallback", { runtime: "claude" }),
   profileCandidate("codex-fallback", { runtime: "codex", writeIntent: "writer" }),
 ];
 
@@ -170,26 +170,23 @@ describe("profile workspace state projection", () => {
     }
   });
 
-  it("offers every supported host and runtime combination", () => {
-    expect(
-      candidateFieldChoices(profileCandidate("openai/primary"), "runWith", {}).map(
-        (choice) => choice.value,
-      ),
-    ).toEqual([
-      "local/pi",
-      "local/claude",
-      "local/codex",
-      "herdr/pi",
-      "herdr/claude",
-      "herdr/codex",
-    ]);
+  it("accepts local selections and rejects stale remote choices without changing the candidate", () => {
+    for (const runtime of ["pi", "claude", "codex"] as const) {
+      const candidate = profileCandidate(runtime === "pi" ? "parent" : "native", { runtime });
+      const before = structuredClone(candidate);
+      expect(selectCandidateField(candidate, "runWith", `local/${runtime}`, {}).candidate).toEqual(
+        before,
+      );
+      expect(
+        selectCandidateField(candidate, "runWith", `herdr/${runtime}`, {}).candidate,
+      ).toBeUndefined();
+      expect(candidate).toEqual(before);
+    }
   });
 
   it("collapses advanced controls without dropping unsupported settings", () => {
     const advancedCandidate = profileCandidate("openai/primary", {
-      host: "herdr",
       openaiFastMode: true,
-      closeOnReport: false,
     });
     const collapsedFields = fields(advancedCandidate, false).map((row) => row.field);
     const expandedFields = fields(advancedCandidate, true).map((row) => row.field);
@@ -197,13 +194,11 @@ describe("profile workspace state projection", () => {
     expect(collapsedFields).toContain("advanced");
     expect(collapsedFields).not.toContain("openaiFastMode");
     expect(collapsedFields).not.toContain("closeOnReport");
-    expect(expandedFields).toEqual(
-      expect.arrayContaining(["advanced", "openaiFastMode", "closeOnReport"]),
-    );
+    expect(expandedFields).toEqual(expect.arrayContaining(["advanced", "openaiFastMode"]));
 
     const fixed = fields(profileCandidate("claude/local", { runtime: "claude" }), true);
     expect(fixed.map((row) => row.field)).toEqual(
-      expect.arrayContaining(["advanced", "context", "openaiFastMode", "closeOnReport"]),
+      expect.arrayContaining(["advanced", "context", "openaiFastMode"]),
     );
     expect(fixed.find((row) => row.field === "context")?.fixed).toBe(true);
   });

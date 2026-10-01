@@ -148,7 +148,7 @@ const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
   "[agents]",
   "enabled = true",
-  ...codexFeatureLines(openaiFastMode, false),
+  ...codexFeatureLines(openaiFastMode),
 ];
 
 const codexConfig = (supervisor: SupervisorConnectionMetadata, openaiFastMode: boolean): string =>

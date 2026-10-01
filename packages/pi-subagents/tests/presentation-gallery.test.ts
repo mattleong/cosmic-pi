@@ -126,14 +126,14 @@ const apiAudit = view({
   name: "api-audit",
   task: "Audit the public API surface for breaking changes",
   profile: "researcher",
-  host: "herdr",
+  host: "local",
   runtime: "codex",
   model: "gpt-5.5",
   effort: "medium",
-  closeOnReport: false,
-  state: "reported",
+  closeOnReport: true,
+  state: "completed",
   reportGeneration: 1,
-  capabilities: ["steer", "rename-display", "parent-contact"],
+  capabilities: ["steer", "interrupt", "parent-contact"],
   finalText: "No breaking changes in the public API since v0.1.",
   usage: usage(40_300, 0.22),
   ...timing(9, 2),
@@ -410,7 +410,7 @@ const messagingScenarios = Effect.all([
     { service: { send: (id) => lookup(id) } },
   ),
   scenario(
-    "next assignment for a retained worker",
+    "guidance for a native worker",
     { tool: "subagent_send", args: { runIds: ["agent-3"], message: "Now audit the CLI flags." } },
     { service: { send: (id) => updated(id, { state: "running", finalText: undefined }) } },
   ),
@@ -577,9 +577,9 @@ const lifecycleScenarios = Effect.all([
         resume: (id) =>
           Effect.fail(
             new UnsupportedSubagentCapabilityError({
-              backend: "herdr/codex",
+              backend: "local/codex",
               capability: "resume",
-              message: `herdr/codex subagents do not support resume. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`,
+              message: `local/codex subagents do not support resume. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`,
             }),
           ),
       },
@@ -837,7 +837,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
   ),
   awaited("writer changes ready for review", [
     view({
-      state: "reported",
+      state: "completed",
       writeIntent: "writer",
       writerWorkspaceMode: "worktree",
       workspaceId: "ws-1",
@@ -866,7 +866,8 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
             status: "started",
             candidateIndex: 1,
             runId: "agent-2",
-            warning: "Unsupported Herdr protocol 21. Fell back automatically to local/pi.",
+            warning:
+              "The primary candidate was unavailable; selected the declared local Pi fallback.",
           },
         ],
         startFailures: [
@@ -1039,9 +1040,9 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     type: "completed",
     runs: [completion(migrationReview, { retryAvailable: true, remainingCandidateCount: 1 })],
   }),
-  ...notified("retained worker reports", {
+  ...notified("native worker reports", {
     type: "completed",
-    runs: [completion(apiAudit, { retained: true })],
+    runs: [completion(apiAudit)],
   }),
   ...notified("three workers finish", {
     type: "completed",

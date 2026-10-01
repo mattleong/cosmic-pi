@@ -55,6 +55,76 @@ const baseConfig = (projectReviewerModel = "openai/project") =>
   );
 
 describe("session profile overrides", () => {
+  it.effect("rejects retired or hostile typed mutations before revision or publication", () =>
+    Effect.gen(function* () {
+      const published: number[] = [];
+      const service = yield* makeSubagentProfileService(baseConfig(), {
+        publishSessionOverrides: (seed) => published.push(seed.revision),
+      });
+      const initial = yield* service.capture;
+      const local = candidate("openai/local");
+      let reads = 0;
+      const accessorCandidate = { ...local };
+      Object.defineProperty(accessorCandidate, "host", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return "herdr";
+        },
+      });
+      const accessorArray = [local];
+      Object.defineProperty(accessorArray, "0", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return local;
+        },
+      });
+      const invalidRoutes = [
+        { candidates: [{ ...local, host: "herdr" }] },
+        { candidates: [{ ...local, closeOnReport: false }] },
+        { candidates: [local, { ...local, host: "herdr" }] },
+        { candidates: [{ ...local, host: "herdr" }, local] },
+        { candidates: [accessorCandidate] },
+        { candidates: accessorArray },
+      ];
+      const beforePublication = [...published];
+      for (const invalidRoute of invalidRoutes) {
+        // SAFETY: Deliberately exercise the public mutation boundary with invalid unknown input.
+        const route = invalidRoute as never;
+        const direct = yield* patchSessionProfileSnapshot(initial, {
+          profile: "worker",
+          route,
+          expectedRevision: initial.revision,
+        }).pipe(Effect.result);
+        expect(direct._tag).toBe("Failure");
+        const result = yield* service
+          .patchSessionProfile({ profile: "worker", route, expectedRevision: initial.revision })
+          .pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(yield* service.capture).toBe(initial);
+        expect(published).toEqual(beforePublication);
+      }
+      expect(reads).toBe(0);
+      const invalidProfiles = {
+        ...initial.baseline.profiles,
+        worker: { candidates: [{ ...local, host: "herdr" }] },
+      };
+      // SAFETY: A saved-set apply boundary must reject retired routes even through a typed call.
+      const rejectedSet = yield* service
+        .replaceSessionProfiles({
+          expectedRevision: initial.revision,
+          origin: initial.baseline.origin,
+          profiles: invalidProfiles as never,
+          profileSources: initial.baseline.profileSources,
+        })
+        .pipe(Effect.result);
+      expect(rejectedSet._tag).toBe("Failure");
+      expect(yield* service.capture).toBe(initial);
+      expect(published).toEqual(beforePublication);
+    }),
+  );
+
   it.effect(
     "overlays complete routes above project configuration and clears without persistence",
     () =>
@@ -525,16 +595,14 @@ describe("session profile overrides", () => {
 
   it.effect("compares every candidate field when suppressing no-op revisions", () =>
     Effect.gen(function* () {
-      const original = candidate("openai/base");
+      const original = candidate("openai-codex/gpt-5.6-sol");
       const variants: ReadonlyArray<ProfileCandidate> = [
-        { ...original, host: "herdr" },
         { ...original, runtime: "codex" },
         { ...original, model: "openai/other" },
         { ...original, effort: "off" },
         { ...original, context: "fork" },
         { ...original, writeIntent: "writer" },
         { ...original, openaiFastMode: true },
-        { ...original, closeOnReport: false },
       ];
 
       for (const changed of variants) {

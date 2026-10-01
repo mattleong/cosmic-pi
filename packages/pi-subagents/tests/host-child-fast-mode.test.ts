@@ -8,7 +8,6 @@ import * as Effect from "effect/Effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import { registerChildPiFastModeHook } from "../src/boundary/host-child-pi.ts";
-import registerSupervisorBridge from "../src/boundary/host-pi-supervisor-extension.ts";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { extensionApiFixture, modelFixture } from "./fixtures/pi-host.ts";
 
@@ -62,18 +61,10 @@ const registerLocal = (pi: ExtensionAPI) =>
       },
     }),
   });
-const registerSupervisor = (pi: ExtensionAPI) =>
-  registerSupervisorBridge(pi, {
-    openBridge: () => Effect.die("No supervisor connection is expected before session start"),
-  });
-
-describe.each([
-  { name: "local child", register: registerLocal },
-  { name: "delegated child", register: registerSupervisor },
-])("$name fast-mode flag", ({ register }) => {
+describe("local child fast-mode flag", () => {
   it("uses flags applied after registration and observes later disabling", () => {
     const harness = requestHarness();
-    register(harness.pi);
+    registerLocal(harness.pi);
     const payload = Object.freeze({ input: "task" });
     expect(harness.request(payload)).toBeUndefined();
 

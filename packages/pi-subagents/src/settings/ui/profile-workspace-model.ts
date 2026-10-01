@@ -2,7 +2,6 @@ import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
   isLocalPiProfileCandidate,
-  isRetainableProfileCandidate,
   supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileId,
@@ -30,7 +29,6 @@ export type ProfileWorkspaceField =
   | "advanced"
   | "context"
   | "openaiFastMode"
-  | "closeOnReport"
   | "actions"
   | "add"
   | "reset";
@@ -44,7 +42,6 @@ export interface ProfileWorkspaceFieldRow {
 }
 
 export interface CandidateFieldChangeOptions {
-  readonly piModel?: string | undefined;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
   readonly profile?: ProfileId | undefined;
@@ -117,7 +114,7 @@ export const runWithValue = (candidate: ProfileCandidate): string =>
   `${candidate.host}/${candidate.runtime}`;
 
 export const runWithLabel = (candidate: Pick<ProfileCandidate, "host" | "runtime">): string =>
-  `${candidate.host === "local" ? "Local" : "Herdr"} ${runtimeLabel(candidate.runtime)}`;
+  `Local ${runtimeLabel(candidate.runtime)}`;
 
 export const targetProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
@@ -140,7 +137,6 @@ const advancedSummaryValues = (
       ? "forked context"
       : undefined,
     candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
-    !candidate.closeOnReport ? "stays open after reporting" : undefined,
   ].filter((value): value is string => value !== undefined);
 
 const advancedCandidateRows = (
@@ -148,7 +144,6 @@ const advancedCandidateRows = (
   parentModel: string | undefined,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = isLocalPiProfileCandidate(candidate);
-  const retainedAllowed = isRetainableProfileCandidate(candidate);
   const fastAvailable = candidateFastModeAvailable(candidate, parentModel);
   const fastFixed = !fastAvailable && !candidate.openaiFastMode;
   return [
@@ -171,15 +166,6 @@ const advancedCandidateRows = (
           : "off, unavailable",
       fixed: fastFixed,
       ...(fastFixed && { fixedReason: "The selected model does not support OpenAI fast mode." }),
-    },
-    {
-      field: "closeOnReport",
-      label: "  After reporting",
-      value: candidate.closeOnReport ? "close after reporting" : "stay open after reporting",
-      fixed: !retainedAllowed,
-      ...(!retainedAllowed && {
-        fixedReason: "Only Herdr read-only runs can stay open after reporting.",
-      }),
     },
   ];
 };
@@ -228,11 +214,11 @@ export type SelectableCandidateField = Exclude<
   "model" | "advanced" | "actions" | "add" | "reset"
 >;
 
-const RUN_WITH_CHOICES = (["local", "herdr"] as const).flatMap((host) =>
+const RUN_WITH_CHOICES = (["local"] as const).flatMap((host) =>
   (["pi", "claude", "codex"] as const).map((runtime) => ({
     value: `${host}/${runtime}`,
     label: runWithLabel({ host, runtime }),
-    description: `Run ${runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex"} ${host === "local" ? "locally on this computer" : "in a Herdr pane"}`,
+    description: `Run ${runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex"} locally on this computer`,
     host,
     runtime,
   })),
@@ -305,26 +291,7 @@ export const candidateFieldChoices = (
         : []),
     ];
   }
-  return isRetainableProfileCandidate(candidate)
-    ? [
-        {
-          value: "true",
-          label: "Close after reporting",
-          description: "Close when the report is accepted",
-        },
-        {
-          value: "false",
-          label: "Stay open after reporting",
-          description: "Keep this Herdr read-only run open for another assignment",
-        },
-      ]
-    : [
-        {
-          value: "true",
-          label: "Close after reporting",
-          description: "This selection must close after reporting",
-        },
-      ];
+  return [];
 };
 
 // SAFETY: Every value comes from candidateFieldChoices for the same field.
@@ -339,11 +306,7 @@ export function selectCandidateField(
   if (field === "runWith") {
     const choice = runWithChoice(value);
     return choice
-      ? updateCandidateControls(
-          candidate,
-          { host: choice.host, runtime: choice.runtime },
-          { piModel: options.piModel },
-        )
+      ? updateCandidateControls(candidate, { host: choice.host, runtime: choice.runtime }, {})
       : { error: "Invalid Run with selection.", notices: [] };
   }
   if (field === "effort") {
@@ -356,10 +319,8 @@ export function selectCandidateField(
   if (field === "context" && (value === "fresh" || value === "fork"))
     return { candidate: { ...candidate, context: value }, notices: [] };
   if (field === "writeIntent" && (value === "read-only" || value === "writer"))
-    return updateCandidateControls(candidate, { writeIntent: value }, { piModel: options.piModel });
+    return updateCandidateControls(candidate, { writeIntent: value }, {});
   if (field === "openaiFastMode" && (value === "true" || value === "false"))
     return { candidate: { ...candidate, openaiFastMode: value === "true" }, notices: [] };
-  if (field === "closeOnReport" && (value === "true" || value === "false"))
-    return { candidate: { ...candidate, closeOnReport: value === "true" }, notices: [] };
   return { error: `Invalid ${field} selection.`, notices: [] };
 }

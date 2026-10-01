@@ -1,5 +1,4 @@
-// The one Effect RPC client of the private supervisor channel, shared by the native MCP helper and
-// the in-process delegated-Pi bridge.
+// The Effect RPC client of the private supervisor channel used by the native MCP helper.
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -25,13 +24,10 @@ const CONNECT_TIMEOUT_MILLIS = 5_000;
  * Opens one authenticated connection in a child of the caller's Scope. A failed or interrupted
  * open closes that child at once while the parent stays open. The assignment watch runs in the
  * parent scope; once it ends for any reason, `closed` completes and a separate parent-scoped fiber
- * closes the connection, which also stops the protocol's reconnect policy from redialing. Root
- * notifications (delegated-Pi channels only) are acknowledged after `onNotification` returns;
- * without a handler they stay unacknowledged.
+ * closes the connection, which also stops the protocol's reconnect policy from redialing.
  */
 export const openSupervisorClient = (
   config: SupervisorChannelConfig,
-  onNotification?: (message: string) => Effect.Effect<void>,
 ): Effect.Effect<
   SupervisorToolClient,
   RpcClientError.RpcClientError | SupervisorRpcFailure | Cause.TimeoutError,
@@ -75,14 +71,6 @@ export const openSupervisorClient = (
         yield* rpc.SupervisorWatchAssignments(auth).pipe(
           Stream.runForEach((update) =>
             Effect.gen(function* () {
-              if (update.kind === "notification") {
-                if (!onNotification) return;
-                yield* onNotification(update.message);
-                return yield* rpc.SupervisorAcknowledgeNotification({
-                  ...auth,
-                  updateId: update.updateId,
-                });
-              }
               if (update.assignmentEpoch <= assignmentEpoch)
                 return yield* new SupervisorToolFailure({
                   code: "non_monotonic_assignment_epoch",

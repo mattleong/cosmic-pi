@@ -99,7 +99,6 @@ export interface SupervisorChannelContract {
 
 export interface SupervisorChannelOpenRequest {
   readonly runId: string;
-  readonly allowPiProxy?: boolean | undefined;
 }
 
 export interface SupervisorChannelLayerOptions {
@@ -276,7 +275,6 @@ const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
-  allowPiProxy: boolean,
 ): Effect.Effect<SupervisorChannelHandle, SupervisorChannelError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -360,7 +358,6 @@ const acquireNodeChannelEffect = (
           runId,
           verifyToken,
           events,
-          allowPiProxy,
         });
         // Cache the whole release so interruption cannot separate session shutdown from resources.
         const close = yield* Effect.cached(
@@ -458,7 +455,7 @@ export const makeSupervisorChannel = (
       const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
       return yield* Effect.acquireRelease(
-        acquireNodeChannelEffect(options, runId, events, request.allowPiProxy === true),
+        acquireNodeChannelEffect(options, runId, events),
         (acquired) => acquired.close.pipe(Effect.orDie),
         { interruptible: true },
       );

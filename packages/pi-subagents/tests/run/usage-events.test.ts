@@ -12,8 +12,9 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import { emptyUsage } from "../../src/run/model.ts";
 import { makeRunContext } from "./fixtures/run-context.ts";
 import {
-  retainedRequest,
-  retainedServiceFixture,
+  fakeNativeReportBackendLayer,
+  nativeReportRequest,
+  nativeReportServiceFixture,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -27,7 +28,7 @@ it.effect("process usage rechecks handle ownership inside the mutation lock", ()
     const fields = {
       process: original,
       stoppedByParent: false,
-      view: view({ state: "reported", usage: emptyUsage() }),
+      view: view({ state: "running", usage: emptyUsage() }),
     } satisfies Pick<RunRecord, "process" | "stoppedByParent" | "view">;
     // SAFETY: The owned usage merger reads only the process, stop flag, and view fields.
     const record = fields as RunRecord;
@@ -55,10 +56,12 @@ it.effect("process usage rechecks handle ownership inside the mutation lock", ()
   }).pipe(Effect.scoped),
 );
 
-it.effect("usage-only events preserve activity and accepted report evidence", () => {
-  const { backend, projections, layer } = retainedServiceFixture();
+it.effect("usage-only events preserve activity across paused resume and report completion", () => {
+  const { backend, projections, layer } = nativeReportServiceFixture(
+    fakeNativeReportBackendLayer({ capabilities: ["steer", "interrupt", "resume"] }),
+  );
   return withService(layer, function* (service) {
-    const run = yield* service.start(retainedRequest({ model: "claude-native" }));
+    const run = yield* service.start(nativeReportRequest({ model: "claude-native" }));
     const control = backend.controls[0]!;
     const epoch = control.assignmentEpochs[0]!;
     control.offer({
@@ -77,39 +80,27 @@ it.effect("usage-only events preserve activity and accepted report evidence", ()
     const active = yield* service.status(run.id);
     expect(active.lastActivityAt).toBe(before.lastActivityAt);
     expect(active.sessionEvents).toEqual(before.sessionEvents);
-    control.report(run.id, 1, "report", "Keep this report");
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported", 200);
-    const reported = projections.at(-1)!.runs[0]!;
-    control.offer({
-      type: "usage",
-      usage: { ...emptyUsage(), input: 5, totalTokens: 5 },
-    });
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 15, 200);
-    const late = projections.at(-1)!.runs[0]!;
-    expect(late.finalText).toBe(reported.finalText);
-    expect(late.lastActivityAt).toBe(reported.lastActivityAt);
-    expect(late.reportGeneration).toBe(reported.reportGeneration);
-    expect(late.sessionEvents).toEqual(reported.sessionEvents);
-    expect((yield* service.status(run.id)).finalText).toBe("Keep this report");
+    expect((yield* service.interrupt(run.id)).state).toBe("paused");
     const admission = yield* Deferred.make<void>();
     control.gateNextStart(admission);
-    control.failNextStart("fixture_not_sent");
-    const sending = yield* service.send(run.id, "rejected assignment").pipe(Effect.forkChild);
+    const resuming = yield* service
+      .resume(run.id, "resume with concurrent accounting")
+      .pipe(Effect.forkChild);
     yield* yieldUntil(() => control.assignmentEpochs.length === 2, 200);
-    control.offer({
-      type: "usage",
-      usage: { ...emptyUsage(), input: 100, totalTokens: 100 },
-    });
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 115, 200);
+    control.offer({ type: "usage", usage: { ...emptyUsage(), input: 100, totalTokens: 100 } });
+    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 110, 200);
     yield* Deferred.succeed(admission, undefined);
-    expect((yield* Fiber.join(sending).pipe(Effect.exit))._tag).toBe("Failure");
-    expect((yield* service.status(run.id)).usage.input).toBe(115);
-    yield* service.send(run.id, "next assignment");
-    control.offer({
-      type: "usage",
-      usage: { ...emptyUsage(), input: 1, totalTokens: 1 },
-    });
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 116, 200);
-    expect((yield* service.status(run.id)).usage.input).toBe(116);
+    expect((yield* Fiber.join(resuming)).state).toBe("running");
+    expect((yield* service.status(run.id)).usage.input).toBe(110);
+
+    control.offer({ type: "usage", usage: { ...emptyUsage(), input: 1, totalTokens: 1 } });
+    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 111, 200);
+    control.report(run.id, 1, "report", "Keep this report");
+    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed", 200);
+    const completed = projections.at(-1)!.runs[0]!;
+    expect(completed.finalText).toBe("Keep this report");
+    expect(completed.usage.input).toBe(111);
+    expect(completed.reportGeneration).toBe(1);
+    yield* yieldUntil(() => control.released() === 1, 200);
   });
 });

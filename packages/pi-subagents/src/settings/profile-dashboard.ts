@@ -20,7 +20,6 @@ import {
 } from "./profile-route-editor.ts";
 import {
   loadCandidateModelPicker,
-  preferredHerdrPiSelector,
   ProfileModelCatalog,
   supportedPiEfforts,
 } from "./profile-model-catalog.ts";
@@ -204,7 +203,6 @@ export function openProfileDashboard(
             target: { kind: "session" },
             ...position,
             parentEffort,
-            preferredPiModel: () => preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
             getHeight,
             requestRender: () => tui.requestRender(),
             ...fullScreenKeybindingOptions(keybindings),

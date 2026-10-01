@@ -119,7 +119,7 @@ const CandidateContractSchema = Schema.Struct({
   context: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),
   writeIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
   openaiFastMode: Schema.optional(Schema.Boolean),
-  closeOnReport: Schema.optional(Schema.Boolean),
+  closeOnReport: Schema.optional(Schema.Literal(true)),
 });
 
 const safeOwnKeys = (record: Readonly<JsonObject>): ReadonlyArray<string> | undefined =>

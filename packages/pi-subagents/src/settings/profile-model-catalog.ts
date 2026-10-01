@@ -141,14 +141,6 @@ export class ProfileModelCatalog {
 
 const canonicalPiSelector = (model: ProjectedPiModel): string => `${model.provider}/${model.id}`;
 
-export const preferredHerdrPiSelector = (
-  snapshot: ProfileModelCatalogSnapshot,
-  parentSelector?: string | undefined,
-): string | undefined => {
-  const selectors = snapshot.piModels.map(canonicalPiSelector).filter(isSafeNativeModelSelector);
-  return parentSelector && selectors.includes(parentSelector) ? parentSelector : selectors[0];
-};
-
 export interface CandidateModelPickerData {
   readonly choices: ReadonlyArray<ProfileModelOption>;
   readonly scopedChoices?: ReadonlyArray<ProfileModelOption> | undefined;
@@ -257,7 +249,7 @@ const piModelOptions = (
     models,
     parentModel: piCatalog.piModels.find((model) => canonicalPiSelector(model) === parentSelector),
     currentSelector: candidate.model,
-    allowParent: candidate.host === "local",
+    allowParent: true,
   });
 
 /** The efforts a Pi candidate's model offers, gated exactly as its picker gates them. */
@@ -275,7 +267,7 @@ export function loadCandidateModelPicker(
 ): Promise<CandidateModelPickerData> {
   const candidate = input.candidate;
   if (candidate.runtime !== "pi") return loadNativeModels(input);
-  // The root registry already reflects project trust; local and Herdr Pi use the same catalog.
+  // The root registry already reflects project trust.
   const snapshot = input.piCatalog;
   const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>
     retainUnavailableCurrent(candidate.model, piModelOptions(input, models));

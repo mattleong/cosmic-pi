@@ -19,7 +19,7 @@ Restart pi after installation. If another questionnaire extension is installed, 
 - Markdown previews beside choices on wide terminals and stacked below them on narrow terminals.
 - A review step before answers are submitted.
 - RPC fallback through Pi's native `select` and `input` dialogs.
-- No local questionnaire tool in ordinary JSON or print modes. Marked local and Herdr Pi children use a root relay instead.
+- No local questionnaire tool in ordinary JSON or print modes. Marked local Pi children use a root relay instead.
 
 The extension never makes model calls and does not persist answers outside Pi's ordinary session history.
 
@@ -127,7 +127,7 @@ Async tools are TUI-only. RPC keeps the existing blocking `ask_user` behavior. T
 
 Cosmic UI lists queued, open, hidden, and settled questionnaires in its unified activity view. You can resume a hidden questionnaire or confirm cancellation there. The overlay still opens automatically, so you never need to open the activity manager to answer. Hiding and resuming preserve drafts and the main editor. `/ask-user` remains available without Cosmic UI.
 
-Explicit blocking `ask_user` calls from local and Herdr Pi subagents route to the root UI. The root coordinator supplies authenticated run ownership, so those questions appear beneath the owning agent. Standalone questions stay at the root. Answers return to the requesting child, never as root automatic answer messages. Run cancellation or session replacement cancels waiting or mounted requests. If a required child relay disappears, the tool fails instead of opening a child-local RPC dialog. Native Claude/Codex prompts and ordinary `contact_parent` questions are not redirected.
+Explicit blocking `ask_user` calls from local Pi subagents route to the root UI. The root coordinator supplies authenticated run ownership, so those questions appear beneath the owning agent. Standalone questions stay at the root. Answers return to the requesting child, never as root automatic answer messages. Run cancellation or session replacement cancels waiting or mounted requests. If a required child relay disappears, the tool fails instead of opening a child-local RPC dialog. Native Claude/Codex prompts and ordinary `contact_parent` questions are not redirected.
 
 ## Private forms for local extensions
 

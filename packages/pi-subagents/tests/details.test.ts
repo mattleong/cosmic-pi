@@ -26,9 +26,9 @@ const run = (index = 1, cost?: number): SubagentRunView => {
     selection: {
       source: "profile-candidate",
       routeSource: "session",
-      host: "herdr",
+      host: "local",
       runtime: "claude",
-      closeOnReport: false,
+      closeOnReport: true,
       candidateIndex: 1,
       reason: "Selected in configured order.",
       skippedCandidates: [
@@ -41,15 +41,15 @@ const run = (index = 1, cost?: number): SubagentRunView => {
     retryExhausted: true,
     retryBlocked: true,
     cwd: "/private/project",
-    state: "reported",
+    state: "completed",
     context: "fresh",
     writeIntent: "read-only",
     openaiFastMode: false,
-    host: "herdr",
+    host: "local",
     runtime: "claude",
-    closeOnReport: false,
+    closeOnReport: true,
     reportGeneration: 1,
-    capabilities: ["resume"],
+    capabilities: ["steer", "interrupt", "parent-contact"],
     model: "provider/model",
     effort: "high",
     sessionId: "private-session",
@@ -232,13 +232,13 @@ describe("persisted subagent details version 2", () => {
     expect(serialized).not.toContain("routeSource");
     expect(serialized).not.toContain('candidateIndex":0');
     expect(details.cards[0]).toMatchObject({
-      host: "herdr",
+      host: "local",
       runtime: "claude",
-      closeOnReport: false,
+      closeOnReport: true,
       reportGeneration: 1,
       context: "fresh",
       writeIntent: "read-only",
-      capabilities: ["resume"],
+      capabilities: ["steer", "interrupt", "parent-contact"],
       startedAt: 1,
       lastActivityAt: 2,
       usage: { totalTokens: 2 },
@@ -472,8 +472,8 @@ describe("persisted subagent details version 2", () => {
 
     const crossField = clone(details);
     Object.assign(crossField.profiles[0]!.candidates[0]!, {
-      host: "herdr",
-      runtime: "pi",
+      host: "local",
+      runtime: "claude",
       model: "parent",
     });
     expect(decodeCompactToolDetails(crossField)).toBeUndefined();
@@ -509,7 +509,8 @@ describe("persisted subagent details version 2", () => {
       startEntries: [
         {
           ...startedEntry(0, "same-name"),
-          warning: "Unsupported Herdr protocol 21. Fell back automatically to local/pi.",
+          warning:
+            "The primary candidate was unavailable; selected the declared local Pi fallback.",
         },
         {
           index: 1,
@@ -529,7 +530,7 @@ describe("persisted subagent details version 2", () => {
     ]);
     expect(details.startEntries[0]).toMatchObject({
       runId: "agent-r2-1",
-      warning: expect.stringContaining("Fell back automatically to local/pi"),
+      warning: expect.stringContaining("declared local Pi fallback"),
     });
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
     expectDeeplyFrozen(details);
@@ -732,11 +733,11 @@ describe("persisted subagent details version 2", () => {
     expect(details.contentOmitted).toBe(true);
     expect(details.cards[0]).toMatchObject({
       finalTextTruncated: true,
-      capabilities: ["resume"],
-      host: "herdr",
+      capabilities: ["steer", "interrupt", "parent-contact"],
+      host: "local",
       runtime: "claude",
       model: "provider/model",
-      closeOnReport: false,
+      closeOnReport: true,
       question: { message: "May I continue?" },
     });
     expect(details.cards[0]?.usage.cost).toBeUndefined();

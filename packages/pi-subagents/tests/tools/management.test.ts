@@ -582,37 +582,6 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest(
-    "acknowledges retained-send next assignments distinctly from steering guidance",
-    function* () {
-      const retainedView = (id: string) =>
-        view({ id, closeOnReport: false, host: "herdr", state: "running", reportGeneration: 1 });
-      const allRetained = subagentServiceDouble({
-        send: (id) => Effect.succeed(retainedView(id)),
-      });
-      const retainedResult = yield* invokeOptionalTool(
-        captureSubagentTools(allRetained).get("subagent_send"),
-        { runIds: ["agent-r1", "agent-r2"], message: "Next task." },
-      );
-      expect(retainedResult?.content[0]?.text).toBe(
-        "Started the next assignment on 2 retained subagents: agent-r1, agent-r2; subagent_await now targets the new report generation.",
-      );
-
-      const mixed = subagentServiceDouble({
-        send: (id) => Effect.succeed(id === "agent-r1" ? retainedView(id) : view({ id })),
-      });
-      const mixedResult = yield* invokeOptionalTool(
-        captureSubagentTools(mixed).get("subagent_send"),
-        { runIds: ["agent-1", "agent-r1"], message: "Continue." },
-      );
-      const text = mixedResult?.content[0]?.text ?? "";
-      expect(text).toContain("Guidance delivered to 1 subagent: agent-1.");
-      expect(text).toContain(
-        "Started the next assignment on 1 retained subagent: agent-r1; subagent_await now targets the new report generation.",
-      );
-    },
-  );
-
   effectTest("preserves target order when mixed results finish in reverse order", function* () {
     const ids = ["success-1", "failure-1", "success-2", "failure-2"];
     const gates = yield* Effect.forEach(ids, () => Deferred.make<void>());

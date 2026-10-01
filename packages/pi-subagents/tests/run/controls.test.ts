@@ -11,18 +11,18 @@ import {
   contactParentFrame,
   localServiceFixture,
   request,
-  retainedRequest,
-  retainedServiceFixture,
+  nativeReportRequest,
+  nativeReportServiceFixture,
   withService,
   type FakeChildControl,
 } from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
   it.effect("clears a waiting parent question when its MCP caller cancels", () => {
-    const { backend, projections, layer } = retainedServiceFixture();
+    const { backend, projections, layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.startSessionOwned(
-        retainedRequest({
+        nativeReportRequest({
           name: "cancelled-question",
         }),
       );

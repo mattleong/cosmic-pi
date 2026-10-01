@@ -35,7 +35,7 @@ export const normalizeProfileId = (value: string): ProfileId | undefined =>
 
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
-export const PROFILE_CANDIDATE_HOSTS = ["local", "herdr"] as const;
+export const PROFILE_CANDIDATE_HOSTS = ["local"] as const;
 export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
@@ -64,7 +64,7 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
   );
 };
 
-/** A normalized route candidate. Profile choices apply except for the protocol-only Herdr-to-local fallback. */
+/** A normalized local route candidate. */
 export interface ProfileCandidate {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -119,10 +119,6 @@ export const isLocalPiProfileCandidate = (
   candidate: Pick<ProfileCandidate, "host" | "runtime">,
 ): boolean => candidate.host === "local" && candidate.runtime === "pi";
 
-export const isRetainableProfileCandidate = (
-  candidate: Pick<ProfileCandidate, "host" | "writeIntent">,
-): boolean => candidate.host === "herdr" && candidate.writeIntent === "read-only";
-
 const splitPiModelSelector = (
   selector: string,
 ): { readonly provider: string; readonly model: string } | undefined => {
@@ -147,7 +143,7 @@ export const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
   "model_selector_invalid",
   "parent_requires_local_pi",
   "fork_requires_local_pi",
-  "retention_requires_herdr_read_only",
+  "close_after_report_required",
   "fast_mode_unsupported",
   "effort_unsupported",
 ] as const;
@@ -168,8 +164,7 @@ export const profileCandidateValidationIssues = (
     issues.push({ code: "parent_requires_local_pi" });
   if (candidate.context === "fork" && !isLocalPiProfileCandidate(candidate))
     issues.push({ code: "fork_requires_local_pi" });
-  if (!candidate.closeOnReport && !isRetainableProfileCandidate(candidate))
-    issues.push({ code: "retention_requires_herdr_read_only" });
+  if (!candidate.closeOnReport) issues.push({ code: "close_after_report_required" });
   if (
     candidate.openaiFastMode === true &&
     !supportsSubagentFastMode(candidate.runtime, candidate.model)
@@ -242,7 +237,7 @@ export interface ProfileRouteContinuation {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
   /** Zero-based candidate selected for the run carrying this continuation. */
   readonly selectedCandidateIndex: number;
-  /** Static/dynamic skips accumulated before selection, including same-candidate host fallback. */
+  /** Static/dynamic skips accumulated before selection. */
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 

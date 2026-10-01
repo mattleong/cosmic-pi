@@ -1,12 +1,11 @@
 // Native CLI frame limits and immediate parser-overflow termination policy, shared by the local
-// Claude/Codex adapters and Herdr Codex hook trust.
+// Claude/Codex adapters.
 // process-transport.ts owns shared spawn, bounded queues, writes, and process-tree release.
 // This boundary owns no harness state and never imports the LocalCliProcess service.
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type {
-  CodexHookRequest,
   CodexInitializedNotification,
   CodexRequest,
 } from "../backend/local-codex-protocol.ts";
@@ -35,7 +34,6 @@ export type LocalCliOutboundFrame =
   | ClaudeUserFrame
   | ClaudeControlRequestFrame
   | CodexRequest
-  | CodexHookRequest
   | CodexInitializedNotification;
 
 export interface LocalCliHandle {

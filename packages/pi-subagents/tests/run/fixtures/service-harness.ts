@@ -625,7 +625,7 @@ export const serviceLayer = (
   writerLeases?: Layer.Layer<WriterLeaseService>,
 ) => layerOver(localPiBackendRegistryLayer, options, profiles, writerLeases);
 
-export interface FakeRetainedControl {
+export interface FakeNativeReportControl {
   readonly prompts: string[];
   readonly assignmentEpochs: number[];
   readonly terminations: Array<"graceful" | "force">;
@@ -645,7 +645,7 @@ export interface FakeRetainedControl {
   readonly released: () => number;
 }
 
-export function fakeRetainedBackendLayer(
+export function fakeNativeReportBackendLayer(
   options: {
     readonly initialStartGate?: Deferred.Deferred<void, never> | undefined;
     readonly interruptGate?: Deferred.Deferred<void, never> | undefined;
@@ -653,9 +653,9 @@ export function fakeRetainedBackendLayer(
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
   } = {},
 ) {
-  const controls: FakeRetainedControl[] = [];
+  const controls: FakeNativeReportControl[] = [];
   const driver: BackendDriver = {
-    host: "herdr",
+    host: "local",
     runtime: "claude",
     capabilities: options.capabilities ?? ["steer", "rename-display"],
     supportsContext: (context) => context === "fresh",
@@ -673,7 +673,7 @@ export function fakeRetainedBackendLayer(
           const startFailures: Array<string | undefined> = [];
           let releaseCount = 0;
           let assignmentEpoch = 0;
-          const offer: FakeRetainedControl["offer"] = (event) => {
+          const offer: FakeNativeReportControl["offer"] = (event) => {
             // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
             const normalized: BackendEvent =
               event.type === "report" && !("assignmentEpoch" in event)
@@ -681,7 +681,7 @@ export function fakeRetainedBackendLayer(
                 : (event as BackendEvent);
             Queue.offerUnsafe(events, normalized);
           };
-          const control: FakeRetainedControl = {
+          const control: FakeNativeReportControl = {
             prompts,
             assignmentEpochs,
             terminations,
@@ -700,9 +700,9 @@ export function fakeRetainedBackendLayer(
               awaitExit: Effect.never,
               controls: {
                 initialize: Effect.succeed({
-                  model: "claude-retained",
+                  model: "claude-native",
                   effort: "high" as const,
-                  sessionId: "retained-session",
+                  sessionId: "native-session",
                 }),
                 start: (message: string, nextAssignmentEpoch: number) =>
                   Effect.gen(function* () {
@@ -715,7 +715,7 @@ export function fakeRetainedBackendLayer(
                       const code = startFailures.shift();
                       const failure = {
                         operation: "start assignment in",
-                        message: "Fixture retained start failure.",
+                        message: "Fixture native start failure.",
                       };
                       return yield* new SubagentProcessError(code ? { ...failure, code } : failure);
                     }
@@ -777,8 +777,8 @@ export function localServiceFixture(
   return { fake, projections, notifications, layer };
 }
 
-export function retainedServiceFixture(
-  backend = fakeRetainedBackendLayer(),
+export function nativeReportServiceFixture(
+  backend = fakeNativeReportBackendLayer(),
   options: SubagentServiceOptions = {},
 ) {
   const { projections, notifications, options: captured } = capturing(options);
@@ -786,7 +786,7 @@ export function retainedServiceFixture(
   return { backend, projections, notifications, layer };
 }
 
-export const retainedReportFrame = (
+export const nativeReportFrame = (
   runId: string,
   assignmentEpoch: number,
   sequence: number,
@@ -837,12 +837,12 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
   ...overrides,
 });
 
-export const retainedRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
+export const nativeReportRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({
-    host: "herdr",
+    host: "local",
     runtime: "claude",
-    closeOnReport: false,
-    model: "claude-retained",
+    closeOnReport: true,
+    model: "claude-native",
     effortWasExplicit: false,
     ...overrides,
   });

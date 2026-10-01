@@ -75,7 +75,6 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         candidate,
         field,
         target: this.options.target,
-        piModel: this.options.preferredPiModel(),
         parentModel: this.options.parentModel,
         parentEffort: this.options.parentEffort,
         supportedEfforts,
@@ -186,7 +185,6 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
             // Runtime and model commit together, so a native switch applies only on selection.
             const switched = nativeSwitch
               ? updateCandidateControls(candidate, nativeSwitch, {
-                  piModel: this.options.preferredPiModel(),
                   nativeModel: option.selector,
                 })
               : { candidate, notices: [] };

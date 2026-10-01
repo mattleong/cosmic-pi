@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
+import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
@@ -368,6 +369,79 @@ describe("subagent Pi registration", () => {
       expect(tools.active()).toEqual(expectedActive());
       yield* settle(() => handlers.get("session_shutdown")?.({}, context()));
       expect(tools.active()).toEqual(["read"]);
+    },
+  );
+
+  effectTest(
+    "keeps incompatible reload settings inactive through tree changes until a fresh session",
+    function* () {
+      const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
+      const envelope = {
+        version: 2,
+        sessionKey: "application-incompatible-session",
+        seed: {
+          revision: 7,
+          overrides: {
+            worker: {
+              candidates: [{ ...profileCandidate("openai/retired"), host: "herdr" }],
+            },
+          },
+          baseline: completeBaseline("global"),
+        },
+      };
+      interface TestReloadGlobalState {
+        [reloadSlot]?: typeof envelope;
+      }
+      // SAFETY: This test installs and owns the exact process-global reload slot.
+      const processState = globalThis as typeof globalThis & TestReloadGlobalState;
+      Reflect.defineProperty(processState, reloadSlot, {
+        configurable: true,
+        writable: true,
+        value: envelope,
+      });
+      const tools = activeToolTracker();
+      let { handlers } = applicationFixture(tools.overrides);
+      const notify = vi.fn();
+      let ctx: ExtensionContext = extensionContextFixture({
+        cwd: process.cwd(),
+        hasUI: true,
+        mode: "tui",
+        isProjectTrusted: () => false,
+        ui: { notify },
+        sessionManager: {
+          getSessionId: () => "application-incompatible-session",
+          getSessionFile: () => undefined,
+        },
+      });
+      try {
+        for (const event of ["session_start", "session_tree", "session_start"] as const) {
+          yield* settle(() => handlers.get(event)?.({ reason: "reload" }, ctx));
+          expect(tools.active()).toEqual(["read"]);
+          expect(processState[reloadSlot]).toBe(envelope);
+        }
+        expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
+
+        yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+        handlers = applicationFixture(tools.overrides).handlers;
+        yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
+        yield* settle(() => handlers.get("session_tree")?.({}, ctx));
+        expect(tools.active()).toEqual(["read"]);
+        expect(processState[reloadSlot]).toBe(envelope);
+
+        ctx = extensionContextFixture({
+          ...ctx,
+          sessionManager: {
+            getSessionId: () => "application-compatible-new-session",
+            getSessionFile: () => undefined,
+          },
+        });
+        yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, ctx));
+        expect(tools.active()).toContain("subagent_start");
+        expect(Object.hasOwn(processState, reloadSlot)).toBe(false);
+      } finally {
+        yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
+        Reflect.deleteProperty(processState, reloadSlot);
+      }
     },
   );
 

@@ -6,7 +6,7 @@ import { activityRow, mountActivity } from "./support/activity.ts";
 
 const routed = activityRow("Long task title ".repeat(30), "running", undefined, {
   profile: "worker",
-  route: "herdr/pi · provider/model:high",
+  route: "local/pi · provider/model:high",
   startedAt: 0,
 });
 const owner = activityRow("a very long task name", "running", undefined, {

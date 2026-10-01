@@ -53,10 +53,9 @@ describe("profile declaration visit restore", () => {
     [candidate],
     {
       ...candidate,
-      host: "herdr",
       writeIntent: "read-only",
       openaiFastMode: false,
-      closeOnReport: false,
+      closeOnReport: true,
     },
     "disabled",
     undefined,
@@ -79,6 +78,9 @@ describe("profile declaration visit restore", () => {
 
   for (const patch of [
     { declaration: [] },
+    { declaration: { ...candidate, host: "herdr" } },
+    { declaration: { ...candidate, closeOnReport: false } },
+    { declaration: [candidate, { ...candidate, host: "herdr" }] },
     { declaration: { ...candidate, unknown: true } },
     { declaration: { ...candidate, openaiFastMode: "false" } },
     { declaration: "broken" },

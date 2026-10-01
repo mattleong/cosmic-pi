@@ -74,7 +74,6 @@ const transferableRuntimeApiKey = (value: string | undefined): value is string =
   !value.includes("\n");
 
 const resolvePiModel = (
-  host: SubagentHost,
   selector: string,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
@@ -84,8 +83,8 @@ const resolvePiModel = (
   InvalidSubagentRequestError
 > =>
   Effect.gen(function* () {
-    // The root registry already reflects the current project-trust decision. Local and Herdr Pi
-    // mirror that decision, so every authenticated canonical model is eligible for resolution.
+    // The root registry already reflects the current project-trust decision. Local Pi mirrors
+    // that decision, so every authenticated canonical model is eligible for resolution.
     const availableModels = ctx.modelRegistry
       .getAvailable()
       .map((model) => ({ provider: model.provider, id: model.id }));
@@ -115,9 +114,7 @@ const resolvePiModel = (
         message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
       });
     const authSource = ctx.modelRegistry.getProviderAuthStatus(model.provider).source;
-    const requiresPrivateTransfer =
-      authSource === "runtime" || (host === "herdr" && authSource === "environment");
-    if (!requiresPrivateTransfer) return { model: modelId };
+    if (authSource !== "runtime") return { model: modelId };
     const auth = yield* Effect.tryPromise({
       try: () => ctx.modelRegistry.getApiKeyAndHeaders(model),
       catch: () =>
@@ -183,13 +180,7 @@ const resolveConcreteModel = (
     const registry = yield* SubagentBackendRegistry;
     const resolved =
       attempt.runtime === "pi"
-        ? yield* resolvePiModel(
-            attempt.host,
-            attempt.model,
-            attempt.effort,
-            attempt.effortWasExplicit,
-            ctx,
-          )
+        ? yield* resolvePiModel(attempt.model, attempt.effort, attempt.effortWasExplicit, ctx)
         : { model: attempt.model };
     if (attempt.openaiFastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
       return yield* new InvalidSubagentRequestError({
@@ -237,39 +228,6 @@ const dynamicCandidateSkip = (
   code: error.code || error._tag,
   reason: error.message,
 });
-
-const HERDR_PROTOCOL_FALLBACK_CODES = new Set([
-  "herdr_upgrade_required",
-  "herdr_protocol_unsupported",
-  "herdr_protocol_mismatch",
-]);
-
-const shouldFallBackFromHerdrProtocol = (
-  attempt: ProfileCandidateAttempt,
-  error: CandidateReadinessFailure,
-): boolean =>
-  attempt.host === "herdr" &&
-  error.code !== undefined &&
-  HERDR_PROTOCOL_FALLBACK_CODES.has(error.code);
-
-const localProtocolFallbackAttempt = (
-  attempt: ProfileCandidateAttempt,
-): ProfileCandidateAttempt => ({
-  ...attempt,
-  host: "local",
-  closeOnReport: true,
-  reason: `Configured Herdr candidate ${attempt.candidateIndex + 1} required an automatic local/${attempt.runtime} protocol fallback.`,
-});
-
-const localProtocolFallbackWarning = (
-  attempt: ProfileCandidateAttempt,
-  error: CandidateReadinessFailure,
-): string =>
-  `${error.message} Fell back automatically to local/${attempt.runtime}.${
-    attempt.closeOnReport
-      ? ""
-      : " closeOnReport was forced to true because local runs close after reporting."
-  }`;
 
 interface PlannedStartInput {
   readonly rawInput: SubagentProfileStartSpec;
@@ -368,7 +326,6 @@ const resolvePlannedStart = (
         selectedAttempt: ProfileCandidateAttempt,
         concrete: ResolvedConcreteModel,
         selectedSkips: ReadonlyArray<SkippedProfileCandidate>,
-        warning?: string,
       ) => {
         const selectionBase = {
           source: selectedAttempt.source,
@@ -385,38 +342,14 @@ const resolvePlannedStart = (
         return {
           attempt: selectedAttempt,
           concrete,
-          selection: warning === undefined ? selectionBase : { ...selectionBase, warning },
+          selection: selectionBase,
         };
       };
       return resolveConcreteModel(attempt, ctx, environment.cwd).pipe(
         Effect.matchEffect({
           onFailure: (error) => {
             if (isCleanupUnconfirmed(error) || isOutcomeUncertain(error)) return Effect.fail(error);
-            const herdrSkip = dynamicCandidateSkip(attempt, error);
-            if (!shouldFallBackFromHerdrProtocol(attempt, error))
-              return tryAttempt(index + 1, [...precedingSkips, herdrSkip]);
-            const fallbackAttempt = localProtocolFallbackAttempt(attempt);
-            const fallbackSkips = [...precedingSkips, herdrSkip];
-            return resolveConcreteModel(fallbackAttempt, ctx, environment.cwd).pipe(
-              Effect.matchEffect({
-                onFailure: (fallbackError) =>
-                  isCleanupUnconfirmed(fallbackError) || isOutcomeUncertain(fallbackError)
-                    ? Effect.fail(fallbackError)
-                    : tryAttempt(index + 1, [
-                        ...fallbackSkips,
-                        dynamicCandidateSkip(fallbackAttempt, fallbackError),
-                      ]),
-                onSuccess: (concrete) =>
-                  Effect.succeed(
-                    selectedResult(
-                      fallbackAttempt,
-                      concrete,
-                      fallbackSkips,
-                      localProtocolFallbackWarning(attempt, error),
-                    ),
-                  ),
-              }),
-            );
+            return tryAttempt(index + 1, [...precedingSkips, dynamicCandidateSkip(attempt, error)]);
           },
           onSuccess: (concrete) =>
             Effect.succeed(selectedResult(attempt, concrete, precedingSkips)),

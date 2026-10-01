@@ -25,12 +25,12 @@ import {
 
 describe("SubagentService", () => {
   it.effect(
-    "quarantines a spawn-started writer when a failed Herdr acquisition owns uncertain cleanup",
+    "quarantines a spawn-started writer when a failed local native acquisition owns uncertain cleanup",
     () => {
       const counts = leaseCounts();
       const projections: SubagentProjection[] = [];
       const driver: BackendDriver = {
-        host: "herdr",
+        host: "local",
         runtime: "pi",
         capabilities: ["steer"],
         supportsContext: (context) => context === "fresh",
@@ -40,16 +40,16 @@ describe("SubagentService", () => {
             yield* Effect.addFinalizer(() =>
               Effect.fail(
                 new SubagentProcessError({
-                  operation: "finalize Herdr launch",
-                  code: "herdr_launch_cleanup_unconfirmed",
+                  operation: "finalize local native launch",
+                  code: "process_cleanup_unconfirmed",
                   message: "Fixture applied start and failed rollback cleanup.",
                 }),
               ).pipe(Effect.orDie),
             );
             return yield* new SubagentProcessError({
-              operation: "launch Herdr agent",
-              code: "herdr_start_agent_outcome_uncertain",
-              message: "Fixture Herdr start may have applied.",
+              operation: "launch local native agent",
+              code: "transport_outcome_uncertain",
+              message: "Fixture local native start may have applied.",
             });
           }),
       };
@@ -69,15 +69,15 @@ describe("SubagentService", () => {
         const failure = yield* service
           .start(
             request({
-              host: "herdr",
+              host: "local",
               runtime: "pi",
               writeIntent: "writer",
               closeOnReport: true,
-              name: "uncertain-herdr-writer",
+              name: "uncertain-local-writer",
             }),
           )
           .pipe(Effect.flip);
-        expect(failure).toMatchObject({ code: "herdr_start_agent_outcome_uncertain" });
+        expect(failure).toMatchObject({ code: "transport_outcome_uncertain" });
         expect(counts.release).toBe(0);
         expect(projections.at(-1)?.runs[0]).toMatchObject({
           state: "failed",
@@ -86,7 +86,7 @@ describe("SubagentService", () => {
         const conflict = yield* service
           .start(
             request({
-              host: "herdr",
+              host: "local",
               runtime: "pi",
               name: "replacement",
               writeIntent: "writer",

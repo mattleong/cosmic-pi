@@ -54,7 +54,6 @@ export const backendSupervisor = (
   events,
   awaitReady: Effect.void,
   setAssignmentEpoch: () => Effect.void,
-  deliverNotification: () => Effect.void,
   reply: () => Effect.void,
   cancelPending: () => {},
   ...behavior,

@@ -22,6 +22,12 @@ interface ProfileReloadEnvelope {
   readonly seed: SessionProfileOverrideSeed;
 }
 
+/** A present same-session seed cannot be replaced by disk defaults during reload. */
+export class IncompatibleProfileReloadHandoffError extends Schema.TaggedError<IncompatibleProfileReloadHandoffError>()(
+  "IncompatibleProfileReloadHandoffError",
+  { message: Schema.String },
+) {}
+
 export interface ProfileReloadHandoff {
   readonly capture: (sessionKey: string) => SessionProfileOverrideSeed | undefined;
   readonly publish: (sessionKey: string, seed: SessionProfileOverrideSeed) => void;
@@ -81,7 +87,7 @@ const writeEnvelope = (envelope: ProfileReloadEnvelope): void => {
   }
 };
 
-const readEnvelope = (): ProfileReloadEnvelope | undefined => {
+const readEnvelope = (sessionKey?: string): ProfileReloadEnvelope | undefined => {
   const slot = readEnvelopeValue();
   if (!slot) {
     deleteEnvelope();
@@ -90,8 +96,17 @@ const readEnvelope = (): ProfileReloadEnvelope | undefined => {
   if (!slot.present || slot.value === undefined) return undefined;
   try {
     const decoded = Option.getOrUndefined(decodeEnvelope(slot.value));
-    const seed = decoded ? decodeSessionProfileOverrideSeed(decoded.seed) : undefined;
-    if (!decoded || !seed || (decoded.version === 2 && !seed.baseline)) {
+    if (!decoded) {
+      deleteEnvelope();
+      return undefined;
+    }
+    const seed = decodeSessionProfileOverrideSeed(decoded.seed);
+    if (!seed || (decoded.version === 2 && !seed.baseline)) {
+      if (decoded.sessionKey === sessionKey)
+        throw new IncompatibleProfileReloadHandoffError({
+          message:
+            "Subagents cannot restore this session's profile settings. Start a fresh Pi session to recover.",
+        });
       deleteEnvelope();
       return undefined;
     }
@@ -100,7 +115,8 @@ const readEnvelope = (): ProfileReloadEnvelope | undefined => {
       sessionKey: decoded.sessionKey,
       seed,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof IncompatibleProfileReloadHandoffError) throw error;
     deleteEnvelope();
     return undefined;
   }
@@ -125,15 +141,11 @@ export const profileReloadSessionKey = (ctx: ExtensionContext): string | undefin
  */
 export const makeProfileReloadHandoff = (): ProfileReloadHandoff => ({
   capture: (sessionKey) => {
-    try {
-      if (!isProfileReloadSessionKey(sessionKey)) return undefined;
-      const envelope = readEnvelope();
-      return envelope?.sessionKey === sessionKey
-        ? cloneSessionProfileOverrideSeed(envelope.seed)
-        : undefined;
-    } catch {
-      return undefined;
-    }
+    if (!isProfileReloadSessionKey(sessionKey)) return undefined;
+    const envelope = readEnvelope(sessionKey);
+    return envelope?.sessionKey === sessionKey
+      ? cloneSessionProfileOverrideSeed(envelope.seed)
+      : undefined;
   },
   publish: (sessionKey, seed) => {
     try {
@@ -142,10 +154,7 @@ export const makeProfileReloadHandoff = (): ProfileReloadHandoff => ({
         return;
       }
       const decodedSeed = decodeSessionProfileOverrideSeed(seed);
-      if (!decodedSeed?.baseline) {
-        deleteEnvelope();
-        return;
-      }
+      if (!decodedSeed?.baseline) return;
       writeEnvelope(
         Object.freeze({
           version: 2,
@@ -159,7 +168,7 @@ export const makeProfileReloadHandoff = (): ProfileReloadHandoff => ({
   },
   clear: (sessionKey) => {
     try {
-      if (sessionKey !== undefined && readEnvelope()?.sessionKey !== sessionKey) return;
+      if (sessionKey !== undefined && readEnvelope(sessionKey)?.sessionKey !== sessionKey) return;
       deleteEnvelope();
     } catch {
       // Reload cleanup is best effort and must not fail session lifecycle handling.

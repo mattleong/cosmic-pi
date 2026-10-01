@@ -127,12 +127,12 @@ describe("hierarchical tool result rendering", () => {
     const second = view({
       id: "report-b",
       name: "Report B",
-      state: "reported",
-      closeOnReport: false,
+      state: "completed",
+      closeOnReport: true,
       reportGeneration: 1,
       endedAt: 3,
       finalText: "Second report body.",
-      progress: "Stale reported progress.",
+      progress: "Stale finished progress.",
     });
     const details = makeAwaitDetails({
       runs: [first, second],

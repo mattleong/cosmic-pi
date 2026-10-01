@@ -12,14 +12,17 @@ import { expect } from "vitest";
 import { SubagentService } from "../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { retainedRequest, retainedServiceFixture } from "../run/fixtures/service-harness.ts";
+import {
+  nativeReportRequest,
+  nativeReportServiceFixture,
+} from "../run/fixtures/service-harness.ts";
 import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { step } from "../support/effect-test.ts";
 import { executeTool } from "./fixtures/tool-harness.ts";
 
 it.live("returns a parent question in the await result without a second notification", () =>
   Effect.gen(function* () {
-    const fixture = retainedServiceFixture();
+    const fixture = nativeReportServiceFixture();
     const tools = new Map<string, ToolDefinition>();
     const pi = extensionApiFixture({
       registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
@@ -35,7 +38,7 @@ it.live("returns a parent question in the await result without a second notifica
       run: (effect, signal) => runtime.run(effect, signal),
     });
     const service = yield* step(() => runtime.run(SubagentService));
-    const child = yield* step(() => runtime.run(service.startSessionOwned(retainedRequest())));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
     const progress = Deferred.makeUnsafe<void>();
     const pending = executeTool(
       tools.get("subagent_await")!,
@@ -67,7 +70,7 @@ it.live(
   "cancels a registered root await on the real revision stream without stopping its child",
   () =>
     Effect.gen(function* () {
-      const fixture = retainedServiceFixture();
+      const fixture = nativeReportServiceFixture();
       const tools = new Map<string, ToolDefinition>();
       const pi = extensionApiFixture({
         registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
@@ -106,7 +109,9 @@ it.live(
         },
       });
       const service = yield* step(() => runtime.run(SubagentService));
-      const child = yield* step(() => runtime.run(service.startSessionOwned(retainedRequest())));
+      const child = yield* step(() =>
+        runtime.run(service.startSessionOwned(nativeReportRequest())),
+      );
       expect(child.state).toBe("running");
       const tool = tools.get("subagent_await")!;
       const progress = Deferred.makeUnsafe<void>();
@@ -171,7 +176,7 @@ it.live(
       const completed = yield* step(() => replacement);
       expect(completed.details).toMatchObject({
         action: "await",
-        cards: [{ id: child.id, state: "reported", finalText: "Child finished normally." }],
+        cards: [{ id: child.id, state: "completed", finalText: "Child finished normally." }],
       });
       expect(completed.details).not.toHaveProperty("cancelled");
       expect(fixture.backend.controls[0]!.terminations).toEqual([]);

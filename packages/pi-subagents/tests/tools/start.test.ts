@@ -70,12 +70,6 @@ const preflightRegistry = (
   };
 };
 
-const herdrProtocol21 = () =>
-  invalidRequest(
-    "herdr_protocol_unsupported",
-    "Unsupported Herdr protocol 21. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
-  );
-
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
@@ -346,11 +340,11 @@ describe("subagent tool", () => {
         profiles: {
           reviewer: [
             route({
-              host: "herdr",
+              host: "local",
               runtime: "claude",
               model: "sonnet",
               effort: "high",
-              closeOnReport: false,
+              closeOnReport: true,
             }),
             route(),
           ],
@@ -375,149 +369,6 @@ describe("subagent tool", () => {
           selectedCandidateIndex: 1,
           candidates: [{ runtime: "claude" }, { runtime: "pi" }],
         },
-      });
-    },
-  );
-
-  effectTest(
-    "falls back from an unsupported Herdr protocol to the matching local runtime",
-    function* () {
-      const runtimeCases = [
-        {
-          runtime: "pi",
-          model: "openai-codex/gpt-5.6-sol",
-          openaiFastMode: true,
-        },
-        { runtime: "claude", model: "claude-opus-5", openaiFastMode: false },
-        { runtime: "codex", model: "gpt-5.6-codex", openaiFastMode: false },
-      ] as const;
-
-      for (const runtimeCase of runtimeCases) {
-        const requests: StartSubagentRequest[] = [];
-        const profiles = profileServiceFor({
-          profiles: {
-            reviewer: route({
-              host: "herdr",
-              effort: "high",
-              closeOnReport: false,
-              ...runtimeCase,
-            }),
-          },
-        });
-        const registry = preflightRegistry((selection) =>
-          selection.host === "herdr" ? herdrProtocol21() : undefined,
-        );
-
-        const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
-          agents: [{ profile: "reviewer", task: "Review" }],
-        });
-
-        expect(requests).toHaveLength(1);
-        expect(requests[0]).toMatchObject({
-          host: "local",
-          runtime: runtimeCase.runtime,
-          model: runtimeCase.model,
-          closeOnReport: true,
-          selection: {
-            host: "local",
-            runtime: runtimeCase.runtime,
-            closeOnReport: true,
-            candidateIndex: 0,
-            skippedCandidates: [{ candidateIndex: 0, code: "herdr_protocol_unsupported" }],
-            warning: expect.stringContaining(
-              `Fell back automatically to local/${runtimeCase.runtime}`,
-            ),
-          },
-          routeContinuation: {
-            selectedCandidateIndex: 0,
-            candidates: [{ host: "herdr", runtime: runtimeCase.runtime, closeOnReport: false }],
-          },
-        });
-        expect(requests[0]?.selection?.warning).toContain("closeOnReport was forced to true");
-        expect(result?.content[0]?.text).toContain("Unsupported Herdr protocol 21");
-        expect(result?.details).toMatchObject({
-          startEntries: [
-            {
-              status: "started",
-              host: "local",
-              runtime: runtimeCase.runtime,
-              warning: expect.stringContaining(
-                `Fell back automatically to local/${runtimeCase.runtime}`,
-              ),
-            },
-          ],
-        });
-      }
-    },
-  );
-
-  effectTest("preserves writer claims across automatic Herdr protocol fallback", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const profiles = profileServiceFor({
-      profiles: {
-        worker: route({
-          host: "herdr",
-          model: "openai-codex/gpt-5.6-sol",
-          effort: "high",
-          writeIntent: "writer",
-          closeOnReport: true,
-        }),
-      },
-    });
-    const registry = preflightRegistry((selection) =>
-      selection.host === "herdr"
-        ? invalidRequest(
-            "herdr_upgrade_required",
-            "Unsupported Herdr protocol 19. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
-          )
-        : undefined,
-    );
-
-    yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
-      agents: [{ profile: "worker", task: "Implement auth", writes: ["src/auth.ts"] }],
-    });
-
-    expect(requests[0]).toMatchObject({
-      host: "local",
-      runtime: "pi",
-      writeIntent: "writer",
-      writes: ["src/auth.ts"],
-      selection: {
-        warning: expect.stringContaining("Fell back automatically to local/pi"),
-      },
-    });
-  });
-
-  effectTest(
-    "keeps the unsupported Herdr protocol diagnostic when local fallback also fails",
-    function* () {
-      const requests: StartSubagentRequest[] = [];
-      const profiles = profileServiceFor({
-        profiles: {
-          reviewer: route({
-            host: "herdr",
-            runtime: "claude",
-            model: "claude-opus-5",
-            effort: "high",
-            closeOnReport: true,
-          }),
-        },
-      });
-      const registry = preflightRegistry((selection) =>
-        selection.host === "herdr"
-          ? herdrProtocol21()
-          : invalidRequest("claude_unauthenticated", "Local Claude authentication is unavailable."),
-      );
-
-      const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
-        agents: [{ profile: "reviewer", task: "Review" }],
-      });
-
-      expect(requests).toEqual([]);
-      expect(result?.content[0]?.text).toContain("Unsupported Herdr protocol 21");
-      expect(result?.content[0]?.text).toContain("Local Claude authentication is unavailable");
-      expect(result?.details).toMatchObject({
-        startFailures: [{ code: "profile_no_eligible_model" }],
       });
     },
   );
@@ -560,52 +411,51 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest("does not fall through after uncertain readiness-process cleanup", function* () {
+  for (const code of ["claude_preflight_cleanup_unconfirmed", "claude_preflight_outcome_uncertain"])
+    effectTest(`does not advance the local route after ${code}`, function* () {
+      const requests: StartSubagentRequest[] = [];
+      const profiles = profileServiceFor({
+        profiles: {
+          reviewer: [
+            route({ runtime: "claude", model: "sonnet", effort: "xhigh" }),
+            route({ effort: "high" }),
+          ],
+        },
+      });
+      const attempted: string[] = [];
+      const registry = preflightRegistry((selection) => {
+        attempted.push(selection.runtime);
+        return selection.runtime === "claude"
+          ? invalidRequest(code, "Fixture readiness execution or cleanup is uncertain.")
+          : undefined;
+      });
+      const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+        agents: [{ profile: "reviewer", task: "Review" }],
+      });
+      expect(requests).toEqual([]);
+      expect(attempted).toEqual(["claude"]);
+      expect(result?.details).toMatchObject({ startFailures: [{ code }] });
+    });
+
+  effectTest("rejects remote configuration before readiness or service start", function* () {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
       profiles: {
-        reviewer: [
-          route({ runtime: "claude", model: "sonnet", effort: "xhigh" }),
-          route({ effort: "high" }),
-        ],
+        reviewer: {
+          ...route({ runtime: "codex", model: "gpt-5.4", effort: "high" }),
+          host: "herdr",
+        },
       },
     });
-    const registry = preflightRegistry((selection) =>
-      selection.runtime === "claude"
-        ? invalidRequest(
-            "claude_preflight_cleanup_unconfirmed",
-            "Fixture readiness process cleanup is uncertain.",
-          )
-        : undefined,
-    );
+    const preflight = vi.fn(() => Effect.succeed(testBackendDriver));
+    const registry = { ...testBackendRegistry, preflight };
     const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
       agents: [{ profile: "reviewer", task: "Review" }],
     });
     expect(requests).toEqual([]);
+    expect(preflight).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({
-      startFailures: [{ code: "claude_preflight_cleanup_unconfirmed" }],
-    });
-  });
-
-  effectTest("fails an unsupported-only route before service start", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const profiles = profileServiceFor({
-      profiles: {
-        reviewer: route({
-          host: "herdr",
-          runtime: "codex",
-          model: "gpt-5.4",
-          effort: "high",
-          closeOnReport: false,
-        }),
-      },
-    });
-    const result = yield* invokeOptionalTool(startTool(requests, { profiles }), {
-      agents: [{ profile: "reviewer", task: "Review" }],
-    });
-    expect(requests).toEqual([]);
-    expect(result?.details).toMatchObject({
-      startFailures: [{ code: "backend_not_implemented" }],
+      startFailures: [{ code: "profile_no_eligible_model" }],
     });
   });
 

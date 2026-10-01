@@ -17,7 +17,6 @@ import {
 import {
   subagentRuntimeEfforts,
   type SubagentEffort,
-  type SubagentHost,
   type SubagentRuntime,
 } from "../domain/routing.ts";
 
@@ -48,8 +47,6 @@ export interface ProfileRouteDraft {
 }
 
 export interface CandidateControlDefaults {
-  /** First authenticated canonical Pi model, used when `parent` becomes unavailable. */
-  readonly piModel?: string | undefined;
   /** Claude or Codex model picked from that runtime's live catalog; neither has a built-in default. */
   readonly nativeModel?: string | undefined;
 }
@@ -243,8 +240,8 @@ const candidateIssueMessage = (
       return "The parent model is available only with Local Pi.";
     case "fork_requires_local_pi":
       return "Fork is available only with Local Pi.";
-    case "retention_requires_herdr_read_only":
-      return "Only Herdr read-only runs can stay open after reporting.";
+    case "close_after_report_required":
+      return "Runs must close after reporting.";
     case "fast_mode_unsupported":
       return `Fast mode is not available with ${runtimeLabel(candidate.runtime)}/${candidate.model}.`;
     case "effort_unsupported":
@@ -257,33 +254,23 @@ export const candidateValidationError = (candidate: ProfileCandidate): string | 
   return issue ? candidateIssueMessage(candidate, issue.code) : undefined;
 };
 
-const replacementPiModel = (
-  host: SubagentHost,
-  defaults: CandidateControlDefaults,
-): string | undefined => (host === "local" ? "parent" : defaults.piModel);
-
-/**
- * Applies controlling fields and visibly normalizes every incompatible dependent field.
- * An unavailable Herdr Pi replacement fails without changing the staged candidate.
- */
+/** Applies controlling fields and visibly normalizes incompatible dependent fields. */
 export function updateCandidateControls(
   candidate: ProfileCandidate,
   patch: Partial<Pick<ProfileCandidate, "host" | "runtime" | "writeIntent">>,
   defaults: CandidateControlDefaults,
 ): CandidateUpdate {
   const notices: string[] = [];
+  if ((patch.host !== undefined && patch.host !== "local") || candidate.host !== "local")
+    return { notices, error: "Unsupported run host." };
   let next: ProfileCandidate = { ...candidate, ...patch };
 
   if (patch.runtime !== undefined && patch.runtime !== candidate.runtime) {
-    const model =
-      patch.runtime === "pi" ? replacementPiModel(next.host, defaults) : defaults.nativeModel;
+    const model = patch.runtime === "pi" ? "parent" : defaults.nativeModel;
     if (!model)
       return {
         notices,
-        error:
-          patch.runtime === "pi"
-            ? "Herdr Pi needs a Pi model, but none is available. Check that Pi is signed in."
-            : `Choose a ${runtimeLabel(patch.runtime)} model.`,
+        error: `Choose a ${runtimeLabel(patch.runtime)} model.`,
       };
     next = { ...next, model };
     notices.push(`Model changed to ${model} for ${runtimeLabel(patch.runtime)}.`);
@@ -296,26 +283,13 @@ export function updateCandidateControls(
       case "model_selector_invalid":
         return { notices, error: candidateIssueMessage(next, issue.code) };
       case "parent_requires_local_pi":
-        if (!defaults.piModel)
-          return {
-            notices: [],
-            error: "Herdr Pi needs a Pi model, but none is available. Check that Pi is signed in.",
-          };
-        next = { ...next, model: defaults.piModel };
-        notices.push(
-          `The parent model works only with Local Pi. Model changed to ${defaults.piModel}.`,
-        );
-        break;
+        return { notices, error: candidateIssueMessage(next, issue.code) };
       case "fork_requires_local_pi":
         next = { ...next, context: "fresh" };
         notices.push("Fork works only with Local Pi. Context changed to Fresh.");
         break;
-      case "retention_requires_herdr_read_only":
-        next = { ...next, closeOnReport: true };
-        notices.push(
-          "Only Herdr read-only runs can stay open after reporting. This run will now close after reporting.",
-        );
-        break;
+      case "close_after_report_required":
+        return { notices, error: candidateIssueMessage(next, issue.code) };
       case "fast_mode_unsupported":
         next = { ...next, openaiFastMode: false };
         notices.push("The selected model does not support fast mode. Fast mode turned off.");

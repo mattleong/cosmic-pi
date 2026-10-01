@@ -45,8 +45,6 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run",
-    "smoke:herdr-codex-hooks": "PI_SUBAGENTS_REAL_CODEX_HOOKS=1 vitest run tests/herdr-codex-hooks-real-smoke.test.ts",
-    "smoke:herdr-codex": "PI_SUBAGENTS_REAL_HERDR_CODEX_SMOKE=1 vitest run tests/herdr-codex-real-smoke.test.ts",
     "smoke:local-claude-replay": "PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE=1 vitest run tests/local-claude-replay-real-smoke.test.ts",
     "smoke:local-claude-steering": "PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE=1 vitest run tests/local-claude-steering-real-smoke.test.ts --maxWorkers=1 --reporter=verbose --silent=false",
     "prepublishOnly": "pnpm validate",

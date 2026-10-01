@@ -9,12 +9,8 @@ export const SUPERVISOR_MCP_TOOL_NAMES = [
   ...SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   "supervisor_submit_report",
 ] as const;
-/** Packaged delegated-Pi bridge only. Native Claude/Codex MCP inventories never list it. */
-export const SUPERVISOR_MCP_PROXY_TOOL_NAME = "supervisor_pi_proxy" as const;
-
 export const SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS = ["message"] as const;
 export const SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS = ["delivery_id", "report"] as const;
-const SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS = ["tool", "arguments_json"] as const;
 
 export interface SupervisorMcpMessageArguments {
   readonly message: string;
@@ -25,24 +21,16 @@ export interface SupervisorMcpReportArguments {
   readonly report: string;
 }
 
-export interface SupervisorMcpProxyArguments {
-  readonly tool: string;
-  readonly arguments_json: string;
-}
-
 export interface SupervisorMcpToolArgumentsByName {
   readonly supervisor_progress: SupervisorMcpMessageArguments;
   readonly supervisor_warning: SupervisorMcpMessageArguments;
   readonly supervisor_question: SupervisorMcpMessageArguments;
   readonly supervisor_submit_report: SupervisorMcpReportArguments;
-  readonly supervisor_pi_proxy: SupervisorMcpProxyArguments;
 }
 
 export const MAX_SUPERVISOR_MCP_MESSAGE_CHARS = 16_384;
 export const MAX_SUPERVISOR_MCP_REPORT_CHARS = 32_768;
 export const MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS = 256;
-export const MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS = 128;
-export const MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS = 2 * 1024 * 1024;
 export const SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE = ".*\\S.*";
 export const SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$";
 
@@ -101,25 +89,6 @@ export const isSupervisorMcpMessageArguments = <ValueInput>(
   if (!exactObjectKeys(value, SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS)) return false;
   try {
     return isSupervisorMcpMessage(Object.getOwnPropertyDescriptor(value, "message")?.value);
-  } catch {
-    return false;
-  }
-};
-
-export const isSupervisorMcpProxyArguments = <ValueInput>(
-  value: ValueInput,
-): value is ValueInput & SupervisorMcpProxyArguments => {
-  if (!exactObjectKeys(value, SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS)) return false;
-  try {
-    const tool = Object.getOwnPropertyDescriptor(value, "tool")?.value;
-    const argumentsJson = Object.getOwnPropertyDescriptor(value, "arguments_json")?.value;
-    return (
-      isStringValue(tool) &&
-      tool.length > 0 &&
-      tool.length <= MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS &&
-      isStringValue(argumentsJson) &&
-      argumentsJson.length <= MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS
-    );
   } catch {
     return false;
   }

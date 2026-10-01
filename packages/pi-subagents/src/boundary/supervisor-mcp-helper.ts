@@ -11,7 +11,6 @@ import { isJsonObject } from "pi-cosmic-core";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import { MAX_SUPERVISOR_CHANNEL_LINE_BYTES } from "../supervisor/protocol.ts";
-import { SUPERVISOR_MCP_PROXY_TOOL_NAME } from "../supervisor/mcp-contract.ts";
 import {
   boundedString,
   validRpcId,
@@ -81,12 +80,8 @@ const sendRpc = <MessageInput>(message: MessageInput): Promise<void> =>
 const rpcError = (id: RpcId | null, code: number, message: string): Promise<void> =>
   sendRpc({ jsonrpc: "2.0", id, error: { code, message } });
 
-// The delegated-Pi coordinator proxy is never an MCP tool, whatever the client claims to be.
 const executeTool = (request: ToolCall) => {
-  const call =
-    request.name === SUPERVISOR_MCP_PROXY_TOOL_NAME
-      ? undefined
-      : decodeSupervisorToolCall(request.name, request.arguments);
+  const call = decodeSupervisorToolCall(request.name, request.arguments);
   return call
     ? runSupervisorTool(supervisor, call).pipe(
         Effect.map((result) => toolResult(result.text, result.isError)),
@@ -178,7 +173,6 @@ const main = Effect.gen(function* () {
     Deferred.doneUnsafe(done, Effect.void);
   };
 
-  // Only delegated-Pi channels deliver notifications, and delegated Pi never uses this helper.
   supervisor = yield* openSupervisorClient(config).pipe(
     Effect.mapError(() =>
       startupFailure("Private supervisor helper authentication failed or parent channel closed."),

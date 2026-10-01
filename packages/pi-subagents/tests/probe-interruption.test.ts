@@ -3,7 +3,6 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect } from "vitest";
-import { makeHerdrCli } from "../src/boundary/herdr-cli.ts";
 import { runIsolatedCodexAuthProbe, runProbeEffect } from "../src/boundary/local-cli-harness.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
@@ -52,16 +51,6 @@ afterEach(() => {
 });
 
 describe("probe interruption cleanup", () => {
-  effectTest("terminates an interrupted Herdr command", function* () {
-    const test = yield* step(executableFixture);
-    const cli = makeHerdrCli({
-      executable: test.executable,
-      environment: { ...process.env, HERDR_CONFIG_PATH: test.pidPath },
-      commandTimeoutMillis: 10_000,
-    });
-    yield* expectInterruptKills(Effect.runFork(cli.snapshot), test.pidPath);
-  });
-
   effectTest("terminates an interrupted local CLI readiness probe", function* () {
     const test = yield* step(executableFixture);
     const fiber = Effect.runFork(

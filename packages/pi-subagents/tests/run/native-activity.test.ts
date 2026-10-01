@@ -1,16 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
-  retainedRequest,
-  retainedServiceFixture,
+  nativeReportRequest,
+  nativeReportServiceFixture,
   withService,
 } from "./fixtures/service-harness.ts";
 
 describe("runtime-native agent projection", () => {
   it.effect("keeps native agents inside one Pi run node and outside Pi limits", () => {
-    const { backend, projections, layer } = retainedServiceFixture();
+    const { backend, projections, layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
-      yield* service.start(retainedRequest({ model: "claude-native" }));
+      yield* service.start(nativeReportRequest({ model: "claude-native" }));
       const control = backend.controls[0]!;
       control.offer({
         type: "native_agent_activity",

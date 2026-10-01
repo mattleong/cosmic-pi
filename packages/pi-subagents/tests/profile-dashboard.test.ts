@@ -69,6 +69,39 @@ const fixture = () => {
 };
 
 describe("profile dashboard actions", () => {
+  effectTest("never applies or selects a saved set containing a retired route", function* () {
+    const f = fixture();
+    const invalid = makeProfileSettingsInspection({
+      globalDocument: {
+        version: 6,
+        profileSets: {
+          common: {
+            profiles: {
+              worker: {
+                host: "herdr",
+                runtime: "codex",
+                model: "native",
+                effort: "default",
+                context: "fresh",
+                writeIntent: "writer",
+              },
+            },
+          },
+        },
+      },
+      projectTrusted: true,
+    });
+    const host = { ...f.host, inspection: () => invalid, refresh: () => Promise.resolve(invalid) };
+    for (const action of ["use-current", "make-default"] as const)
+      yield* step(() =>
+        expect(
+          runProfileSetAction(host, { action, target: { scope: "global", name: "common" } }),
+        ).rejects.toThrow(),
+      );
+    expect(f.calls.replaceSessionProfiles).not.toHaveBeenCalled();
+    expect(f.calls.patchDefaultProfileSet).not.toHaveBeenCalled();
+  });
+
   effectTest(
     "previews all profiles and resets a successful no-op Use visit from its receipt",
     function* () {
@@ -276,7 +309,6 @@ const dashboard = () => {
       target: { kind: "session" },
       initialProfile: "worker",
       initialFocus: "fields",
-      preferredPiModel: () => undefined,
       parentEffort: "high",
       getHeight: () => height,
       requestRender: vi.fn(),

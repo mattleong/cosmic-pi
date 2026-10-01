@@ -45,7 +45,6 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly candidate: ProfileCandidate;
   readonly field: SelectableCandidateField;
   readonly target: ProfileWorkspaceTarget;
-  readonly piModel?: string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
@@ -60,9 +59,7 @@ const currentFieldValue = (
   field: SelectableCandidateField,
 ): string => {
   if (field === "runWith") return runWithValue(candidate);
-  return field === "closeOnReport" || field === "openaiFastMode"
-    ? String(candidate[field])
-    : candidate[field];
+  return field === "openaiFastMode" ? String(candidate[field]) : candidate[field];
 };
 
 export const makeCandidateFieldSelector = (
@@ -78,7 +75,6 @@ export const makeCandidateFieldSelector = (
   const label = row?.label.trim() ?? options.field;
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
-    piModel: options.piModel,
     supportedEfforts: options.supportedEfforts,
     fastModeAvailable: options.fastModeAvailable,
     profile: options.profile,
@@ -87,10 +83,7 @@ export const makeCandidateFieldSelector = (
   return new SearchableSelectPage<string>({
     theme: options.theme,
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
-    title:
-      options.field === "closeOnReport"
-        ? "Choose what happens after reporting"
-        : `Choose ${label.toLowerCase()}`,
+    title: `Choose ${label.toLowerCase()}`,
     subtitle: `${targetLabel(options.target)} · current: ${row?.value ?? current}`,
     choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
       (choice) => ({

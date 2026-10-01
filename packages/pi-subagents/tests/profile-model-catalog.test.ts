@@ -11,7 +11,6 @@ import {
   loadCandidateModelPicker,
   type CandidateModelPickerData,
   type CandidateModelPickerInput,
-  preferredHerdrPiSelector,
   ProfileModelCatalog,
   type ProfileModelRegistry,
   type ProfileModelRegistryRefreshResult,
@@ -147,23 +146,6 @@ describe("profile model catalog", () => {
     }),
   );
 
-  it.effect("derives the preferred Herdr Pi selector from the current snapshot", () =>
-    Effect.gen(function* () {
-      let models = [piModel("native", "first"), piModel("extension", "eligible")];
-      const registry: ProfileModelRegistry = {
-        getAvailable: () => models,
-        getError: () => undefined,
-        refresh: () => Promise.resolve({ aborted: false }),
-      };
-      const catalog = new ProfileModelCatalog(registry);
-      expect(preferredHerdrPiSelector(catalog.capture(), "native/first")).toBe("native/first");
-
-      models = [piModel("native", "second"), piModel("extension2", "eligible")];
-      expect(yield* catalog.refresh()).toBe("updated");
-      expect(preferredHerdrPiSelector(catalog.capture(), "native/first")).toBe("native/second");
-    }),
-  );
-
   it.effect("projects scoped Pi models separately from all authenticated models", () =>
     Effect.gen(function* () {
       const scoped = piModel("openai", "scoped");
@@ -234,58 +216,52 @@ describe("profile model catalog", () => {
     }),
   );
 
-  it.effect(
-    "keeps trusted extension-provider models eligible for Herdr and uses live Codex tiers",
-    () =>
-      Effect.gen(function* () {
-        const catalog = staticCatalog([piModel("openai-codex", "gpt-5.6-sol")]);
-        const herdr = yield* loadPicker(
-          catalog,
-          profileCandidate("openai-codex/gpt-5.6-sol", { host: "herdr" }),
-        );
-        expect(herdr.warning).toBeUndefined();
-        expect(herdr.choices).toMatchObject([
-          { selector: "openai-codex/gpt-5.6-sol", fastModeAvailable: true },
-        ]);
+  it.effect("keeps trusted extension-provider models eligible and uses live Codex tiers", () =>
+    Effect.gen(function* () {
+      const catalog = staticCatalog([piModel("openai-codex", "gpt-5.6-sol")]);
+      const pi = yield* loadPicker(catalog, profileCandidate("openai-codex/gpt-5.6-sol"));
+      expect(pi.warning).toBeUndefined();
+      expect(
+        pi.choices.find((choice) => choice.selector === "openai-codex/gpt-5.6-sol"),
+      ).toMatchObject({ fastModeAvailable: true });
 
-        const advertised: NativeRuntimeModel = {
-          selector: "future-codex",
-          label: "Future Codex",
-          description: "Advertised live catalog model",
-          supportedEfforts: ["high"],
-          supportedServiceTiers: ["priority"],
-          isDefault: true,
-        };
-        const codexCandidate = profileCandidate(advertised.selector, { runtime: "codex" });
-        const fastModeFor = (picker: CandidateModelPickerData) =>
-          picker.choices.find((option) => option.selector === advertised.selector)
-            ?.fastModeAvailable;
-        const live = yield* loadPicker(catalog, codexCandidate, {
-          profile: "worker",
-          listNativeModels: () => Promise.resolve([advertised]),
-        });
-        expect(fastModeFor(live)).toBe(true);
+      const advertised: NativeRuntimeModel = {
+        selector: "future-codex",
+        label: "Future Codex",
+        description: "Advertised live catalog model",
+        supportedEfforts: ["high"],
+        supportedServiceTiers: ["priority"],
+        isDefault: true,
+      };
+      const codexCandidate = profileCandidate(advertised.selector, { runtime: "codex" });
+      const fastModeFor = (picker: CandidateModelPickerData) =>
+        picker.choices.find((option) => option.selector === advertised.selector)?.fastModeAvailable;
+      const live = yield* loadPicker(catalog, codexCandidate, {
+        profile: "worker",
+        listNativeModels: () => Promise.resolve([advertised]),
+      });
+      expect(fastModeFor(live)).toBe(true);
 
-        const fallback = yield* loadPicker(catalog, codexCandidate, {
-          profile: "worker",
-          listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
-        });
-        expect(fastModeFor(fallback)).toBe(false);
-        expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
+      const fallback = yield* loadPicker(catalog, codexCandidate, {
+        profile: "worker",
+        listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
+      });
+      expect(fastModeFor(fallback)).toBe(false);
+      expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
 
-        // A runtime switch offers only live models, never the previous runtime's model.
-        const switching = profileCandidate("openai-codex/gpt-5.6-sol", { runtime: "codex" });
-        const pending = yield* loadPicker(catalog, switching, {
-          listNativeModels: () => Promise.resolve([advertised]),
-          modelPending: true,
-        });
-        expect(pending.choices.map((option) => option.selector)).toEqual([advertised.selector]);
-        expect(pending.defaultSelector).toBe(advertised.selector);
-        const offline = yield* loadPicker(catalog, switching, {
-          listNativeModels: () => Promise.reject(new Error("catalog failed")),
-          modelPending: true,
-        });
-        expect(offline.choices).toEqual([]);
-      }),
+      // A runtime switch offers only live models, never the previous runtime's model.
+      const switching = profileCandidate("openai-codex/gpt-5.6-sol", { runtime: "codex" });
+      const pending = yield* loadPicker(catalog, switching, {
+        listNativeModels: () => Promise.resolve([advertised]),
+        modelPending: true,
+      });
+      expect(pending.choices.map((option) => option.selector)).toEqual([advertised.selector]);
+      expect(pending.defaultSelector).toBe(advertised.selector);
+      const offline = yield* loadPicker(catalog, switching, {
+        listNativeModels: () => Promise.reject(new Error("catalog failed")),
+        modelPending: true,
+      });
+      expect(offline.choices).toEqual([]);
+    }),
   );
 });

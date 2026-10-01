@@ -226,8 +226,7 @@ export abstract class ProfileWorkspaceState {
     } else if (row) selection.control = row.field;
   }
   protected selectField(field: ProfileWorkspaceField): void {
-    if (["context", "openaiFastMode", "closeOnReport"].includes(field))
-      this.advancedExpanded = true;
+    if (["context", "openaiFastMode"].includes(field)) this.advancedExpanded = true;
     const rows = this.rows();
     const index = rows.findIndex(
       (row) =>

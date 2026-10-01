@@ -51,7 +51,6 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly initialSaveFocused?: boolean | undefined;
   readonly initialAdvancedExpanded?: boolean | undefined;
   readonly initialSelections?: ReadonlyArray<ProfileWorkspaceSelectionMemory> | undefined;
-  readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly close: () => void;
