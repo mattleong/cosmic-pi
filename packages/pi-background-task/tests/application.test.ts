@@ -15,7 +15,9 @@ import {
   extensionContextFixture,
   opaqueFixture,
 } from "pi-cosmic-core/testing";
+import { signalProcess } from "pi-cosmic-core";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
+import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { vi } from "vitest";
 import {
   BACKGROUND_TASK_CODE_MODE_BOUNDS,
@@ -64,9 +66,11 @@ const context = (cwd: string) =>
     mode: "rpc",
   });
 
-const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"]) => {
+const harness = (
+  loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"],
+  events: ExtensionAPI["events"] = createEventBus(),
+) => {
   const handlers = new Map<string, Handler>();
-  const events = createEventBus();
   let command: RegisteredCommand | undefined;
   const tools: CapturedBackgroundTool[] = [];
   const activeTools: string[] = [];
@@ -89,8 +93,22 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
     registerTool,
     events,
     activeTools,
-    emit: (name: "session_start" | "turn_end" | "session_shutdown", ctx: ExtensionContext) =>
-      Promise.resolve(handlers.get(name)?.({}, ctx)),
+    emit: (
+      name: "session_start" | "session_tree" | "turn_end" | "session_shutdown",
+      ctx: ExtensionContext,
+    ) => Promise.resolve(handlers.get(name)?.({}, ctx)),
+    discover: (sessionId: string) => {
+      const found: BackgroundTaskCodeModeCapability[] = [];
+      events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
+        version: BACKGROUND_TASK_CODE_MODE_VERSION,
+        sessionId,
+        respond: <Candidate>(candidate: Candidate) => {
+          const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
+          if (capability) found.push(capability);
+        },
+      });
+      return found;
+    },
     runCommand: (args: string, ctx: ExtensionCommandContext) => {
       if (!command) return Promise.reject(new Error("task command was not registered"));
       return Promise.resolve(command.handler(args, ctx));
@@ -197,29 +215,31 @@ describe("background-task Pi lifecycle", () => {
     }),
   );
 
-  it.effect("interrupts a never-settling settings load on replacement", () =>
-    Effect.gen(function* () {
-      const firstCwd = `${process.cwd()}/first-pending`;
-      const secondCwd = `${process.cwd()}/second-ready`;
-      const entered = deferredPromise();
-      let firstSignal: AbortSignal | undefined;
-      const app = harness((cwd, _trusted, signal) => {
-        if (cwd !== firstCwd) return Promise.resolve();
-        firstSignal = signal;
-        entered.resolve();
-        return Promise.race([]);
-      });
+  it.effect.each(["session_start", "session_tree"] as const)(
+    "interrupts a never-settling settings load on %s replacement",
+    (event) =>
+      Effect.gen(function* () {
+        const firstCwd = `${process.cwd()}/first-pending`;
+        const secondCwd = `${process.cwd()}/second-ready`;
+        const entered = deferredPromise();
+        let firstSignal: AbortSignal | undefined;
+        const app = harness((cwd, _trusted, signal) => {
+          if (cwd !== firstCwd) return Promise.resolve();
+          firstSignal = signal;
+          entered.resolve();
+          return Promise.race([]);
+        });
 
-      const firstStart = app.emit("session_start", context(firstCwd));
-      yield* Effect.promise(() => entered.promise);
-      const secondContext = context(secondCwd);
-      const secondStart = app.emit("session_start", secondContext);
-      yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
+        const firstStart = app.emit("session_start", context(firstCwd));
+        yield* Effect.promise(() => entered.promise);
+        const secondContext = context(secondCwd);
+        const secondStart = app.emit(event, secondContext);
+        yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
 
-      expect(firstSignal?.aborted).toBe(true);
-      expect(app.tools.map((tool) => tool.name)).toEqual(["background_task"]);
-      yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
-    }),
+        expect(firstSignal?.aborted).toBe(true);
+        expect(app.tools.map((tool) => tool.name)).toEqual(["background_task"]);
+        yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
+      }),
   );
 
   it.effect("reports the active generation's normalized config without rereading it", () =>
@@ -296,44 +316,46 @@ describe("background-task Pi lifecycle", () => {
     }),
   );
 
-  it.effect("rejects a stale tool call typed while replacement settings are still loading", () =>
-    Effect.gen(function* () {
-      const entered = deferredPromise();
-      const replacement = deferredPromise();
-      let loadCount = 0;
-      const app = harness(() => {
-        if (++loadCount === 1) return Promise.resolve();
-        entered.resolve();
-        return replacement.promise;
-      });
-      const ctx = context(process.cwd());
-      yield* Effect.promise(() => app.emit("session_start", ctx));
-      const tool = app.tools[0];
-      if (!tool) throw new Error("background tool registration was not captured");
+  it.effect.each(["session_start", "session_tree"] as const)(
+    "rejects a stale tool call while %s replacement settings are still loading",
+    (event) =>
+      Effect.gen(function* () {
+        const entered = deferredPromise();
+        const replacement = deferredPromise();
+        let loadCount = 0;
+        const app = harness(() => {
+          if (++loadCount === 1) return Promise.resolve();
+          entered.resolve();
+          return replacement.promise;
+        });
+        const ctx = context(process.cwd());
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        const tool = app.tools[0];
+        if (!tool) throw new Error("background tool registration was not captured");
 
-      const replacing = app.emit("session_start", ctx);
-      // The replacement loader has signalled entry and stays blocked: the prior runtime is
-      // already deactivated and the next one is not yet active, so the activation-1 tool
-      // must fail typed instead of reaching the unactivated replacement runtime.
-      yield* Effect.promise(() => entered.promise);
-      yield* Effect.promise(() =>
-        expect(
-          tool.execute(
-            "replacement-check",
-            { action: "list" },
-            new AbortController().signal,
-            undefined,
-            ctx,
-          ),
-        ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
-      );
+        const replacing = app.emit(event, ctx);
+        // The replacement loader has signalled entry and stays blocked: the prior runtime is
+        // already deactivated and the next one is not yet active, so the activation-1 tool
+        // must fail typed instead of reaching the unactivated replacement runtime.
+        yield* Effect.promise(() => entered.promise);
+        yield* Effect.promise(() =>
+          expect(
+            tool.execute(
+              "replacement-check",
+              { action: "list" },
+              new AbortController().signal,
+              undefined,
+              ctx,
+            ),
+          ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+        );
 
-      replacement.resolve();
-      yield* Effect.promise(() => replacing);
-      // Tool activation still happens once settings resolve for the replacement generation.
-      expect(app.tools.map((tool) => tool.name)).toEqual(["background_task", "background_task"]);
-      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
-    }),
+        replacement.resolve();
+        yield* Effect.promise(() => replacing);
+        // Tool activation still happens once settings resolve for the replacement generation.
+        expect(app.tools.map((tool) => tool.name)).toEqual(["background_task", "background_task"]);
+        yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+      }),
   );
 
   it.effect("invalidates pending settings preparation when the captured session aborts", () =>
@@ -351,6 +373,118 @@ describe("background-task Pi lifecycle", () => {
       expect(app.registerTool).not.toHaveBeenCalled();
       yield* Effect.promise(() => app.emit("session_shutdown", ctx));
     }),
+  );
+
+  it.live("tree navigation terminates prior processes and revokes same-session capabilities", () =>
+    Effect.gen(function* () {
+      const activity = fakeActivityHost("tree-session");
+      const app = harness(() => Promise.resolve(), activity.events);
+      const ctx: ExtensionContext = {
+        ...context(process.cwd()),
+        sessionManager: opaqueFixture({
+          getSessionId: () => "tree-session",
+          getSessionFile: () => undefined,
+        }),
+      };
+      yield* Effect.gen(function* () {
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        // Navigation keeps the same session identity. Repeat to prove that each branch gets
+        // a usable fresh registry, rather than only disposing the initial runtime.
+        for (let navigation = 0; navigation < 2; navigation += 1) {
+          const capability = app.discover("tree-session")[0];
+          if (!capability) throw new Error("background task capability was not available");
+          const execute = (input: BackgroundTaskCodeModeInput) =>
+            capability.execute("tree-task", input, new AbortController().signal, 4_096);
+          const started = yield* Effect.promise(() =>
+            execute({
+              action: "start",
+              command:
+                `node -e "const {spawn}=require('node:child_process'); ` +
+                `const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); ` +
+                `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
+            }),
+          );
+          if (started.action !== "start") throw new Error("start returned the wrong action");
+          const ready = yield* Effect.promise(() =>
+            execute({
+              action: "wait",
+              id: started.snapshot.id,
+              until: "output",
+              contains: ":end",
+              waitSeconds: 5,
+            }),
+          );
+          if (ready.action !== "wait") throw new Error("wait returned the wrong action");
+          expect(ready.wait.outcome).toBe("matched");
+          const logs = yield* Effect.promise(() =>
+            execute({ action: "logs", id: started.snapshot.id }),
+          );
+          const match = /ready:(\d+):(\d+):end/.exec(logs.text);
+          const nodePid = Number(match?.[1]);
+          const descendantPid = Number(match?.[2]);
+          const shellPid = ready.wait.snapshot.pid;
+          if (
+            !shellPid ||
+            ![nodePid, descendantPid].every((pid) => Number.isSafeInteger(pid) && pid > 0)
+          )
+            throw new Error("running task did not report valid process ids");
+          // Independent test ownership prevents a failed cleanup regression from leaking a
+          // process after the application has already replaced its old registry.
+          const pids = yield* Effect.acquireRelease(
+            Effect.succeed([...new Set([shellPid, nodePid, descendantPid])]),
+            (captured) =>
+              Effect.sync(() => {
+                for (const pid of captured) signalProcess(pid, "SIGKILL");
+              }),
+          );
+          expect(descendantPid).not.toBe(nodePid);
+          for (const pid of pids) expect(signalProcess(pid, 0)).toBe("present");
+          expect(activity.get()?.items).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: started.snapshot.id })]),
+          );
+
+          yield* Effect.promise(() => app.emit("session_tree", ctx));
+
+          // Leader exit is joined, but descendant reaping can follow the process-group sweep.
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            if (pids.every((pid) => signalProcess(pid, 0) === "absent")) break;
+            yield* Effect.sleep("10 millis");
+          }
+          for (const pid of pids) expect(signalProcess(pid, 0)).toBe("absent");
+          expect(activity.get()?.items).toEqual([]);
+          yield* Effect.promise(() =>
+            expect(execute({ action: "list" })).rejects.toMatchObject({
+              _tag: "PiSessionRuntimeError",
+            }),
+          );
+          const replacement = app.discover("tree-session")[0];
+          if (!replacement) throw new Error("replacement capability was not available");
+          expect(
+            yield* Effect.promise(() =>
+              replacement.execute(
+                "fresh-list",
+                { action: "list" },
+                new AbortController().signal,
+                4_096,
+              ),
+            ),
+          ).toMatchObject({ tasks: [] });
+          expect(
+            yield* Effect.promise(() =>
+              app.tools
+                .at(-1)!
+                .execute(
+                  "fresh-tool",
+                  { action: "list" },
+                  new AbortController().signal,
+                  undefined,
+                  ctx,
+                ),
+            ),
+          ).toMatchObject({ details: { action: "list", tasks: [] } });
+        }
+      }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+    }).pipe(Effect.scoped),
   );
 
   it.effect("publishes one current-session Code Mode capability and revokes it on shutdown", () =>
@@ -373,18 +507,7 @@ describe("background-task Pi lifecycle", () => {
         }),
       ).not.toThrow();
 
-      const discover = (sessionId: string) => {
-        const found: BackgroundTaskCodeModeCapability[] = [];
-        app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
-          version: BACKGROUND_TASK_CODE_MODE_VERSION,
-          sessionId,
-          respond: <Candidate>(candidate: Candidate) => {
-            const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
-            if (capability) found.push(capability);
-          },
-        });
-        return found;
-      };
+      const { discover } = app;
       expect(discover("other-session")).toEqual([]);
       const discovered = discover("session-1");
       expect(discovered).toHaveLength(1);

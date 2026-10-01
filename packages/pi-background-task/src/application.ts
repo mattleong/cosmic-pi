@@ -1,5 +1,10 @@
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as MutableRef from "effect/MutableRef";
 import {
   loadCodePreviewSettings,
   CodePreviewSchedulerService,
@@ -34,6 +39,11 @@ import {
 import { registerTasksCommand } from "./settings/controller.ts";
 import { registerBackgroundTaskTool } from "./tools/background-task.ts";
 
+interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
+  /** Revoked before disposal can publish late task settlement into the shared UI bridge. */
+  readonly publicationOwner: MutableRef.MutableRef<boolean>;
+}
+
 export interface BackgroundTaskApplicationBoundaries {
   readonly loadSettings: (
     cwd: string,
@@ -57,7 +67,7 @@ export function registerBackgroundTaskApplication(
   };
 
   const slot = makePiSessionRuntimeSlot<
-    BackgroundTaskSessionInput,
+    BackgroundTaskSessionActivation,
     BackgroundTaskApplication,
     never,
     BackgroundTaskRuntimeError,
@@ -67,10 +77,13 @@ export function registerBackgroundTaskApplication(
     }
   >({
     makeRuntime: (input) =>
-      makePiManagedRuntime(pi, makeBackgroundTaskLayer(input, bridge.publish), {
-        agentDirectory: getAgentDir,
-        packageName: "pi-background-task",
-      }),
+      makePiManagedRuntime(
+        pi,
+        makeBackgroundTaskLayer(input, (projection) => {
+          if (MutableRef.get(input.publicationOwner)) bridge.publish(projection);
+        }),
+        { agentDirectory: getAgentDir, packageName: "pi-background-task" },
+      ),
     startup: (input) =>
       Effect.gen(function* () {
         // The slot has already deactivated any prior runtime, so no tool call can target the
@@ -117,7 +130,8 @@ export function registerBackgroundTaskApplication(
             ).then(() => undefined),
         });
     },
-    onDeactivated: () => {
+    onDeactivated: (input) => {
+      MutableRef.set(input.publicationOwner, false);
       currentConfig = undefined;
       revokeActivity();
       codeModeHost.deactivate();
@@ -154,7 +168,7 @@ export function registerBackgroundTaskApplication(
       run(BackgroundTaskSettingsFiles.use((files) => files.write(location, id, value))),
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  const startSession = (ctx: ExtensionContext) => {
     revokeActivity();
     codeModeHost.deactivate();
     const captured = captureSessionHost(ctx);
@@ -163,9 +177,22 @@ export function registerBackgroundTaskApplication(
       return slot.shutdown();
     }
     return slot
-      .start({ ctx, cwd: captured.cwd, projectTrusted: isProjectTrusted(ctx) }, captured.signal)
+      .start(
+        {
+          ctx,
+          cwd: captured.cwd,
+          projectTrusted: isProjectTrusted(ctx),
+          publicationOwner: MutableRef.make(true),
+        },
+        captured.signal,
+      )
       .then(() => undefined);
-  });
+  };
+
+  pi.on("session_start", (_event, ctx) => startSession(ctx));
+  // Tree navigation keeps the session id but abandons the prior branch's task ownership.
+  // Slot replacement joins process cleanup and revokes capabilities before reactivation.
+  pi.on("session_tree", (_event, ctx) => startSession(ctx));
 
   pi.on("turn_end", (_event, ctx) => {
     if (slot.isActive()) bridge.setContext(ctx);
