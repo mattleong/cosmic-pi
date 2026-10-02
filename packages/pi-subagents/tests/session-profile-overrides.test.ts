@@ -670,31 +670,25 @@ describe("session profile overrides", () => {
     }),
   );
 
-  it.effect("keeps session edits across reload while adopting reloaded feature switches", () =>
+  it.effect("keeps session edits across reload while adopting reloaded workflow settings", () =>
     Effect.gen(function* () {
-      const withSwitches = (scriptedWorkflows: boolean, automaticProfileRouting: boolean) =>
+      const withWorkflows = (scriptedWorkflows: boolean) =>
         resolveTestConfig({
           version: 6,
           defaultProfileSet: "default",
           profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
           scriptedWorkflows,
-          automaticProfileRouting,
         });
-      const initial = makeSessionProfileSnapshot(withSwitches(true, true));
+      const initial = makeSessionProfileSnapshot(withWorkflows(true));
       const edited = yield* patchSessionProfileSnapshot(initial, {
         profile: "worker",
         route: route("openai/session"),
         expectedRevision: 0,
       });
       expect(edited.effectiveConfig.scriptedWorkflows).toBe(true);
-      expect(edited.effectiveConfig.automaticProfileRouting).toBe(true);
 
-      const reloaded = makeSessionProfileSnapshot(
-        withSwitches(false, true),
-        sessionProfileSeed(edited),
-      );
+      const reloaded = makeSessionProfileSnapshot(withWorkflows(false), sessionProfileSeed(edited));
       expect(reloaded.effectiveConfig.scriptedWorkflows).toBe(false);
-      expect(reloaded.effectiveConfig.automaticProfileRouting).toBe(true);
       expect(reloaded.effectiveConfig.profileSources.worker).toBe("session");
       expect(reloaded.effectiveConfig.profiles.worker.candidates[0]?.model).toBe("openai/session");
     }),

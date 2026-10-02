@@ -1,5 +1,4 @@
 // Pi tool execution is a Promise-shaped host boundary.
-import type { Usage } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -173,12 +172,6 @@ const requiredTargetIds = (
 const joinSections = (sections: ReadonlyArray<string>): string =>
   sections.filter(Boolean).join("\n\n");
 
-/** Only root results carry routing classifier usage; the strict proxy result keeps its fields. */
-const withRoutingUsage = (
-  result: AgentToolResult<unknown>,
-  usage: Usage | undefined,
-): AgentToolResult<unknown> => (usage ? { ...result, usage } : result);
-
 export const executeSubagentActionEffect = (
   pi: ExtensionAPI,
   environment: SubagentToolRuntime["environment"],
@@ -308,13 +301,10 @@ export const executeSubagentActionEffect = (
           onUpdate,
           readOnly: scripted,
         });
-        return withRoutingUsage(
-          present({
-            ...result,
-            contract: startContract(input.args.agents, result.startOutcomes),
-          }),
-          callerRunId === undefined ? result.classifierUsage : undefined,
-        );
+        return present({
+          ...result,
+          contract: startContract(input.args.agents, result.startOutcomes),
+        });
       }
       case SUBAGENT_TOOL_NAME.list:
         return present({

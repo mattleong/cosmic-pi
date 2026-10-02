@@ -56,7 +56,7 @@ type SubagentToolSpecs = { readonly [N in SubagentToolName]: SubagentToolSpec<N>
 
 /** Offered only while root scripts can reach the orchestration tools. */
 const SCRIPTED_WORKFLOW_GUIDELINE =
-  "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. Jev may recommend a branch, never authorize recovery or writes.";
+  "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each workflow assignment.";
 
 const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {

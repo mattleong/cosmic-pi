@@ -353,7 +353,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     examples: [
       "writerWorkspace worktree",
       "global scriptedWorkflows false",
-      "project automaticProfileRouting inherit",
+      "project scriptedWorkflows inherit",
       "global maxDepth 2",
       "session maxDirectChildren inherit",
     ],

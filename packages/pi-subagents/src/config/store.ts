@@ -699,8 +699,15 @@ export const subagentConfigStoreLayer = Layer.effect(
       ),
       patchNesting: patchVoid(applyNestingPatch, (patch) => patch.nesting === undefined),
       patchFeatureToggle: patchVoid(applyFeatureTogglePatch, (patch) => {
+        const toggle = ownDataProperty(patch, "toggle");
         const enabled = ownDataProperty(patch, "enabled");
-        return enabled.valid && (!enabled.present || enabled.value === undefined);
+        return (
+          toggle.valid &&
+          toggle.present &&
+          isSubagentFeatureToggle(toggle.value) &&
+          enabled.valid &&
+          (!enabled.present || enabled.value === undefined)
+        );
       }),
     });
   }),

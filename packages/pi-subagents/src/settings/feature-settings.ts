@@ -30,12 +30,7 @@ const FEATURE_TOGGLES = {
   scriptedWorkflows: {
     label: "Scripted subagent workflows",
     description:
-      "Lets native codemode scripts start, await, check, and stop subagents. Off removes only these subagent tools from scripts; codemode itself, direct subagent calls, and Jev-assisted selection stay available.",
-  },
-  automaticProfileRouting: {
-    label: "Jev-assisted profile selection",
-    description:
-      "When a subagent starts without a profile, Jev may pick a read-only one from its task. An explicit profile always wins. Without an authenticated Jev provider nothing is inferred; with one, task excerpts may be sent to it. A pick is used only at 0.9 confidence or higher.",
+      "Lets native codemode scripts start, await, check, and stop subagents. Off removes only these subagent tools from scripts; codemode itself and direct subagent calls stay available.",
   },
 } as const satisfies Record<SubagentFeatureToggle, FeatureToggleInfo>;
 

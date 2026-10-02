@@ -188,7 +188,6 @@ const resolveSubagentFeatureToggles = (
     project?.file[toggle] ?? global.file[toggle] ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES[toggle];
   return {
     scriptedWorkflows: resolve("scriptedWorkflows"),
-    automaticProfileRouting: resolve("automaticProfileRouting"),
   };
 };
 

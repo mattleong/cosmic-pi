@@ -22,6 +22,12 @@ import {
 } from "../../src/run/errors.ts";
 import { decodeSubagentEffort } from "../../src/domain/routing.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
+import { SubagentService } from "../../src/run/service.ts";
+import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
+import {
+  decodeSubagentProxyResult,
+  encodeSubagentProxyPayload,
+} from "../../src/tools/proxy-protocol.ts";
 import type { SubagentStartDetails } from "../../src/tools/details-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
@@ -118,6 +124,58 @@ describe("subagent tool", () => {
       });
     },
   );
+
+  effectTest("resolves authenticated child starts without a classifier dependency", function* () {
+    const callers: Array<readonly [string, string | undefined]> = [];
+    const service = subagentServiceDouble({
+      startSessionOwnedFrom: (callerRunId, request) =>
+        Effect.sync(() => {
+          callers.push([callerRunId, request.profile]);
+          return view({ id: `child-${callers.length}`, profile: request.profile });
+        }),
+    });
+    const classifierCall = vi.fn(() => {
+      throw new Error("Profile selection must not consult classifiers");
+    });
+    const proxied = yield* executeSubagentActionEffect(
+      extensionApiFixture({
+        getThinkingLevel: () => "high",
+        getActiveTools: () => ["read"],
+      }),
+      { cwd: "/project", projectTrusted: true },
+      {
+        tool: "subagent_start",
+        args: {
+          agents: [
+            { task: "Map the entry points", profile: "scout" },
+            { task: "Assess the finished change for regressions" },
+          ],
+        },
+      },
+      undefined,
+      extensionContextFixture({
+        ...context,
+        modelRegistry: {
+          ...context.modelRegistry,
+          getAvailableOfType: classifierCall,
+          classify: classifierCall,
+        },
+      }),
+      "authenticated-caller",
+    ).pipe(
+      Effect.provideService(SubagentService, service),
+      Effect.provideService(SubagentProfileService, fallbackProfileService),
+      Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+      Effect.orDie,
+    );
+    expect(callers).toEqual([
+      ["authenticated-caller", "scout"],
+      ["authenticated-caller", "generalist"],
+    ]);
+    expect(classifierCall).not.toHaveBeenCalled();
+    expect(proxied.usage).toBeUndefined();
+    expect(decodeSubagentProxyResult(encodeSubagentProxyPayload(proxied) ?? "")).toBeDefined();
+  });
 
   effectTest("releases persistent start presentation after execution settles", function* () {
     const release = vi.fn();

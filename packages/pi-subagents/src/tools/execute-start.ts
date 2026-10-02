@@ -1,36 +1,16 @@
 import { sanitizeTerminalLine, type JsonObject } from "pi-cosmic-core";
-import type { Usage } from "@earendil-works/pi-ai";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import {
-  makeHostProfileClassifierSession,
-  type HostProfileClassifier,
-} from "../boundary/host-profile-classifier.ts";
-import {
-  hostProfileEnvironment,
   resolveProfileStart,
   type SubagentSessionEnvironment,
 } from "../boundary/host-profile-resolution.ts";
-import {
-  automaticRoutingCallFailure,
-  automaticRoutingChoices,
-  automaticRoutingContext,
-  automaticRoutingReason,
-  automaticRoutingWriterFailure,
-  decideAutomaticRouting,
-  isAutomaticRoutingCandidate,
-  sumAutomaticRoutingUsage,
-  type AutomaticRoutingDecision,
-  type AutomaticRoutingFailure,
-} from "../profiles/automatic-selection.ts";
-import type { ProfileId, SubagentSelectionProvenance } from "../profiles/model.ts";
+import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
-import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import {
   InvalidSubagentRequestError,
@@ -181,131 +161,18 @@ const settleStartOutcomes = (outcomes: Iterable<SubagentStartOutcome>) => {
   };
 };
 
-/** Provenance for a launch whose omitted profile Jev chose. */
-interface AutomaticRoute {
-  readonly classifier: string;
-  readonly profile: ProfileId;
-  readonly confidence: number;
-}
-
-interface RoutedSpec {
-  readonly spec: SubagentStartSpec;
-  readonly automatic?: AutomaticRoute | undefined;
-}
-
-const routingError = (failure: AutomaticRoutingFailure) =>
-  new InvalidSubagentRequestError({ code: failure.code, message: failure.message });
-
-const unrouted = (spec: SubagentStartSpec): Effect.Effect<RoutedSpec> => Effect.succeed({ spec });
-
-/** One classification: a trusted answer routes the spec; anything else fails its own slot. */
-const classifyRoute = (
-  classifier: HostProfileClassifier,
-  spec: SubagentStartSpec,
-  choices: ReadonlyArray<ProfileId>,
-  usages: Usage[],
-): Effect.Effect<RoutedSpec, InvalidSubagentRequestError> =>
-  classifier.classify(automaticRoutingContext(spec, choices)).pipe(
-    Effect.map((response): AutomaticRoutingDecision => {
-      if (response.usage) usages.push(response.usage);
-      return decideAutomaticRouting(response, choices);
-    }),
-    Effect.catchTag("HostProfileClassifierError", (error) =>
-      Effect.succeed<AutomaticRoutingDecision>({
-        kind: "declined",
-        failure: automaticRoutingCallFailure(error.reason === "timeout" ? "timeout" : "failed"),
-      }),
-    ),
-    Effect.flatMap((decision) =>
-      decision.kind === "selected"
-        ? Effect.succeed<RoutedSpec>({
-            spec: { ...spec, profile: decision.profile },
-            automatic: {
-              classifier: classifier.label,
-              profile: decision.profile,
-              confidence: decision.confidence,
-            },
-          })
-        : Effect.fail(routingError(decision.failure)),
-    ),
-  );
-
-/**
- * The batch's automatic profile router. Disabled routing, explicit profiles, and writes never
- * look anything up. Otherwise availability is checked at most once, and only when an eligible
- * launch and at least one read-only choice exist. An unavailable classifier keeps the legacy
- * generalist fallback; an untrusted answer fails only its own pre-admission slot.
- */
-const makeAutomaticRouter = (
-  input: StartBatchInput,
-  specs: ReadonlyArray<SubagentStartSpec>,
-  snapshot: SessionProfileSnapshot,
-) =>
-  Effect.gen(function* () {
-    const usages: Usage[] = [];
-    const usage = () => sumAutomaticRoutingUsage(usages);
-    const legacy = { route: unrouted, usage };
-    if (!snapshot.effectiveConfig.automaticProfileRouting) return legacy;
-    if (!specs.some(isAutomaticRoutingCandidate)) return legacy;
-    const choices = yield* Effect.try(() =>
-      automaticRoutingChoices(
-        snapshot.effectiveConfig,
-        hostProfileEnvironment(input.pi, input.ctx),
-      ),
-    ).pipe(Effect.orElseSucceed((): ReadonlyArray<ProfileId> => []));
-    if (choices.length === 0) return legacy;
-    const session = yield* makeHostProfileClassifierSession(input.ctx);
-    const route = (
-      spec: SubagentStartSpec,
-    ): Effect.Effect<RoutedSpec, InvalidSubagentRequestError> =>
-      isAutomaticRoutingCandidate(spec)
-        ? session.classifier.pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => unrouted(spec),
-                onSome: (classifier) => classifyRoute(classifier, spec, choices, usages),
-              }),
-            ),
-          )
-        : unrouted(spec);
-    return { route, usage };
-  });
-
-/** Admission guards after resolution; a routed launch must still resolve read-only. */
+/** Scripted workflows admit only resolved read-only routes. */
 const admissionError = (
   request: StartSubagentRequest,
-  automatic: AutomaticRoute | undefined,
   readOnly: boolean,
-): InvalidSubagentRequestError | undefined => {
-  if (request.writeIntent === "read-only") return undefined;
-  if (automatic) return routingError(automaticRoutingWriterFailure(automatic.profile));
-  return readOnly
+): InvalidSubagentRequestError | undefined =>
+  readOnly && request.writeIntent !== "read-only"
     ? new InvalidSubagentRequestError({
         code: "scripted_writer_not_supported",
         message:
           "Workflow launch requires a read-only profile\n\nHand implementation back to the parent agent.",
       })
     : undefined;
-};
-
-const withRoutingProvenance = (
-  request: StartSubagentRequest,
-  automatic: AutomaticRoute | undefined,
-): StartSubagentRequest =>
-  automatic && request.selection
-    ? {
-        ...request,
-        selection: {
-          ...request.selection,
-          reason: automaticRoutingReason(
-            automatic.classifier,
-            automatic.profile,
-            automatic.confidence,
-            request.selection.reason,
-          ),
-        },
-      }
-    : request;
 
 /** Runs the batch, publishing hostile-input-proof partial receipts in request order. */
 export const executeStartBatch = (
@@ -316,8 +183,6 @@ export const executeStartBatch = (
     readonly startFailures: ReadonlyArray<SubagentStartFailure>;
     readonly startEntries: ReadonlyArray<SubagentStartEntry>;
     readonly startOutcomes: ReadonlyArray<SubagentStartOutcome>;
-    /** Reported automatic-routing classifier usage, when any classification ran. */
-    readonly classifierUsage?: Usage | undefined;
   },
   SubagentError,
   SubagentProfileService | SubagentBackendRegistry
@@ -326,7 +191,6 @@ export const executeStartBatch = (
     const specs = yield* startSpecs(input.agents);
     const profileService = yield* SubagentProfileService;
     const profileSnapshot = yield* profileService.capture;
-    const router = yield* makeAutomaticRouter(input, specs, profileSnapshot);
     const partialOutcomes = new Map<number, SubagentStartOutcome>();
     const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
       partialOutcomes.set(outcome.index, outcome);
@@ -357,17 +221,9 @@ export const executeStartBatch = (
         })),
       );
     const launchOne = (spec: SubagentStartSpec, index: number) =>
-      router.route(spec).pipe(
-        Effect.flatMap(({ spec: routed, automatic }) =>
-          resolveRequest(routed).pipe(
-            Effect.map((request) => ({
-              request: withRoutingProvenance(request, automatic),
-              automatic,
-            })),
-          ),
-        ),
-        Effect.flatMap(({ request, automatic }) => {
-          const rejected = admissionError(request, automatic, input.readOnly === true);
+      resolveRequest(spec).pipe(
+        Effect.flatMap((request) => {
+          const rejected = admissionError(request, input.readOnly === true);
           return (rejected ? Effect.fail(rejected) : input.startOwned(request)).pipe(
             Effect.map((run): SubagentStartOutcome => ({ index, run })),
             Effect.catch((error) =>
@@ -380,12 +236,10 @@ export const executeStartBatch = (
       );
     const outcomes = yield* Effect.forEach(specs, launchOne, { concurrency: MAX_START_BATCH });
     const { ordered, launched, failures } = settleStartOutcomes(outcomes);
-    const classifierUsage = router.usage();
     return {
       runs: launched,
       startFailures: failures,
       startEntries: startEntriesFor(specs, new Map(ordered.map((o) => [o.index, o]))),
       startOutcomes: ordered,
-      ...(classifierUsage && { classifierUsage }),
     };
   });

@@ -45,7 +45,7 @@ const StartSpecFields = {
   profile: Type.Optional(
     StringEnum(PROFILE_IDS, {
       description:
-        "Behavior and model-routing profile, selected by deliverable: scout locates and explains existing code; researcher investigates external sources; planner recommends implementation strategies and ordered changes; worker implements; reviewer evaluates code, plans, and simplification opportunities before or after implementation; oracle analyzes inherited decisions; generalist handles other work. Read-only or initial work is not automatically scouting. An explicit profile always wins. When omitted without writes, automatic profile routing, if enabled and an authenticated Jev classifier is available, may choose a read-only profile or fail the launch for an explicit choice; otherwise the generalist fallback applies. The selected profile always determines the model route.",
+        "Behavior and model-routing profile, selected by deliverable: scout locates and explains existing code; researcher investigates external sources; planner recommends implementation strategies and ordered changes; worker implements; reviewer evaluates code, plans, and simplification opportunities before or after implementation; oracle analyzes inherited decisions; generalist handles other work. Read-only or initial work is not automatically scouting. An explicit profile always wins. When omitted, the generalist fallback applies. The selected profile always determines the model route.",
     }),
   ),
   writes: Type.Optional(

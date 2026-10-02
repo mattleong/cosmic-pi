@@ -997,34 +997,49 @@ describe("feature switch persistence", () => {
     const paths = yield* step(fixture);
     for (const document of [
       { version: 6, scriptedWorkflows: "false" },
-      { version: 6, automaticProfileRouting: 0 },
       { version: 6, scriptedWorkflows: null },
+      { version: 6, automaticProfileRouting: null, unknownFeature: true },
       { version: 5, scriptedWorkflows: false },
       { version: 4, automaticProfileRouting: true },
+      { version: 5, automaticProfileRouting: false },
     ]) {
       yield* step(() => paths.writeGlobal(document));
       yield* rejects(() => paths.load(false), "activate", paths.globalPath);
     }
     yield* step(() => paths.writeGlobal({ version: 6 }));
-    yield* step(() => paths.writeProject({ version: 6, automaticProfileRouting: "off" }));
+    yield* step(() => paths.writeProject({ version: 6, scriptedWorkflows: "off" }));
     yield* rejects(() => paths.load(true), "activate", paths.projectPath);
     // An untrusted project is never read, so its malformed value cannot block activation.
-    expect((yield* step(() => paths.load(false))).automaticProfileRouting).toBe(true);
+    expect((yield* step(() => paths.load(false))).scriptedWorkflows).toBe(true);
   });
 
-  effectTest("loads trusted Project switches over Global ones, independently", function* () {
+  effectTest("ignores retired v6 routing values without rewriting either scope", function* () {
     const paths = yield* step(fixture);
-    yield* step(() =>
-      paths.writeGlobal({ version: 6, scriptedWorkflows: false, automaticProfileRouting: false }),
-    );
-    yield* step(() => paths.writeProject({ version: 6, automaticProfileRouting: true }));
-    const trusted = yield* step(() => paths.load(true));
-    expect([trusted.scriptedWorkflows, trusted.automaticProfileRouting]).toEqual([false, true]);
-    const untrusted = yield* step(() => paths.load(false));
-    expect([untrusted.scriptedWorkflows, untrusted.automaticProfileRouting]).toEqual([
-      false,
-      false,
-    ]);
+    for (const scope of ["global", "project"] as const)
+      for (const value of [true, false, null, 0, "off", [], { enabled: "private-value" }]) {
+        const raw = { version: 6, automaticProfileRouting: value };
+        const target = scope === "global" ? paths.globalPath : paths.projectPath;
+        yield* step(() => (scope === "global" ? paths.writeGlobal(raw) : paths.writeProject(raw)));
+        const before = yield* step(() => readFile(target, "utf8"));
+        const beforeStat = yield* step(() => stat(target));
+        const loaded = yield* step(() => paths.load(scope === "project"));
+        expect(loaded).not.toHaveProperty("automaticProfileRouting");
+        expect(loaded.scriptedWorkflows).toBe(true);
+        expect(loaded.diagnostics).toEqual([]);
+        expect(yield* step(() => readFile(target, "utf8"))).toBe(before);
+        const afterStat = yield* step(() => stat(target));
+        expect([afterStat.ino, afterStat.mtimeMs]).toEqual([beforeStat.ino, beforeStat.mtimeMs]);
+      }
+  });
+
+  effectTest("loads trusted Project workflows over Global and otherwise inherits", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() => paths.writeGlobal({ version: 6, scriptedWorkflows: false }));
+    yield* step(() => paths.writeProject({ version: 6, scriptedWorkflows: true }));
+    expect((yield* step(() => paths.load(true))).scriptedWorkflows).toBe(true);
+    expect((yield* step(() => paths.load(false))).scriptedWorkflows).toBe(false);
+    yield* step(() => paths.writeProject({ version: 6 }));
+    expect((yield* step(() => paths.load(true))).scriptedWorkflows).toBe(false);
   });
 
   effectTest("saves and clears one switch while preserving every other field", function* () {
@@ -1035,7 +1050,7 @@ describe("feature switch persistence", () => {
       profileSets: { saved: { profiles: { worker: "disabled" } } },
       nesting: { maxDirectChildren: 4, maxDepth: 2 },
       writerWorkspaceMode: "worktree",
-      automaticProfileRouting: false,
+      automaticProfileRouting: { retired: ["preserve", null, false] },
     };
     yield* step(() => paths.writeProject(original));
     yield* step(() =>
@@ -1061,7 +1076,19 @@ describe("feature switch persistence", () => {
     );
     expect(yield* step(paths.readProject)).toEqual(original);
     const reloaded = yield* step(() => paths.load(true));
-    expect([reloaded.scriptedWorkflows, reloaded.automaticProfileRouting]).toEqual([true, false]);
+    expect(reloaded.scriptedWorkflows).toBe(true);
+    expect(reloaded).not.toHaveProperty("automaticProfileRouting");
+
+    const nesting = { maxDirectChildren: 8, maxDepth: 3 };
+    yield* step(() =>
+      paths.patchNesting({
+        scope: "project",
+        nesting,
+        expectedExists: true,
+        expectedDocument: original,
+      }),
+    );
+    expect(yield* step(paths.readProject)).toEqual({ ...original, nesting });
   });
 
   effectTest("inherits without creating a file in either scope", function* () {
@@ -1073,7 +1100,7 @@ describe("feature switch persistence", () => {
       yield* step(() =>
         paths.patchFeatureToggle({
           scope,
-          toggle: "automaticProfileRouting",
+          toggle: "scriptedWorkflows",
           expectedExists: false,
         }),
       );
@@ -1082,12 +1109,47 @@ describe("feature switch persistence", () => {
     yield* step(() =>
       paths.patchFeatureToggle({
         scope: "global",
-        toggle: "automaticProfileRouting",
+        toggle: "scriptedWorkflows",
         enabled: true,
         expectedExists: false,
       }),
     );
-    expect(yield* step(paths.readGlobal)).toEqual({ version: 6, automaticProfileRouting: true });
+    expect(yield* step(paths.readGlobal)).toEqual({ version: 6, scriptedWorkflows: true });
+  });
+
+  effectTest("rejects every runtime patch of the retired key, even without a file", function* () {
+    for (const scope of ["global", "project"] as const) {
+      const paths = yield* step(fixture);
+      const target = scope === "global" ? paths.globalPath : paths.projectPath;
+      const original = { version: 6, automaticProfileRouting: { retired: true } };
+      for (const expectedExists of [false, true]) {
+        if (expectedExists)
+          yield* step(() =>
+            scope === "global" ? paths.writeGlobal(original) : paths.writeProject(original),
+          );
+        for (const enabled of [true, false, undefined]) {
+          yield* rejects(
+            () =>
+              paths.patchFeatureToggle({
+                scope,
+                // SAFETY: Deliberately exercises an untyped caller using the retired key.
+                toggle: "automaticProfileRouting" as never,
+                enabled,
+                expectedExists,
+                ...(expectedExists && { expectedDocument: original }),
+              }),
+            "update",
+            target,
+          );
+          if (expectedExists)
+            expect(yield* step(() => readFile(target, "utf8"))).toBe(JSON.stringify(original));
+          else
+            yield* step(() =>
+              expect(readFile(target, "utf8")).rejects.toMatchObject({ code: "ENOENT" }),
+            );
+        }
+      }
+    }
   });
 
   effectTest(

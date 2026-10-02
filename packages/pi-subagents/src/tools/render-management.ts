@@ -4,7 +4,6 @@ import { expandedSection } from "pi-code-previews";
 import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
-import { isAutomaticRoutingFailureCode } from "../profiles/automatic-selection.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import type {
   CompactSubagentToolDetails,
@@ -109,8 +108,6 @@ export const failureRecovery = (
 ): string => {
   const normalizedCode = code?.toLowerCase() ?? "";
   const normalizedMessage = message.toLowerCase();
-  if (context === "start" && isAutomaticRoutingFailureCode(normalizedCode))
-    return "Hand this launch back to the main agent to choose an explicit profile. Do not retry classification automatically.";
   const [rules, fallback] = isUncertainToolFailure({ code: normalizedCode })
     ? [
         UNCERTAIN_FAILURE_RECOVERY_RULES,

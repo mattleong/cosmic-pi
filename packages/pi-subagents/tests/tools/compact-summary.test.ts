@@ -2,7 +2,6 @@ import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
-import { AUTOMATIC_ROUTING_FAILURE_CODES } from "../../src/profiles/automatic-selection.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentAwaitDetails, WorkspaceToolDetails } from "../../src/tools/details-schema.ts";
@@ -553,9 +552,9 @@ describe("subagent compact semantic policy", () => {
     }
   });
 
-  it("does not infer unknown ownership for automatic routing refusals before admission", () => {
-    for (const code of [...AUTOMATIC_ROUTING_FAILURE_CODES, "automatic_routing_unknown"]) {
-      const message = "Automatic selection needs attention\n\nChoose a profile explicitly.";
+  it("keeps historical launch failures conservative when admission receipts are missing", () => {
+    for (const code of ["unknown_failure", "automatic_routing_low_confidence"]) {
+      const message = "Historical launch failure";
       const summary = summarize("start", {
         version: 2,
         action: "start",
@@ -569,8 +568,10 @@ describe("subagent compact semantic policy", () => {
       expect(
         (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message)),
       ).toEqual([]);
-      expect(summary?.issues?.filter((issue) => issue.severity === "warning").length).toBe(
-        code === "automatic_routing_unknown" ? 1 : 0,
+      expect(summary?.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "launch:0:recovery-unknown", severity: "warning" }),
+        ]),
       );
     }
   });

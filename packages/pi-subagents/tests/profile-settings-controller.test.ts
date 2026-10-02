@@ -719,11 +719,11 @@ describe("feature switch settings", () => {
   const featurePatches = (fixture: ReturnType<typeof setup>) =>
     vi.mocked(fixture.managerActions.patchFeatureToggle).mock.calls.map(([patch]) => patch);
 
-  effectTest("saves each switch to the named scope against its inspected document", function* () {
+  effectTest("saves workflows to either named scope against its inspected document", function* () {
     const fixture = setup();
     const value = inspection();
     yield* step(() => fixture.settings("global scriptedWorkflows false"));
-    yield* step(() => fixture.settings("project automaticProfileRouting true"));
+    yield* step(() => fixture.settings("project scriptedWorkflows true"));
     expect(featurePatches(fixture)).toEqual([
       {
         scope: "global",
@@ -735,7 +735,7 @@ describe("feature switch settings", () => {
       },
       {
         scope: "project",
-        toggle: "automaticProfileRouting",
+        toggle: "scriptedWorkflows",
         enabled: true,
         expectedExists: true,
         expectedDocument: value.projectDocument,
@@ -750,7 +750,7 @@ describe("feature switch settings", () => {
       trusted: false,
       value: makeProfileSettingsInspection({ projectTrusted: false }),
     });
-    yield* step(() => fixture.settings("global automaticProfileRouting inherit"));
+    yield* step(() => fixture.settings("global scriptedWorkflows inherit"));
     const [patch] = featurePatches(fixture);
     expect(patch).toMatchObject({ scope: "global", expectedExists: false });
     expect(patch).not.toHaveProperty("enabled");
@@ -759,11 +759,22 @@ describe("feature switch settings", () => {
 
   effectTest("has no session scope and changes nothing without a persistent one", function* () {
     const fixture = setup();
-    for (const args of ["scriptedWorkflows false", "session automaticProfileRouting inherit"])
+    for (const args of ["scriptedWorkflows false", "session scriptedWorkflows inherit"])
       yield* step(() => fixture.settings(args));
     expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
     expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+  });
+
+  effectTest("rejects retired routing commands without writing any scope", function* () {
+    const fixture = setup();
+    for (const scope of ["global", "project", "session"])
+      for (const value of ["true", "false", "inherit"])
+        yield* step(() => fixture.settings(`${scope} automaticProfileRouting ${value}`));
+    expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
+    expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
+    expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
   });
 
   effectTest("rejects values other than true, false, or inherit", function* () {

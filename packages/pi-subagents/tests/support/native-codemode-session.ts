@@ -8,7 +8,6 @@ import {
   type AuthOperationOptions,
   type JsonObject,
   type ModelType,
-  type ProviderClassifier,
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -39,9 +38,8 @@ const driver: BackendDriver = {
   spawn: () => Effect.die("The session fixture delegates spawning to its owned service boundary."),
 };
 const registry = makeSubagentBackendRegistry([driver]);
-const profilesFor = (automaticProfileRouting: boolean | undefined) =>
+const profilesFor = () =>
   profileServiceFor({
-    ...(automaticProfileRouting !== undefined && { automaticProfileRouting }),
     profiles: {
       scout: [declaredCandidate("sonnet", { runtime: "claude" })],
       reviewer: [declaredCandidate("sonnet", { runtime: "claude" })],
@@ -50,20 +48,14 @@ const profilesFor = (automaticProfileRouting: boolean | undefined) =>
     },
   });
 
-/** The only classifier provider a session may see; its ID carries the Jev family token. */
-export const CLASSIFIER_FIXTURE_PROVIDER = "workflow-classifier-test";
+/** An authenticated local-only classifier that launch paths must never consult. */
+const CLASSIFIER_FIXTURE_PROVIDER = "workflow-classifier-test";
 
-export interface NativeCodemodeSessionOptions {
-  readonly classifier?: ProviderClassifier["classify"];
+interface NativeCodemodeSessionOptions {
+  readonly classifier?: "reviewer" | "throws";
   readonly proxy?: boolean;
-  /** Persisted feature switches; omitted values keep the enabled defaults. */
+  /** Omitted values keep scripted workflows enabled. */
   readonly scriptedWorkflows?: boolean;
-  readonly automaticProfileRouting?: boolean;
-  /**
-   * `rejects` makes the authenticated classifier catalog lookup fail; `hangs` never settles and
-   * ignores its abort signal, like a misbehaving host.
-   */
-  readonly classifierCatalog?: "fixture" | "rejects" | "hangs";
 }
 
 export const nativeCodemodeSession = (
@@ -87,19 +79,18 @@ export const nativeCodemodeSession = (
     // Availability stays fixture-only: a provider authenticated by the developer's environment
     // must never be preferred, reached, or required by these tests.
     let catalogLookups = 0;
+    let classifierCalls = 0;
     const listAvailable = models.getAvailableOfType.bind(models);
     models.getAvailableOfType = <TType extends ModelType>(
       type: TType,
       providerId?: string,
       authOptions?: AuthOperationOptions,
     ) => {
+      if (type !== "classifier") return listAvailable(type, providerId, authOptions);
       catalogLookups += 1;
-      if (options.classifierCatalog === "hangs") return Effect.runPromise(Effect.never);
-      return options.classifierCatalog === "rejects"
-        ? Promise.reject(new Error("Fixture classifier catalog is unavailable"))
-        : listAvailable(type, providerId, authOptions).then((available) =>
-            available.filter((model) => model.provider === CLASSIFIER_FIXTURE_PROVIDER),
-          );
+      return listAvailable(type, providerId, authOptions).then((available) =>
+        available.filter((model) => model.provider === CLASSIFIER_FIXTURE_PROVIDER),
+      );
     };
     if (options.classifier)
       models.registerProvider(CLASSIFIER_FIXTURE_PROVIDER, {
@@ -116,7 +107,30 @@ export const nativeCodemodeSession = (
             contextWindow: 16_000,
           },
         ],
-        classifiers: { "workflow-classifier-test": { classify: options.classifier } },
+        classifiers: {
+          "workflow-classifier-test": {
+            classify: (model) => {
+              classifierCalls += 1;
+              if (options.classifier === "throws")
+                return Promise.reject(new Error("Profile selection must not call a classifier"));
+              return Promise.resolve({
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                timestamp: 1,
+                stopReason: "stop",
+                answers: {
+                  profile: {
+                    type: "choice",
+                    choice: "reviewer",
+                    probabilities: { reviewer: 1 },
+                    confidence: 1,
+                  },
+                },
+              });
+            },
+          },
+        },
       });
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -124,7 +138,7 @@ export const nativeCodemodeSession = (
         if (options.classifier) models.unregisterProvider(CLASSIFIER_FIXTURE_PROVIDER);
       }),
     );
-    const profiles = profilesFor(options.automaticProfileRouting);
+    const profiles = profilesFor();
     const settings = SettingsManager.inMemory({
       defaultTools: ["+codemode"],
       compaction: { enabled: false },
@@ -225,5 +239,6 @@ export const nativeCodemodeSession = (
       run: (code: string, callId?: string) => call("codemode", { code }, callId),
       /** Authenticated classifier catalog lookups made through the session's registry. */
       catalogLookups: () => catalogLookups,
+      classifierCalls: () => classifierCalls,
     };
   });

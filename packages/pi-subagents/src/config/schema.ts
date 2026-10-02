@@ -33,15 +33,14 @@ export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checko
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
 
 /**
- * Independent version-6 feature switches. Each is an optional root boolean that Project overrides
- * over Global; an absent declaration inherits, and both are enabled by default.
+ * Version-6 feature switches are optional root booleans that Project overrides over Global;
+ * an absent declaration inherits, and features are enabled by default.
  */
-export const SUBAGENT_FEATURE_TOGGLES = ["scriptedWorkflows", "automaticProfileRouting"] as const;
+export const SUBAGENT_FEATURE_TOGGLES = ["scriptedWorkflows"] as const;
 export type SubagentFeatureToggle = (typeof SUBAGENT_FEATURE_TOGGLES)[number];
 export type SubagentFeatureToggles = Readonly<Record<SubagentFeatureToggle, boolean>>;
 export const DEFAULT_SUBAGENT_FEATURE_TOGGLES: SubagentFeatureToggles = Object.freeze({
   scriptedWorkflows: true,
-  automaticProfileRouting: true,
 });
 export const isSubagentFeatureToggle = <Value>(
   value: Value,
@@ -76,7 +75,6 @@ export interface SubagentConfigFile {
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly scriptedWorkflows?: boolean | undefined;
-  readonly automaticProfileRouting?: boolean | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -403,6 +401,7 @@ const ROOT_KEYS_BY_VERSION = {
     "nesting",
     "writerWorkspaceMode",
     ...SUBAGENT_FEATURE_TOGGLES,
+    "automaticProfileRouting", // Retired and ignored; preserve compatibility with saved v6 files.
   ],
 } as const;
 

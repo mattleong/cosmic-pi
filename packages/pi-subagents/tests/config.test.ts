@@ -31,45 +31,68 @@ describe("writer workspace configuration", () => {
 });
 
 describe("feature switch configuration", () => {
-  const toggles = (config: ReturnType<typeof resolve>) => ({
-    scriptedWorkflows: config.scriptedWorkflows,
-    automaticProfileRouting: config.automaticProfileRouting,
-  });
+  it.each([4, 5, 6])(
+    "enables scripted workflows for version %s documents by default",
+    (version) => {
+      expect(resolve({ version }).scriptedWorkflows).toBe(true);
+    },
+  );
 
-  it.each([4, 5, 6])("enables both features for version %s documents that omit them", (version) => {
-    expect(toggles(resolve({ version }))).toEqual({
-      scriptedWorkflows: true,
-      automaticProfileRouting: true,
-    });
-  });
-
-  it("resolves each switch independently with trusted Project over Global", () => {
-    const global = { version: 6, scriptedWorkflows: false, automaticProfileRouting: false };
-    expect(toggles(resolve(global))).toEqual({
-      scriptedWorkflows: false,
-      automaticProfileRouting: false,
-    });
-    expect(toggles(resolve(global, { version: 6, scriptedWorkflows: true }))).toEqual({
-      scriptedWorkflows: true,
-      automaticProfileRouting: false,
-    });
-    expect(toggles(resolve(global, { version: 6, scriptedWorkflows: true }, false))).toEqual({
-      scriptedWorkflows: false,
-      automaticProfileRouting: false,
-    });
+  it("resolves scripted workflows with trusted Project over Global", () => {
+    const global = { version: 6, scriptedWorkflows: false };
+    expect(resolve(global).scriptedWorkflows).toBe(false);
+    expect(resolve(global, { version: 6 }).scriptedWorkflows).toBe(false);
+    expect(resolve(global, { version: 6, scriptedWorkflows: true }).scriptedWorkflows).toBe(true);
+    expect(resolve(global, { version: 6, scriptedWorkflows: true }, false).scriptedWorkflows).toBe(
+      false,
+    );
     expect(
-      toggles(resolve({ version: 6 }, { version: 6, automaticProfileRouting: false })),
-    ).toEqual({ scriptedWorkflows: true, automaticProfileRouting: false });
+      resolve({ version: 6 }, { version: 6, scriptedWorkflows: false }).scriptedWorkflows,
+    ).toBe(false);
   });
 
-  it("reports non-boolean values and legacy declarations without retaining them", () => {
+  it("reports non-boolean workflow values without retaining them", () => {
     for (const value of ["false", 0, null, { enabled: false }]) {
       const decoded = decodeSubagentConfig({ version: 6, scriptedWorkflows: value });
       expect(decoded.file.scriptedWorkflows).toBeUndefined();
       expect(decoded.diagnostics).toContain("config.scriptedWorkflows");
     }
-    const legacy = decodeSubagentConfig({ version: 5, automaticProfileRouting: false });
-    expect(legacy.file.automaticProfileRouting).toBeUndefined();
+  });
+
+  it("ignores all retired v6 routing values without an effective field", () => {
+    for (const value of [true, false, null, 0, "off", [], { enabled: "private-value" }]) {
+      const raw = { version: 6, automaticProfileRouting: value };
+      const decoded = decodeSubagentConfig(raw);
+      expect(decoded.diagnostics).toEqual([]);
+      expect(decoded.file).toEqual({ version: 6 });
+      expect(resolve(raw)).toEqual(resolve({ version: 6 }));
+      expect(resolve({ version: 6 }, raw)).toEqual(resolve({ version: 6 }));
+    }
+  });
+
+  it("never reads the retired routing value", () => {
+    let reads = 0;
+    const raw = {
+      version: 6,
+      get automaticProfileRouting() {
+        reads += 1;
+        throw new Error("The retired value must not be read.");
+      },
+    };
+    expect(decodeSubagentConfig(raw).diagnostics).toEqual([]);
+    expect(reads).toBe(0);
+  });
+
+  it.each([4, 5])("still rejects retired routing declarations in version %s", (version) => {
+    const legacy = decodeSubagentConfig({ version, automaticProfileRouting: false });
+    expect(legacy.file).not.toHaveProperty("automaticProfileRouting");
     expect(legacy.diagnostics).toContain("config.<unknown>");
+  });
+
+  it("still rejects unrelated unknown v6 keys", () => {
+    expect(
+      decodeSubagentConfig({ version: 6, automaticProfileRouting: null, unknownFeature: true })
+        .diagnostics,
+    ).toContain("config.<unknown>");
   });
 });
