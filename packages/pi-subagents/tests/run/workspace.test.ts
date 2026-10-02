@@ -317,6 +317,28 @@ describe("writer workspace orchestration", () => {
     });
   });
 
+  it.effect("refuses script-origin writers before workspace creation or reservations", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      expect(
+        yield* service
+          .startScriptSessionOwned(request({ cwd: "/repo", writeIntent: "writer" }))
+          .pipe(Effect.flip),
+      ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
+      const reader = yield* service.startScriptSessionOwned(request({ cwd: "/repo" }));
+      expect(
+        yield* service
+          .startSessionOwnedFrom(reader.id, request({ writeIntent: "writer" }))
+          .pipe(Effect.flip),
+      ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
+      expect(f.entries.size).toBe(0);
+      expect(f.acquired).toEqual([]);
+      expect(f.canonicalized).toEqual([]);
+      expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: true });
+      expect(yield* service.list).toHaveLength(1);
+    });
+  });
+
   it.effect(
     "nested readers inspect their parent's effective cwd but nested writers fail before artifact creation",
     () => {

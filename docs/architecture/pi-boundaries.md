@@ -50,7 +50,7 @@ Built-in compact summaries apply only to installed `read`, `bash`, `write`, `edi
 
 ### Tool schemas
 
-Pi tool parameter declarations may use TypeBox or literal JSON Schema. Tool execution delegates to Effect immediately. This exception applies to schema representation, not implementation logic.
+Pi tool parameter declarations may use TypeBox or literal JSON Schema. Tool output declarations are generated from authoritative Effect Schema contracts; producers encode structured results with the matching codec. Core's shared pure adapter, `toPiToolOutputSchema`, makes that generated JSON Schema self-contained for Pi; pi-subagents and pi-background-task use it rather than package-local copies. The Effect schema remains authoritative, and the generated JSON Schema is only its declaration for Pi. Tool execution delegates to Effect immediately. This exception applies to schema representation, not implementation logic.
 
 ### Third-party libraries
 

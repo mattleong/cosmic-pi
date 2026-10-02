@@ -1,6 +1,9 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { NESTED_PACKAGE_DIRECTORIES } from "./workspace-manifest-paths.mjs";
+import {
+  NESTED_PACKAGE_DIRECTORIES,
+  workspacePackageDirectories,
+} from "./workspace-manifest-paths.mjs";
 
 const rootDir = join(import.meta.dirname, "..");
 const packagesDir = join(rootDir, "packages");
@@ -65,10 +68,7 @@ const walkFiles = async (directory, nestedPackages) => {
   return files;
 };
 
-const packageDirectories = (await readdir(packagesDir, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => join(packagesDir, entry.name))
-  .sort((left, right) => left.localeCompare(right));
+const packageDirectories = await workspacePackageDirectories(rootDir);
 
 for (let index = 0; index < packageDirectories.length; index += 1) {
   const packageDir = packageDirectories[index];

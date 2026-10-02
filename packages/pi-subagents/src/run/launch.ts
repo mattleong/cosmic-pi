@@ -50,6 +50,7 @@ import {
 import { emptyRunWarningSlots } from "./warnings.ts";
 import { addWriterPoolMemberLocked } from "./writer-pool.ts";
 import { failedStartRecoveryForRecord } from "./retry.ts";
+import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 
 const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
@@ -142,10 +143,27 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     sendPeerNotices,
   } = dependencies;
 
-  const start = (request: StartSubagentRequest): Effect.Effect<SubagentRunView, SubagentError> =>
+  const enforceScriptedAdmissionLocked = (request: StartSubagentRequest, scriptedRoot: boolean) =>
+    Effect.gen(function* () {
+      if (request.writeIntent === "writer" && scriptOriginForStart(records, request, scriptedRoot))
+        return yield* scriptedWriterAdmissionError();
+    });
+  const validate = (request: StartSubagentRequest, scriptedRoot = false) =>
+    validateStartRequest(request, writerLeases.platform).pipe(
+      Effect.tap(() =>
+        request.writeIntent === "writer"
+          ? withLock(enforceScriptedAdmissionLocked(request, scriptedRoot))
+          : Effect.void,
+      ),
+    );
+
+  const start = (
+    request: StartSubagentRequest,
+    scriptedRoot = false,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const writeClaims = yield* validateStartRequest(request, writerLeases.platform);
+        const writeClaims = yield* validate(request, scriptedRoot);
         const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
         const nestingPolicy: SubagentNestingPolicy =
           request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
@@ -253,6 +271,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 "retry_parent_mismatch",
                 "A retry successor must keep its predecessor's parent.",
               );
+            yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
             return parent;
           });
 
@@ -401,6 +420,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const attemptToken = allocateAssignmentAttemptToken();
             const writerPool = yield* writerPoolForAdmissionLocked(id);
             const record: RunRecord = {
+              scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),
               view: buildRunView(parent, id, name),
               scope,
               driver,
@@ -455,6 +475,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           withLock(
             Effect.gen(function* () {
               if (isClosed()) return yield* runtimeClosedError();
+              yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
               let candidate: RunRecord | undefined;
               const terminalHistoryCount = [...records.values()].filter((record) =>
                 isTerminalRunState(record.view.state),
@@ -624,9 +645,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     );
 
   return {
-    /** Cheap input/platform checks also run before private workspace acquisition. */
-    validate: (request: StartSubagentRequest) =>
-      validateStartRequest(request, writerLeases.platform),
+    /** Input/platform and inherited policy checks precede private workspace acquisition. */
+    validate,
     /** Admission, eviction, record construction, initialization, prompt issue, compensation. */
     start,
   };

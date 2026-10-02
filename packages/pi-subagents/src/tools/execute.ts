@@ -31,17 +31,12 @@ import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch } from "./execute-start.ts";
-import { makeAwaitDetails, makeCompactToolDetails, makeStartDetails } from "./details.ts";
-import type { SubagentStartEntry } from "./details-schema.ts";
+import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
+import { awaitContract, statusContract, startContract, lifecycleContract } from "./contract.ts";
 import {
   attentionRecoveryText,
-  boundToolOutput,
   formatActionFailures,
   formatDetailedRuns,
-  formatRun,
-  formatStartResult,
-  joinBoundedToolText,
-  managementAcknowledgement,
   renderedCompletionReceipts,
 } from "./format.ts";
 import {
@@ -49,10 +44,9 @@ import {
   observeAwaitInterruption,
   type AwaitExecution,
 } from "./execute-await.ts";
-import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
-import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
+import type { SubagentActionFailure } from "./model.ts";
 import { isPendingDeliveryError } from "./outcome.ts";
 import {
   claimsOperationError,
@@ -90,22 +84,37 @@ const forEachOutcome = <R>(
   operation: (id: string) => Effect.Effect<SubagentRunView, SubagentError, R>,
   allowPendingDelivery = false,
 ) =>
-  Effect.partition(
+  Effect.forEach(
     ids,
     (id) =>
       operation(id).pipe(
-        Effect.mapError(
-          (error): SubagentActionFailure => ({
-            id,
-            message: error.message,
-            code: subagentErrorCode(error),
-            ...(allowPendingDelivery &&
-              isPendingDeliveryError(error) && { pendingDelivery: true as const }),
-          }),
-        ),
+        Effect.match({
+          onSuccess: (run) => ({ runId: id, run }) as const,
+          onFailure: (error) =>
+            ({
+              runId: id,
+              failure: {
+                id,
+                message: error.message,
+                code: subagentErrorCode(error),
+                ...(allowPendingDelivery &&
+                  isPendingDeliveryError(error) && { pendingDelivery: true as const }),
+              } satisfies SubagentActionFailure,
+            }) as const,
+        }),
       ),
     { concurrency: 8 },
-  ).pipe(Effect.map(([runs, actionFailures]) => ({ runs, actionFailures })));
+  ).pipe(
+    Effect.map((outcomes) => ({
+      outcomes,
+      runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
+      actionFailures: outcomes.flatMap((outcome) =>
+        "failure" in outcome ? [outcome.failure] : [],
+      ),
+    })),
+  );
+
+type AwaitedLifecycleResult = Effect.Success<ReturnType<typeof forEachOutcome>>;
 
 const requiredField = (
   value: string,
@@ -166,6 +175,7 @@ export const executeSubagentActionEffect = (
   ctx: ExtensionContext,
   callerRunId?: string,
   awaitExecution?: AwaitExecution,
+  scripted = false,
 ): Effect.Effect<
   AgentToolResult<unknown>,
   SubagentError,
@@ -181,6 +191,8 @@ export const executeSubagentActionEffect = (
       ? (awaitExecution ?? makeAwaitExecution(input.args.runIds, input.args.until, onUpdate))
       : undefined;
   const requestedAwaitIds = awaitState?.requestedIds;
+  const present = (result: SubagentExecutionResult) =>
+    presentSubagentResult(input, result, requestedAwaitIds);
   const effect = Effect.gen(function* () {
     const service = yield* SubagentService;
     const authorize = (ids: ReadonlyArray<string>) =>
@@ -188,7 +200,9 @@ export const executeSubagentActionEffect = (
     const startOwned = (request: StartSubagentRequest) =>
       callerRunId
         ? service.startSessionOwnedFrom(callerRunId, request)
-        : service.startSessionOwned(request);
+        : scripted
+          ? service.startScriptSessionOwned(request)
+          : service.startSessionOwned(request);
     const consumeCompletions = (
       observations: ReadonlyArray<SubagentRunObservation>,
       fullyRenderedIds: ReadonlySet<string>,
@@ -206,48 +220,87 @@ export const executeSubagentActionEffect = (
       Effect.gen(function* () {
         const runs = observations.map((observation) => observation.run);
         const attentionRequired = runs.some(isParentActionRequiredRun);
+        if (scripted && attentionRequired)
+          return yield* new InvalidSubagentRequestError({
+            code: "scripted_parent_attention_required",
+            message: `Subagents need parent attention\n\nEnd the workflow and handle this directly.\n\n${attentionRecoveryText(runs)}`,
+          });
         const prefix = joinSections([...sections, attentionRecoveryText(runs)]);
         const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
-        const outcome = { runs, attentionRequired, text: formatted.text, ...extra() };
+        const additional = extra();
+        const contract =
+          input.tool === SUBAGENT_TOOL_NAME.await
+            ? awaitContract({
+                observations,
+                fullyRenderedIds: formatted.fullyRenderedIds,
+                until: input.args.until,
+                requestedRunIds: requestedAwaitIds ?? [],
+              })
+            : input.tool === SUBAGENT_TOOL_NAME.status
+              ? statusContract({
+                  observations,
+                  fullyRenderedIds: formatted.fullyRenderedIds,
+                  missingRunIds: (additional.actionFailures ?? []).map((failure) => failure.id),
+                })
+              : undefined;
+        const outcome = {
+          runs,
+          attentionRequired,
+          text: formatted.text,
+          ...additional,
+          ...(contract && { contract }),
+        };
         const result = yield* Effect.sync(() => present(outcome));
+        const receipts = renderedCompletionReceipts(observations, formatted.fullyRenderedIds);
+        awaitState?.markDeliveryAttempt(receipts.map((receipt) => receipt.id));
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
         return { result, fullyRenderedIds: formatted.fullyRenderedIds };
       });
     const finishStatus = (ids: ReadonlyArray<string>) =>
       authorize(ids).pipe(
         Effect.andThen(
-          service.withStatusObservations(ids, ({ observations, missingIds }) => {
-            const actionFailures = missingIds.map(
-              (id): SubagentActionFailure => ({
-                id,
-                code: "SubagentNotFoundError",
-                message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
-              }),
-            );
-            return completeObservations(
-              observations,
-              [formatActionFailures(action, actionFailures)],
-              () => ({
-                actionFailures,
-              }),
-            );
-          }),
+          service.withStatusObservations(
+            ids,
+            ({ observations, missingIds }) => {
+              const actionFailures = missingIds.map(
+                (id): SubagentActionFailure => ({
+                  id,
+                  code: "SubagentNotFoundError",
+                  message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
+                }),
+              );
+              return completeObservations(
+                observations,
+                [formatActionFailures(action, actionFailures)],
+                () => ({
+                  actionFailures,
+                }),
+              );
+            },
+            input.tool === SUBAGENT_TOOL_NAME.status
+              ? { includeDeliveredReports: input.args.includeDeliveredReports }
+              : undefined,
+          ),
         ),
         Effect.map(({ result }) => result),
       );
 
     switch (input.tool) {
-      case SUBAGENT_TOOL_NAME.start:
-        return present(
-          yield* executeStartBatch({
-            agents: input.args.agents,
-            pi,
-            ctx,
-            environment,
-            startOwned,
-            onUpdate,
-          }),
-        );
+      case SUBAGENT_TOOL_NAME.start: {
+        const result = yield* executeStartBatch({
+          agents: input.args.agents,
+          pi,
+          ctx,
+          environment,
+          startOwned,
+          onUpdate,
+          readOnly: scripted,
+        });
+        return present({
+          ...result,
+          contract: startContract(input.args.agents, result.startOutcomes),
+        });
+      }
       case SUBAGENT_TOOL_NAME.list:
         return present({
           runs: yield* callerRunId ? service.visibleList(callerRunId) : service.list,
@@ -289,13 +342,24 @@ export const executeSubagentActionEffect = (
       }
       case SUBAGENT_TOOL_NAME.lifecycle: {
         const { args } = input;
+        if (scripted && args.action !== "stop")
+          return yield* new InvalidSubagentRequestError({
+            code: "scripted_lifecycle_not_supported",
+            message:
+              "Workflow lifecycle supports stopping only. Hand retry, resume, and interrupt decisions back to the parent agent.",
+          });
+        const presentLifecycle = (result: AwaitedLifecycleResult) =>
+          present({
+            ...result,
+            contract: lifecycleContract(args.action, result.outcomes),
+          });
         if (args.action === "retry") {
           // Retry ignores a message; only interrupt, stop, and resume reject one.
           const ids = yield* requiredTargetIds(action, args.runIds);
           const profileService = yield* SubagentProfileService;
           const policySnapshot = yield* profileService.capture;
           yield* authorize(ids);
-          return present(
+          return presentLifecycle(
             yield* forEachOutcome(ids, (id) => {
               let handedOff = false;
               const operation = Effect.acquireUseRelease(
@@ -338,7 +402,7 @@ export const executeSubagentActionEffect = (
           });
         const ids = yield* requiredTargetIds(action, args.runIds);
         yield* authorize(ids);
-        return present(
+        return presentLifecycle(
           yield* forEachOutcome(ids, (id) =>
             args.action === "interrupt"
               ? service.interrupt(id)
@@ -380,71 +444,6 @@ export const executeSubagentActionEffect = (
     }
   });
 
-  const present = (executionResult: {
-    readonly runs: ReadonlyArray<SubagentRunView>;
-    readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
-    readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
-    readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
-    readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-    readonly attentionRequired?: boolean;
-    readonly text?: string;
-  }): AgentToolResult<unknown> => {
-    const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
-    const startFailures = executionResult.startFailures ?? [];
-    const actionFailures = executionResult.actionFailures ?? [];
-    const details: unknown =
-      input.tool === SUBAGENT_TOOL_NAME.start
-        ? makeStartDetails({
-            // Every start result contains the complete request-ordered receipt.
-            startEntries: executionResult.startEntries ?? [],
-            ...(startFailures.length > 0 && { startFailures }),
-          })
-        : input.tool === SUBAGENT_TOOL_NAME.await
-          ? makeAwaitDetails({
-              runs,
-              contextRuns: awaitContextRuns,
-              awaitedRunIds: requestedAwaitIds,
-              awaitUntil: input.args.until,
-              ...(attentionRequired === true && { attentionRequired: true as const }),
-            })
-          : makeCompactToolDetails({
-              action: subagentToolAction(input),
-              runs,
-              ...(actionFailures.length > 0 && { actionFailures }),
-            });
-    const detailedText = () => formattedText ?? formatDetailedRuns(runs).text;
-    const resultText = (): string => {
-      if (input.tool === SUBAGENT_TOOL_NAME.start)
-        return formattedText ?? formatStartResult(runs, startFailures);
-      const acknowledgement = () =>
-        managementAcknowledgement(
-          subagentToolAction(input),
-          runs,
-          input.tool === SUBAGENT_TOOL_NAME.claims ? input.args.action : undefined,
-        );
-      // Status keeps its detailed text even when some targets failed.
-      if (actionFailures.length > 0)
-        return input.tool === SUBAGENT_TOOL_NAME.status
-          ? detailedText()
-          : joinBoundedToolText([
-              acknowledgement(),
-              formatActionFailures(subagentToolAction(input), actionFailures),
-            ]);
-      if (runs.length === 0) return "No subagent runs.";
-      switch (input.tool) {
-        case SUBAGENT_TOOL_NAME.list:
-          return projectRunCardTree(runs)
-            .map((row) => `${runTreeBranch(row)}${formatRun(row.run)}`)
-            .join("\n");
-        case SUBAGENT_TOOL_NAME.status:
-        case SUBAGENT_TOOL_NAME.await:
-          return detailedText();
-        default:
-          return acknowledgement();
-      }
-    };
-    return { content: [{ type: "text", text: boundToolOutput(resultText()) }], details };
-  };
   return effect;
 };
 
@@ -455,6 +454,7 @@ export const executeSubagentAction = (
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
+  scripted = false,
 ): Promise<AgentToolResult<unknown>> => {
   const awaitState =
     input.tool === SUBAGENT_TOOL_NAME.await
@@ -472,6 +472,7 @@ export const executeSubagentAction = (
             ctx,
             undefined,
             awaitState,
+            scripted,
           ),
           awaitState?.markInterrupted,
         ),

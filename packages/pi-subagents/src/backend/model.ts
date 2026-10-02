@@ -72,6 +72,8 @@ export interface BackendProxyRequest {
 export interface BackendProxyResult {
   readonly content: ReadonlyArray<unknown>;
   readonly details?: unknown;
+  readonly structuredContent?: unknown;
+  readonly isError?: boolean;
 }
 
 /** Latest assistant attempt only, bounded and sanitized by the adapter. */

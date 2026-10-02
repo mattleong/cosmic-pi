@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentRunView } from "../../src/run/model.ts";
+import { MAX_RETAINED_RUNS } from "../../src/run/limits.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
@@ -284,6 +285,29 @@ describe("SubagentService", () => {
       expect(fake.reclaimedRunIds).toEqual([firstId]);
     });
   });
+
+  it.effect(
+    "refuses a scripted descendant writer without reclaiming or quarantining full history",
+    () => {
+      const { fake, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
+        const scripted = yield* service.startScriptSessionOwned(request());
+        const history = yield* completeHistory(service, fake, MAX_RETAINED_RUNS, "retained", 1);
+        for (const id of history) yield* service.status(id);
+        const before = yield* service.list;
+        expect(
+          yield* service
+            .startSessionOwnedFrom(scripted.id, request({ writeIntent: "writer" }))
+            .pipe(Effect.flip),
+        ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
+        expect(yield* service.list).toEqual(before);
+        expect(fake.reclaimedRunIds).toEqual([]);
+        // A normal start still reclaims the eligible leaf, proving history really was at capacity.
+        yield* service.start(request({ name: "allowed-after-refusal" }));
+        expect(fake.reclaimedRunIds).toEqual([history[0]]);
+      });
+    },
+  );
 
   it.effect("keeps the evicted record registered and admits nothing when reclaim fails", () => {
     let reclaimFails = true;

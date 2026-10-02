@@ -8,6 +8,7 @@ import {
   writeGallerySection,
   type GalleryScenario,
 } from "pi-code-previews/testing";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
 import { backgroundTaskNotFound, InvalidBackgroundCwdError } from "../src/task/errors.ts";
 import type {
@@ -426,12 +427,62 @@ const settle = (scenario: Scenario): Effect.Effect<GalleryScenario> => {
   );
 };
 
+/** A scenario that needs what the registered definition adds beyond the shared executor. */
+interface RegisteredScenario {
+  readonly title: string;
+  readonly input: BackgroundTaskToolInput;
+  readonly service: Partial<BackgroundTaskServiceContract>;
+}
+
+const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
+  {
+    // A fact outside the script contract's bounds: the task started, so the model keeps its
+    // receipt, marked as an error, and scripts receive no structured result.
+    title: "started task whose structured result could not be built",
+    input: { action: "start", command: "pnpm docs:dev", name: "docs" },
+    service: {
+      start: (request) =>
+        started("task-13", 48701)(request).pipe(Effect.map((task) => ({ ...task, startedAt: -1 }))),
+    },
+  },
+];
+
+/** Settles a scenario through the registered definition's own execute, over its service. */
+const settleRegistered = (scenario: RegisteredScenario): Effect.Effect<GalleryScenario> => {
+  const tool = captureRegistrations((pi) =>
+    registerBackgroundTaskTool(pi, {
+      run: (effect, signal) =>
+        Effect.runPromise(
+          effect.pipe(
+            Effect.provideService(BackgroundTaskService, { ...service, ...scenario.service }),
+            Effect.provide(Path.layer),
+          ),
+          signal ? { signal } : undefined,
+        ),
+    }),
+  ).tools[0]!;
+  const ctx = extensionContextFixture({ cwd: "/project" });
+  return Effect.promise(() =>
+    tool.execute("gallery", scenario.input, undefined, undefined, ctx),
+  ).pipe(
+    Effect.map((result) => ({
+      title: scenario.title,
+      args: scenario.input,
+      result,
+      isError: result.isError === true,
+    })),
+  );
+};
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
   it.effect("renders background task outcomes in both collapsed styles", () =>
     Effect.gen(function* () {
-      const results = yield* Effect.forEach(scenarios, settle);
+      const results = [
+        ...(yield* Effect.forEach(scenarios, settle)),
+        ...(yield* Effect.forEach(registeredScenarios, settleRegistered)),
+      ];
       const lines: string[] = [];
       for (const style of ["compact", "preview"] as const) {
         const restore = applyPresentationSettings({

@@ -74,6 +74,7 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
   return {
     start,
     startSessionOwned,
+    startScriptSessionOwned: base.startScriptSessionOwned ?? startSessionOwned,
     startSessionOwnedFrom,
     visibleList,
     authorizeTargets,

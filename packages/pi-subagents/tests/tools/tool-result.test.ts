@@ -38,11 +38,46 @@ import {
 
 type Handler = ExtensionHandler<any, any>;
 type Tool = ToolDefinition<any, any, any>;
+const toolHosts = new WeakMap<Tool, Map<string, Handler[]>>();
 const execute = (
   tool: Tool,
   args: Parameters<Tool["execute"]>[1],
   options?: Parameters<typeof executeTool>[2],
-) => step(() => executeTool(tool, args, options));
+) =>
+  Effect.gen(function* () {
+    // Owned host fixture follows Pi start and admission provenance before execution.
+    for (const hook of toolHosts.get(tool)?.get("tool_execution_start") ?? [])
+      yield* step(() =>
+        Promise.resolve(
+          hook(
+            {
+              type: "tool_execution_start",
+              toolName: tool.name,
+              toolCallId: options?.callID ?? "call",
+              args,
+            },
+            ctx,
+          ),
+        ),
+      );
+    for (const hook of toolHosts.get(tool)?.get("tool_call") ?? []) {
+      const result = yield* step(() =>
+        Promise.resolve(
+          hook(
+            {
+              type: "tool_call",
+              toolName: tool.name,
+              toolCallId: options?.callID ?? "call",
+              input: args,
+            },
+            ctx,
+          ),
+        ),
+      );
+      if (result?.block) return yield* Effect.die(new Error(result.reason));
+    }
+    return yield* step(() => executeTool(tool, args, options));
+  });
 const serializeResult = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ctx = extensionContextFixture({
   cwd: process.cwd(),
@@ -151,8 +186,206 @@ function ownedTools(service = subagentServiceDouble({}), earlierResult?: Handler
     },
     { receipts, owner },
   );
+  for (const tool of h.tools.values()) toolHosts.set(tool, h.hooks);
   return { ...h, receipts, owner };
 }
+
+effectTest("fails closed on unknown origin and releases aborted call provenance", function* () {
+  const h = host();
+  const receipts = registerSubagentErrorReceipts(h.pi);
+  const owner = receipts.activate();
+  const admit = (id: string, nested = true) =>
+    step(() =>
+      Promise.resolve(
+        h.hooks.get("tool_call")![0]!(
+          {
+            type: "tool_call",
+            toolCallId: id,
+            toolName: "subagent_start",
+            input: { parentToolCallId: "argument-does-not-authorize" },
+            ...(nested && { parentToolCallId: "native-parent" }),
+          },
+          ctx,
+        ),
+      ),
+    );
+  const start = (id: string, parentToolCallId?: string) =>
+    step(() =>
+      Promise.resolve(
+        h.hooks.get("tool_execution_start")![0]!(
+          {
+            type: "tool_execution_start",
+            toolCallId: id,
+            toolName: "subagent_start",
+            args: {},
+            ...(parentToolCallId !== undefined && { parentToolCallId }),
+          },
+          ctx,
+        ),
+      ),
+    );
+  expect(receipts.isNested(owner, "unknown")).toBe(true);
+  yield* start("codemode-looking-model-id");
+  expect(receipts.isNested(owner, "codemode-looking-model-id")).toBe(true);
+  yield* admit("codemode-looking-model-id", false);
+  expect(receipts.isNested(owner, "codemode-looking-model-id")).toBe(false);
+  for (let i = 0; i < 255; i++) yield* start(`pending-${i}`, "native-parent");
+  yield* start("over-cap", "");
+  expect(yield* admit("over-cap", false)).toMatchObject({ block: true });
+  yield* step(() =>
+    Promise.resolve(
+      h.hooks.get("tool_execution_end")![0]!(
+        {
+          type: "tool_execution_end",
+          toolName: "subagent_start",
+          toolCallId: "pending-0",
+          isError: true,
+          result: {},
+        },
+        ctx,
+      ),
+    ),
+  );
+  // The overflow start was not retained. A freed slot must not turn its lost empty
+  // parent into model privilege when admission finally arrives.
+  expect(yield* admit("over-cap", false)).toBeUndefined();
+  expect(receipts.isNested(owner, "over-cap")).toBe(true);
+  receipts.activate();
+  expect(receipts.isNested(owner, "codemode-looking-model-id")).toBe(true);
+});
+
+effectTest(
+  "keeps empty-parent and missing-start origins scripted across later root-looking events",
+  function* () {
+    const h = host();
+    const receipts = registerSubagentErrorReceipts(h.pi);
+    const owner = receipts.activate();
+    const start = (id: string, parentToolCallId?: string) =>
+      step(() =>
+        Promise.resolve(
+          h.hooks.get("tool_execution_start")![0]!(
+            {
+              type: "tool_execution_start",
+              toolCallId: id,
+              toolName: "subagent_start",
+              args: {},
+              ...(parentToolCallId !== undefined && { parentToolCallId }),
+            },
+            ctx,
+          ),
+        ),
+      );
+    const admit = (id: string) =>
+      step(() =>
+        Promise.resolve(
+          h.hooks.get("tool_call")![0]!(
+            {
+              type: "tool_call",
+              toolCallId: id,
+              toolName: "subagent_start",
+              input: {},
+            },
+            ctx,
+          ),
+        ),
+      );
+    yield* start("opaque", "");
+    yield* admit("opaque"); // Pi's admission hook drops the empty parent ID.
+    expect(receipts.isNested(owner, "opaque")).toBe(true);
+    yield* start("opaque");
+    yield* admit("opaque");
+    expect(receipts.isNested(owner, "opaque")).toBe(true);
+
+    yield* admit("missing-start");
+    expect(receipts.isNested(owner, "missing-start")).toBe(true);
+    yield* start("missing-start");
+    yield* admit("missing-start");
+    expect(receipts.isNested(owner, "missing-start")).toBe(true);
+  },
+);
+
+for (const reset of ["activation", "agent_end"] as const)
+  effectTest(`does not grant model origin after ${reset} loses start evidence`, function* () {
+    const h = host();
+    const receipts = registerSubagentErrorReceipts(h.pi);
+    const owner = receipts.activate();
+    yield* step(() =>
+      Promise.resolve(
+        h.hooks.get("tool_execution_start")![0]!(
+          {
+            type: "tool_execution_start",
+            toolCallId: "pending",
+            toolName: "subagent_start",
+            args: {},
+          },
+          ctx,
+        ),
+      ),
+    );
+    const currentOwner = reset === "activation" ? receipts.activate() : owner;
+    if (reset === "agent_end") yield* h.emit("agent_end");
+    yield* step(() =>
+      Promise.resolve(
+        h.hooks.get("tool_call")![0]!(
+          {
+            type: "tool_call",
+            toolCallId: "pending",
+            toolName: "subagent_start",
+            input: {},
+          },
+          ctx,
+        ),
+      ),
+    );
+    expect(receipts.isNested(currentOwner, "pending")).toBe(true);
+    expect(receipts.isNested(owner, "pending")).toBe(true);
+  });
+
+effectTest(
+  "ignores oversized and foreign starts without stealing owned-call capacity",
+  function* () {
+    const h = host();
+    const receipts = registerSubagentErrorReceipts(h.pi);
+    const owner = receipts.activate();
+    const start = (id: string, toolName = "subagent_start") =>
+      step(() =>
+        Promise.resolve(
+          h.hooks.get("tool_execution_start")![0]!(
+            {
+              type: "tool_execution_start",
+              toolCallId: id,
+              toolName,
+              args: {},
+            },
+            ctx,
+          ),
+        ),
+      );
+    yield* start("inactive");
+    receipts.deactivate();
+    yield* start("while-inactive");
+    const activeOwner = receipts.activate();
+    yield* start("foreign", "read");
+    yield* start("x".repeat(1_025));
+    for (let i = 0; i < 256; i++) yield* start(`owned-${i}`);
+    const admission = yield* step(() =>
+      Promise.resolve(
+        h.hooks.get("tool_call")![0]!(
+          {
+            type: "tool_call",
+            toolCallId: "owned-255",
+            toolName: "subagent_start",
+            input: {},
+          },
+          ctx,
+        ),
+      ),
+    );
+    expect(admission).toBeUndefined();
+    expect(receipts.isNested(activeOwner, "owned-255")).toBe(false);
+    expect(receipts.isNested(owner, "owned-255")).toBe(true);
+  },
+);
 
 effectTest(
   "composes with prior content, images and error middleware without replacing details",

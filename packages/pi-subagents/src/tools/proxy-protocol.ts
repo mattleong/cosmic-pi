@@ -10,6 +10,7 @@ import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentToolName } from "../run/tool-policy.ts";
+import { SubagentContractSchema, encodeSubagentContract } from "./contract-schema.ts";
 import {
   SUBAGENT_TOOL_SCHEMAS,
   type SubagentToolArgs,
@@ -61,6 +62,8 @@ const ProxyResultSchema = Schema.Struct({
     }),
   ).check(Schema.isMaxLength(64)),
   details: Schema.optional(Schema.Unknown),
+  structuredContent: Schema.optionalKey(SubagentContractSchema),
+  isError: Schema.optionalKey(Schema.Boolean),
 });
 const decodeProxyArgumentsJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeProxyResultJson = Schema.decodeUnknownOption(Schema.fromJsonString(ProxyResultSchema), {
@@ -69,9 +72,17 @@ const decodeProxyResultJson = Schema.decodeUnknownOption(Schema.fromJsonString(P
 
 /** Strict client-side decode for private root coordinator proxy responses. */
 export const decodeSubagentProxyResult = (source: string): AgentToolResult<unknown> | undefined => {
+  if (source.length > MAX_PROXY_JSON_CHARS) return undefined;
   const decoded = decodeProxyResultJson(source);
   if (Option.isNone(decoded)) return undefined;
-  return { content: [...decoded.value.content], details: decoded.value.details ?? {} };
+  return {
+    content: [...decoded.value.content],
+    details: decoded.value.details ?? {},
+    ...(decoded.value.structuredContent !== undefined && {
+      structuredContent: encodeSubagentContract(decoded.value.structuredContent),
+    }),
+    ...(decoded.value.isError !== undefined && { isError: decoded.value.isError }),
+  };
 };
 
 const invalid = (message: string) =>

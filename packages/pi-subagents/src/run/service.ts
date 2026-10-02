@@ -43,6 +43,7 @@ import { makeRunResume } from "./resume.ts";
 import { makeRunRetry, type SubagentRetryClaim } from "./retry.ts";
 import { makeRunSettlement } from "./settlement.ts";
 import {
+  type FailedStartRecovery,
   hasSubagentCapability,
   isActiveRunState,
   SUBAGENT_ROOT_RUN_ID,
@@ -107,6 +108,8 @@ export interface SubagentRunObservation {
   readonly completionReceipt?: SubagentCompletionReceipt | undefined;
   /** Exact pending question owned by this await, never by status. */
   readonly questionReceipt?: QuestionNotificationReceipt | undefined;
+  /** Authoritative record cleanup and retry facts for a failed initial assignment. */
+  readonly recovery?: FailedStartRecovery | undefined;
 }
 
 export interface SubagentStatusObservations {
@@ -114,10 +117,22 @@ export interface SubagentStatusObservations {
   readonly missingIds: ReadonlyArray<string>;
 }
 
+export interface SubagentStatusObservationOptions {
+  /**
+   * Read back the latest retained report after its outcome was delivered and no other
+   * operation owns it. Read-back carries no receipt, so it never consumes or re-notifies.
+   */
+  readonly includeDeliveredReports?: boolean | undefined;
+}
+
 export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   /** Submit one launch to the session owner; cancelling the waiter never abandons ownership. */
   readonly startSessionOwned: (
+    request: StartSubagentRequest,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  /** Trusted root host boundary seeds immutable script-origin subtree policy. */
+  readonly startScriptSessionOwned: (
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   /** Authenticated nested-Pi admission; ancestry comes only from the server-side caller identity. */
@@ -172,6 +187,7 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly withStatusObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     use: (selection: SubagentStatusObservations) => Effect.Effect<A, E, R>,
+    options?: SubagentStatusObservationOptions,
   ) => Effect.Effect<A, InvalidSubagentRequestError | E, R>;
   readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
@@ -660,10 +676,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     bindWorkspace: workspaces.bind,
   });
 
-  const startWithWorkspace: SubagentServiceContract["start"] = (request) =>
-    launch.validate(request).pipe(Effect.andThen(workspaces.withLaunch(request, launch.start)));
-  const startWorkspaceSessionOwned: SubagentServiceContract["startSessionOwned"] = (request) =>
-    runSessionOwned(ownerScope, Effect.void, () => startWithWorkspace(request)).pipe(
+  const startWithWorkspace = (request: StartSubagentRequest, scriptedRoot = false) =>
+    launch
+      .validate(request, scriptedRoot)
+      .pipe(
+        Effect.andThen(
+          workspaces.withLaunch(request, (prepared) => launch.start(prepared, scriptedRoot)),
+        ),
+      );
+  const startWorkspaceSessionOwned = (request: StartSubagentRequest, scriptedRoot = false) =>
+    runSessionOwned(ownerScope, Effect.void, () => startWithWorkspace(request, scriptedRoot)).pipe(
       Effect.map((view) => observations.redactCompletionReport(view)),
     );
 
@@ -748,11 +770,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...observations,
     start: startWithWorkspace,
     startSessionOwned: startWorkspaceSessionOwned,
+    startScriptSessionOwned: (request) => startWorkspaceSessionOwned(request, true),
     workspaceList: workspaces.workspaceList,
     workspaceReview: workspaces.workspaceReview,
     workspacePrepare: workspaces.workspacePrepare,
     workspaceIntegrate: workspaces.workspaceIntegrate,
     workspaceDiscard: workspaces.workspaceDiscard,
+    // Bindings belong only to admitted writers, which can never have script origin.
     workspaceRevise: workspaces.revise((request, handle) =>
       runSessionOwned(ownerScope, Effect.void, () =>
         workspaces.withLaunch(request, launch.start, handle),

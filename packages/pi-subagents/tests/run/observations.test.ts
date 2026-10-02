@@ -8,13 +8,22 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
+import { processError } from "../../src/run/errors.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
-import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
+import {
+  SubagentService,
+  type SubagentServiceContract,
+  type SubagentStatusObservationOptions,
+} from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
+import { profileCandidate } from "../fixtures/profiles.ts";
 import {
   contactParentFrame,
   expectInterruptBeforeUse,
   localServiceFixture,
+  nativeReportRequest,
+  nativeReportServiceFixture,
   request,
   useProbe,
   waitForCompleted,
@@ -52,6 +61,31 @@ const completionRetryFixture = (policy: CompletionPolicy) => {
       return run;
     });
   return { notifications, layer, attempts: () => attempts, firstAttempt };
+};
+
+const includeDeliveredReports: SubagentStatusObservationOptions = {
+  includeDeliveredReports: true,
+};
+
+/** Observes one run through status, returning its observation without consuming it. */
+const observeStatus = (
+  service: SubagentServiceContract,
+  id: string,
+  options?: SubagentStatusObservationOptions,
+) =>
+  service.withStatusObservations(
+    [id],
+    ({ observations }) => Effect.succeed(observations[0]),
+    options,
+  );
+
+/** A reviewer route with one remaining candidate after its first. */
+const reviewerRoute: ProfileRouteContinuation = {
+  profile: "reviewer",
+  routeSource: "global",
+  candidates: [profileCandidate("openai-codex/gpt-5.6-sol"), profileCandidate("parent")],
+  selectedCandidateIndex: 0,
+  skippedCandidates: [],
 };
 
 describe("SubagentService", () => {
@@ -314,6 +348,154 @@ describe("SubagentService", () => {
       expect(observations[0]?.run.finalText).toBe("Owned report text.");
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
+    });
+  });
+
+  for (const deliveredBy of ["notification", "await"] as const)
+    it.effect(`reads back a report delivered by ${deliveredBy} only for opt-in status`, () => {
+      const { fake, projections, notifications, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
+        const run = yield* service.start(request({ name: "delivered-read-back" }));
+        fake.controls[0]?.settle("Delivered report text.");
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        if (deliveredBy === "await") {
+          const [awaited] = yield* service.awaitTerminal([run.id], "all_finished");
+          expect(awaited?.finalText).toBe("Delivered report text.");
+        } else {
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() => notifications.length === 1);
+        }
+
+        const defaultObservation = yield* observeStatus(service, run.id);
+        expect(defaultObservation?.run.reportStatus).toBe("delivered");
+        expect(defaultObservation?.run).not.toHaveProperty("finalText");
+        expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
+
+        // Repeated read-back neither consumes nor re-queues the delivered outcome.
+        for (let read = 0; read < 2; read++) {
+          const readBack = yield* observeStatus(service, run.id, includeDeliveredReports);
+          expect(readBack).not.toHaveProperty("completionReceipt");
+          expect(readBack?.run).toMatchObject({
+            reportStatus: "delivered",
+            finalText: "Delivered report text.",
+          });
+          expect(readBack?.run.sessionEvents).not.toEqual(
+            expect.arrayContaining([expect.objectContaining({ text: "Delivered report text." })]),
+          );
+        }
+
+        // Await keeps redacting an outcome it can no longer own.
+        const [awaitedAgain] = yield* service.awaitTerminal([run.id], "all_finished");
+        expect(awaitedAgain?.reportStatus).toBe("delivered");
+        expect(awaitedAgain).not.toHaveProperty("finalText");
+        yield* TestClock.adjust("30 seconds");
+        expect(notifications).toHaveLength(deliveredBy === "notification" ? 1 : 0);
+      });
+    });
+
+  it.effect("keeps an await-owned report redacted from opt-in status", () => {
+    const { fake, notifications, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "owned-read-back" }));
+      const entered = yield* Deferred.make<void>();
+      const releaseRender = yield* Deferred.make<void>();
+      const awaiting = yield* service
+        .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(releaseRender);
+            const receipt = observations[0]?.completionReceipt;
+            if (receipt) yield* service.consumeCompletions([receipt]);
+            return observations;
+          }),
+        )
+        .pipe(Effect.forkScoped);
+
+      fake.controls[0]?.settle("Owned report text.");
+      yield* Deferred.await(entered);
+
+      const competing = yield* observeStatus(service, run.id, includeDeliveredReports);
+      expect(competing).not.toHaveProperty("completionReceipt");
+      expect(competing?.run.reportStatus).toBe("claimed");
+      expect(competing?.run).not.toHaveProperty("finalText");
+      // A forged receipt cannot release the owned report into read-back.
+      yield* service.consumeCompletions([
+        { id: run.id, generation: 1, claimToken: "forged-owner" },
+      ]);
+      const afterForgery = yield* observeStatus(service, run.id, includeDeliveredReports);
+      expect(afterForgery?.run.reportStatus).toBe("claimed");
+      expect(afterForgery?.run).not.toHaveProperty("finalText");
+
+      yield* Deferred.succeed(releaseRender, undefined);
+      const observations = yield* Fiber.join(awaiting);
+      expect(observations[0]?.run.finalText).toBe("Owned report text.");
+      expect((yield* observeStatus(service, run.id, includeDeliveredReports))?.run).toMatchObject({
+        reportStatus: "delivered",
+        finalText: "Owned report text.",
+      });
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    });
+  });
+
+  it.effect("reports failed-run recovery from cleanup and retry ownership", () => {
+    const cleanupGate = Deferred.makeUnsafe<void>();
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(
+        request({ profile: "reviewer", routeContinuation: reviewerRoute }),
+      );
+      fake.controls[0]!.gateRelease(cleanupGate);
+      fake.controls[0]!.exit(1);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      const recovery = () =>
+        observeStatus(service, run.id).pipe(Effect.map((observation) => observation?.recovery));
+
+      expect(yield* recovery()).toEqual({
+        runId: run.id,
+        cleanupDisposition: "pending",
+        retryDisposition: "pending",
+        remainingCandidateCount: 1,
+        hasRemainingCandidate: true,
+      });
+
+      yield* Deferred.succeed(cleanupGate, undefined);
+      // The continuation claim waits for confirmed cleanup, then blocks a concurrent retry.
+      const claim = yield* service.claimRetryContinuation(run.id);
+      expect(yield* recovery()).toMatchObject({
+        cleanupDisposition: "confirmed",
+        retryDisposition: "blocked",
+      });
+      yield* service.releaseRetryClaim(run.id, claim.claimToken);
+      expect(yield* recovery()).toMatchObject({
+        cleanupDisposition: "confirmed",
+        retryDisposition: "eligible",
+      });
+    });
+  });
+
+  it.effect("blocks failed-run recovery while the assignment outcome is uncertain", () => {
+    const { backend, layer, projections } = nativeReportServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(
+        nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerRoute }),
+      );
+      backend.controls[0]!.offer({
+        type: "exit",
+        exitCode: null,
+        diagnostic: "generic exit",
+        failure: processError(
+          "steer",
+          "steer_outcome_uncertain",
+          "Native write acknowledgement unknown.",
+        ),
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* service.stop(run.id);
+      expect((yield* observeStatus(service, run.id))?.recovery).toMatchObject({
+        retryDisposition: "blocked",
+        hasRemainingCandidate: true,
+      });
     });
   });
 

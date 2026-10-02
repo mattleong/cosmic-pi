@@ -71,6 +71,7 @@ const processFixture = () =>
         };
         context.writerPools.set(cwd.digest, pool);
         const record: RunRecord = {
+          scriptOrigin: false,
           view: view({ id, name: id, state: "starting", writeIntent: "writer", capabilities: [] }),
           scope: yield* Scope.fork(owner),
           driver,

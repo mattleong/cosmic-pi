@@ -29,7 +29,12 @@ type FailureRecoveryRule = readonly [
   messages?: ReadonlyArray<string>,
 ];
 
+const SCRIPTED_WRITER_RECOVERY: FailureRecoveryRule = [
+  ["scripted_subtree_writer_not_supported", "scripted_writer_not_supported"],
+  "Hand writer work back to the root main agent for authorization and a separate launch outside the script-origin tree.",
+];
 const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
+  SCRIPTED_WRITER_RECOVERY,
   [
     ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
     "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.",
@@ -40,6 +45,7 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
 ];
 const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
+  SCRIPTED_WRITER_RECOVERY,
   [["notfound", "not_found"], "Refresh run IDs with subagent_list.", ["not found"]],
   [
     ["completion_claim_conflict"],

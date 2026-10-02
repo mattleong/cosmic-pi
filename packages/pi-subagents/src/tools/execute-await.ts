@@ -13,6 +13,8 @@ import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import { makeAwaitDetails } from "./details.ts";
 import { attentionRecoveryText, boundToolOutput } from "./format.ts";
 import { formatAwaitProgress } from "./render-await.ts";
+import { cancelledAwaitContract } from "./contract.ts";
+import { encodeSubagentContract } from "./contract-schema.ts";
 
 /** Observe the actual Effect exit, not a later signal state or a squashed error string.
  * The tiny mask installs the observer even for an already-aborted host call. Owned
@@ -47,6 +49,7 @@ export function makeAwaitExecution(
   let contextRuns: ReadonlyArray<SubagentRunView> = [];
   let lastUpdate = "";
   let interrupted = false;
+  const deliveryAttemptedIds = new Set<string>();
   const progressText = (runs: ReadonlyArray<SubagentRunView>) =>
     formatAwaitProgress(
       runs,
@@ -99,6 +102,9 @@ export function makeAwaitExecution(
         proxyCleanupUnconfirmed
           ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
           : "Wait cleanup is complete. Await these IDs again when their results are needed.",
+        deliveryAttemptedIds.size > 0
+          ? "Report delivery may have committed before cancellation. Use subagent_status with includeDeliveredReports: true to recover the latest retained delivered reports."
+          : "",
         latestRuns.length > 0 ? progressText(latestRuns) : "",
         attentionRecoveryText(latestRuns),
       ]
@@ -107,6 +113,15 @@ export function makeAwaitExecution(
     );
     return {
       content: [{ type: "text", text }],
+      structuredContent: encodeSubagentContract(
+        cancelledAwaitContract({
+          runs: latestRuns,
+          requestedRunIds: requestedIds,
+          until,
+          cleanup: proxyCleanupUnconfirmed ? "unconfirmed" : "confirmed",
+          deliveryAttemptedIds,
+        }),
+      ),
       details: makeAwaitDetails({
         runs: latestRuns,
         contextRuns,
@@ -127,6 +142,11 @@ export function makeAwaitExecution(
       interrupted = true;
     },
     wasInterrupted: () => interrupted,
+    // Consumption can commit before a late abort drops the successful result. Until a fresh
+    // observation, cancellation cannot promise these reports remain unconsumed.
+    markDeliveryAttempt: (ids: ReadonlyArray<string>) => {
+      for (const id of ids) deliveryAttemptedIds.add(id);
+    },
     cancelled,
   };
 }

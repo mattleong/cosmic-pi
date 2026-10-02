@@ -1,5 +1,9 @@
 // Pi tool execution is a Promise-shaped host boundary.
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type AgentToolResult,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -10,7 +14,10 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core";
+import {
+  stripTerminalControls as sanitizeTerminalText,
+  toPiToolOutputSchema,
+} from "pi-cosmic-core";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { BackgroundTaskService } from "../task/service.ts";
 import {
@@ -20,7 +27,12 @@ import {
   backgroundTaskResultSubject,
   decodeBackgroundTaskDetails,
 } from "../ui/compact-summary.ts";
-import { executeBackgroundTaskCommand, type BackgroundTaskToolDetails } from "./command.ts";
+import {
+  executeBackgroundTaskCommand,
+  type BackgroundTaskContractResult,
+  type BackgroundTaskToolDetails,
+} from "./command.ts";
+import { BackgroundTaskContractSchema, encodeBackgroundTaskContract } from "./contract-schema.ts";
 import { resultSnapshot, renderBackgroundTaskPreview, taskProcessLine } from "./preview.ts";
 import { BackgroundTaskParameters, type BackgroundTaskToolInput } from "./schema.ts";
 
@@ -55,6 +67,34 @@ const headingSubtitle = (
 const resultText = (content: Parameters<typeof getTextContent>[0]): string =>
   sanitizeTerminalText(getTextContent(content));
 
+/** Native Pi `outputSchema`: the encoded side of the strict version-1 contract codec. */
+const OUTPUT_SCHEMA = toPiToolOutputSchema(BackgroundTaskContractSchema);
+
+const CONTRACT_UNAVAILABLE =
+  "Background task result is unavailable; the action may have taken effect";
+
+/**
+ * The model-facing text, persisted details, and strictly encoded contract. If encoding breaks a
+ * producer invariant, the action has already run: the result becomes an error without structured
+ * data that keeps the original receipt text, task IDs included, and details unchanged.
+ */
+const backgroundTaskToolResult = (
+  result: BackgroundTaskContractResult,
+): AgentToolResult<BackgroundTaskToolDetails> => {
+  const structuredContent = encodeBackgroundTaskContract(result.contract);
+  return structuredContent === undefined
+    ? {
+        content: [{ type: "text", text: `${CONTRACT_UNAVAILABLE}\n${result.text}` }],
+        details: result.details,
+        isError: true,
+      }
+    : {
+        content: [{ type: "text", text: result.text }],
+        details: result.details,
+        structuredContent,
+      };
+};
+
 export function registerBackgroundTaskTool(
   pi: ExtensionAPI,
   runner: BackgroundTaskToolRunner,
@@ -74,13 +114,16 @@ export function registerBackgroundTaskTool(
       "After starting a background task, continue independent work. At a dependency barrier, use wait once instead of polling status or logs.",
       "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; tailLines does not apply when afterCursor is set.",
       "Stop background tasks when they are no longer needed; every task is terminated when the Pi session is replaced or shut down.",
+      "Native codemode receives version-1 structured results. Print successful task IDs immediately and check the contract envelope before using them. A task's finished flag means terminal state, not command success or cleanup confirmation.",
+      "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs can be reused after reload or tree navigation; discard old workflow checkpoints.",
     ],
     parameters: BackgroundTaskParameters,
+    outputSchema: OUTPUT_SCHEMA,
     execute(_toolCallId, input, signal, _onUpdate, ctx) {
-      return runner.run(executeBackgroundTaskCommand(input, ctx.cwd), signal).then((result) => ({
-        content: [{ type: "text" as const, text: result.text }],
-        details: result.details,
-      }));
+      // Typed failures and interruption still reject; only successes carry the contract.
+      return runner
+        .run(executeBackgroundTaskCommand(input, ctx.cwd), signal)
+        .then(backgroundTaskToolResult);
     },
     renderCall(args, theme, context) {
       // Drawn lazily: the result, rendered after the call, supplies the task's name.

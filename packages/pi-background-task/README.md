@@ -20,6 +20,32 @@ The reusable `pi-background-task/code-mode` protocol remains available to local 
 
 The custom `pi-code-mode` extension and its `tools.session.backgroundTask` adapter are retired. Native Pi `codemode` can call the registered `background_task` tool through Pi's native tool pipeline; no custom adapter is installed automatically. Started tasks may outlive a foreground call, but not the Pi session.
 
+## Native Code Mode results
+
+`background_task` declares a native Pi `outputSchema`, so native `codemode` scripts receive its `structuredContent` instead of the text. The model-facing text, its 50 KB / 2,000-line bound, and the persisted details are unchanged; the `pi-background-task/code-mode` v1 protocol is separate and also unchanged.
+
+Every successful result carries `contract: "pi-background-task/task"`, `version: 1`, `tool: "background_task"`, and the `action`:
+
+- `start`, `status`, and `stop` return `task`; `list` and `stop_all` return `tasks`.
+- `logs` returns `id`, `state`, `finished`, `output`, `truncated`, `nextCursor`, `earliestAvailableCursor`, and `droppedBytes`.
+- `wait` returns `outcome` (`matched`, `completed`, or `timeout`), `task`, `nextCursor`, `earliestAvailableCursor`, `droppedBytes`, and `matchCursor` after a match.
+- `clear` returns `removed`.
+
+A task has `id`, `state`, `finished`, `startedAt`, `logCursor`, and `droppedLogBytes`, plus optional `name`, `endedAt`, `exitCode` (an integer or `null`), `signal`, `error`, and `cause` (the output line that names why a failed task failed). The command, cwd, and pid are never included. `finished` means only that the task state is terminal: failed, stopped, and timed-out tasks are finished too, so it is not proof that the command succeeded, that the process exited, or that cleanup completed. Read `state` and `exitCode` for the outcome.
+
+Only successes carry a contract. Invalid input, unknown IDs, capacity, spawn, and termination failures reject the call, so the script receives an error; `stop_all` never reports partial success. If a result cannot be encoded, the call becomes an error without structured data that still contains the original text, including task IDs.
+
+Scripts should follow these rules:
+
+- Print or otherwise record each task ID as soon as `start` returns, before awaiting other work, so the main agent can recover it.
+- Don't race launches or stops against script-side deadlines. An abandoned call may still start or stop processes. Use `timeoutSeconds` for a runtime limit and `wait` for a bounded barrier.
+- A `wait` timeout is a normal result. It never stops the task; stop tasks explicitly.
+- A failed, rejected, or cancelled call or script may already have had effects, such as a started task or a requested stop. Nothing is rolled back. After a failure, the main agent should check `list` or `status`.
+- Task IDs belong to the current session runtime. Reload, session switch or fork, `/tree` navigation, and shutdown terminate tasks and start a fresh registry whose IDs restart at `task-1`, so an old ID may name a different, new task. Never reuse checkpointed IDs, such as values saved with `store()`, across those boundaries; clear and recreate workflow checkpoints for the current runtime.
+- A `tool_result` hook that replaces a result's content without returning `structuredContent` removes the structured data; scripts then receive the text instead.
+
+Metadata strings (`name`, `signal`, `error`, and `cause`) are terminal-sanitized, credential-redacted, and bounded; task IDs are unchanged. `logs` `output` is the requested slice of combined stdout and stderr with terminal controls removed and each stderr chunk prefixed `[stderr] ` before clipping, as in the text. Clipping can remove the first retained prefix. It is **not** credential-redacted. It holds at most the newest 1 MiB of UTF-8 and is `""` when there is no output. With neither `afterCursor` nor `tailLines`, the slice is only the last 200 lines; use `afterCursor: 0` to request all retained output. `truncated` reports only payload clipping, not tail selection; `droppedBytes` separately counts output the task's log buffer already discarded. Clipping is not paging: `nextCursor` remains the latest cursor, so clipped bytes are not read again. Request smaller `tailLines` slices, read incrementally with `afterCursor`, or redirect complete output to a file. Tasks run with the local user's authority; there is no sandbox.
+
 ## Lifecycle
 
 Background tasks are non-interactive. Session reload, switch, fork, successful `/tree` navigation, and shutdown initiate process-tree cleanup. Cleanup cannot be guaranteed after host `SIGKILL` or machine loss; Windows post-leader cleanup is best effort without Job Objects. Tasks have no default runtime timeout; the agent may provide one per start. A failed or unconfirmed stop remains active in `stopping` and retains capacity until the operating-system process handle confirms exit; the tool reports a typed termination failure rather than fabricating completion.

@@ -30,6 +30,23 @@ Custom screens use the shared live viewport: centered at 90% of terminal width a
   and details record only where it sits: producer-computed UTF-16 `causes` spans, never parsed. A span the final,
   possibly truncated, text no longer holds is dropped. The command layer strips `failureCause` before building details,
   and the frozen v1 Code Mode contract never carries it; programs see the cause through `text`.
+  The registered tool also declares a native Pi `outputSchema` for a separate success-only contract
+  (`pi-background-task/task`, version 1). `contract-schema.ts` is its authoritative Effect Schema; it
+  reuses the frozen member fields by value without changing them, and Pi receives core's
+  `toPiToolOutputSchema` derivation. `contract.ts` projects it from the original domain facts (service
+  snapshots with `failureCause`, log slices, and wait results) before details strip anything, and never
+  reads text or details. The executor returns `BackgroundTaskContractResult`, the legacy
+  `{ text, details }` pair plus the contract; Code Mode v1 and presentation still consume only the pair.
+  Contract tasks pick their fields explicitly: no command, cwd, pid, waiter marks, or log events.
+  `finished` is terminal task state, never proof of exit, cleanup, or success. Name, signal, error,
+  and cause are terminal-sanitized, credential-redacted, and bounded; IDs pass unchanged. `logs`
+  output reuses the text's sanitized combined output and `[stderr] ` convention, is not credential-redacted,
+  and keeps its newest 1 MiB of UTF-8 independently of the text bound. `truncated` reports only
+  that clipping, and `nextCursor` stays the latest assigned cursor. Registration strictly encodes the
+  contract with its JSON codec and freezes the detached `structuredContent`. Typed failures and
+  interruption still reject; an encoding invariant failure returns `isError` without structured data,
+  a short first line, and the original text and details, with no rollback. Task IDs restart at `task-1`
+  in each fresh registry, so scripts must not reuse checkpointed IDs across runtime replacement.
   The public `pi-code-previews` cooperative shell decorates the registered tool with an explicit
   `src/ui/compact-summary.ts` provider. This pure projection decodes the details with the shared task schema,
   distinguishes management completion from task state, and reports failure, cleanup, timeout,

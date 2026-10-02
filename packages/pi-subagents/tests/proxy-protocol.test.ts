@@ -8,6 +8,8 @@ import {
   encodeSubagentProxyInput,
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
+import { startContract } from "../src/tools/contract.ts";
+import { view } from "./fixtures/run-view.ts";
 
 const proxyRoundTripCases: ReadonlyArray<SubagentToolInput> = [
   { tool: "subagent_models", args: { profile: "reviewer" } },
@@ -41,6 +43,36 @@ const proxyRoundTripCases: ReadonlyArray<SubagentToolInput> = [
 ];
 
 describe("nested Pi proxy protocol", () => {
+  it("round-trips machine-readable outcomes without losing partial failure evidence", () => {
+    const contract = startContract(
+      [{ task: "Inspect" }, { task: "Unavailable" }],
+      [
+        { index: 0, run: view({ id: "started" }) },
+        {
+          index: 1,
+          failure: { index: 1, code: "start_outcome_uncertain", message: "Launch is unconfirmed." },
+        },
+      ],
+    );
+    const result = {
+      content: [{ type: "text", text: "Launch receipt" }],
+      details: {},
+      structuredContent: contract,
+      isError: true,
+    };
+    expect(decodeSubagentProxyResult(JSON.stringify(result))).toEqual(result);
+    expect(
+      decodeSubagentProxyResult(
+        JSON.stringify({ ...result, structuredContent: { ...contract, extra: true } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      decodeSubagentProxyResult(
+        JSON.stringify({ ...result, structuredContent: { ...contract, version: 2 } }),
+      ),
+    ).toBeUndefined();
+  });
+
   it.each([
     { action: "integrate", workspaceId: "w", revisionId: "r" },
     { action: "review", workspaceId: "w", offset: 1 },

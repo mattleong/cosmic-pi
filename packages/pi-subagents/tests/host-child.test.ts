@@ -12,6 +12,8 @@ import {
 } from "../src/boundary/host-child.ts";
 import { ParentContactError, type LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
 import { SUBAGENT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
+import { statusContract } from "../src/tools/contract.ts";
+import { view } from "./fixtures/run-view.ts";
 import { extensionApiFixture } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
@@ -220,6 +222,35 @@ describe("local Pi child bridge", () => {
     yield* step(() => firstStart);
     yield* step(() => first.promise);
     expect(harness.latestTool("contact_parent")).toBe(winningContact);
+    yield* settle(harness.shutdown);
+  });
+
+  effectTest("rejects a structured proxy result for a different coordinator tool", function* () {
+    const harness = makeHarness();
+    yield* settle(harness.start);
+    const pending = rejection(
+      execute(
+        harness.latestTool(SUBAGENT_TOOL_NAME.await),
+        { runIds: ["a"], until: "all_finished" },
+        undefined,
+      ),
+    );
+    const request = yield* harness.awaitContact("proxy_request");
+    harness.currentListener().handlers.onControl({
+      channel: "pi-subagents",
+      type: "proxy_response",
+      requestId: request.requestId,
+      ok: true,
+      payloadJson: JSON.stringify({
+        content: [{ type: "text", text: "Unrelated status" }],
+        structuredContent: statusContract({
+          observations: [{ run: view({ id: "a" }) }],
+          fullyRenderedIds: new Set(),
+          missingRunIds: [],
+        }),
+      }),
+    });
+    expect(yield* step(() => pending)).toBeDefined();
     yield* settle(harness.shutdown);
   });
 

@@ -7,11 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import {
-  sanitizeTerminalLine,
-  stripTerminalControls as sanitizeTerminalText,
-  countLabel,
-} from "pi-cosmic-core";
+import { sanitizeTerminalLine, countLabel } from "pi-cosmic-core";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import {
   discardedOutputText,
@@ -25,13 +21,31 @@ import {
 import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import { BackgroundTaskService } from "../task/service.ts";
 import { utf8ByteLength } from "../task/utf8.ts";
+import {
+  clearContract,
+  combinedLogOutput,
+  logsContract,
+  taskActionContract,
+  tasksActionContract,
+  waitContract,
+} from "./contract.ts";
+import type { BackgroundTaskContract } from "./contract-schema.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
 
+/** The legacy text and persisted-details pair that Code Mode v1 and presentation consume. */
 export interface BackgroundTaskCommandResult {
   readonly text: string;
   readonly details: BackgroundTaskToolDetails;
+}
+
+/**
+ * A command result plus its version-1 machine-readable contract. All three projections come from
+ * the same original domain facts; the contract never reads the text or details.
+ */
+export interface BackgroundTaskContractResult extends BackgroundTaskCommandResult {
+  readonly contract: BackgroundTaskContract;
 }
 
 const required = (
@@ -152,12 +166,8 @@ const formatWait = (result: BackgroundTaskStatusWait): string => {
 
 const NO_NEW_OUTPUT = "(no new output)";
 
-const formatLogs = (slice: BackgroundLogSlice, maxBytes: number) => {
-  const content = sanitizeTerminalText(
-    slice.events
-      .map((event) => `${event.stream === "stderr" ? "[stderr] " : ""}${event.text}`)
-      .join(""),
-  );
+/** `content` is the slice's sanitized combined output, shared with its contract. */
+const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number) => {
   const cut = truncateTail(content, { maxLines: DEFAULT_MAX_LINES, maxBytes });
   const { truncated, outputBytes, totalBytes, outputLines, totalLines } = cut;
   // `backgroundLogLines` reads this layout back: one metadata line, then the gap line, if any.
@@ -187,20 +197,22 @@ export const backgroundLogLines = (
   return lines.length === 1 && lines[0] === NO_NEW_OUTPUT ? [] : lines;
 };
 
-const reply = (text: string, details: BackgroundTaskToolDetails): BackgroundTaskCommandResult => ({
-  text,
-  details,
-});
+const reply = (
+  text: string,
+  details: BackgroundTaskToolDetails,
+  contract: BackgroundTaskContract,
+): BackgroundTaskContractResult => ({ text, details, contract });
 
 /** The exact successful-start formatter used by execution and Code Mode admission. */
 export const backgroundTaskStartCommandResult = (
   snapshot: BackgroundTaskStatus,
   maxTextBytes: number,
-): BackgroundTaskCommandResult =>
-  reply(boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes), {
-    action: "start",
-    snapshot: detailsSnapshot(snapshot),
-  });
+): BackgroundTaskContractResult =>
+  reply(
+    boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes),
+    { action: "start", snapshot: detailsSnapshot(snapshot) },
+    taskActionContract("start", snapshot),
+  );
 
 /** One task's result: its line (with any cause) bounded, and the details pointing at the cause. */
 const taskReply = (
@@ -208,10 +220,15 @@ const taskReply = (
   task: BackgroundTaskStatus,
   maxTextBytes: number,
   details: (snapshot: BackgroundTaskSnapshot) => BackgroundTaskToolDetails,
-): BackgroundTaskCommandResult => {
+  contract: BackgroundTaskContract,
+): BackgroundTaskContractResult => {
   const composed = withCause(line, task);
   const text = boundedText(composed.text, maxTextBytes);
-  return reply(text, { ...details(detailsSnapshot(task)), ...causeSpans(text, composed.causes) });
+  return reply(
+    text,
+    { ...details(detailsSnapshot(task)), ...causeSpans(text, composed.causes) },
+    contract,
+  );
 };
 
 export interface BackgroundTaskCommandOptions {
@@ -257,18 +274,25 @@ export const executeBackgroundTaskCommand = (
       case "list": {
         const tasks = yield* service.list(input.state ?? "all");
         const listed = formatTaskList(tasks, maxTextBytes);
-        return reply(listed.text, {
-          action: input.action,
-          tasks: tasks.map(detailsSnapshot),
-          ...causeSpans(listed.text, listed.causes),
-        });
+        return reply(
+          listed.text,
+          {
+            action: input.action,
+            tasks: tasks.map(detailsSnapshot),
+            ...causeSpans(listed.text, listed.causes),
+          },
+          tasksActionContract(input.action, tasks),
+        );
       }
       case "status": {
         const task = yield* service.status(yield* required(input.id, "id", input.action));
-        return taskReply(formatBackgroundTask(task), task, maxTextBytes, (snapshot) => ({
-          action: "status",
-          snapshot,
-        }));
+        return taskReply(
+          formatBackgroundTask(task),
+          task,
+          maxTextBytes,
+          (snapshot) => ({ action: "status", snapshot }),
+          taskActionContract("status", task),
+        );
       }
       case "logs": {
         const slice = yield* service.logs({
@@ -277,13 +301,14 @@ export const executeBackgroundTaskCommand = (
           ...(input.tailLines !== undefined && { tailLines: input.tailLines }),
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
         });
-        const { text, truncation } = formatLogs(slice, maxTextBytes);
+        const output = combinedLogOutput(slice.events);
+        const { text, truncation } = formatLogs(slice, output, maxTextBytes);
         const { events: _events, ...logs } = slice;
-        return reply(boundedText(text, maxTextBytes), {
-          action: input.action,
-          logs,
-          ...(truncation && { truncation }),
-        });
+        return reply(
+          boundedText(text, maxTextBytes),
+          { action: input.action, logs, ...(truncation && { truncation }) },
+          logsContract(slice, output),
+        );
       }
       case "wait": {
         if (input.until === undefined) {
@@ -298,10 +323,13 @@ export const executeBackgroundTaskCommand = (
           ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
         });
-        return taskReply(formatWait(wait), wait.snapshot, maxTextBytes, (snapshot) => ({
-          action: "wait",
-          wait: { ...wait, snapshot },
-        }));
+        return taskReply(
+          formatWait(wait),
+          wait.snapshot,
+          maxTextBytes,
+          (snapshot) => ({ action: "wait", wait: { ...wait, snapshot } }),
+          waitContract(wait),
+        );
       }
       case "stop": {
         const task = yield* service.stop(
@@ -312,10 +340,8 @@ export const executeBackgroundTaskCommand = (
           `Stopped ${formatBackgroundTask(task)}`,
           task,
           maxTextBytes,
-          (snapshot) => ({
-            action: "stop",
-            snapshot,
-          }),
+          (snapshot) => ({ action: "stop", snapshot }),
+          taskActionContract("stop", task),
         );
       }
       case "stop_all": {
@@ -323,6 +349,7 @@ export const executeBackgroundTaskCommand = (
         return reply(
           boundedText(`Stopped ${countLabel(tasks.length, "background task")}.`, maxTextBytes),
           { action: input.action, tasks: tasks.map(detailsSnapshot) },
+          tasksActionContract(input.action, tasks),
         );
       }
       case "clear": {
@@ -330,6 +357,7 @@ export const executeBackgroundTaskCommand = (
         return reply(
           boundedText(`Cleared ${countLabel(removed, "completed background task")}.`, maxTextBytes),
           { action: input.action, removed },
+          clearContract(removed),
         );
       }
     }

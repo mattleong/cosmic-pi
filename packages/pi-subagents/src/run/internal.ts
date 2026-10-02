@@ -89,6 +89,8 @@ export interface BackendReportWatermark {
 }
 
 export interface RunRecord {
+  /** Immutable inherited admission policy; never published or supplied by tool arguments. */
+  readonly scriptOrigin: boolean;
   view: SubagentRunView;
   scope: Scope.Closeable;
   readonly driver: BackendDriver;

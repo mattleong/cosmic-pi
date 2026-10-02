@@ -34,7 +34,8 @@ import {
   type SubagentToolInput,
   type SubagentToolParameters,
 } from "./schema.ts";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel, toPiToolOutputSchema } from "pi-cosmic-core";
+import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 
 // Pi renders calls while arguments stream in, so any field may still be absent.
 const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
@@ -64,7 +65,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Launch one to thirty-two session-scoped background subagents, subject to the caller's configured direct-child capacity, for bounded independent workstreams such as codebase reconnaissance, research, planning, review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. The session uses shared-checkout mode by default or opt-in worktree isolation, with no per-worker override. Worktree writers currently require a root caller; nested read-only and shared-checkout launches remain supported. Shared-checkout writers are exclusive without claims or may share with disjoint claims. Native edit, write, and Bash are unchanged. Ordered readiness failures advance through the declared local route only before spawn. All runs close after reporting. An admitted failed start reports its run ID and settled cleanup/retry disposition. Post-ownership uncertainty never falls through.",
+      "Launch one to thirty-two session-scoped background subagents, subject to the caller's configured direct-child capacity, for bounded independent workstreams such as codebase reconnaissance, research, planning, review, and disjoint implementation. Start is nonblocking. Every task must be self-contained with relevant paths, constraints, evidence, and a concrete deliverable. Each item accepts task, optional profile, optional name, and optional exact-file writes claims. The session uses shared-checkout mode by default or opt-in worktree isolation, with no per-worker override. Worktree writers currently require a root caller; nested read-only and shared-checkout launches remain supported. Script-started trees stay read-only, including model-issued descendants and retry successors; the root main agent may authorize separate writer work outside those trees. Shared-checkout writers are exclusive without claims or may share with disjoint claims. Native edit, write, and Bash are unchanged. Ordered readiness failures advance through the declared local route only before spawn. All runs close after reporting. An admitted failed start reports its run ID and settled cleanup/retry disposition. Post-ownership uncertainty never falls through.",
     promptSnippet:
       "Parallelize independent reconnaissance, research, planning, and review with background subagents",
     promptGuidelines: [
@@ -75,6 +76,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Use profile=worker only for explicit implementation handoffs. While shared-checkout writers are active, the parent coordinates and reviews but does not edit. Isolated worktree writers do not share the parent cwd, so the parent may keep editing. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed. Worktree reports are proposals, not approval: use subagent_workspace to review, test combined changes, and integrate.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
       "When a profiled run fails and its start receipt or status reports an eligible remaining route candidate, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
+      "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. Jev may recommend a branch, never authorize recovery or writes.",
     ],
     prepareArguments: prepareSubagentStartArguments,
     // Pi renders calls while arguments stream in, before `agents` exists.
@@ -97,7 +99,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.status]: {
     label: "Subagent Status",
     description:
-      "Inspect up to twelve specific subagent run IDs, including each run's capabilities.",
+      "Inspect up to twelve specific subagent run IDs, including each run's capabilities. includeDeliveredReports reads back the latest retained report without another notification or completion claim; competing ownership still redacts it.",
     renderCall: (args, theme) =>
       renderSubagentCall(`Inspect ${countLabel(args.runIds?.length ?? 0, "subagent")}`, "", theme),
   },
@@ -244,6 +246,16 @@ export function registerSubagentTools(
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
       name,
+      // V1 script orchestration stays at root; judgment tools remain model-issued.
+      exposure: runtime.proxyCall || !isSubagentContractTool(name) ? "model-only" : "direct",
+      ...(isSubagentContractTool(name) &&
+        !runtime.proxyCall && {
+          outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]),
+          namespace: {
+            name: "subagents",
+            description: "Root-session read-only subagent orchestration",
+          },
+        }),
       parameters: SUBAGENT_TOOL_SCHEMAS[name].parameters,
       execute: (_id, args, ...rest) =>
         settlePresentation(
@@ -251,7 +263,13 @@ export function registerSubagentTools(
             (() => undefined),
           () =>
             // SAFETY: Pi validated args against this tool's catalog schema, typed by its TypeBox copy.
-            executeSubagentAction(pi, runtime, { tool: name, args } as SubagentToolInput, ...rest),
+            executeSubagentAction(
+              pi,
+              runtime,
+              { tool: name, args } as SubagentToolInput,
+              ...rest,
+              receiptOwner?.receipts.isNested(receiptOwner.owner, _id) ?? false,
+            ),
         ),
       renderResult: (result, options, theme, context) =>
         renderSubagentResult(result, options.isPartial, options.expanded, theme, {

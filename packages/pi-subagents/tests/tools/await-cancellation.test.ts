@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Duration from "effect/Duration";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import { expect } from "vitest";
@@ -63,6 +64,86 @@ it.live("returns a parent question in the await result without a second notifica
     });
     yield* Effect.sleep(Duration.millis(50));
     expect(fixture.notifications.filter((item) => item.type === "question")).toHaveLength(0);
+  }),
+);
+
+it.live("keeps late-abort delivery uncertain and recoverable after consumption", () =>
+  Effect.gen(function* () {
+    const fixture = nativeReportServiceFixture();
+    const tools = new Map<string, ToolDefinition>();
+    const pi = extensionApiFixture({
+      registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+    });
+    const runtime = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
+      ),
+      (owned) => step(() => owned.dispose()),
+    );
+    const service = yield* step(() => runtime.run(SubagentService));
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const intercepted = {
+      ...service,
+      withAwaitTerminalObservations: ((...args) =>
+        service
+          .withAwaitTerminalObservations(...args)
+          .pipe(
+            Effect.ensuring(
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            ),
+          )) satisfies typeof service.withAwaitTerminalObservations,
+    };
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run: (effect, signal) =>
+        runtime.run(effect.pipe(Effect.provideService(SubagentService, intercepted)), signal),
+    });
+    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const progress = yield* Deferred.make<void>();
+    const controller = new AbortController();
+    const pending = executeTool(
+      tools.get("subagent_await")!,
+      { runIds: [child.id], until: "all_finished" },
+      {
+        callID: "late-cancel",
+        signal: controller.signal,
+        update: () => Deferred.doneUnsafe(progress, Effect.void),
+      },
+    );
+    yield* Deferred.await(progress);
+    fixture.backend.controls[0]!.offer({
+      type: "report",
+      runId: child.id,
+      sequence: 1,
+      deliveryId: "late-report",
+      text: "Recover after late abort",
+    });
+    yield* Deferred.await(entered); // Result constructed, consumed, and original claim scope released.
+    controller.abort();
+    yield* Deferred.succeed(release, undefined);
+    const result = yield* step(() => pending);
+    expect(result.structuredContent).toMatchObject({
+      outcome: "cancelled",
+      cleanup: "confirmed",
+      targets: [{ runId: child.id, report: { status: "unknown" } }],
+    });
+    expect(
+      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(result.structuredContent),
+    ).not.toContain("Recover after late abort");
+    const observations = yield* step(() =>
+      runtime.run(
+        service.withStatusObservations(
+          [child.id],
+          ({ observations }) => Effect.succeed(observations),
+          { includeDeliveredReports: true },
+        ),
+      ),
+    );
+    expect(observations[0]).toMatchObject({
+      run: { reportStatus: "delivered", finalText: "Recover after late abort" },
+    });
+    expect(observations[0]?.completionReceipt).toBeUndefined();
   }),
 );
 

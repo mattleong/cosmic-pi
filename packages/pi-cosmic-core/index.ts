@@ -37,6 +37,7 @@ export {
 export { nodeHttpServerLayer } from "./src/platform/http-server.ts";
 export { SafeFile, type SafeFileResult, type SafeFileContract } from "./src/platform/safe-file.ts";
 export { decodeUnknownOrUndefined } from "./src/schema/decode.ts";
+export { toPiToolOutputSchema, ToolOutputSchemaError } from "./src/schema/tool-output.ts";
 export {
   isJsonObject,
   JsonDocumentStore,

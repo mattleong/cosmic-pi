@@ -38,6 +38,7 @@ it.effect(
       };
       pools.set(cwd.digest, pool);
       const record: RunRecord = {
+        scriptOrigin: false,
         view: view({
           id: "writer",
           name: "writer",

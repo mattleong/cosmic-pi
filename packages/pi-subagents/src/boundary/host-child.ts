@@ -31,6 +31,7 @@ import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import { decodeSubagentContract, isSubagentContractTool } from "../tools/contract-schema.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
@@ -326,6 +327,12 @@ export function registerSubagentChildBridge(
         input.questionnaires.delete(requestId);
         if (!isActivationCurrent(input, token))
           throw new Error("Subagent proxy is unavailable for this session.");
+        if (
+          result.structuredContent !== undefined &&
+          (!isSubagentContractTool(encoded.tool) ||
+            decodeSubagentContract(encoded.tool, result.structuredContent) === undefined)
+        )
+          throw new Error("Subagent proxy returned a mismatched orchestration result.");
         return result;
       });
   };

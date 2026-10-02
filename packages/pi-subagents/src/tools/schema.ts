@@ -110,6 +110,12 @@ const ListParameters = Type.Object({}, strictObjectOptions);
 const StatusParameters = Type.Object(
   {
     runIds: RunIdsParameters,
+    includeDeliveredReports: Type.Optional(
+      Type.Boolean({
+        description:
+          "Read back the latest retained, already-delivered report without consuming or notifying again. Competing claims still redact it; no historical report storage is added.",
+      }),
+    ),
   },
   strictObjectOptions,
 );

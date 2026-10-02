@@ -39,6 +39,7 @@ import {
   UnsupportedSubagentCapabilityError,
 } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
+import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
 import {
   createParentCompactSummary,
@@ -211,6 +212,7 @@ interface Execution {
   readonly service?: SubagentServiceDoubleInput;
   readonly profiles?: SubagentProfileServiceContract;
   readonly onUpdate?: AgentToolUpdateCallback<unknown>;
+  readonly scripted?: boolean;
 }
 
 // Pi turns a rejected execution into text content with empty details.
@@ -221,7 +223,16 @@ const rejected = (message: string) => ({
 
 /** Runs one call like the registered tool, marking errors as Pi's receipt hook does. */
 const execute = (input: SubagentToolInput, options: Execution = {}) =>
-  executeSubagentActionEffect(hostApi, runtime.environment, input, options.onUpdate, context).pipe(
+  executeSubagentActionEffect(
+    hostApi,
+    runtime.environment,
+    input,
+    options.onUpdate,
+    context,
+    undefined,
+    undefined,
+    options.scripted,
+  ).pipe(
     Effect.map((result) => {
       const details = decodeSubagentOutcomeDetails(subagentToolAction(input), result.details);
       return { result, isError: details !== undefined && marksSubagentToolError(details) };
@@ -294,7 +305,27 @@ const startScenarios = Effect.gen(function* () {
     phase: "running",
     result: partial,
   };
-  return [settled, still];
+  const blockedWriter = yield* scenario(
+    "scripted writer launch is returned to the main agent",
+    {
+      tool: "subagent_start",
+      args: {
+        agents: [{ profile: "worker", name: "workflow-edit", task: "Implement the change" }],
+      },
+    },
+    { scripted: true },
+  );
+  const blockedDescendant = yield* scenario(
+    "workflow descendant cannot delegate writer work",
+    {
+      tool: "subagent_start",
+      args: {
+        agents: [{ profile: "worker", name: "delegated-edit", task: "Implement the change" }],
+      },
+    },
+    { service: { startSessionOwned: () => Effect.fail(scriptedWriterAdmissionError()) } },
+  );
+  return [settled, still, blockedWriter, blockedDescendant];
 });
 
 const awaitInput: SubagentToolInput<"subagent_await"> = {

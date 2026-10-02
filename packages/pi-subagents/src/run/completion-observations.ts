@@ -11,10 +11,12 @@ import {
   type SubagentRunView,
 } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
+import { failedStartRecoveryForRecord } from "./retry.ts";
 import type {
   SubagentAwaitUntil,
   SubagentRunObservation,
   SubagentServiceContract,
+  SubagentStatusObservationOptions,
 } from "./service.ts";
 import { snapshotView } from "./state.ts";
 
@@ -74,7 +76,12 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     });
   };
 
-  const observeRecord = (record: RunRecord, claimToken?: string): SubagentRunObservation => {
+  /** Caller must hold the service lock. */
+  const observeRecord = (
+    record: RunRecord,
+    claimToken?: string,
+    options?: SubagentStatusObservationOptions,
+  ): SubagentRunObservation => {
     const generation = record.completionGeneration;
     const view = withTreeMetadata(record.view);
     if (!isAssignmentFinishedRunState(view.state))
@@ -99,8 +106,26 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             ? "available"
             : "claimed",
     };
+    // Read-back returns only the latest in-memory report and never a receipt. Any claim
+    // held by another operation, including one waiting for a later generation, keeps it redacted.
+    const readBack =
+      options?.includeDeliveredReports === true &&
+      observed.reportStatus === "delivered" &&
+      [...record.completionClaims.values()].every((owner) => owner === claimToken);
+    const redacted = owns ? undefined : redactCompletionReport(observed);
+    // Recovery facts come from the record, never from the public view. Like retry claims,
+    // they cover only a failed initial assignment.
+    const recovery =
+      record.view.state === "failed" && record.view.reportGeneration === 0
+        ? failedStartRecoveryForRecord(record)
+        : undefined;
     return {
-      run: owns ? snapshotView(observed) : redactCompletionReport(observed),
+      run:
+        redacted === undefined
+          ? snapshotView(observed)
+          : readBack
+            ? snapshotView({ ...redacted, finalText: observed.finalText })
+            : redacted,
       ...(owns && {
         completionReceipt: {
           id: record.view.id,
@@ -108,6 +133,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
           claimToken,
         },
       }),
+      ...(recovery && { recovery }),
     };
   };
 
@@ -314,10 +340,16 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       ),
     );
   };
-  const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>
+  const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (
+    ids,
+    use,
+    options,
+  ) =>
     withCompletionClaims(ids, false, (claim) =>
       use({
-        observations: claim.selected.map((record) => observeRecord(record, claim.claimToken)),
+        observations: claim.selected.map((record) =>
+          observeRecord(record, claim.claimToken, options),
+        ),
         missingIds: claim.missingIds,
       }),
     );

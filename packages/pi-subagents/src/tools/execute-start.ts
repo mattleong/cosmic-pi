@@ -43,6 +43,8 @@ export interface StartBatchInput {
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly onUpdate: AgentToolUpdateCallback<unknown> | undefined;
+  /** Initial native codemode workflows coordinate read-only assignments only. */
+  readonly readOnly?: boolean;
 }
 
 const startSpecs = (
@@ -167,6 +169,7 @@ export const executeStartBatch = (
     readonly runs: ReadonlyArray<SubagentRunView>;
     readonly startFailures: ReadonlyArray<SubagentStartFailure>;
     readonly startEntries: ReadonlyArray<SubagentStartEntry>;
+    readonly startOutcomes: ReadonlyArray<SubagentStartOutcome>;
   },
   SubagentError,
   SubagentProfileService | SubagentBackendRegistry
@@ -207,7 +210,16 @@ export const executeStartBatch = (
     const launchOne = (spec: SubagentStartSpec, index: number) =>
       resolveRequest(spec).pipe(
         Effect.flatMap((request) =>
-          input.startOwned(request).pipe(
+          (input.readOnly && request.writeIntent !== "read-only"
+            ? Effect.fail(
+                new InvalidSubagentRequestError({
+                  code: "scripted_writer_not_supported",
+                  message:
+                    "Workflow launch requires a read-only profile\n\nHand implementation back to the parent agent.",
+                }),
+              )
+            : input.startOwned(request)
+          ).pipe(
             Effect.map((run): SubagentStartOutcome => ({ index, run })),
             Effect.catch((error) =>
               Effect.succeed(failureFor(spec, index, error, routeForRequest(request))),
@@ -223,5 +235,6 @@ export const executeStartBatch = (
       runs: launched,
       startFailures: failures,
       startEntries: startEntriesFor(specs, new Map(ordered.map((o) => [o.index, o]))),
+      startOutcomes: ordered,
     };
   });
