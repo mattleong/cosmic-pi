@@ -32,7 +32,7 @@ const requestedName = (agent: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine(agent.name?.trim() || `launch ${index + 1}`);
 
 const requestedProfile = (agent: SubagentStartSpec): string =>
-  sanitizeTerminalLine(agent.profile?.trim() || "generalist");
+  sanitizeTerminalLine(agent.profile?.trim() || "default selection");
 
 /**
  * Static request projection: collapsed stays compact; expanded alone reveals bounded tasks.

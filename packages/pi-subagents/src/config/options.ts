@@ -10,10 +10,13 @@ import {
   type ProfileRouteSource,
 } from "../profiles/model.ts";
 import {
+  DEFAULT_SUBAGENT_FEATURE_TOGGLES,
   DEFAULT_SUBAGENT_NESTING_POLICY,
   DEFAULT_WRITER_WORKSPACE_MODE,
   type WriterWorkspaceMode,
   type DecodedSubagentConfig,
+  type SubagentFeatureToggle,
+  type SubagentFeatureToggles,
   type SubagentNestingPolicy,
 } from "./schema.ts";
 
@@ -26,7 +29,8 @@ export type ResolvedProfileSetSelection =
       readonly invalid?: boolean | undefined;
     };
 
-export interface ResolvedSubagentConfig {
+/** Every feature switch resolved to a required boolean; `/reload` picks up saved changes. */
+export interface ResolvedSubagentConfig extends SubagentFeatureToggles {
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
   readonly fallbackProfile: ProfileId;
@@ -175,6 +179,19 @@ const declaredSelection = (
   };
 };
 
+/** A trusted Project declaration wins over Global; with neither, every feature is enabled. */
+const resolveSubagentFeatureToggles = (
+  global: DecodedSubagentConfig,
+  project?: DecodedSubagentConfig,
+): SubagentFeatureToggles => {
+  const resolve = (toggle: SubagentFeatureToggle): boolean =>
+    project?.file[toggle] ?? global.file[toggle] ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES[toggle];
+  return {
+    scriptedWorkflows: resolve("scriptedWorkflows"),
+    automaticProfileRouting: resolve("automaticProfileRouting"),
+  };
+};
+
 /** Project routes in its selected set replace the selected global-set route; missing routes inherit. */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
@@ -184,6 +201,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
   const nesting =
     project?.file.nesting ?? input.global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY;
   return freezeSnapshot({
+    ...resolveSubagentFeatureToggles(input.global, project),
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
     fallbackProfile: "generalist",

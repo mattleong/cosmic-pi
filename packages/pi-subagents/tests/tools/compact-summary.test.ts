@@ -2,6 +2,7 @@ import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
+import { AUTOMATIC_ROUTING_FAILURE_CODES } from "../../src/profiles/automatic-selection.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentAwaitDetails, WorkspaceToolDetails } from "../../src/tools/details-schema.ts";
@@ -549,6 +550,28 @@ describe("subagent compact semantic policy", () => {
       expect(compactIssueSeverity(summary?.issues)).toBe("warning");
       expect(details(summary?.issues)).toContain(code);
       expect(details(summary?.issues)).toContain("Do not retry");
+    }
+  });
+
+  it("does not infer unknown ownership for automatic routing refusals before admission", () => {
+    for (const code of [...AUTOMATIC_ROUTING_FAILURE_CODES, "automatic_routing_unknown"]) {
+      const message = "Automatic selection needs attention\n\nChoose a profile explicitly.";
+      const summary = summarize("start", {
+        version: 2,
+        action: "start",
+        startEntries: [
+          { ...pending, profile: "generalist", status: "failed", routeStatus: "unavailable" },
+        ],
+        startFailures: [{ index: 0, code, message }],
+      });
+      expect(summary?.outcome).toBe("error");
+      expect(details(summary?.issues)).toContain(message);
+      expect(
+        (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message)),
+      ).toEqual([]);
+      expect(summary?.issues?.filter((issue) => issue.severity === "warning").length).toBe(
+        code === "automatic_routing_unknown" ? 1 : 0,
+      );
     }
   });
 

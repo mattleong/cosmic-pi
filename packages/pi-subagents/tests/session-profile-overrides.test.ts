@@ -669,4 +669,34 @@ describe("session profile overrides", () => {
       expect(repaired.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/repair");
     }),
   );
+
+  it.effect("keeps session edits across reload while adopting reloaded feature switches", () =>
+    Effect.gen(function* () {
+      const withSwitches = (scriptedWorkflows: boolean, automaticProfileRouting: boolean) =>
+        resolveTestConfig({
+          version: 6,
+          defaultProfileSet: "default",
+          profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
+          scriptedWorkflows,
+          automaticProfileRouting,
+        });
+      const initial = makeSessionProfileSnapshot(withSwitches(true, true));
+      const edited = yield* patchSessionProfileSnapshot(initial, {
+        profile: "worker",
+        route: route("openai/session"),
+        expectedRevision: 0,
+      });
+      expect(edited.effectiveConfig.scriptedWorkflows).toBe(true);
+      expect(edited.effectiveConfig.automaticProfileRouting).toBe(true);
+
+      const reloaded = makeSessionProfileSnapshot(
+        withSwitches(false, true),
+        sessionProfileSeed(edited),
+      );
+      expect(reloaded.effectiveConfig.scriptedWorkflows).toBe(false);
+      expect(reloaded.effectiveConfig.automaticProfileRouting).toBe(true);
+      expect(reloaded.effectiveConfig.profileSources.worker).toBe("session");
+      expect(reloaded.effectiveConfig.profiles.worker.candidates[0]?.model).toBe("openai/session");
+    }),
+  );
 });

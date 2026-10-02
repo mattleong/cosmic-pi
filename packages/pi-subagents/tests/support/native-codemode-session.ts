@@ -5,7 +5,9 @@ import {
   fauxToolCall,
   InMemoryCredentialStore,
   InMemoryModelsStore,
+  type AuthOperationOptions,
   type JsonObject,
+  type ModelType,
   type ProviderClassifier,
 } from "@earendil-works/pi-ai";
 import {
@@ -37,17 +39,36 @@ const driver: BackendDriver = {
   spawn: () => Effect.die("The session fixture delegates spawning to its owned service boundary."),
 };
 const registry = makeSubagentBackendRegistry([driver]);
-const profiles = profileServiceFor({
-  profiles: {
-    scout: [declaredCandidate("sonnet", { runtime: "claude" })],
-    reviewer: [declaredCandidate("sonnet", { runtime: "claude" })],
-    worker: [declaredCandidate("sonnet", { runtime: "claude", writeIntent: "writer" })],
-  },
-});
+const profilesFor = (automaticProfileRouting: boolean | undefined) =>
+  profileServiceFor({
+    ...(automaticProfileRouting !== undefined && { automaticProfileRouting }),
+    profiles: {
+      scout: [declaredCandidate("sonnet", { runtime: "claude" })],
+      reviewer: [declaredCandidate("sonnet", { runtime: "claude" })],
+      worker: [declaredCandidate("sonnet", { runtime: "claude", writeIntent: "writer" })],
+      generalist: [declaredCandidate("sonnet", { runtime: "claude" })],
+    },
+  });
+
+/** The only classifier provider a session may see; its ID carries the Jev family token. */
+export const CLASSIFIER_FIXTURE_PROVIDER = "workflow-classifier-test";
+
+export interface NativeCodemodeSessionOptions {
+  readonly classifier?: ProviderClassifier["classify"];
+  readonly proxy?: boolean;
+  /** Persisted feature switches; omitted values keep the enabled defaults. */
+  readonly scriptedWorkflows?: boolean;
+  readonly automaticProfileRouting?: boolean;
+  /**
+   * `rejects` makes the authenticated classifier catalog lookup fail; `hangs` never settles and
+   * ignores its abort signal, like a misbehaving host.
+   */
+  readonly classifierCatalog?: "fixture" | "rejects" | "hangs";
+}
 
 export const nativeCodemodeSession = (
   service: SubagentServiceContract,
-  options: { readonly classifier?: ProviderClassifier["classify"]; readonly proxy?: boolean } = {},
+  options: NativeCodemodeSessionOptions = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -63,8 +84,25 @@ export const nativeCodemodeSession = (
       }),
     );
     models.registerNativeProvider(fake.provider);
+    // Availability stays fixture-only: a provider authenticated by the developer's environment
+    // must never be preferred, reached, or required by these tests.
+    let catalogLookups = 0;
+    const listAvailable = models.getAvailableOfType.bind(models);
+    models.getAvailableOfType = <TType extends ModelType>(
+      type: TType,
+      providerId?: string,
+      authOptions?: AuthOperationOptions,
+    ) => {
+      catalogLookups += 1;
+      if (options.classifierCatalog === "hangs") return Effect.runPromise(Effect.never);
+      return options.classifierCatalog === "rejects"
+        ? Promise.reject(new Error("Fixture classifier catalog is unavailable"))
+        : listAvailable(type, providerId, authOptions).then((available) =>
+            available.filter((model) => model.provider === CLASSIFIER_FIXTURE_PROVIDER),
+          );
+    };
     if (options.classifier)
-      models.registerProvider("workflow-classifier-test", {
+      models.registerProvider(CLASSIFIER_FIXTURE_PROVIDER, {
         apiKey: "fixture-only-key",
         baseUrl: "http://127.0.0.1:9",
         models: [
@@ -83,9 +121,10 @@ export const nativeCodemodeSession = (
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         models.unregisterProvider(fake.provider.id);
-        if (options.classifier) models.unregisterProvider("workflow-classifier-test");
+        if (options.classifier) models.unregisterProvider(CLASSIFIER_FIXTURE_PROVIDER);
       }),
     );
+    const profiles = profilesFor(options.automaticProfileRouting);
     const settings = SettingsManager.inMemory({
       defaultTools: ["+codemode"],
       compaction: { enabled: false },
@@ -111,6 +150,9 @@ export const nativeCodemodeSession = (
               pi,
               {
                 environment: { cwd: directory, projectTrusted: false },
+                ...(options.scriptedWorkflows !== undefined && {
+                  scriptedWorkflows: options.scriptedWorkflows,
+                }),
                 ...(options.proxy && {
                   proxyCall: () =>
                     Promise.reject(new Error("Proxy calls are model-only in this fixture.")),
@@ -181,5 +223,7 @@ export const nativeCodemodeSession = (
       session,
       call,
       run: (code: string, callId?: string) => call("codemode", { code }, callId),
+      /** Authenticated classifier catalog lookups made through the session's registry. */
+      catalogLookups: () => catalogLookups,
     };
   });

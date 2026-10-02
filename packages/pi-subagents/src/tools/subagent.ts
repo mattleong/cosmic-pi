@@ -54,6 +54,10 @@ type SubagentToolSpec<N extends SubagentToolName> = Pick<
 
 type SubagentToolSpecs = { readonly [N in SubagentToolName]: SubagentToolSpec<N> };
 
+/** Offered only while root scripts can reach the orchestration tools. */
+const SCRIPTED_WORKFLOW_GUIDELINE =
+  "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. Jev may recommend a branch, never authorize recovery or writes.";
+
 const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
     label: "Inspect Profile Routes",
@@ -76,7 +80,6 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Use profile=worker only for explicit implementation handoffs. While shared-checkout writers are active, the parent coordinates and reviews but does not edit. Isolated worktree writers do not share the parent cwd, so the parent may keep editing. Launch multiple shared-cwd writers only with pairwise-disjoint exact writes claims; native tools and Bash are cooperative rather than per-file sandboxed. Worktree reports are proposals, not approval: use subagent_workspace to review, test combined changes, and integrate.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
       "When a profiled run fails and its start receipt or status reports an eligible remaining route candidate, call subagent_lifecycle with action=retry for that run before launching any generalist replacement. Retry creates a new run on the next candidate from the original frozen route and never re-attempts the failed candidate.",
-      "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. Jev may recommend a branch, never authorize recovery or writes.",
     ],
     prepareArguments: prepareSubagentStartArguments,
     // Pi renders calls while arguments stream in, before `agents` exists.
@@ -241,21 +244,28 @@ export function registerSubagentTools(
     return owned;
   };
 
+  // V1 script orchestration stays at root and follows the scripted-workflows setting.
+  const scriptsEnabled = !runtime.proxyCall && runtime.scriptedWorkflows !== false;
   const register = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
+    // Judgment tools remain model-issued; the structured contract stays for model calls too.
+    const rootContract = isSubagentContractTool(name) && !runtime.proxyCall;
+    const scriptable = rootContract && scriptsEnabled;
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
-      name,
-      // V1 script orchestration stays at root; judgment tools remain model-issued.
-      exposure: runtime.proxyCall || !isSubagentContractTool(name) ? "model-only" : "direct",
-      ...(isSubagentContractTool(name) &&
-        !runtime.proxyCall && {
-          outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]),
-          namespace: {
-            name: "subagents",
-            description: "Root-session read-only subagent orchestration",
-          },
+      ...(scriptable &&
+        name === SUBAGENT_TOOL_NAME.start && {
+          promptGuidelines: [...(spec.promptGuidelines ?? []), SCRIPTED_WORKFLOW_GUIDELINE],
         }),
+      name,
+      exposure: scriptable ? "direct" : "model-only",
+      ...(rootContract && { outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]) }),
+      ...(scriptable && {
+        namespace: {
+          name: "subagents",
+          description: "Root-session read-only subagent orchestration",
+        },
+      }),
       parameters: SUBAGENT_TOOL_SCHEMAS[name].parameters,
       execute: (_id, args, ...rest) =>
         settlePresentation(

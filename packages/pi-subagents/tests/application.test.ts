@@ -20,7 +20,7 @@ import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
-import { nodePath } from "./support/node-builtins.ts";
+import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 
 type Handler = ExtensionHandler<any, any>;
 
@@ -582,6 +582,86 @@ describe("subagent Pi registration", () => {
       yield* settle(() =>
         handlers.get("session_shutdown")?.({ reason: "quit" }, newSessionContext),
       );
+    },
+  );
+
+  effectTest(
+    "applies a saved scripted-workflow switch after reload, not on tree navigation",
+    function* () {
+      const agentDirectory = yield* step(() =>
+        nodeFsPromises.mkdtemp(nodePath.join(tmpdir(), "pi-subagents-features-")),
+      );
+      const configPath = nodePath.join(agentDirectory, "pi-subagents.json");
+      const readConfig = () => nodeFsPromises.readFile(configPath, "utf8").then(JSON.parse);
+      let handlers = new Map<string, Handler>();
+      let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+      type RegisteredTool = { readonly name: string; readonly exposure?: string };
+      let registered = new Map<string, RegisteredTool>();
+      const activeTools = activeToolTracker((tool: RegisteredTool) => {
+        registered.set(tool.name, tool);
+      });
+      const registerFreshApplication = () => {
+        registered = new Map();
+        handlers = applicationFixture(
+          {
+            ...activeTools.overrides,
+            registerCommand: vi.fn(
+              (
+                name: string,
+                definition: {
+                  handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+                },
+              ) => {
+                if (name === "subagents") command = definition.handler;
+              },
+            ),
+          },
+          { getAgentDirectory: () => agentDirectory, loadSettings: () => Promise.resolve() },
+        ).handlers;
+      };
+      const notify = vi.fn();
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        hasUI: true,
+        mode: "tui",
+        isProjectTrusted: () => false,
+        ui: { notify },
+        sessionManager: {
+          getSessionId: () => "application-feature-switch-session",
+          getSessionFile: () => undefined,
+        },
+      });
+      // Root contract tools are scriptable by native codemode only through direct exposure.
+      const scriptable = () => registered.get("subagent_start")?.exposure === "direct";
+      const reload = function* () {
+        yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+        registerFreshApplication();
+        yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
+      };
+      try {
+        registerFreshApplication();
+        yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
+        expect(scriptable()).toBe(true);
+
+        const settings = (args: string) => command?.(`settings ${args}`, ctx) ?? Promise.resolve();
+        yield* step(() => settings("global scriptedWorkflows false"));
+        expect(yield* step(readConfig)).toEqual({ version: 6, scriptedWorkflows: false });
+        expect(notify).not.toHaveBeenCalledWith(expect.any(String), "error");
+        yield* settle(() => handlers.get("session_tree")?.({}, ctx));
+        expect(scriptable()).toBe(true);
+
+        yield* reload();
+        expect(scriptable()).toBe(false);
+
+        yield* step(() => settings("global scriptedWorkflows inherit"));
+        expect(yield* step(readConfig)).toEqual({ version: 6 });
+        yield* reload();
+        expect(scriptable()).toBe(true);
+      } finally {
+        yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
+        yield* step(() => nodeFsPromises.rm(agentDirectory, { recursive: true, force: true }));
+      }
     },
   );
 

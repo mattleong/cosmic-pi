@@ -28,9 +28,12 @@ import {
   decodeSubagentConfig,
   isLegacyConfigVersion,
   isProfileSetName,
+  isSubagentFeatureToggle,
   isSupportedConfigVersion,
   ownDataProperty,
+  SUBAGENT_FEATURE_TOGGLES,
   type DecodedSubagentConfig,
+  type SubagentFeatureToggle,
   LEGACY_SUBAGENT_CONFIG_VERSION,
   MAX_PROFILE_SETS,
   MIGRATED_PROFILE_SET_NAME,
@@ -114,6 +117,12 @@ export interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 
+export interface SubagentFeatureTogglePatch extends SubagentConfigPatchBase {
+  readonly toggle: SubagentFeatureToggle;
+  /** Undefined removes the scope's declaration and restores inheritance. */
+  readonly enabled?: boolean | undefined;
+}
+
 type ConfigPatch<Patch, A = void> = (
   cwd: string,
   agentDirectory: string,
@@ -140,6 +149,7 @@ export interface SubagentConfigStoreContract {
   readonly deleteProfileSet: ConfigPatch<SubagentDeleteProfileSetPatch>;
   readonly patchWriterWorkspace: ConfigPatch<SubagentWriterWorkspacePatch>;
   readonly patchNesting: ConfigPatch<SubagentNestingPatch>;
+  readonly patchFeatureToggle: ConfigPatch<SubagentFeatureTogglePatch>;
 }
 
 export class SubagentConfigStore extends Context.Service<
@@ -178,7 +188,12 @@ const decodeDocument = (
 ): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
   const decoded = decodeSubagentConfig(raw, scope);
   if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
-  const fatal = [`${scope}.<unknown>`, `${scope}.nesting`, `${scope}.writerWorkspaceMode`];
+  const fatal = [
+    `${scope}.<unknown>`,
+    `${scope}.nesting`,
+    `${scope}.writerWorkspaceMode`,
+    ...SUBAGENT_FEATURE_TOGGLES.map((toggle) => `${scope}.${toggle}`),
+  ];
   return decoded.diagnostics.some((diagnostic) => fatal.includes(diagnostic))
     ? Effect.fail(
         configError(
@@ -544,6 +559,27 @@ const applyWriterWorkspacePatch = (
   return next;
 };
 
+const applyFeatureTogglePatch = (
+  current: JsonObject,
+  patch: SubagentFeatureTogglePatch,
+  path: string,
+): JsonObject | SubagentConfigStoreError => {
+  const toggle = ownDataProperty(patch, "toggle");
+  if (!toggle.valid || !toggle.present || !isSubagentFeatureToggle(toggle.value))
+    return mutationError(path, "Invalid feature setting.");
+  const enabledProperty = ownDataProperty(patch, "enabled");
+  const enabled =
+    enabledProperty.valid && enabledProperty.present ? enabledProperty.value : undefined;
+  if (!enabledProperty.valid || (enabled !== undefined && !Predicate.isBoolean(enabled)))
+    return mutationError(path, "A feature setting must be true, false, or inherited.");
+  const upgraded = upgradeDocument(current, path);
+  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
+  const next = { ...upgraded };
+  if (Predicate.isBoolean(enabled)) next[toggle.value] = enabled;
+  else delete next[toggle.value];
+  return next;
+};
+
 export const subagentConfigStoreLayer = Layer.effect(
   SubagentConfigStore,
   Effect.gen(function* () {
@@ -662,6 +698,10 @@ export const subagentConfigStoreLayer = Layer.effect(
         (patch) => patch.writerWorkspaceMode === undefined,
       ),
       patchNesting: patchVoid(applyNestingPatch, (patch) => patch.nesting === undefined),
+      patchFeatureToggle: patchVoid(applyFeatureTogglePatch, (patch) => {
+        const enabled = ownDataProperty(patch, "enabled");
+        return enabled.valid && (!enabled.present || enabled.value === undefined);
+      }),
     });
   }),
 );

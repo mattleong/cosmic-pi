@@ -120,6 +120,7 @@ const staticStore = (config: ResolvedSubagentConfig) =>
     deleteProfileSet: () => Effect.die("unused"),
     patchNesting: () => Effect.die("unused"),
     patchWriterWorkspace: () => Effect.die("unused"),
+    patchFeatureToggle: () => Effect.die("unused"),
   });
 
 const environment = {

@@ -1,4 +1,5 @@
 // Pi tool execution is a Promise-shaped host boundary.
+import type { Usage } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -69,6 +70,11 @@ export interface SubagentToolRuntime {
     | undefined;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
   readonly toolPresentation?: SubagentToolPresentation | undefined;
+  /**
+   * Whether native codemode may call the root orchestration tools. Absent means allowed; false
+   * keeps every coordinator tool model-only. Proxied child registrations are model-only anyway.
+   */
+  readonly scriptedWorkflows?: boolean | undefined;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
     signal?: AbortSignal,
@@ -166,6 +172,12 @@ const requiredTargetIds = (
 
 const joinSections = (sections: ReadonlyArray<string>): string =>
   sections.filter(Boolean).join("\n\n");
+
+/** Only root results carry routing classifier usage; the strict proxy result keeps its fields. */
+const withRoutingUsage = (
+  result: AgentToolResult<unknown>,
+  usage: Usage | undefined,
+): AgentToolResult<unknown> => (usage ? { ...result, usage } : result);
 
 export const executeSubagentActionEffect = (
   pi: ExtensionAPI,
@@ -296,10 +308,13 @@ export const executeSubagentActionEffect = (
           onUpdate,
           readOnly: scripted,
         });
-        return present({
-          ...result,
-          contract: startContract(input.args.agents, result.startOutcomes),
-        });
+        return withRoutingUsage(
+          present({
+            ...result,
+            contract: startContract(input.args.agents, result.startOutcomes),
+          }),
+          callerRunId === undefined ? result.classifierUsage : undefined,
+        );
       }
       case SUBAGENT_TOOL_NAME.list:
         return present({

@@ -25,6 +25,7 @@ import type {
   SubagentCreateProfileSetFromSnapshotPatch,
   SubagentDefaultProfileSetPatch,
   SubagentDeleteProfileSetPatch,
+  SubagentFeatureTogglePatch,
   SubagentNestingPatch,
   SubagentProfilePatch,
   SubagentRenameProfileSetPatch,
@@ -73,6 +74,8 @@ export interface FleetManagerActions {
   readonly renameProfileSet: (patch: SubagentRenameProfileSetPatch) => Promise<void>;
   readonly deleteProfileSet: (patch: SubagentDeleteProfileSetPatch) => Promise<void>;
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
+  /** Saves or clears one scope's feature switch; the running session keeps its value until /reload. */
+  readonly patchFeatureToggle: (patch: SubagentFeatureTogglePatch) => Promise<void>;
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
   /** The coordinator rejects unsafe switches and persists accepted preferences for new sessions. */
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;

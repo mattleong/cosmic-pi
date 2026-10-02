@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { failureRecovery } from "../../src/tools/render-management.ts";
+import { AUTOMATIC_ROUTING_FAILURE_CODES } from "../../src/profiles/automatic-selection.ts";
 
 describe("failure recovery guidance", () => {
   it("gives start and action failures different guidance for the same route code", () => {
@@ -40,6 +41,18 @@ describe("failure recovery guidance", () => {
         expect(recovery).toMatch(/do not (resend|retry)/i);
         expect(recovery).not.toMatch(/then retry|before retrying|resend it/i);
       }
+  });
+
+  it("routes known automatic selection failures to manual selection, not route recovery", () => {
+    const manual = failureRecovery(AUTOMATIC_ROUTING_FAILURE_CODES[0], "", "start");
+    const generic = failureRecovery("automatic_routing_unknown", "", "start");
+    const route = failureRecovery("profile_candidate_invalid", "", "start");
+    expect(manual).not.toEqual(generic);
+    expect(manual).not.toEqual(route);
+    for (const code of AUTOMATIC_ROUTING_FAILURE_CODES) {
+      expect(failureRecovery(code.toUpperCase(), "", "start")).toEqual(manual);
+      expect(failureRecovery(code, "", "action")).not.toEqual(manual);
+    }
   });
 
   it("matches codes case-insensitively", () => {

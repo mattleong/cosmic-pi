@@ -32,6 +32,22 @@ export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
 export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
 
+/**
+ * Independent version-6 feature switches. Each is an optional root boolean that Project overrides
+ * over Global; an absent declaration inherits, and both are enabled by default.
+ */
+export const SUBAGENT_FEATURE_TOGGLES = ["scriptedWorkflows", "automaticProfileRouting"] as const;
+export type SubagentFeatureToggle = (typeof SUBAGENT_FEATURE_TOGGLES)[number];
+export type SubagentFeatureToggles = Readonly<Record<SubagentFeatureToggle, boolean>>;
+export const DEFAULT_SUBAGENT_FEATURE_TOGGLES: SubagentFeatureToggles = Object.freeze({
+  scriptedWorkflows: true,
+  automaticProfileRouting: true,
+});
+export const isSubagentFeatureToggle = <Value>(
+  value: Value,
+): value is Value & SubagentFeatureToggle =>
+  SUBAGENT_FEATURE_TOGGLES.some((toggle) => toggle === value);
+
 export const DEFAULT_MAX_DIRECT_CHILDREN = 12;
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 export const MIN_DIRECT_CHILDREN = 1;
@@ -59,6 +75,8 @@ export interface SubagentConfigFile {
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
+  readonly scriptedWorkflows?: boolean | undefined;
+  readonly automaticProfileRouting?: boolean | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -384,6 +402,7 @@ const ROOT_KEYS_BY_VERSION = {
     "profileSets",
     "nesting",
     "writerWorkspaceMode",
+    ...SUBAGENT_FEATURE_TOGGLES,
   ],
 } as const;
 
@@ -403,6 +422,14 @@ const decodeCurrentBody = (rawRoot: Readonly<JsonObject>, scope: string, diagnos
     const mode = Schema.decodeUnknownOption(WriterWorkspaceModeSchema)(workspaceField.value);
     if (Option.isNone(mode)) diagnostics.push(`${scope}.writerWorkspaceMode`);
     else writerWorkspaceMode = mode.value;
+  }
+  const toggles: Partial<Record<SubagentFeatureToggle, boolean>> = {};
+  for (const toggle of SUBAGENT_FEATURE_TOGGLES) {
+    const field = readField(rawRoot, toggle, `${scope}.${toggle}`, diagnostics);
+    if (!field.present) continue;
+    const enabled = Schema.decodeUnknownOption(Schema.Boolean)(field.value);
+    if (Option.isNone(enabled)) diagnostics.push(`${scope}.${toggle}`);
+    else toggles[toggle] = enabled.value;
   }
   const setsField = readField(rawRoot, "profileSets", `${scope}.profileSets`, diagnostics);
   const decoded = setsField.present
@@ -430,6 +457,7 @@ const decodeCurrentBody = (rawRoot: Readonly<JsonObject>, scope: string, diagnos
       ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
+      ...toggles,
     },
     invalidProfileSetRoutes: decoded?.invalidRoutes ?? {},
     invalidProfileSets: decoded?.invalidSets ?? [],

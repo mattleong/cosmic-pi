@@ -5,6 +5,7 @@ import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { isUncertainToolFailure } from "./outcome.ts";
 import { failureMessage } from "pi-cosmic-core";
+import { isAutomaticRoutingFailureCode } from "../profiles/automatic-selection.ts";
 
 /** Progress counter; a sole named target needs no count. */
 export function progressDetail(
@@ -76,6 +77,9 @@ export function summarizeStart(
     issues.push(launchFailureIssue(failure, label, uncertain));
     const recovery = failure.admittedRun;
     if (!recovery) {
+      // A classifier refusal occurs before admission, so there is no ownership to recover.
+      // Other failures remain conservative: a missing receipt is not proof of no effects.
+      if (isAutomaticRoutingFailureCode(failure.code)) continue;
       issues.push({
         severity: "warning",
         code: `launch:${failure.index}:recovery-unknown`,

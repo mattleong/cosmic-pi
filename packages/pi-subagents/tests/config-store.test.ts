@@ -81,6 +81,8 @@ const fixture = () =>
           withStore((store) => store.deleteProfileSet(cwd, agentDirectory, trusted(patch))),
         patchWriterWorkspace: (patch: Trusted<"patchWriterWorkspace">) =>
           withStore((store) => store.patchWriterWorkspace(cwd, agentDirectory, trusted(patch))),
+        patchFeatureToggle: (patch: Trusted<"patchFeatureToggle">) =>
+          withStore((store) => store.patchFeatureToggle(cwd, agentDirectory, trusted(patch))),
       }));
   });
 
@@ -987,5 +989,172 @@ describe("writer workspace preference persistence", () => {
       version: 6,
       writerWorkspaceMode: "shared-checkout",
     });
+  });
+});
+
+describe("feature switch persistence", () => {
+  effectTest("fails activation closed on malformed or undeclared switch values", function* () {
+    const paths = yield* step(fixture);
+    for (const document of [
+      { version: 6, scriptedWorkflows: "false" },
+      { version: 6, automaticProfileRouting: 0 },
+      { version: 6, scriptedWorkflows: null },
+      { version: 5, scriptedWorkflows: false },
+      { version: 4, automaticProfileRouting: true },
+    ]) {
+      yield* step(() => paths.writeGlobal(document));
+      yield* rejects(() => paths.load(false), "activate", paths.globalPath);
+    }
+    yield* step(() => paths.writeGlobal({ version: 6 }));
+    yield* step(() => paths.writeProject({ version: 6, automaticProfileRouting: "off" }));
+    yield* rejects(() => paths.load(true), "activate", paths.projectPath);
+    // An untrusted project is never read, so its malformed value cannot block activation.
+    expect((yield* step(() => paths.load(false))).automaticProfileRouting).toBe(true);
+  });
+
+  effectTest("loads trusted Project switches over Global ones, independently", function* () {
+    const paths = yield* step(fixture);
+    yield* step(() =>
+      paths.writeGlobal({ version: 6, scriptedWorkflows: false, automaticProfileRouting: false }),
+    );
+    yield* step(() => paths.writeProject({ version: 6, automaticProfileRouting: true }));
+    const trusted = yield* step(() => paths.load(true));
+    expect([trusted.scriptedWorkflows, trusted.automaticProfileRouting]).toEqual([false, true]);
+    const untrusted = yield* step(() => paths.load(false));
+    expect([untrusted.scriptedWorkflows, untrusted.automaticProfileRouting]).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  effectTest("saves and clears one switch while preserving every other field", function* () {
+    const paths = yield* step(fixture);
+    const original = {
+      version: 6,
+      defaultProfileSet: "saved",
+      profileSets: { saved: { profiles: { worker: "disabled" } } },
+      nesting: { maxDirectChildren: 4, maxDepth: 2 },
+      writerWorkspaceMode: "worktree",
+      automaticProfileRouting: false,
+    };
+    yield* step(() => paths.writeProject(original));
+    yield* step(() =>
+      paths.patchFeatureToggle({
+        scope: "project",
+        toggle: "scriptedWorkflows",
+        enabled: false,
+        expectedExists: true,
+        expectedDocument: original,
+      }),
+    );
+    const saved = { ...original, scriptedWorkflows: false };
+    expect(yield* step(paths.readProject)).toEqual(saved);
+    expect((yield* step(() => paths.load(true))).scriptedWorkflows).toBe(false);
+
+    yield* step(() =>
+      paths.patchFeatureToggle({
+        scope: "project",
+        toggle: "scriptedWorkflows",
+        expectedExists: true,
+        expectedDocument: saved,
+      }),
+    );
+    expect(yield* step(paths.readProject)).toEqual(original);
+    const reloaded = yield* step(() => paths.load(true));
+    expect([reloaded.scriptedWorkflows, reloaded.automaticProfileRouting]).toEqual([true, false]);
+  });
+
+  effectTest("inherits without creating a file in either scope", function* () {
+    const paths = yield* step(fixture);
+    for (const [scope, path] of [
+      ["global", paths.globalPath],
+      ["project", paths.projectPath],
+    ] as const) {
+      yield* step(() =>
+        paths.patchFeatureToggle({
+          scope,
+          toggle: "automaticProfileRouting",
+          expectedExists: false,
+        }),
+      );
+      yield* step(() => expect(readFile(path, "utf8")).rejects.toMatchObject({ code: "ENOENT" }));
+    }
+    yield* step(() =>
+      paths.patchFeatureToggle({
+        scope: "global",
+        toggle: "automaticProfileRouting",
+        enabled: true,
+        expectedExists: false,
+      }),
+    );
+    expect(yield* step(paths.readGlobal)).toEqual({ version: 6, automaticProfileRouting: true });
+  });
+
+  effectTest(
+    "refuses stale, untrusted, and invalid writes without changing the file",
+    function* () {
+      const paths = yield* step(fixture);
+      const current = { version: 6, scriptedWorkflows: true };
+      yield* step(() => paths.writeProject(current));
+      const before = yield* step(() => readFile(paths.projectPath, "utf8"));
+      const base = {
+        scope: "project",
+        toggle: "scriptedWorkflows",
+        enabled: false,
+        expectedExists: true,
+        expectedDocument: current,
+      } as const;
+      yield* rejects(
+        () => paths.patchFeatureToggle({ ...base, expectedDocument: { version: 6 } }),
+        "update",
+        paths.projectPath,
+      );
+      yield* rejects(
+        () => paths.patchFeatureToggle({ ...base, projectTrusted: false }),
+        "update",
+        paths.projectPath,
+      );
+      // SAFETY: The typed store boundary is intentionally supplied invalid runtime values.
+      for (const invalid of [
+        { toggle: "unknownFeature" as never },
+        { enabled: "false" as never },
+        { toggle: "toString" as never },
+      ])
+        yield* rejects(
+          () => paths.patchFeatureToggle({ ...base, ...invalid }),
+          "update",
+          paths.projectPath,
+        );
+      expect(yield* step(() => readFile(paths.projectPath, "utf8"))).toBe(before);
+    },
+  );
+
+  effectTest("migrates valid legacy documents when saving a switch", function* () {
+    const paths = yield* step(fixture);
+    const legacy = {
+      version: 5,
+      profiles: { worker: declaredCandidate("openai/worker", { fastMode: true }) },
+      nesting: { maxDirectChildren: 4, maxDepth: 2 },
+    };
+    yield* step(() => paths.writeGlobal(legacy));
+    yield* step(() =>
+      paths.patchFeatureToggle({
+        scope: "global",
+        toggle: "scriptedWorkflows",
+        enabled: false,
+        expectedExists: true,
+        expectedDocument: legacy,
+      }),
+    );
+    const migrated = yield* step(paths.readGlobal);
+    expect(migrated).toMatchObject({
+      version: 6,
+      defaultProfileSet: "default",
+      nesting: legacy.nesting,
+      scriptedWorkflows: false,
+      profileSets: { default: { profiles: { worker: { openaiFastMode: true } } } },
+    });
+    const loaded = yield* step(() => paths.load(false));
+    expect([loaded.scriptedWorkflows, loaded.profileSources.worker]).toEqual([false, "global"]);
   });
 });

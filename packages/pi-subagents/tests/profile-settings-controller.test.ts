@@ -100,6 +100,7 @@ const actions = (value: ProfileSettingsInspection) =>
     renameProfileSet: vi.fn(() => Promise.resolve()),
     deleteProfileSet: vi.fn(() => Promise.resolve()),
     patchNesting: vi.fn(() => Promise.resolve()),
+    patchFeatureToggle: vi.fn(() => Promise.resolve()),
     inspectWriterWorkspace: vi.fn(() =>
       Promise.resolve({ mode: "worktree" as const, canSwitch: true }),
     ),
@@ -711,6 +712,114 @@ describe("profile settings controller", () => {
     yield* step(() => fixture.settings("project maxDepth 2"));
     expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
     expect(fixture.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
+  });
+});
+
+describe("feature switch settings", () => {
+  const featurePatches = (fixture: ReturnType<typeof setup>) =>
+    vi.mocked(fixture.managerActions.patchFeatureToggle).mock.calls.map(([patch]) => patch);
+
+  effectTest("saves each switch to the named scope against its inspected document", function* () {
+    const fixture = setup();
+    const value = inspection();
+    yield* step(() => fixture.settings("global scriptedWorkflows false"));
+    yield* step(() => fixture.settings("project automaticProfileRouting true"));
+    expect(featurePatches(fixture)).toEqual([
+      {
+        scope: "global",
+        toggle: "scriptedWorkflows",
+        enabled: false,
+        expectedExists: true,
+        expectedDocument: value.globalDocument,
+        projectTrusted: true,
+      },
+      {
+        scope: "project",
+        toggle: "automaticProfileRouting",
+        enabled: true,
+        expectedExists: true,
+        expectedDocument: value.projectDocument,
+        projectTrusted: true,
+      },
+    ]);
+    expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "error");
+  });
+
+  effectTest("inherit removes the scope's own value, even with no file yet", function* () {
+    const fixture = setup({
+      trusted: false,
+      value: makeProfileSettingsInspection({ projectTrusted: false }),
+    });
+    yield* step(() => fixture.settings("global automaticProfileRouting inherit"));
+    const [patch] = featurePatches(fixture);
+    expect(patch).toMatchObject({ scope: "global", expectedExists: false });
+    expect(patch).not.toHaveProperty("enabled");
+    expect(patch).not.toHaveProperty("expectedDocument");
+  });
+
+  effectTest("has no session scope and changes nothing without a persistent one", function* () {
+    const fixture = setup();
+    for (const args of ["scriptedWorkflows false", "session automaticProfileRouting inherit"])
+      yield* step(() => fixture.settings(args));
+    expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
+    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+  });
+
+  effectTest("rejects values other than true, false, or inherit", function* () {
+    const fixture = setup();
+    for (const value of ["off", "1", "yes"])
+      yield* step(() => fixture.settings(`global scriptedWorkflows ${value}`));
+    expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
+  });
+
+  effectTest("refuses Project writes before trust and when trust is revoked", function* () {
+    const untrusted = setup({ trusted: false });
+    yield* step(() => untrusted.settings("project scriptedWorkflows false"));
+    expect(untrusted.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(untrusted.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "warning");
+
+    const revoked = setup();
+    const inspect = revoked.managerActions.inspectProfiles;
+    vi.mocked(inspect).mockImplementationOnce((trusted) => {
+      revoked.setProjectTrusted(false);
+      return vi.mocked(inspect).getMockImplementation()!(trusted);
+    });
+    yield* step(() => revoked.settings("project scriptedWorkflows false"));
+    expect(revoked.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(revoked.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
+  });
+
+  effectTest("reports a stale document conflict without claiming success", function* () {
+    const fixture = setup();
+    vi.mocked(fixture.managerActions.patchFeatureToggle).mockRejectedValueOnce(
+      new SubagentConfigStoreError({
+        operation: "update",
+        path: "/agent/pi-subagents.json",
+        message: "Subagents settings changed on disk; reopen /subagents profiles and try again.",
+      }),
+    );
+    yield* step(() => fixture.settings("global scriptedWorkflows false"));
+    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+    expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
+  });
+
+  effectTest("a change from a replaced session cannot reach its successor", function* () {
+    const fixture = setup();
+    let current = true;
+    vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+      isCurrent: () => current,
+      run: (effect, signal) => Effect.runPromise(effect, { signal }),
+    });
+    const inspect = fixture.managerActions.inspectProfiles;
+    vi.mocked(inspect).mockImplementationOnce((trusted) => {
+      current = false;
+      return vi.mocked(inspect).getMockImplementation()!(trusted);
+    });
+    yield* step(() => fixture.settings("global scriptedWorkflows false"));
+    expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(fixture.ui.notify).not.toHaveBeenCalled();
   });
 });
 

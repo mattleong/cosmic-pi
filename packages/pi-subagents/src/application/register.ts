@@ -227,6 +227,9 @@ export function registerSubagentApplication(
           );
           const projection = yield* SubagentService.use((service) => service.projection);
           const scheduler = yield* CodePreviewSchedulerService;
+          // Feature switches follow the session's frozen base config, so saved changes apply
+          // after /reload while /tree keeps the values this session started with.
+          const profiles = yield* SubagentProfileService.use((service) => service.capture);
           return {
             scheduler,
             projection,
@@ -235,6 +238,7 @@ export function registerSubagentApplication(
                 cwd: activation.cwd,
                 projectTrusted: activation.projectTrusted,
               },
+              scriptedWorkflows: profiles.effectiveConfig.scriptedWorkflows,
               toolPresentation: bridge.bindToolPresentation(),
               run: (effect, signal) => run(effect, signal),
             },
@@ -446,6 +450,7 @@ export function registerSubagentApplication(
     renameProfileSet: withConfigStore((store) => store.renameProfileSet),
     deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
     patchNesting: withConfigStore((store) => store.patchNesting),
+    patchFeatureToggle: withConfigStore((store) => store.patchFeatureToggle),
     patchSessionProfile: (patch) =>
       withCurrentActivation(() =>
         run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),

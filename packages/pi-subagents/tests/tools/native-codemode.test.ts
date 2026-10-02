@@ -17,7 +17,10 @@ import {
   contactParentFrame,
   withService,
 } from "../run/fixtures/service-harness.ts";
-import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
+import {
+  nativeCodemodeSession,
+  type NativeCodemodeSessionOptions,
+} from "../support/native-codemode-session.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
@@ -431,4 +434,283 @@ describe("native scripted subagent workflows", () => {
         }).pipe(Effect.provide(nodeFilePlatformLayer)),
       15_000,
     );
+});
+
+type FixtureClassify = NonNullable<NativeCodemodeSessionOptions["classifier"]>;
+type FixtureContext = Parameters<FixtureClassify>[1];
+
+/** A fixture Jev answer for the routing question; `contexts` records every inference input. */
+const routingClassifier = (
+  contexts: FixtureContext[],
+  answer: { readonly choice: string; readonly confidence: number } | "error",
+): FixtureClassify => {
+  return (model, context) => {
+    contexts.push(context);
+    return Promise.resolve({
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      timestamp: 1,
+      stopReason: answer === "error" ? "error" : "stop",
+      answers:
+        answer === "error"
+          ? {}
+          : {
+              profile: {
+                type: "choice",
+                choice: answer.choice,
+                probabilities: { [answer.choice]: answer.confidence },
+                confidence: answer.confidence,
+              },
+            },
+      ...(answer === "error" && { errorMessage: "provider-secret-diagnostic" }),
+    });
+  };
+};
+
+const omittedLaunch = "{task:'Assess the finished change for regressions',name:'omitted'}";
+
+describe("automatic profile routing in native sessions", () => {
+  it.live(
+    "routes omitted-profile scripted and model-issued starts to the Jev-selected read-only profile",
+    () =>
+      Effect.gen(function* () {
+        const requests: StartSubagentRequest[] = [];
+        const contexts: FixtureContext[] = [];
+        const h = yield* nativeCodemodeSession(capturingService(requests), {
+          classifier: routingClassifier(contexts, { choice: "reviewer", confidence: 0.95 }),
+        });
+        const scripted = yield* h.run(
+          `const r = await tools.subagent_start({agents:[${omittedLaunch}]}); ${print("r")}`,
+        );
+        expect(output(scripted.text)).toMatchObject({
+          outcome: "started",
+          launches: [{ status: "started", profile: "reviewer" }],
+        });
+        const direct = yield* h.call("subagent_start", {
+          agents: [{ task: "Assess the finished change for regressions" }],
+        });
+        expect(direct.isError).toBe(false);
+        expect(requests.map((request) => [request.profile, request.writeIntent])).toEqual([
+          ["reviewer", "read-only"],
+          ["reviewer", "read-only"],
+        ]);
+        expect(requests[0]?.selection?.reason).toMatch(/jev-fixture.*reviewer.*95%/u);
+        // Inference sees the task excerpt, optional name, and offered read-only profiles only.
+        const [first] = contexts;
+        expect(Object.keys(first?.state ?? {}).sort()).toEqual(["name", "task"]);
+        const criteria = Object.keys(first?.questions.profile?.criteria ?? {});
+        expect(criteria).toEqual(
+          expect.arrayContaining(["scout", "reviewer", "generalist", "main"]),
+        );
+        expect(criteria).not.toContain("worker");
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
+
+  it.live(
+    "makes no classifier lookup or inference for explicit profiles, writes, or disabled routing",
+    () =>
+      Effect.gen(function* () {
+        for (const automaticProfileRouting of [true, false]) {
+          const requests: StartSubagentRequest[] = [];
+          const contexts: FixtureContext[] = [];
+          const h = yield* nativeCodemodeSession(capturingService(requests), {
+            automaticProfileRouting,
+            classifier: routingClassifier(contexts, { choice: "reviewer", confidence: 0.99 }),
+          });
+          yield* h.run(
+            "await tools.subagent_start({agents:[{task:'Map the entry points',profile:'scout'}]});",
+          );
+          yield* h.call("subagent_start", {
+            agents: [{ task: "Implement the parser", writes: ["src/parser.ts"] }],
+          });
+          if (!automaticProfileRouting) {
+            yield* h.run(`await tools.subagent_start({agents:[${omittedLaunch}]});`);
+            yield* h.call("subagent_start", { agents: [{ task: "Summarize the change" }] });
+          }
+          expect(h.catalogLookups()).toBe(0);
+          expect(contexts).toEqual([]);
+          expect(requests.map((request) => request.profile)).toEqual(
+            automaticProfileRouting ? ["scout"] : ["scout", "generalist", "generalist"],
+          );
+        }
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
+
+  for (const [label, answer, code] of [
+    [
+      "low confidence",
+      { choice: "reviewer", confidence: 0.89 },
+      "automatic_routing_low_confidence",
+    ],
+    ["main hand-back", { choice: "main", confidence: 0.99 }, "automatic_routing_handback"],
+    [
+      "an unoffered writer",
+      { choice: "worker", confidence: 0.99 },
+      "automatic_routing_invalid_answer",
+    ],
+    [
+      "an out-of-range confidence",
+      { choice: "reviewer", confidence: 1.5 },
+      "automatic_routing_invalid_answer",
+    ],
+    ["a provider error", "error", "automatic_routing_failed"],
+  ] as const)
+    it.live(
+      `fails only the routed slot without launching on ${label}`,
+      () =>
+        Effect.gen(function* () {
+          const requests: StartSubagentRequest[] = [];
+          const contexts: FixtureContext[] = [];
+          const h = yield* nativeCodemodeSession(capturingService(requests), {
+            classifier: routingClassifier(contexts, answer),
+          });
+          const result = yield* h.run(`
+            const r = await tools.subagent_start({agents:[
+              ${omittedLaunch},
+              {task:'Map the entry points',profile:'scout'}
+            ]});
+            ${print("r")}
+          `);
+          expect(output(result.text)).toMatchObject({
+            outcome: "partial",
+            launches: [
+              {
+                index: 0,
+                status: "failed",
+                failure: {
+                  code,
+                  message: expect.not.stringContaining("provider-secret-diagnostic"),
+                },
+              },
+              { index: 1, status: "started" },
+            ],
+          });
+          expect(requests.map((request) => request.profile)).toEqual(["scout"]);
+          expect(contexts).toHaveLength(1);
+        }).pipe(Effect.provide(nodeFilePlatformLayer)),
+      15_000,
+    );
+
+  it.live(
+    "keeps the generalist fallback without inference when the classifier catalog is unavailable",
+    () =>
+      Effect.gen(function* () {
+        for (const classifierCatalog of ["rejects", "fixture"] as const) {
+          const requests: StartSubagentRequest[] = [];
+          const contexts: FixtureContext[] = [];
+          const h = yield* nativeCodemodeSession(capturingService(requests), {
+            classifierCatalog,
+            // A fixture catalog without the classifier provider has no authenticated Jev.
+            ...(classifierCatalog === "rejects" && {
+              classifier: routingClassifier(contexts, { choice: "reviewer", confidence: 0.99 }),
+            }),
+          });
+          const result = yield* h.call("subagent_start", {
+            agents: [{ task: "Summarize the change" }, { task: "Summarize the tests" }],
+          });
+          expect(result.isError).toBe(false);
+          expect(requests.map((request) => request.profile)).toEqual(["generalist", "generalist"]);
+          expect(h.catalogLookups()).toBe(1);
+          expect(contexts).toEqual([]);
+        }
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
+
+  it.live(
+    "cancels an in-flight routing inference without launching",
+    () =>
+      Effect.gen(function* () {
+        const requests: StartSubagentRequest[] = [];
+        const entered = yield* Deferred.make<void>();
+        const aborted = yield* Deferred.make<void>();
+        const h = yield* nativeCodemodeSession(capturingService(requests), {
+          classifier: (model, _context, options) => {
+            const settled = Effect.runPromise(Deferred.await(aborted)).then(() => ({
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              timestamp: 1,
+              stopReason: "aborted" as const,
+              answers: {},
+            }));
+            // Listen before announcing entry: the test may abort synchronously in response.
+            options?.signal?.addEventListener("abort", () =>
+              Deferred.doneUnsafe(aborted, Effect.void),
+            );
+            Deferred.doneUnsafe(entered, Effect.void);
+            return settled;
+          },
+        });
+        const script = yield* h
+          .run(`await tools.subagent_start({agents:[${omittedLaunch}]});`)
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Effect.promise(() => h.session.abort());
+        yield* Fiber.join(script);
+        // The provider observes the abort, and the interrupted batch never launches late.
+        yield* Deferred.await(aborted);
+        yield* Effect.sleep("20 millis");
+        expect(requests).toEqual([]);
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
+
+  it.live(
+    "aborts promptly while a catalog lookup ignores its signal",
+    () =>
+      Effect.gen(function* () {
+        const requests: StartSubagentRequest[] = [];
+        const contexts: FixtureContext[] = [];
+        const h = yield* nativeCodemodeSession(capturingService(requests), {
+          classifierCatalog: "hangs",
+          classifier: routingClassifier(contexts, { choice: "reviewer", confidence: 0.99 }),
+        });
+        const script = yield* h
+          .run(`await tools.subagent_start({agents:[${omittedLaunch}]});`)
+          .pipe(Effect.forkScoped);
+        for (let attempt = 0; attempt < 500 && h.catalogLookups() === 0; attempt += 1)
+          yield* Effect.sleep("10 millis");
+        expect(h.catalogLookups()).toBe(1);
+        yield* Effect.promise(() => h.session.abort());
+        yield* Fiber.join(script);
+        yield* Effect.sleep("20 millis");
+        expect(requests).toEqual([]);
+        expect(contexts).toEqual([]);
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
+});
+
+describe("scripted workflow exposure", () => {
+  it.live(
+    "keeps every coordinator tool model-only when scripted workflows are off",
+    () =>
+      Effect.gen(function* () {
+        const requests: StartSubagentRequest[] = [];
+        const h = yield* nativeCodemodeSession(capturingService(requests), {
+          scriptedWorkflows: false,
+        });
+        expect(
+          h.session.getCallableToolNames().filter((name) => name.startsWith("subagent_")),
+        ).toEqual([]);
+        expect(h.session.getActiveToolNames()).toEqual(
+          expect.arrayContaining(["subagent_start", "subagent_await", "subagent_status"]),
+        );
+        const scripted = yield* h.run(
+          "await tools.subagent_start({agents:[{task:'Map the entry points',profile:'scout'}]});",
+        );
+        expect(scripted.isError).toBe(true);
+        expect(requests).toEqual([]);
+        const direct = yield* h.call("subagent_start", {
+          agents: [{ task: "Map the entry points", profile: "scout" }],
+        });
+        expect(direct.isError).toBe(false);
+        expect(requests.map((request) => request.profile)).toEqual(["scout"]);
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
 });

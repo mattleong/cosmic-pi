@@ -919,6 +919,50 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       }),
     },
   },
+  {
+    // An omitted profile the classifier couldn't place fails before admission: no route, no run.
+    tool: "subagent_start",
+    title: "automatic profile choice is uncertain",
+    args: {
+      agents: [
+        { name: "workflow-followup", task: "Assess the refresh-flow findings" },
+        { name: "docs-sweep", profile: "scout", task: "Sweep docs" },
+      ],
+    },
+    isError: true,
+    result: {
+      content: [{ type: "text" as const, text: "Agent-facing launch report" }],
+      details: makeStartDetails({
+        startEntries: [
+          {
+            index: 0,
+            name: "workflow-followup",
+            profile: "generalist",
+            status: "failed",
+            routeStatus: "unavailable",
+          },
+          {
+            ...route,
+            profile: "scout",
+            index: 1,
+            name: "docs-sweep",
+            status: "started",
+            candidateIndex: 0,
+            runId: "agent-2",
+          },
+        ],
+        startFailures: [
+          {
+            index: 0,
+            name: "workflow-followup",
+            code: "automatic_routing_low_confidence",
+            message:
+              "Automatic profile selection wasn't confident enough (72%)\n\nChoose a profile explicitly and start again.",
+          },
+        ],
+      }),
+    },
+  },
 ];
 
 // ─── Child and supervisor tools ──────────────────────────────────────────────

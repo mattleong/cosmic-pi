@@ -1,6 +1,7 @@
 /**
- * `/subagents settings` through the shared settings shell: the writer workspace, and nesting
- * limits for the session, global, or trusted-project scope.
+ * `/subagents settings` through the shared settings shell: the writer workspace, feature switches
+ * for the global or trusted-project scope, and nesting limits for the session, global, or
+ * trusted-project scope.
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
@@ -28,20 +29,25 @@ import {
   MIN_DIRECT_CHILDREN,
   MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
+  isSubagentFeatureToggle,
   type SubagentNestingPolicy,
   type WriterWorkspaceMode,
 } from "../config/schema.ts";
 import type { WriterWorkspaceBlockCode } from "../run/workspace-control.ts";
 import type { FleetManagerActions } from "./controller.ts";
+import {
+  applyFeatureToggle,
+  featureToggleDescriptors,
+  featureToggleItems,
+  featureToggleStatusLines,
+  type FeatureScope,
+  type SettingsResult,
+} from "./feature-settings.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
 
 type NestingScope = "session" | "global" | "project";
 type NestingField = keyof SubagentNestingPolicy;
-type SettingsResult = Result.Result<
-  undefined,
-  { readonly message: string; readonly stale?: boolean }
->;
 
 const INHERIT = "inherit";
 const WORKSPACE = "writerWorkspace";
@@ -77,8 +83,8 @@ const NESTING_FIELD_IDS = Object.keys(NESTING_FIELDS).filter(isNestingField);
 
 const SCOPES = [
   { name: "session", description: "Change nesting limits for this session only" },
-  { name: "global", description: "Change nesting limits for new sessions everywhere" },
-  { name: "project", description: "Change nesting limits for this trusted project" },
+  { name: "global", description: "Change features and nesting limits for new sessions everywhere" },
+  { name: "project", description: "Change features and nesting limits for this trusted project" },
 ] as const;
 
 const UNTRUSTED = "Trust this project before changing its subagent settings";
@@ -223,6 +229,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
           actions.inspectWriterWorkspace(),
           actions.inspectProfiles(isProjectTrusted(ctx)),
         ]).then(([workspace, inspection]) => {
+          const trusted = isProjectTrusted(ctx);
           const scopeLine = (scope: NestingScope) => {
             const own = scopeNesting(inspection, scope);
             return own
@@ -237,7 +244,8 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
             "Nesting limits by scope:",
             scopeLine("session"),
             scopeLine("global"),
-            ...(isProjectTrusted(ctx) ? [scopeLine("project")] : []),
+            ...(trusted ? [scopeLine("project")] : []),
+            ...featureToggleStatusLines(inspection, trusted ? ["global", "project"] : ["global"]),
           ].join("\n");
         });
 
@@ -252,6 +260,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
         const scopes: readonly NestingScope[] = trusted
           ? ["session", "global", "project"]
           : ["session", "global"];
+        const featureScopes: readonly FeatureScope[] = trusted ? ["global", "project"] : ["global"];
         const withCurrent = (values: readonly string[], currentValue: string) =>
           values.includes(currentValue) ? [...values] : [currentValue, ...values];
         const items: SettingItem[] = [
@@ -262,6 +271,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
             currentValue: WORKSPACE_LABELS[workspace.mode],
             values: Object.values(WORKSPACE_LABELS),
           },
+          ...featureToggleItems(inspection, featureScopes),
           ...scopes.flatMap((scope) =>
             NESTING_FIELD_IDS.map((field) => {
               const own = scopeNesting(inspection, scope);
@@ -322,7 +332,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
 
   return settingsSubcommand<undefined>({
     root: "subagents",
-    description: "Configure the writer workspace and subagent nesting limits",
+    description: "Configure the writer workspace, subagent features, and nesting limits",
     title: "Subagents",
     descriptors: [
       {
@@ -331,6 +341,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
         values: Object.values(WORKSPACE_LABELS),
         currentValue: () => "",
       },
+      ...featureToggleDescriptors,
       ...NESTING_FIELD_IDS.map((field) => ({
         id: field,
         description: NESTING_FIELDS[field].description,
@@ -341,12 +352,15 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     ],
     examples: [
       "writerWorkspace worktree",
+      "global scriptedWorkflows false",
+      "project automaticProfileRouting inherit",
       "global maxDepth 2",
       "session maxDirectChildren inherit",
     ],
     notes: () => [
       "Nesting limits apply to the named scope, session by default. Session changes apply now;",
       `global and project changes after /reload. ${INHERIT} clears a scope's own limits.`,
+      "Feature switches need global or project and take effect after /reload; project wins.",
       "The writer workspace applies to new sessions and ignores the scope.",
     ],
     scopes: SCOPES,
@@ -356,6 +370,14 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     status: statusText,
     apply: (ctx, id, value, _signal, scope) => {
       if (id === WORKSPACE) return applyWorkspace(value);
+      if (isSubagentFeatureToggle(id))
+        return applyFeatureToggle(
+          { actions, current, untrusted: UNTRUSTED },
+          ctx,
+          id,
+          value,
+          scope,
+        );
       if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));
       const target: NestingScope = scope === "global" || scope === "project" ? scope : "session";
       return applyNesting(ctx, id, value, target);
