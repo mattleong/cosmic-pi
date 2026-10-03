@@ -170,7 +170,7 @@ const admissionError = (
     ? new InvalidSubagentRequestError({
         code: "scripted_writer_not_supported",
         message:
-          "Workflow launch requires a read-only profile\n\nHand implementation back to the parent agent.",
+          "Codemode scripts can only start read-only agents\n\nStart writers from the main agent directly or inside a subagent_workflow script.",
       })
     : undefined;
 

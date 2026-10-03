@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { makeLocalClaudeBackendDriver } from "./backend/local-claude.ts";
 import { makeLocalCodexBackendDriver } from "./backend/local-codex.ts";
 import { makeLocalPiBackendDriver } from "./backend/local-pi.ts";
@@ -12,10 +12,7 @@ import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
 import { WorkspaceService } from "./workspace/service.ts";
-import type {
-  SubagentNotification,
-  SubagentNotificationDelivery,
-} from "./boundary/host-notifier.ts";
+import type { SubagentNotifier } from "./boundary/host-notifier.ts";
 import { SubagentConfigStore, subagentConfigStoreLayer } from "./config/store.ts";
 import {
   subagentProfileServiceLayer,
@@ -23,6 +20,10 @@ import {
 } from "./profiles/service.ts";
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
+import { WorkflowJournal } from "./workflow/journal.ts";
+import type { WorkflowRunView } from "./workflow/model.ts";
+import { WorkflowService } from "./workflow/service.ts";
+import { WorkflowStore } from "./workflow/store.ts";
 
 /** One memoized registry owns the three local drivers and their shared boundary services. */
 const subagentBackendRegistryLayer = Layer.effect(
@@ -41,8 +42,13 @@ const subagentBackendRegistryLayer = Layer.effect(
 
 export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly workspaceOwnerId?: string;
+  /** Pi session whose resume journals survive /reload and /tree; absent keeps them local. */
+  readonly sessionKey?: string | undefined;
+  /** Read live before loading project workflows; defaults to the activation's trust. */
+  readonly isProjectTrusted?: (() => boolean) | undefined;
   readonly publish: (projection: SubagentProjection) => void;
-  readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
+  readonly publishWorkflows?: ((runs: ReadonlyArray<WorkflowRunView>) => void) | undefined;
+  readonly notify: SubagentNotifier;
   readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
   readonly questionnaireHandler?: SubagentServiceOptions["questionnaireHandler"] | undefined;
 }
@@ -85,8 +91,25 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
       });
     }),
   ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, workspaces, configStore)));
+  const workflowStore = WorkflowStore.layer({
+    cwd: options.cwd,
+    agentDirectory: options.agentDirectory,
+    isProjectTrusted: options.isProjectTrusted ?? (() => options.projectTrusted),
+  }).pipe(Layer.provide(SafeFile.layer), Layer.provide(nodeFilePlatformLayer));
+  // Built on the subagent service, so its runs are interrupted before that service stops.
+  const workflows = WorkflowService.layer({
+    ...(options.publishWorkflows && { publish: options.publishWorkflows }),
+    notify: options.notify,
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(service, WorkflowJournal.layer(options.sessionKey), workflowStore),
+    ),
+    Layer.provide(nodeFilePlatformLayer),
+  );
   // Layer memoization shares both persistence and the backend registry with host preflight/service use.
   return Layer.mergeAll(
+    workflows,
+    workflowStore,
     service,
     profiles,
     configStore,

@@ -76,3 +76,18 @@ it.effect(
       f.activity.dispose();
     }),
 );
+it.effect("closes Activity before Resume shows the questionnaire and cancels in place", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    yield* f.activity.observer.admitted("one", request, Effect.void);
+    yield* f.activity.observer.presenting("one");
+    const token = f.bridge.activate(() => {});
+    f.bridge.markOpened(token);
+    f.bridge.markCollapsed(token);
+    const actions = f.provider.snapshot()[0]?.actions ?? [];
+    // Showing the questionnaire takes keyboard focus; a manager left open would hide it.
+    expect(actions.find((action) => action.id === "resume")?.handoff).toBe(true);
+    expect(actions.find((action) => action.id === "cancel")?.handoff).toBe(false);
+    f.activity.dispose();
+  }),
+);

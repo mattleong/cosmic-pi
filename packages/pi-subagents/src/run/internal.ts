@@ -13,6 +13,8 @@ import type {
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import {
+  invalidRequest,
+  type InvalidSubagentRequestError,
   type SubagentError,
   type SubagentNotFoundError,
   UnsupportedSubagentCapabilityError,
@@ -40,6 +42,12 @@ export interface RunContext {
   /** The shared lock guarding every RunRecord mutation; `*Locked` operations require it. */
   readonly withLock: WithRunLock;
   readonly publish: Effect.Effect<void>;
+  /**
+   * Rechecks start admission after a release that publishes nothing, such as a cleared claim
+   * or a released process slot, so starts queued behind it retry. Publishing and every run-lock
+   * release recheck too.
+   */
+  readonly recheckAdmission: Effect.Effect<void>;
   readonly records: ReadonlyMap<string, RunRecord>;
   /** One session-owned cross-process writer pool per canonical cwd digest. */
   readonly writerPools: Map<string, WriterPoolEntry>;
@@ -88,9 +96,37 @@ export interface BackendReportWatermark {
   readonly deliveryId: string;
 }
 
+/**
+ * Trusted owner admission for one launch, never derived from tool arguments. Launch runs
+ * `checkLocked` before every admission attempt and `admittedLocked` before the record
+ * becomes visible, so root delivery can never select the owned generation.
+ */
+export interface RunOwnership {
+  /** Identity reserved earlier by the owner, so its placeholder keeps one stable id. */
+  readonly runId?: string | undefined;
+  readonly checkLocked: Effect.Effect<void, InvalidSubagentRequestError>;
+  readonly admittedLocked: (record: RunRecord) => void;
+}
+
+/** Exclusive owner of a run's first completion generation. */
+export interface RunOwnerClaim {
+  readonly ownerId: string;
+  readonly claimToken: string;
+  readonly generation: number;
+  /** Root lifecycle guards apply until the owner closes or hands the run back. */
+  live: boolean;
+}
+
 export interface RunRecord {
   /** Immutable inherited admission policy; never published or supplied by tool arguments. */
   readonly scriptOrigin: boolean;
+  /** Set once at admission by a trusted owner. */
+  owner?: RunOwnerClaim | undefined;
+  /**
+   * An owned run's launch prompt without its owner's workflow step and result contract; the
+   * launch switches to it once the owner relinquishes the run to the root.
+   */
+  readonly releasedSystemPrompt?: string | undefined;
   view: SubagentRunView;
   scope: Scope.Closeable;
   readonly driver: BackendDriver;
@@ -113,6 +149,8 @@ export interface RunRecord {
   retryExhausted: boolean;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
+  /** First accepted contract result of an assignment, as canonical JSON. */
+  structuredResult?: { readonly assignmentEpoch: number; readonly json: string } | undefined;
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
@@ -206,6 +244,22 @@ export const commitRunInitialization = (record: RunRecord, state: BackendStartup
     ...(state.sessionFile && { sessionFile: state.sessionFile }),
   };
   return pending;
+};
+
+/** Root operations that would detach a live owner's result fail with one recoverable code. */
+export const workflowOwnedRunError = (
+  record: RunRecord,
+  operation: string,
+): InvalidSubagentRequestError | undefined => {
+  const owner = record.owner;
+  if (!owner?.live) return undefined;
+  const workflow = record.view.workflow?.name
+    ? `${record.view.workflow.name} (${owner.ownerId})`
+    : owner.ownerId;
+  return invalidRequest(
+    "workflow_owned_run",
+    `Subagent ${record.view.id} belongs to workflow ${workflow}, which receives its result, so it cannot ${operation}. Check or stop the workflow with subagent_workflow; stopping this subagent skips it.`,
+  );
 };
 
 const unsupportedCapabilityMessage = (

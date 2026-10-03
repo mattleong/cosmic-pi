@@ -21,6 +21,9 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { nativeArgumentPreview, safeNativeArgumentText } from "./native-codemode-args";
 import { nativeCodemodeCallSubject } from "./native-codemode-subject";
 
+/** Native model rows record only the `provider/id` they resolved, never prompts or image data. */
+const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
+
 function issue(code: string, text: string): CompactIssue {
   const detail = sanitizeDiagnosticContent(text);
   const message = failureMessage(detail, "The nested call failed");
@@ -67,7 +70,7 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
               message: "Arguments preview",
               detail:
                 preview?.text ??
-                (call.name === "models.classify"
+                (nativeModelCalls.has(call.name)
                   ? safeNativeArgumentText(call.args)
                   : "Argument preview is unavailable"),
             },

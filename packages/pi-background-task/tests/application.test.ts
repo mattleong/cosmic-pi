@@ -15,7 +15,8 @@ import {
   extensionContextFixture,
   opaqueFixture,
 } from "pi-cosmic-core/testing";
-import { signalProcess } from "pi-cosmic-core";
+import { makeSessionCapabilityProtocol, signalProcess } from "pi-cosmic-core";
+import { ACTIVITY_VIEW_DISCOVER } from "pi-cosmic-ui/activity/view";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { vi } from "vitest";
@@ -193,6 +194,55 @@ function tasksCommandHarness(
 }
 
 describe("background-task Pi lifecycle", () => {
+  for (const outcome of ["accepted", "unavailable", "absent", "rejected", "replaced"] as const) {
+    it.effect(`routes bare tasks to the shared view with ${outcome} admission`, () =>
+      Effect.gen(function* () {
+        const events = createEventBus();
+        const queryProtocol = makeSessionCapabilityProtocol({ version: 1, maxSessionIdChars: 256 });
+        const pending = deferredPromise<boolean>();
+        const open = vi.fn(() =>
+          outcome === "replaced"
+            ? pending.promise
+            : outcome === "rejected"
+              ? Promise.reject(new Error("Manager already open"))
+              : Promise.resolve(outcome === "accepted"),
+        );
+        if (outcome !== "absent")
+          events.on(ACTIVITY_VIEW_DISCOVER, (data) => {
+            const query = queryProtocol.normalizeQuery(data);
+            if (query?.sessionId === "view-session")
+              query.respond({ version: 1, sessionId: "view-session", hostToken: {}, open });
+          });
+        const custom = vi.fn(() => Promise.resolve(undefined));
+        const ctx = extensionContextFixture({
+          cwd: process.cwd(),
+          signal: undefined,
+          hasUI: true,
+          mode: "tui",
+          isProjectTrusted: () => false,
+          ui: { notify: vi.fn(), custom },
+          sessionManager: { getSessionId: () => "view-session", getSessionFile: () => undefined },
+        });
+        const h = harness(() => Promise.resolve(), events);
+        yield* Effect.promise(() => h.emit("session_start", ctx));
+        const opened = h.runCommand("", ctx);
+        if (outcome === "replaced") {
+          yield* Effect.promise(() => vi.waitFor(() => expect(open).toHaveBeenCalled()));
+          yield* Effect.promise(() => h.emit("session_tree", ctx));
+          pending.resolve(false);
+        }
+        if (outcome === "rejected" || outcome === "replaced")
+          yield* Effect.promise(() => expect(opened).rejects.toThrow());
+        else yield* Effect.promise(() => opened);
+        if (outcome !== "absent") expect(open).toHaveBeenCalledWith("tasks", undefined);
+        expect(custom).toHaveBeenCalledTimes(
+          outcome === "absent" || outcome === "unavailable" ? 1 : 0,
+        );
+        yield* Effect.promise(() => h.emit("session_shutdown", ctx));
+      }),
+    );
+  }
+
   it.effect("skips superseded settings loads so only the latest generation activates", () =>
     Effect.gen(function* () {
       const settings = deferredPromise();

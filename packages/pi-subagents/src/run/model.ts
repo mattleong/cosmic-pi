@@ -13,6 +13,7 @@ import type {
   ProfileRouteContinuation,
   SubagentSelectionProvenance,
 } from "../profiles/model.ts";
+import type { ResultContract } from "../domain/result-contract.ts";
 
 export type RuntimeApiKey = Redacted.Redacted<string>;
 
@@ -122,6 +123,14 @@ export const hasUnresolvedSteeringDelivery = (run: {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
 }): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
 
+/** Trusted workflow placement of an owned run; never accepted from tool or proxy schemas. */
+export interface SubagentWorkflowMembership {
+  readonly workflowId: string;
+  /** Workflow display name for parent-facing notices. */
+  readonly name?: string | undefined;
+  readonly phase?: string | undefined;
+}
+
 export interface SubagentRunView {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
   readonly id: string;
@@ -153,6 +162,7 @@ export interface SubagentRunView {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly workspaceId?: string | undefined;
   readonly sourceCwd?: string | undefined;
+  readonly workflow?: SubagentWorkflowMembership | undefined;
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
@@ -255,6 +265,12 @@ export interface StartSubagentRequest {
   /** Coordinator-only prepared artifact. Public and proxy schemas cannot supply this. */
   readonly workspace?: WorkspaceHandle | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
+  /** Internal per-run writer mode chosen by a trusted owner; a retry keeps its predecessor's mode. */
+  readonly writerWorkspaceModeOverride?: WriterWorkspaceMode | undefined;
+  /** Internal workflow membership, projected to the run view. */
+  readonly workflow?: SubagentWorkflowMembership | undefined;
+  /** Internal structured-result contract; a completed run's final text is the result's canonical JSON. */
+  readonly resultContract?: ResultContract | undefined;
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;

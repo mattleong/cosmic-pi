@@ -16,6 +16,7 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
       ownerScope: yield* Scope.Scope,
       withLock: lock.withPermits(1),
       publish: Effect.void,
+      recheckAdmission: Effect.void,
       records,
       writerPools: new Map(),
       writerLeases: yield* WriterLeaseService,

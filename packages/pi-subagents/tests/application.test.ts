@@ -1,5 +1,8 @@
 // Promise assertions are test-runner boundaries.
 import { tmpdir } from "node:os";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
+import { ACTIVITY_VIEW_DISCOVER } from "pi-cosmic-ui/activity/view";
 import type {
   ExtensionCommandContext,
   ExtensionContext,
@@ -116,6 +119,59 @@ describeActivationLifecycle("root application", (loadSettings = () => Promise.re
 });
 
 describe("subagent Pi registration", () => {
+  for (const outcome of ["accepted", "unavailable", "absent", "rejected", "replaced"] as const) {
+    effectTest(`routes bare subagents to the shared view with ${outcome} admission`, function* () {
+      const events = createEventBus();
+      const queryProtocol = makeSessionCapabilityProtocol({ version: 1, maxSessionIdChars: 256 });
+      const pending = deferredPromise<boolean>();
+      const open = vi.fn(() =>
+        outcome === "replaced"
+          ? pending.promise
+          : outcome === "rejected"
+            ? Promise.reject(new Error("Manager already open"))
+            : Promise.resolve(outcome === "accepted"),
+      );
+      if (outcome !== "absent")
+        events.on(ACTIVITY_VIEW_DISCOVER, (data) => {
+          const query = queryProtocol.normalizeQuery(data);
+          if (query?.sessionId === "view-session")
+            query.respond({ version: 1, sessionId: "view-session", hostToken: {}, open });
+        });
+      let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+      const custom = vi.fn(() => Promise.resolve(undefined));
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        hasUI: true,
+        mode: "tui",
+        isProjectTrusted: () => false,
+        ui: { notify: vi.fn(), custom, setWidget: vi.fn() },
+        sessionManager: { getSessionId: () => "view-session", getSessionFile: () => undefined },
+      });
+      const { handlers } = applicationFixture({
+        events,
+        registerCommand: (name: string, definition: { handler: typeof command }) => {
+          if (name === "subagents") command = definition.handler;
+        },
+      });
+      yield* settle(() => handlers.get("session_start")?.({}, ctx));
+      const opened = command!("", ctx);
+      if (outcome === "replaced") {
+        yield* step(() => vi.waitFor(() => expect(open).toHaveBeenCalled()));
+        yield* settle(() => handlers.get("session_tree")?.({}, ctx));
+        pending.resolve(false);
+      }
+      if (outcome === "rejected" || outcome === "replaced")
+        yield* step(() => expect(opened).rejects.toThrow());
+      else yield* step(() => opened);
+      if (outcome !== "absent") expect(open).toHaveBeenCalledWith("subagents", undefined);
+      expect(custom).toHaveBeenCalledTimes(
+        outcome === "absent" || outcome === "unavailable" ? 1 : 0,
+      );
+      yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
+    });
+  }
+
   for (const cancellation of ["editor", "shutdown", "replacement"] as const) {
     effectTest(`owns pending settings refresh through ${cancellation} cancellation`, function* () {
       let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
@@ -319,7 +375,7 @@ describe("subagent Pi registration", () => {
   );
 
   effectTest(
-    "deactivates tools during replacement/abort and restores only the prior active subset",
+    "keeps tools through tree replacement and deactivates them only when activation is lost",
     function* () {
       const tools = activeToolTracker();
       const replacementSettings = deferredPromise();
@@ -342,9 +398,10 @@ describe("subagent Pi registration", () => {
       ];
       tools.setActive(tools.active().filter((name) => name !== disabledName));
 
+      // Pi awaits the tree replacement, and deactivating would drop its restored tool loadout.
       const replacing = Promise.resolve(handlers.get("session_tree")?.({}, context()));
       yield* step(() => Promise.resolve());
-      expect(tools.active()).toEqual(["read"]);
+      expect(tools.active()).toEqual(expectedActive());
       replacementSettings.resolve();
       yield* step(() => replacing);
       expect(tools.active()).toEqual(expectedActive());
@@ -632,8 +689,11 @@ describe("subagent Pi registration", () => {
           getSessionFile: () => undefined,
         },
       });
-      // Root contract tools are scriptable by native codemode only through direct exposure.
-      const scriptable = () => registered.get("subagent_start")?.exposure === "direct";
+      // Root contract tools are scriptable by native codemode only through direct exposure;
+      // the same switch registers the model-only dynamic workflow runner.
+      const scriptable = () =>
+        registered.get("subagent_start")?.exposure === "direct" &&
+        registered.get("subagent_workflow")?.exposure === "model-only";
       const reload = function* () {
         yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
         registerFreshApplication();
@@ -653,6 +713,7 @@ describe("subagent Pi registration", () => {
 
         yield* reload();
         expect(scriptable()).toBe(false);
+        expect(registered.has("subagent_workflow")).toBe(false);
 
         yield* step(() => settings("global scriptedWorkflows inherit"));
         expect(yield* step(readConfig)).toEqual({ version: 6 });

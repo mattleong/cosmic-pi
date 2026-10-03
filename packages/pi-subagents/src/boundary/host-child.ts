@@ -24,11 +24,15 @@ import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
 } from "pi-cosmic-core";
-import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
+import type {
+  LocalPiContact,
+  LocalPiParentControl,
+  LocalPiResultContractDocument,
+} from "../backend/local-pi-protocol.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
-import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { SUBAGENT_RESULT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import { decodeSubagentContract, isSubagentContractTool } from "../tools/contract-schema.ts";
@@ -44,17 +48,22 @@ import { parentToolRenderers } from "../tools/render-parent.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
+import { registerChildResults } from "./host-child-result.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import {
   openLocalPiChildIpc,
   ParentContactError,
   type LocalPiChildIpcChannel,
 } from "./local-pi-ipc.ts";
+import { nodeFsPromises } from "./node-builtins.ts";
 
 const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 const CHILD_PROXY_TOOL_NAMES = [...SUBAGENT_TOOL_NAMES, "contact_parent"];
-const CHILD_PROXY_TOOL_NAME_SET: ReadonlySet<string> = new Set(CHILD_PROXY_TOOL_NAMES);
+const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
+  ...CHILD_PROXY_TOOL_NAMES,
+  SUBAGENT_RESULT_TOOL_NAME,
+]);
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
@@ -93,12 +102,14 @@ export interface SubagentChildBridgeBoundaries {
     signal: AbortSignal,
   ) => PromiseLike<CodePreviewSettings | void>;
   readonly openIpc: () => LocalPiChildIpcChannel;
+  readonly readResultContract?: ((path: string) => PromiseLike<string>) | undefined;
 }
 
 const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
   loadSettings: loadCodePreviewSettings,
   openIpc: openLocalPiChildIpc,
 };
+const readResultContractFile = (path: string) => nodeFsPromises.readFile(path, "utf8");
 
 interface ChildSessionInput {
   readonly sessionId: string | undefined;
@@ -107,6 +118,7 @@ interface ChildSessionInput {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   token: number | undefined;
+  result?: LocalPiResultContractDocument | undefined;
 }
 
 import { registerSubagentMessageRenderers } from "../application/messages.ts";
@@ -122,6 +134,7 @@ export function registerSubagentChildBridge(
     type: "boolean",
     default: false,
   });
+  const results = registerChildResults(pi, boundaries.readResultContract ?? readResultContractFile);
   const runtimeApi = consumeRuntimeApiCredentials(process.env);
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
@@ -134,7 +147,7 @@ export function registerSubagentChildBridge(
 
   const removeProxyNames = (): void =>
     invokeHostCallback(() => {
-      const kept = pi.getActiveTools().filter((name) => !CHILD_PROXY_TOOL_NAME_SET.has(name));
+      const kept = pi.getActiveTools().filter((name) => !CHILD_PRIVATE_TOOL_NAME_SET.has(name));
       pi.setActiveTools(kept);
     }, undefined);
 
@@ -146,6 +159,7 @@ export function registerSubagentChildBridge(
   const rejectPending = (): void => {
     rejectAll(pending, "The parent subagent supervisor disconnected.");
     rejectAll(pendingProxy, "The root subagent coordinator disconnected.");
+    results.rejectPending("The parent subagent supervisor disconnected.");
   };
   const deleteExact = <A>(
     waiters: Correlations<A>,
@@ -244,6 +258,7 @@ export function registerSubagentChildBridge(
       });
       return;
     }
+    if (message.type === "structured_result_ack") return results.acknowledge(message);
     if (message.type === "turn_input_barrier") {
       forkContact(input, {
         channel: "pi-subagents",
@@ -508,13 +523,26 @@ export function registerSubagentChildBridge(
           },
           { receipts, owner: receipts.activate() },
         );
-        registerContactParent(input, token, (interval, tick) =>
-          isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
-        );
+        const scheduleAnimation: CompactAnimationScheduler = (interval, tick) =>
+          isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined;
+        registerContactParent(input, token, scheduleAnimation);
+        if (input.result)
+          results.register(input.result, {
+            isCurrent: () => isActivationCurrent(input, token),
+            send: ipc.sendContact,
+            run: (effect, signal) => slot.run(effect, signal),
+            scheduleAnimation,
+          });
         const runId = subagentChildRunId();
         if (runId) registerSubagentProxyManagerCommand(pi, runId, call);
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");
-        pi.setActiveTools([...new Set([...pi.getActiveTools(), ...CHILD_PROXY_TOOL_NAMES])]);
+        pi.setActiveTools([
+          ...new Set([
+            ...pi.getActiveTools(),
+            ...CHILD_PROXY_TOOL_NAMES,
+            ...(input.result ? [SUBAGENT_RESULT_TOOL_NAME] : []),
+          ]),
+        ]);
       } catch {
         deactivate(input);
         if (slot.isCurrent(token)) void slot.shutdown();
@@ -540,7 +568,23 @@ export function registerSubagentChildBridge(
       token: undefined,
     };
     currentSession = input;
-    return slot.start(input, captured.signal).then(() => undefined);
+    const start = () =>
+      isSessionCurrent(input)
+        ? slot.start(input, captured.signal).then(() => undefined)
+        : undefined;
+    const contract = results.load();
+    if (!contract) return start();
+    // An unreadable contract still starts the session; the parent then fails the missing result.
+    return Promise.resolve(contract).then(
+      (document) => {
+        input.result = document;
+        return start();
+      },
+      (error) =>
+        Promise.resolve(start()).then(() => {
+          throw error;
+        }),
+    );
   });
 
   pi.on("session_shutdown", () => {

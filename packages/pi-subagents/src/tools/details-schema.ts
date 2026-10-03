@@ -64,6 +64,16 @@ const nonNegativeNumber = Schema.Number.check(
 );
 const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
 
+const MAX_WORKSPACE_WARNINGS = 3;
+const MAX_WORKSPACE_WARNING_DETAIL_CHARS = 4_096;
+/** A problem an operation left for the parent, already worded by its producer. */
+const WorkspaceWarningSchema = Schema.Struct({
+  code: boundedString(MAX_FAILURE_CODE_CHARS, 1),
+  message: boundedString(MAX_WARNING_CHARS, 1),
+  detail: boundedString(MAX_WORKSPACE_WARNING_DETAIL_CHARS, 1),
+});
+export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
+
 /** Workspace history keeps receipt metadata only, never immutable patch bodies. */
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -81,6 +91,10 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   listedCount: Schema.optionalKey(nonNegativeInteger),
   preparedCwd: Schema.optionalKey(boundedString(1_024, 1)),
   successorRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  /** Problems a committed integration left behind, such as a kept worker tree. */
+  warnings: Schema.optionalKey(
+    Schema.Array(WorkspaceWarningSchema).check(Schema.isMaxLength(MAX_WORKSPACE_WARNINGS)),
+  ),
   /** Producer-computed UTF-16 span of list metadata or the immutable diff, never parsed. */
   displayContent: Schema.optionalKey(
     Schema.Struct({

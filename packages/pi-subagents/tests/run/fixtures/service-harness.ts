@@ -6,7 +6,12 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import { makeLocalPiBackendDriver } from "../../../src/backend/local-pi.ts";
-import type { BackendDriver, BackendEvent, BackendReport } from "../../../src/backend/model.ts";
+import type {
+  BackendDriver,
+  BackendEvent,
+  BackendLaunchRequest,
+  BackendReport,
+} from "../../../src/backend/model.ts";
 import {
   makeSubagentBackendRegistry,
   SubagentBackendRegistry,
@@ -651,16 +656,26 @@ export function fakeNativeReportBackendLayer(
     readonly interruptGate?: Deferred.Deferred<void, never> | undefined;
     readonly onInterruptStarted?: (() => void) | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
+    /** Models a backend without an OS process id, whose cleanup changes no published field. */
+    readonly omitPid?: boolean | undefined;
+    /** Holds every backend release until opened. */
+    readonly releaseGate?: Deferred.Deferred<void, never> | undefined;
+    /** Hands back continuation state, so a closed run can resume in a new process. */
+    readonly resumable?: boolean | undefined;
+    /** Holds the first process's initialization until opened. */
+    readonly initializeGate?: Deferred.Deferred<void, never> | undefined;
   } = {},
 ) {
   const controls: FakeNativeReportControl[] = [];
+  /** Every launch request the backend spawned, in order. */
+  const launches: BackendLaunchRequest[] = [];
   const driver: BackendDriver = {
     host: "local",
     runtime: "claude",
     capabilities: options.capabilities ?? ["steer", "rename-display"],
     supportsContext: (context) => context === "fresh",
     preflight: () => Effect.void,
-    spawn: () =>
+    spawn: (launch) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
           const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
@@ -693,17 +708,24 @@ export function fakeNativeReportBackendLayer(
             released: () => releaseCount,
           };
           controls.push(control);
+          launches.push(launch);
           return {
             handle: {
-              pid: 22_001,
+              ...(!options.omitPid && { pid: 22_001 }),
               events,
               awaitExit: Effect.never,
               controls: {
-                initialize: Effect.succeed({
-                  model: "claude-native",
-                  effort: "high" as const,
-                  sessionId: "native-session",
-                }),
+                initialize: (controls.length === 1 && options.initializeGate
+                  ? Deferred.await(options.initializeGate)
+                  : Effect.void
+                ).pipe(
+                  Effect.as({
+                    model: "claude-native",
+                    effort: "high" as const,
+                    sessionId: "native-session",
+                    ...(options.resumable && { resumeToken: { sessionId: "native-session" } }),
+                  }),
+                ),
                 start: (message: string, nextAssignmentEpoch: number) =>
                   Effect.gen(function* () {
                     assignmentEpoch = nextAssignmentEpoch;
@@ -736,7 +758,8 @@ export function fakeNativeReportBackendLayer(
                 Effect.sync(() => void terminations.push(mode)),
               cancelPending: () => {},
             },
-            release: Effect.sync(() => {
+            release: Effect.gen(function* () {
+              if (options.releaseGate) yield* Deferred.await(options.releaseGate);
               releaseCount += 1;
               Queue.endUnsafe(events);
             }),
@@ -747,6 +770,7 @@ export function fakeNativeReportBackendLayer(
   };
   return {
     controls,
+    launches,
     layer: Layer.succeed(SubagentBackendRegistry, makeSubagentBackendRegistry([driver])),
   };
 }
@@ -780,9 +804,10 @@ export function localServiceFixture(
 export function nativeReportServiceFixture(
   backend = fakeNativeReportBackendLayer(),
   options: SubagentServiceOptions = {},
+  profiles = profileLayerFor({}),
 ) {
   const { projections, notifications, options: captured } = capturing(options);
-  const layer = layerOver(backend.layer, captured);
+  const layer = layerOver(backend.layer, captured, profiles);
   return { backend, projections, notifications, layer };
 }
 

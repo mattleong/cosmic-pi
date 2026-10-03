@@ -4,6 +4,8 @@ export type ActivityRow = ActivityItem & {
   readonly key: string;
   readonly providerId: string;
   readonly generation: number;
+  /** Historical summary only: the current provider no longer exposes this item. */
+  readonly retained?: true;
   /** Lower bounds, not exact lifetime totals. Repeated snapshots never inflate them. */
   readonly omittedChildren?: number;
   readonly omittedHistory?: number;
@@ -49,7 +51,7 @@ export function retainActivity(
   const next = new Map(current.map((row) => [row.key, row]));
   for (const row of previous)
     if (!next.has(row.key) && isFinished(row))
-      next.set(row.key, { ...row, actions: [], awaited: false });
+      next.set(row.key, { ...row, retained: true, actions: [], awaited: false });
   const rows = [...next.values()];
   const { parents, roots } = resolveActivityOwnership(next);
   const protectedKeys = new Set<string>();

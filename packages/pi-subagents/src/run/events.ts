@@ -7,6 +7,7 @@ import type { SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProxyExecution } from "./proxy-execution.ts";
 import type { RunSettlement } from "./settlement.ts";
+import type { RunStructuredResults } from "./structured-result.ts";
 import {
   bashCommandMayMutate,
   MAX_OBSERVED_WRITE_PATHS,
@@ -49,6 +50,8 @@ export interface RunEventDependencies {
   /** Starts asynchronous containment after an unambiguous native file-tool violation. */
   readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
+  /** Answers every submission, including those of inactive runs, so a child never waits. */
+  readonly onStructuredResult: RunStructuredResults;
 }
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
@@ -64,6 +67,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     failRun,
     onWriteClaimViolation,
     onProxyEvent,
+    onStructuredResult,
   } = dependencies;
 
   /** Reads the clock before mutateView takes the lock, then passes that time to `update`. */
@@ -113,6 +117,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         name: current.name,
         requestId: envelope.requestId,
         message,
+        // A workflow keeps waiting only while it still owns the run.
+        ...(current.workflow && record.owner?.live && { workflow: current.workflow }),
       });
       return {
         ...current,
@@ -244,7 +250,10 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
 
   const handleEvent = (
     record: RunRecord,
-    event: Exclude<BackendEvent, { readonly type: "usage" | "proxy_request" | "proxy_cancel" }>,
+    event: Exclude<
+      BackendEvent,
+      { readonly type: "usage" | "proxy_request" | "proxy_cancel" | "structured_result" }
+    >,
   ): Effect.Effect<unknown, SubagentError> => {
     if (event.type !== "exit" && isInactiveRunRecord(record))
       // A backend may report final cumulative usage/cost only at its native result, after the
@@ -373,6 +382,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       return mergeProcessUsage(record, source, event.usage).pipe(Effect.asVoid);
     if (event.type === "proxy_request" || event.type === "proxy_cancel")
       return onProxyEvent(record, event).pipe(Effect.asVoid);
+    if (event.type === "structured_result") return onStructuredResult(record, event);
     return handleEvent(record, event).pipe(Effect.asVoid);
   };
 }

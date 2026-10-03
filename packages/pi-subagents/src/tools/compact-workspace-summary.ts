@@ -193,6 +193,8 @@ export function compactWorkspaceSummary<ValueInput>(
       ];
       break;
     case "integrate":
+      issues = (details.warnings ?? []).map((warning) => ({ severity: "warning", ...warning }));
+      break;
     case "discard":
       break;
   }

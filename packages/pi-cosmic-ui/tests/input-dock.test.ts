@@ -2,7 +2,7 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { opaqueFixture } from "pi-cosmic-core/testing";
-import { createInputDock } from "../src/boundary/host-input-dock.ts";
+import { createInputDock, inputDockVisible } from "../src/boundary/host-input-dock.ts";
 
 const harness = () => {
   const widgets = new Map<string, Component>();
@@ -88,5 +88,22 @@ describe("input dock ownership", () => {
     });
     expect(() => handle.hide()).toThrow();
     expect(h.widgets.size).toBe(0);
+  });
+});
+
+describe("input dock presence", () => {
+  it("is visible only while a mounted dock is shown", () => {
+    const h = harness();
+    const dock = createInputDock(h.ui);
+    expect(inputDockVisible()).toBe(false);
+    dock.mount(h.tui, component());
+    expect(inputDockVisible()).toBe(true);
+    const handle = dock.handle(overlay());
+    handle.setHidden(true);
+    expect(inputDockVisible()).toBe(false);
+    handle.setHidden(false);
+    expect(inputDockVisible()).toBe(true);
+    handle.hide();
+    expect(inputDockVisible()).toBe(false);
   });
 });

@@ -1,12 +1,14 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { clipText, countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
+import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
-import type { WorkspaceToolDetails } from "./details-schema.ts";
+import type { WorkspaceToolDetails, WorkspaceWarning } from "./details-schema.ts";
 import {
   WorkspaceParameters,
   workspaceOperationError,
@@ -30,6 +32,63 @@ const result = (
     ...details,
   },
 });
+
+const MAX_LISTED_PATHS = 8;
+
+/** The last segment of a worker-relative path, as one short plain row. */
+const fileName = (name: string) =>
+  clipText(sanitizeTerminalLine(name.replace(/\/+$/u, "").split("/").pop() ?? ""), 40) || "A file";
+
+/** Problems a committed integration left behind, worded for people and for the agent. */
+export function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
+  const warnings: WorkspaceWarning[] = [];
+  const paths = outcome.uncapturedPaths;
+  const worker = JSON.stringify(outcome.workerRoot);
+  if (paths.length > 0) {
+    const listed = paths
+      .slice(0, MAX_LISTED_PATHS)
+      .map((name) => JSON.stringify(clipText(name, 256)))
+      .join(", ");
+    const more =
+      paths.length > MAX_LISTED_PATHS ? ` and ${paths.length - MAX_LISTED_PATHS} more` : "";
+    warnings.push({
+      code: "worker-retained",
+      message:
+        paths.length === 1
+          ? `${fileName(paths[0]!)} wasn't in the proposal, so the working copy was kept`
+          : `${countLabel(paths.length, "file")} weren't in the proposal, so the working copy was kept`,
+      detail: `The workspace snapshot did not capture these worker files, so they were neither reviewed nor integrated: ${listed}${more}. The worker tree, which these paths are relative to, was kept at ${worker} so they are not lost. Copy any you need into the parent checkout, then discard this workspace to delete the tree.`,
+    });
+  }
+  if (outcome.treeRemovalFailed)
+    warnings.push({
+      code: "workspace-trees-remain",
+      message: "The proposal's working copies couldn't be deleted",
+      detail: `The integration committed, but removing the workspace's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk. Discard this workspace to retry the removal.`,
+    });
+  if (outcome.leaseReleaseUnconfirmed)
+    warnings.push({
+      code: "integration-lease-unconfirmed",
+      message: "The source checkout lock wasn't released; new writers are blocked",
+      detail:
+        "The integration committed, but releasing its source writer lease could not be confirmed. This session refuses writer starts and further integrations (workspace_integration_quarantined) until Pi restarts. After a restart the source lease may report recovery-required; recover it only after confirming no Pi session or writer still uses this checkout.",
+    });
+  return warnings;
+}
+
+const integrationResult = (
+  outcome: WorkspaceIntegrationOutcome,
+  receipt: Omit<WorkspaceToolDetails, "version" | "action" | "warnings">,
+) => {
+  const warnings = integrationWarnings(outcome);
+  return result(
+    [
+      "Integrated the exact reviewed and tested revision as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.",
+      ...warnings.map((warning) => `Warning: ${warning.detail}`),
+    ].join("\n"),
+    { ...receipt, ...(warnings.length > 0 && { warnings }) },
+  );
+};
 
 const WorkspaceMetadataSchema = Schema.Struct({
   workspaceId: Schema.String,
@@ -185,11 +244,13 @@ export const executeWorkspaceAction = (
       }
       case "integrate": {
         const preparationId = operation.preparationId ?? "";
-        yield* service.workspaceIntegrate(workspaceId, revisionId, preparationId, callerRunId);
-        return result(
-          "Integrated the exact reviewed and tested revision as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.",
-          { ...receipt, revisionId, preparationId },
+        const outcome = yield* service.workspaceIntegrate(
+          workspaceId,
+          revisionId,
+          preparationId,
+          callerRunId,
         );
+        return integrationResult(outcome, { ...receipt, revisionId, preparationId });
       }
       case "discard":
         yield* service.workspaceDiscard(workspaceId, callerRunId);

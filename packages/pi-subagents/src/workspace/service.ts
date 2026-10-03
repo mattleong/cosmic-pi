@@ -5,8 +5,10 @@ import * as Semaphore from "effect/Semaphore";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { makeGitWorkspaceEngine } from "../boundary/git-worktree.ts";
 import type {
+  WorkspaceAcquired,
   WorkspaceError,
   WorkspaceHandle,
+  WorkspaceIntegration,
   WorkspaceIntegrationTarget,
   WorkspaceListing,
   WorkspacePreparation,
@@ -21,6 +23,7 @@ export interface WorkspaceServiceContract {
   readonly create: (input: {
     readonly sourceCwd: string;
     readonly ownerId: string;
+    readonly onAcquired?: WorkspaceAcquired | undefined;
   }) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly freeze: (
     target: WorkspaceSettledTarget,
@@ -30,11 +33,13 @@ export interface WorkspaceServiceContract {
   ) => Effect.Effect<WorkspacePreparation, WorkspaceError>;
   readonly integrate: (
     target: WorkspaceIntegrationTarget,
-  ) => Effect.Effect<WorkspaceRecord, WorkspaceError>;
+  ) => Effect.Effect<WorkspaceIntegration, WorkspaceError>;
   readonly revise: (
     target: WorkspaceSettledTarget & { readonly revisionId?: string },
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
-  readonly fork: (target: WorkspaceSettledTarget) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
+  readonly fork: (
+    target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
+  ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
   readonly recoverDiscard: (
     target: WorkspaceSettledTarget & { readonly recoveryRiskAccepted: true },

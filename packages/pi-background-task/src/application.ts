@@ -26,6 +26,7 @@ import {
   makeBackgroundTaskCodeModeHost,
 } from "./boundary/host-code-mode.ts";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
+import { discoverActivityView } from "pi-cosmic-ui/activity/view";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTaskConfigStore, BackgroundTaskSettingsFiles } from "./config/store.ts";
 import type { BackgroundTaskConfig } from "./config/schema.ts";
@@ -59,9 +60,11 @@ export function registerBackgroundTaskApplication(
   const bridge = makeProjectionBridge(pi.events);
   const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
   let releaseActivity: (() => void) | undefined;
+  let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   /** The settings this session started with; `/tasks settings` changes apply after /reload. */
   let currentConfig: BackgroundTaskConfig | undefined;
   const revokeActivity = () => {
+    openActivity = undefined;
     releaseActivity?.();
     releaseActivity = undefined;
   };
@@ -117,6 +120,18 @@ export function registerBackgroundTaskApplication(
       bridge.setFooterEnabled(prepared.config.showFooterStatus);
       bridge.setContext(ctx);
       const sessionId = backgroundTaskCodeModeSessionId(ctx);
+      openActivity = (signal) => {
+        if (!slot.isCurrent(token) || !slot.isActive() || signal?.aborted)
+          throw new Error("Background Tasks aren't available in this session");
+        const capability = sessionId ? discoverActivityView(pi.events, sessionId) : undefined;
+        return Promise.resolve(capability ? capability.open("tasks", signal) : false).then(
+          (opened) => {
+            if (!slot.isCurrent(token) || !slot.isActive() || signal?.aborted)
+              throw new Error("Background Tasks session was replaced");
+            return opened;
+          },
+        );
+      };
       if (sessionId)
         releaseActivity = registerBackgroundTaskActivity({
           events: pi.events,
@@ -126,6 +141,11 @@ export function registerBackgroundTaskApplication(
           stop: (id, signal) =>
             run(
               BackgroundTaskService.use((service) => service.stop(id)),
+              signal,
+            ).then(() => undefined),
+          clear: (signal) =>
+            run(
+              BackgroundTaskService.use((service) => service.clear),
               signal,
             ).then(() => undefined),
         });
@@ -159,6 +179,10 @@ export function registerBackgroundTaskApplication(
         );
 
   registerTasksCommand(pi, bridge, {
+    openActivity: (signal) =>
+      openActivity
+        ? openActivity(signal)
+        : Promise.reject(new Error("Background Tasks aren't available in this session")),
     stop: (id) =>
       run(BackgroundTaskService.use((service) => service.stop(id))).then(() => undefined),
     clear: () => run(BackgroundTaskService.use((service) => service.clear)).then(() => undefined),

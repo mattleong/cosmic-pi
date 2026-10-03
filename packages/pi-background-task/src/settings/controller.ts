@@ -30,6 +30,8 @@ import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import { BackgroundTaskNotFoundError } from "../task/errors.ts";
 
 export interface TaskManagerActions {
+  /** False only before unified-view admission; rejection never falls back to a second surface. */
+  readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
   readonly stop: (id: string) => Promise<void>;
   readonly clear: () => Promise<void>;
 }
@@ -137,7 +139,14 @@ export function registerTasksCommand(
   registerExtensionCommand(pi, {
     name: "tasks",
     description: "Open the background task manager, or change its settings",
-    bare: { handler: (_args, ctx) => openTaskManager(ctx, bridge, actions) },
+    bare: {
+      handler: (_args, ctx) =>
+        ctx.mode === "tui" && actions.openActivity
+          ? actions
+              .openActivity(ctx.signal)
+              .then((opened) => (opened ? undefined : openTaskManager(ctx, bridge, actions)))
+          : openTaskManager(ctx, bridge, actions),
+    },
     subcommands: [taskSettingsSubcommand(actions)],
   });
 }

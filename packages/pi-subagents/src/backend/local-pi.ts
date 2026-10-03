@@ -26,6 +26,7 @@ import {
   decodeAssistantMessage,
   decodeRpcEnvelope,
   decodeRpcStateData,
+  MAX_STRUCTURED_RESULT_REJECTION_CHARS,
   rpcStateModelId,
   type LocalPiParentControl,
   type RpcChildEnvelope,
@@ -35,6 +36,7 @@ import {
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
+  safeTextPrefix,
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "../run/state.ts";
@@ -372,6 +374,23 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             };
           case "proxy_cancel":
             return { type: "proxy_cancel", requestId: contact.requestId };
+          case "structured_result":
+            return {
+              type: "structured_result",
+              assignmentEpoch,
+              requestId: contact.requestId,
+              valueJson: contact.valueJson,
+              respond: (ok, message) =>
+                child.sendContactControl({
+                  channel: "pi-subagents",
+                  type: "structured_result_ack",
+                  requestId: contact.requestId,
+                  ok,
+                  ...(message !== undefined && {
+                    message: safeTextPrefix(message, MAX_STRUCTURED_RESULT_REJECTION_CHARS),
+                  }),
+                }),
+            };
         }
       })();
       return offer(normalized, event);

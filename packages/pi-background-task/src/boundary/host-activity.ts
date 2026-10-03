@@ -42,9 +42,18 @@ export function backgroundTaskActivityItems(
                   id: "stop",
                   label: "Stop",
                   confirmation: `Stop "${title}" and its process tree?`,
+                  handoff: false,
                 }),
               ]
-            : [],
+            : [
+                Object.freeze({
+                  id: "clear",
+                  label: "Clear finished tasks",
+                  confirmation:
+                    "Clear all finished tasks from this session? Running tasks keep running.",
+                  handoff: false,
+                }),
+              ],
         ),
       };
       if (task.endedAt !== undefined) Object.assign(item, { endedAt: task.endedAt });
@@ -68,7 +77,16 @@ export function backgroundTaskActivityDetail(
     remaining -= text.length;
   }
   const header = sanitizeDiagnosticContent(
-    [`${task.name ?? task.id}: ${task.state}`, task.command, task.cwd, task.error ?? ""].join("\n"),
+    [
+      `${task.name ?? task.id}: ${task.state}`,
+      task.command,
+      task.cwd,
+      `ID: ${task.id} · PID: ${task.pid ?? "none"}`,
+      `Exit: ${task.exitCode ?? "none"} · signal: ${task.signal ?? "none"}`,
+      `Started: ${task.startedAt} · ended: ${task.endedAt ?? "none"}`,
+      `Log cursor: ${task.logCursor} · dropped bytes: ${task.droppedLogBytes}`,
+      task.error ?? "",
+    ].join("\n"),
     { maximumLength: 4_000 },
   );
   return sanitizeDiagnosticContent(`${header}\n\n${chunks.reverse().join("")}`, {
@@ -83,6 +101,7 @@ export function registerBackgroundTaskActivity(options: {
   readonly bridge: BackgroundTaskProjectionBridge;
   readonly isCurrent: () => boolean;
   readonly stop: (id: string, signal: AbortSignal) => Promise<void>;
+  readonly clear?: (signal: AbortSignal) => Promise<void>;
 }): () => void {
   return registerRevisionedActivityProvider(options.events, {
     sessionId: options.sessionId,
@@ -91,8 +110,9 @@ export function registerBackgroundTaskActivity(options: {
     items: () => backgroundTaskActivityItems(options.bridge.get()),
     detail: (item) => backgroundTaskActivityDetail(options.bridge.get(), item.id) ?? "",
     act: (item, action, signal) => {
-      if (action !== "stop") throw new Error("Background task action is unavailable.");
-      return options.stop(item.id, signal);
+      if (action === "clear" && options.clear) return options.clear(signal);
+      if (action === "stop") return options.stop(item.id, signal);
+      throw new Error("Background task action is unavailable.");
     },
     subscriptions: [options.bridge.subscribe],
   });

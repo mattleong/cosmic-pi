@@ -6,6 +6,7 @@ export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
   for (const type of [
     "pi-subagents-completed",
     "pi-subagents-question",
+    "pi-subagents-workflow",
     "pi-subagents-proxy-notification",
     "pi-subagents-peer-notice",
   ])

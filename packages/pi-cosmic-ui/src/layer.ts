@@ -65,6 +65,9 @@ export const makeCosmicUiApplicationLayer = (
     publish: (rows, starting) => {
       if (connected) options.activityHost?.publish(connected, rows, starting);
     },
+    changed: () => {
+      if (connected) options.activityHost?.update(connected);
+    },
     tick: (now) => {
       if (connected) options.activityHost?.tick(connected, now);
     },

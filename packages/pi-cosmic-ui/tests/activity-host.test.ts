@@ -14,6 +14,7 @@ import {
 import {
   ACTIVITY_EVENT,
   ActivitySnapshotSchema,
+  activityKey,
   registerActivityProvider,
   type ActivityItem,
   type ActivityProviderOptions,
@@ -24,6 +25,7 @@ import {
   type ActivityServiceContract,
 } from "../src/activity/service.ts";
 import { makeActivityHost } from "../src/boundary/host-activity.ts";
+import { ActivityComponent } from "../src/activity/component.ts";
 import { screenViewport } from "../src/manager/viewport.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 import { eventBus } from "./support/host.ts";
@@ -44,8 +46,9 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     work.push(effect);
   });
   let redraws = 0;
+  const terminal = { columns: 80, rows: 24 };
   const tui = opaqueFixture({
-    terminal: { columns: 80, rows: 24 },
+    terminal,
     requestRender() {
       redraws++;
     },
@@ -112,6 +115,9 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     drain,
     mountWidget,
     renderWidget: () => mountedWidget?.render(80) ?? [],
+    resizeWidget: (rows: number) => {
+      terminal.rows = rows;
+    },
     redraws: () => redraws,
     pendingWork: () => work.length,
     disposeWidget: () => mountedWidget?.dispose?.(),
@@ -119,6 +125,126 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
 }
 
 describe("activity host lifecycle", () => {
+  it.effect("keeps a published phase checklist visible and recalculates its budget on resize", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      const service = yield* fixture.service();
+      fixture.host.activate(fixture.ctx, service);
+      const phases = Array.from({ length: 12 }, (_, index) => ({
+        title: `Unique phase ${index} boundary`,
+      }));
+      const provider = fixture.register({
+        snapshot: () => [{ ...item("flow"), kind: "workflow", title: "Checklist", phases }],
+      });
+      yield* fixture.drain();
+      const redraws = fixture.redraws();
+      fixture.host.tick(service, SPINNER_FRAME_MS);
+      expect(fixture.redraws()).toBeGreaterThan(redraws);
+      fixture.resizeWidget(60);
+      for (const phase of phases)
+        expect(fixture.renderWidget().some((line) => line.includes(phase.title))).toBe(true);
+      fixture.resizeWidget(20);
+      expect(fixture.renderWidget().length).toBeLessThanOrEqual(10);
+      fixture.resizeWidget(60);
+      for (const phase of phases)
+        expect(fixture.renderWidget().some((line) => line.includes(phase.title))).toBe(true);
+      provider.dispose();
+      fixture.host.deactivate();
+    }),
+  );
+  it.effect("runs manager actions in place unless the producer hands off to its own UI", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const invoked: string[] = [];
+      const provider = fixture.register({
+        snapshot: () => [
+          {
+            ...item("flow"),
+            kind: "workflow",
+            actions: [{ id: "stop", label: "Stop workflow", handoff: false }],
+          },
+          {
+            ...item("asking"),
+            parent: { providerId: "agents", itemId: "flow" },
+            actions: [{ id: "reply", label: "Reply", handoff: true }],
+          },
+        ],
+        invoke: (itemId, actionId) => {
+          invoked.push(`${itemId}:${actionId}`);
+          return Promise.resolve();
+        },
+      });
+      yield* fixture.drain();
+      const open = yield* fixture.host
+        .open(fixture.ctx)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      fixture.surface.mount();
+      const component = fixture.surface.overlays[0];
+      if (!(component instanceof ActivityComponent))
+        throw new Error("Activity manager not mounted");
+      component.render(120);
+      expect(component.shell.state.selectedId).toBe(activityKey("agents", "flow"));
+      component.handleInput("x");
+      yield* fixture.drain();
+      expect(invoked).toEqual(["flow:stop"]);
+      expect(fixture.surface.overlays).toEqual([component]);
+      component.handleInput("j");
+      component.render(120);
+      expect(component.shell.state.selectedId).toBe(activityKey("agents", "asking"));
+      component.handleInput("m");
+      expect(fixture.surface.overlays).toEqual([]);
+      yield* Fiber.join(open);
+      expect(invoked).toEqual(["flow:stop", "asking:reply"]);
+      provider.dispose();
+    }),
+  );
+  it.effect("confirms an unchanged action after the source republishes while it is shown", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      let revision = "1";
+      const invoked: string[] = [];
+      const provider = fixture.register({
+        snapshot: () => [
+          {
+            ...item("flow"),
+            kind: "workflow",
+            revision,
+            actions: [
+              {
+                id: "stop",
+                label: "Stop workflow",
+                confirmation: "Stop this workflow and its agents?",
+                handoff: false,
+              },
+            ],
+          },
+        ],
+        invoke: (itemId, actionId, invokedRevision) => {
+          invoked.push(`${itemId}:${actionId}:${invokedRevision}`);
+          return Promise.resolve();
+        },
+      });
+      yield* fixture.drain();
+      yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped({ startImmediately: true }));
+      fixture.surface.mount();
+      const component = fixture.surface.overlays[0];
+      if (!(component instanceof ActivityComponent))
+        throw new Error("Activity manager not mounted");
+      component.render(120);
+      component.handleInput("x");
+      revision = "2";
+      provider.publish();
+      yield* fixture.drain();
+      component.render(120);
+      component.handleInput("\r");
+      yield* fixture.drain();
+      expect(invoked).toEqual(["flow:stop:2"]);
+      expect(fixture.surface.overlays).toEqual([component]);
+      provider.dispose();
+    }),
+  );
   it.effect("acknowledges a mounted valid widget and immediately revokes on teardown", () =>
     Effect.gen(function* () {
       const fixture = harness("deferred");
@@ -315,6 +441,43 @@ describe("activity host lifecycle", () => {
       expect(fixture.surface.overlays).toEqual([]);
     }),
   );
+  it.effect(
+    "preserves ordinary Activity selection and zoom across reopening without workflows",
+    () =>
+      Effect.gen(function* () {
+        const fixture = harness();
+        fixture.host.activate(fixture.ctx, yield* fixture.service());
+        const provider = fixture.register({ snapshot: () => [item("alpha"), item("beta")] });
+        yield* fixture.drain();
+        const first = yield* fixture.host
+          .open(fixture.ctx)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        fixture.surface.mount();
+        const component = fixture.surface.overlays[0];
+        if (!(component instanceof ActivityComponent))
+          throw new Error("Activity manager not mounted");
+        component.render(120);
+        expect(component.shell.state.selectedId).toBe(activityKey("agents", "alpha"));
+        component.handleInput("j");
+        component.handleInput("z");
+        const selected = activityKey("agents", "beta");
+        expect(component.presentation.focus).toBe(selected);
+        component.handleInput("q");
+        yield* Fiber.join(first);
+        const reopened = yield* fixture.host
+          .open(fixture.ctx)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        fixture.surface.mount();
+        const next = fixture.surface.overlays[0];
+        if (!(next instanceof ActivityComponent)) throw new Error("Activity manager not mounted");
+        next.render(120);
+        expect(next.presentation.focus).toBe(selected);
+        expect(next.shell.state.selectedId).toBe(selected);
+        next.handleInput("q");
+        yield* Fiber.join(reopened);
+        provider.dispose();
+      }),
+  );
   it.effect("admits one manager and closes only its owned overlay beneath a questionnaire", () =>
     Effect.gen(function* () {
       const fixture = harness();
@@ -322,7 +485,7 @@ describe("activity host lifecycle", () => {
       const open = yield* fixture.host
         .open(fixture.ctx)
         .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* fixture.host.open(fixture.ctx);
+      yield* Effect.flip(fixture.host.open(fixture.ctx));
       fixture.surface.mount();
       fixture.surface.mount();
       expect(fixture.surface.overlays).toHaveLength(1);

@@ -99,12 +99,22 @@ export const runSupervisorTool = (
     switch (call.kind) {
       case "report": {
         const { deliveryId, report: text } = call;
-        const result = yield* rpc
+        return yield* rpc
           .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text })
-          .pipe(Effect.timeout(CALL_TIMEOUT_MILLIS));
-        return ok(
-          `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
-        );
+          .pipe(
+            Effect.timeout(CALL_TIMEOUT_MILLIS),
+            Effect.map((result) =>
+              ok(
+                `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
+              ),
+            ),
+            // An invalid structured result is the model's to fix, so it gets a tool error result.
+            Effect.catchIf(
+              (error) =>
+                error instanceof SupervisorRpcFailure && error.code === "report_schema_invalid",
+              (error) => Effect.succeed(ok(error.message, true)),
+            ),
+          );
       }
       case "question":
         // The reply acknowledgement for this question's epoch outlives caller interruption.

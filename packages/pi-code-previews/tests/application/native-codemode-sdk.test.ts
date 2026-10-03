@@ -420,7 +420,9 @@ for (const earlierBuiltin of [false, true])
         const unchanged = yield* step(() => run("return load('answer');"));
         assert.ok(unchanged.content.some((part) => part.type === "text" && part.text === "41"));
         const image = yield* step(() =>
-          run("image('data:image/png;base64,aW1hZ2U='); text('IMAGE_OUTPUT');"),
+          run(
+            "image('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='); text('IMAGE_OUTPUT');",
+          ),
         );
         assert.ok(image.content.some((part) => part.type === "image"));
         const native = registrations.findLast((tool) => tool.name === "codemode")!;

@@ -93,4 +93,25 @@ export interface WorkspaceRevisionTarget extends WorkspaceTarget {
 export interface WorkspaceIntegrationTarget extends WorkspaceRevisionTarget {
   readonly preparationId: string;
   readonly processCleanupConfirmed: true;
+  /** Keeps the editable trees after integration because a live run still uses them. */
+  readonly retainTrees?: boolean;
 }
+/** A committed integration and what it had to leave on disk. */
+export interface WorkspaceIntegration {
+  readonly record: WorkspaceRecord;
+  /** The worker tree's root, which `uncapturedPaths` are relative to. */
+  readonly workerRoot: string;
+  /**
+   * Worker files that the integrated revision did not capture, such as files of unsupported
+   * types or at excluded paths. The worker starts from the baseline snapshot, which holds none
+   * of them, so a writer created each one. The worker tree is kept so they are never deleted.
+   */
+  readonly uncapturedPaths: ReadonlyArray<string>;
+  /** Removing the spent editable trees failed, so they remain on disk. */
+  readonly treeRemovalFailed: boolean;
+}
+/**
+ * Reports a newly acquired workspace synchronously, before its handle is returned, so an
+ * interrupted caller still learns about the workspace it owns.
+ */
+export type WorkspaceAcquired = (handle: WorkspaceHandle) => void;

@@ -26,7 +26,9 @@ import {
   makeHostNotifier,
   type SubagentCompletionNotification,
   type SubagentNotification,
+  type SubagentWorkflowNotification,
 } from "../src/boundary/host-notifier.ts";
+import { subagentResultTool } from "../src/boundary/host-child-result.ts";
 import type { DeclaredProfileCandidate, ProfileRouteContinuation } from "../src/profiles/model.ts";
 import {
   SubagentProfileService,
@@ -47,11 +49,27 @@ import {
 } from "../src/tools/compact-parent-summary.ts";
 import { makeAwaitDetails, makeStartDetails } from "../src/tools/details.ts";
 import { parentToolRenderers } from "../src/tools/render-parent.ts";
+import { RESULT_ACCEPTED_TEXT } from "../src/tools/result-presentation.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
 import { makeAwaitExecution } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/tools/outcome.ts";
 import { subagentToolAction, type SubagentToolInput } from "../src/tools/schema.ts";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
+import { registerWorkflowTool, type WorkflowToolRuntime } from "../src/tools/workflow.ts";
+import type { WorkflowToolArgs } from "../src/tools/workflow-presentation.ts";
+import type { WorkflowRunView } from "../src/workflow/model.ts";
+import {
+  interruptedWorkflowNotification,
+  workflowNotification,
+} from "../src/workflow/notification.ts";
+import { parseWorkflowScript } from "../src/workflow/script.ts";
+import {
+  WorkflowNotFoundError,
+  WorkflowService,
+  type WorkflowServiceContract,
+} from "../src/workflow/service.ts";
+import { WorkflowStore } from "../src/workflow/store.ts";
+import * as Stream from "effect/Stream";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
 import { extensionApiFixture } from "./fixtures/pi-host.ts";
 import { containedWriter, view } from "./fixtures/run-view.ts";
@@ -725,12 +743,27 @@ const workspaceService: SubagentServiceDoubleInput = {
       cwd: "/project/.pi-subagents/prepared/prep-1",
       leaseDirectories: [],
     }),
-  workspaceIntegrate: () => Effect.void,
+  workspaceIntegrate: () =>
+    Effect.succeed({
+      workerRoot: "/agent/git-workspaces/ws-1/worker",
+      uncapturedPaths: [],
+      treeRemovalFailed: false,
+      leaseReleaseUnconfirmed: false,
+    }),
   workspaceDiscard: () => Effect.void,
   workspaceRevise: () =>
     Effect.succeed(
       view({ id: "agent-10", name: "db-migration", profile: "worker", writeIntent: "writer" }),
     ),
+};
+const leftoverWorkspace: SubagentServiceDoubleInput = {
+  workspaceIntegrate: () =>
+    Effect.succeed({
+      workerRoot: "/agent/git-workspaces/ws-1/worker",
+      uncapturedPaths: ["src/Billing/Invoice.cs", "assets/logo.svg"],
+      treeRemovalFailed: false,
+      leaseReleaseUnconfirmed: true,
+    }),
 };
 const staleWorkspace: SubagentServiceDoubleInput = {
   workspacePrepare: () =>
@@ -773,6 +806,19 @@ const workspaceScenarios = Effect.all([
       },
     },
     { service: workspaceService },
+  ),
+  scenario(
+    "integrate leaving files and the source lock behind",
+    {
+      tool: "subagent_workspace",
+      args: {
+        action: "integrate",
+        workspaceId: "ws-1",
+        revisionId: "rev-1",
+        preparationId: "prep-1",
+      },
+    },
+    { service: leftoverWorkspace },
   ),
   scenario(
     "request a revision",
@@ -1030,12 +1076,278 @@ const parentScenarios: ReadonlyArray<ToolScenario> = [
   },
 ];
 
+/** The child's private result tool, as registered for a launch with a result contract. */
+const resultTool = () =>
+  subagentResultTool(
+    {
+      parameters: {
+        type: "object",
+        properties: {
+          verdict: { type: "string", enum: ["safe", "unsafe"] },
+          findings: { type: "array", items: { type: "string" } },
+        },
+        required: ["verdict", "findings"],
+        additionalProperties: false,
+      },
+      strictSafe: true,
+    },
+    () => Promise.reject(new Error("Rendering must not execute")),
+  );
+
+const verdict = { verdict: "unsafe", findings: ["session.ts:118 swallows a refresh timeout"] };
+
+const resultScenarios: ReadonlyArray<ToolScenario> = [
+  {
+    tool: "subagent_result",
+    title: "submitting",
+    args: verdict,
+    phase: "running",
+  },
+  {
+    tool: "subagent_result",
+    title: "accepted",
+    args: verdict,
+    result: acknowledged(RESULT_ACCEPTED_TEXT),
+  },
+  {
+    tool: "subagent_result",
+    title: "rejected by its schema",
+    args: { verdict: "risky", findings: [] },
+    isError: true,
+    result: rejected(
+      'Validation failed for tool "subagent_result":\n  - verdict: must be equal to one of the allowed values\n\nReceived arguments:\n{"verdict":"risky","findings":[]}',
+    ),
+  },
+  {
+    tool: "subagent_result",
+    title: "second result refused",
+    args: verdict,
+    isError: true,
+    result: rejected(
+      "A result was already accepted for this run, and the first one is final. Stop now.",
+    ),
+  },
+];
+
+// ─── Dynamic workflows ───────────────────────────────────────────────────────
+
+const reviewScript = `export const meta = {
+  name: "review-changes",
+  description: "Review the diff by dimension, then verify each finding",
+  phases: [{ title: "Review" }, { title: "Verify" }],
+};
+const found = await parallel(["correctness", "security"].map((area) => () =>
+  agent(\`Review the uncommitted diff for \${area} bugs.\`, { phase: "Review", profile: "reviewer" })));
+phase("Verify");
+return found.filter(Boolean);`;
+
+const workflowRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => ({
+  id: "wf-mg3k2l-1",
+  name: "review-changes",
+  description: "Review the diff by dimension, then verify each finding",
+  source: { kind: "inline" },
+  sha256: "digest",
+  phases: [{ title: "Review" }, { title: "Verify" }],
+  currentPhase: "Review",
+  state: "running",
+  startedAt: now - 3 * 60_000,
+  agents: [
+    {
+      callId: 1,
+      runId: "agent-7",
+      label: "review:correctness",
+      phase: "Review",
+      profile: "reviewer",
+      state: "completed",
+      queuedAt: now - 180_000,
+      startedAt: now - 179_000,
+      endedAt: now - 60_000,
+    },
+    {
+      callId: 2,
+      runId: "agent-8",
+      label: "review:security",
+      phase: "Review",
+      profile: "reviewer",
+      state: "running",
+      queuedAt: now - 180_000,
+      startedAt: now - 179_000,
+    },
+    {
+      callId: 3,
+      runId: "agent-9",
+      label: "verify:1",
+      phase: "Verify",
+      profile: "reviewer",
+      state: "queued",
+      queuedAt: now - 30_000,
+    },
+  ],
+  reused: 0,
+  logs: [{ at: now - 60_000, level: "info", message: "correctness review found 2 findings" }],
+  outputTokens: 4_200,
+  args: { scope: "src/auth" },
+  ...patch,
+});
+
+const completedWorkflow = workflowRun({
+  state: "completed",
+  currentPhase: "Verify",
+  endedAt: now,
+  agents: workflowRun().agents.map((agent) => ({
+    ...agent,
+    state: "completed" as const,
+    endedAt: now,
+  })),
+  result: {
+    text: JSON.stringify(
+      [{ file: "src/auth/session.ts", line: 118, claim: "Timeout is swallowed" }],
+      null,
+      2,
+    ),
+    clipped: false,
+  },
+});
+const failedWorkflow = workflowRun({
+  state: "failed",
+  endedAt: now,
+  failure: {
+    name: "TypeError",
+    message: "found.filter is not a function",
+    stack: "at <workflow>:9:14",
+  },
+});
+const stoppedWorkflow = workflowRun({
+  state: "stopped",
+  endedAt: now,
+  agents: workflowRun().agents.map((agent) =>
+    agent.state === "completed"
+      ? agent
+      : { ...agent, state: "stopped" as const, reason: "the workflow stopped", endedAt: now },
+  ),
+});
+const writerWorkflow = workflowRun({
+  ...completedWorkflow,
+  name: "fix-findings",
+  agents: [
+    {
+      callId: 1,
+      runId: "agent-12",
+      label: "fix:session-timeout",
+      profile: "worker",
+      state: "completed",
+      queuedAt: now - 120_000,
+      workspaceId: "workspace-4",
+    },
+  ],
+  reused: 2,
+  resumedFrom: "wf-mg3k2l-1",
+  result: { text: "Fixed 1 finding; proposal in workspace-4.", clipped: false },
+});
+
+const workflowRuns: ReadonlyArray<WorkflowRunView> = [completedWorkflow, failedWorkflow];
+
+/** A fixed workflow service: the tool's real execute path, deterministic views. */
+const galleryWorkflows: WorkflowServiceContract = {
+  start: (request) =>
+    request.source.kind === "inline"
+      ? parseWorkflowScript(request.source.script).pipe(
+          Effect.as(workflowRun({ agents: [], logs: [] })),
+        )
+      : Effect.succeed(workflowRun({ agents: [], logs: [] })),
+  stop: () => Effect.succeed(stoppedWorkflow),
+  status: (runId) => {
+    const found = [workflowRun(), ...workflowRuns].find((run) => run.state === runId);
+    return found
+      ? Effect.succeed(found)
+      : Effect.fail(
+          new WorkflowNotFoundError({ message: `No workflow run ${runId} in this session.` }),
+        );
+  },
+  list: Effect.succeed(workflowRuns),
+  skip: () => Effect.void,
+  changes: Stream.empty,
+};
+
+const workflowRuntime: WorkflowToolRuntime = {
+  environment: { cwd: "/project", projectTrusted: true },
+  run: (effect) =>
+    Effect.runPromise(
+      effect.pipe(
+        Effect.provideService(WorkflowService, galleryWorkflows),
+        Effect.provideService(WorkflowStore, {
+          load: () => Effect.die(new Error("unused")),
+          loadPath: () => Effect.die(new Error("unused")),
+          list: Effect.succeed({
+            workflows: [
+              {
+                name: "review-changes",
+                scope: "project" as const,
+                path: "/project/.pi/workflows/review-changes.js",
+                meta: {
+                  name: "review-changes",
+                  description: "Review the diff by dimension, then verify each finding",
+                  whenToUse: "Before committing a change that touches more than one module",
+                  phases: [{ title: "Review" }, { title: "Verify" }],
+                },
+              },
+            ],
+            diagnostics: [
+              {
+                path: "/project/.pi/workflows/draft.js",
+                message: "Invalid meta: missing description",
+              },
+            ],
+            truncated: false,
+          }),
+        }),
+        Effect.provideService(SubagentProfileService, fallbackProfileService),
+        Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+      ),
+    ),
+};
+
+const workflowScenarios = Effect.gen(function* () {
+  const [tool] = captureRegistrations((pi) => registerWorkflowTool(pi, workflowRuntime)).tools;
+  const execute = (title: string, args: Partial<WorkflowToolArgs>): Effect.Effect<ToolScenario> =>
+    Effect.promise(() => tool!.execute("call", args, undefined, undefined, context)).pipe(
+      Effect.map((result) => ({
+        tool: "subagent_workflow",
+        title,
+        args,
+        result,
+        ...(result.isError === true && { isError: true }),
+      })),
+    );
+  return [
+    yield* execute("start an inline script", {
+      action: "start",
+      script: reviewScript,
+      args: { scope: "src/auth" },
+    }),
+    yield* execute("script without meta is rejected", { action: "start", script: "return 1;" }),
+    yield* execute("script with a syntax error is rejected", {
+      action: "start",
+      script: 'export const meta = { name: "broken", description: "d" };\nconst x: number = 1;',
+    }),
+    yield* execute("status while agents run", { action: "status", runId: "running" }),
+    yield* execute("status after completion", { action: "status", runId: "completed" }),
+    yield* execute("status after a script error", { action: "status", runId: "failed" }),
+    yield* execute("unknown run", { action: "status", runId: "wf-old-3" }),
+    yield* execute("stop", { action: "stop", runId: "wf-mg3k2l-1" }),
+    yield* execute("list saved workflows and runs", { action: "list" }),
+  ];
+});
+
 // ─── Notification messages ───────────────────────────────────────────────────
 
 type SentMessage = Pick<GalleryMessage, "customType" | "content" | "display" | "details">;
 
 /** Messages exactly as the root notifier sends them. */
-const notified = (title: string, notification: SubagentNotification) => {
+const notified = (
+  title: string,
+  notification: SubagentNotification | SubagentWorkflowNotification,
+) => {
   const messages: GalleryMessage[] = [];
   makeHostNotifier(
     extensionApiFixture({
@@ -1083,6 +1395,33 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       completion(migrationReview),
     ],
   }),
+  ...notified("workflow completed", workflowNotification(completedWorkflow)!),
+  ...notified("resumed workflow with a worktree proposal", workflowNotification(writerWorkflow)!),
+  ...notified("workflow script failed", workflowNotification(failedWorkflow)!),
+  ...notified("workflow stopped", workflowNotification(stoppedWorkflow)!),
+  ...notified(
+    "workflow stopped by the user",
+    workflowNotification({ ...stoppedWorkflow, stoppedBy: "user" })!,
+  ),
+  ...notified(
+    "workflow interrupted while it was stopping",
+    interruptedWorkflowNotification({
+      runId: "wf-k3c9-3",
+      name: "review-changes",
+      finished: 2,
+      workspaces: [],
+      stopped: true,
+    }),
+  ),
+  ...notified(
+    "workflow interrupted by a reload",
+    interruptedWorkflowNotification({
+      runId: "wf-k3c9-2",
+      name: "fix-findings",
+      finished: 3,
+      workspaces: ["ws-7f2a"],
+    }),
+  ),
   ...notified("worker needs a reply", {
     type: "question",
     id: dbMigration.id,
@@ -1132,8 +1471,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...(yield* lifecycleScenarios),
         ...(yield* claimsScenarios),
         ...(yield* workspaceScenarios),
+        ...(yield* workflowScenarios),
       ];
-      const scenarios = [...executed, ...receiptScenarios, ...parentScenarios];
+      const scenarios = [...executed, ...receiptScenarios, ...parentScenarios, ...resultScenarios];
       const lines: string[] = [];
       for (const style of ["compact", "preview"] as const) {
         const restore = applyPresentationSettings({
@@ -1144,9 +1484,10 @@ describe.skipIf(!directory)("presentation gallery", () => {
           // The shell captures the collapsed style at registration.
           const registered = captureRegistrations((pi) => {
             registerSubagentTools(pi, runtime);
+            registerWorkflowTool(pi, workflowRuntime);
             registerSubagentMessageRenderers(pi);
           });
-          const tools = [...registered.tools, ...parentTools()];
+          const tools = [...registered.tools, ...parentTools(), resultTool()];
           for (const { tool, ...entry } of scenarios)
             lines.push(
               ...galleryFrames(tools.find((candidate) => candidate.name === tool)!, {

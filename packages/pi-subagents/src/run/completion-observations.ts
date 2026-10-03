@@ -3,7 +3,12 @@ import * as Scope from "effect/Scope";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./errors.ts";
-import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
+import {
+  type RunContext,
+  type RunRecord,
+  type WithRunLock,
+  workflowOwnedRunError,
+} from "./internal.ts";
 import {
   isAssignmentFinishedRunState,
   isParentActionRequiredRun,
@@ -182,6 +187,12 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
                 code: "subagent_runs_not_found",
                 message: `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
               });
+            const ownedFailure = claimAll
+              ? selected
+                  .map((record) => workflowOwnedRunError(record, "be awaited directly"))
+                  .find((error) => error !== undefined)
+              : undefined;
+            if (ownedFailure) return yield* ownedFailure;
             const claimToken = allocateClaimToken();
             const desired = claimAll
               ? selected.flatMap((record) => {

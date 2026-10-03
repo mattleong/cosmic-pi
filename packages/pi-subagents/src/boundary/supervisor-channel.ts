@@ -40,6 +40,7 @@ import {
   tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
+import type { ResultContract } from "../domain/result-contract.ts";
 import { makeSupervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
 import {
   channelError,
@@ -99,6 +100,8 @@ export interface SupervisorChannelContract {
 
 export interface SupervisorChannelOpenRequest {
   readonly runId: string;
+  /** Reports must be one JSON value this contract accepts; others are rejected with issues. */
+  readonly resultContract?: ResultContract | undefined;
 }
 
 export interface SupervisorChannelLayerOptions {
@@ -275,6 +278,7 @@ const acquireNodeChannelEffect = (
   options: SupervisorChannelLayerOptions,
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
+  resultContract: ResultContract | undefined,
 ): Effect.Effect<SupervisorChannelHandle, SupervisorChannelError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -358,6 +362,7 @@ const acquireNodeChannelEffect = (
           runId,
           verifyToken,
           events,
+          resultContract,
         });
         // Cache the whole release so interruption cannot separate session shutdown from resources.
         const close = yield* Effect.cached(
@@ -455,7 +460,7 @@ export const makeSupervisorChannel = (
       const runId: SupervisorRunId = request.runId;
       const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
       return yield* Effect.acquireRelease(
-        acquireNodeChannelEffect(options, runId, events),
+        acquireNodeChannelEffect(options, runId, events, request.resultContract),
         (acquired) => acquired.close.pipe(Effect.orDie),
         { interruptible: true },
       );

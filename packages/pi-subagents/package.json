@@ -51,7 +51,9 @@
     "pack:dry": "pnpm pack --dry-run"
   },
   "dependencies": {
+    "@earendil-works/pi-codemode": "catalog:",
     "@effect/platform-node": "catalog:",
+    "acorn": "8.15.0",
     "effect": "catalog:",
     "jiti": "2.7.0",
     "pi-ask-user": "workspace:*",

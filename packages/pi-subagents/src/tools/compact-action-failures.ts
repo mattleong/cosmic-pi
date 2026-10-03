@@ -17,6 +17,7 @@ type Phrase = (subject: string) => string;
 
 /** [lower-cased code substrings, message]; the first match wins, so specific codes lead. */
 const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> = [
+  [["workflow_owned_run"], (subject) => `${subject} reports to its workflow`],
   [["notfound", "not_found"], () => "A requested subagent was not found"],
   [["run_waiting_for_parent"], (subject) => `${subject} is waiting for a reply`],
   [["parent_question_missing"], (subject) => `${subject} has no question waiting for a reply`],

@@ -9,6 +9,7 @@ import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import {
   invalidRequest,
+  type InvalidSubagentRequestError,
   type SubagentError,
   SubagentNotFoundError,
   SubagentProcessError,
@@ -21,6 +22,7 @@ import {
   requireCapability,
   type RunContext,
   type RunRecord,
+  workflowOwnedRunError,
 } from "./internal.ts";
 import { isTerminalRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
@@ -33,6 +35,46 @@ import { snapshotView } from "./state.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import { addWriterPoolMemberLocked } from "./writer-pool.ts";
 
+const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | undefined => {
+  const { id, state, reportGeneration } = record.view;
+  if (record.evictionClaim)
+    return invalidRequest(
+      "resume_state_invalid",
+      `Subagent ${id} is being evicted by start admission and can no longer resume.`,
+    );
+  if (record.runStateReclaimState === "reclaimed")
+    return invalidRequest(
+      "resume_state_reclaimed",
+      `Subagent ${id} cannot resume because its private continuation state was already reclaimed.`,
+    );
+  if (state !== "paused" && state !== "completed")
+    return invalidRequest(
+      "resume_state_invalid",
+      state === "reported"
+        ? `Subagent ${id} is retained after report generation ${reportGeneration}; use subagent_send to begin its next assignment on the same backend resource.`
+        : `Subagent ${id} cannot resume while ${state}.`,
+    );
+  if (record.stoppedByParent)
+    return invalidRequest("resume_cancelled", `Subagent ${id} was stopped and cannot resume.`);
+  // A paused owned run continues its owned generation; resuming a completed one would
+  // start a generation that only the root receives.
+  const ownedFailure =
+    state === "completed" ? workflowOwnedRunError(record, "resume after completing") : undefined;
+  if (ownedFailure) return ownedFailure;
+  if (!hasCompletionGenerationCapacity(record))
+    return invalidRequest(
+      "report_delivery_backlog",
+      `Subagent ${id} has ${record.completionGenerations.size} unresolved outcome generations; wait for parent delivery or claim the latest outcome before resuming.`,
+    );
+  return undefined;
+};
+
+interface ClaimedResume {
+  readonly record: RunRecord;
+  readonly needsRespawn: boolean;
+  readonly attemptToken: string;
+}
+
 export interface RunResumeDependencies extends RunContext {
   readonly currentChildLimit: Effect.Effect<number>;
   readonly delivery: RunNotificationDelivery;
@@ -43,6 +85,7 @@ export interface RunResumeDependencies extends RunContext {
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
   readonly retainUncertainAssignment: RunAssignment["retainUncertainAssignment"];
   readonly invalidateWorkspace: RunWorkspaceControl["invalidateForResume"];
+  readonly heldLaunchSlots: RunWorkspaceControl["heldLaunchSlots"];
 }
 
 /**
@@ -116,6 +159,121 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       }),
     );
 
+  /** Session-owned commit of a claimed resume: respawns when needed, then issues the prompt. */
+  const commitResume = (
+    id: string,
+    claimed: ClaimedResume,
+    prompt: string,
+    now: number,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
+    Effect.gen(function* () {
+      const record = claimed.record;
+      if (claimed.needsRespawn) {
+        const nextScope = yield* Scope.make();
+        const nextCleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
+        const installed = yield* withLock(
+          Effect.gen(function* () {
+            if (
+              record.stoppedByParent ||
+              record.view.state !== "starting" ||
+              record.process !== undefined
+            )
+              return false;
+            const writerPool = record.canonicalWriterCwd
+              ? yield* addWriterPoolMemberLocked(
+                  writerPools,
+                  record.canonicalWriterCwd,
+                  record.view.id,
+                  record.view.writeClaims,
+                )
+              : undefined;
+            record.scope = nextScope;
+            record.cleanupSettlement = nextCleanupSettlement;
+            record.cleanupPending = false;
+            record.closingScope = undefined;
+            record.closingScopeSettled = undefined;
+            record.writerPool = writerPool;
+            record.writeViolationContainmentStarted = false;
+            record.launch = {
+              ...record.launch,
+              resumeToken: record.resumeToken,
+            };
+            return true;
+          }),
+        );
+        if (!installed) {
+          yield* Scope.close(nextScope, Exit.void);
+          return yield* invalidRequest(
+            "resume_cancelled",
+            `Subagent ${id} stopped before its session could be restored.`,
+          );
+        }
+        const state = yield* initializeProcess(record);
+        const committed = yield* withLock(
+          Effect.gen(function* () {
+            if (record.view.state !== "starting") return undefined;
+            const pendingSettlement = commitRunInitialization(record, state);
+            yield* publish;
+            return pendingSettlement;
+          }),
+        );
+        if (committed) {
+          if (committed.state === "failed")
+            return yield* failRun(
+              record,
+              committed.error ?? "Subagent failed while resuming.",
+            ).pipe(Effect.tap(() => closeRecordScope(record)));
+          return yield* settle(record, committed.state, committed.error);
+        }
+      }
+      const issued = yield* submitPrompt(claimed.record, prompt, "resume", claimed.attemptToken);
+      const view = yield* withLock(
+        Effect.gen(function* () {
+          const record = claimed.record;
+          if (issued.state !== "running") return snapshotView(record.view);
+          record.view = {
+            ...record.view,
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "parent",
+              `Resume: ${prompt}`,
+              now,
+            ),
+          };
+          yield* publish;
+          return snapshotView(record.view);
+        }),
+      );
+      if (view.state !== "running" && !isTerminalRunState(view.state))
+        return yield* new SubagentProcessError({
+          operation: "resume",
+          message: view.error ?? `Subagent ${id} stopped before resume completed.`,
+        });
+      yield* sendPeerNotices(id);
+      return view;
+    }).pipe(
+      Effect.tapError((error) =>
+        error._tag === "SubagentProcessError" && error.code === "resume_outcome_uncertain"
+          ? withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
+              Effect.flatMap((pending) =>
+                pending
+                  ? pending.state === "failed"
+                    ? failRun(
+                        claimed.record,
+                        pending.error ?? "Subagent failed while resuming.",
+                      ).pipe(Effect.asVoid)
+                    : settle(claimed.record, pending.state, pending.error).pipe(Effect.asVoid)
+                  : retainUncertainAssignment(claimed.record, claimed.attemptToken, error.message),
+              ),
+            )
+          : withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
+              Effect.andThen(failRun(claimed.record, error.message)),
+              Effect.andThen(closeRecordScope(claimed.record)),
+              Effect.asVoid,
+            ),
+      ),
+    );
+
   const resume = (id: string, message?: string): Effect.Effect<SubagentRunView, SubagentError> =>
     waitForRunCleanupBounded(id).pipe(
       Effect.andThen(
@@ -153,90 +311,83 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
             currentCwd !== undefined &&
             currentCwd.filesystemIdentity === record.canonicalWriterCwd?.filesystemIdentity &&
             currentCwd.digest === record.canonicalWriterCwd?.digest;
+          const writerFailureLocked = (selected: RunRecord, needsRespawn: boolean) =>
+            Effect.gen(function* () {
+              if (writerLeases.platform === "win32")
+                return yield* new UnsupportedSafeWriterOwnershipError({
+                  code: "unsupported_safe_writer_ownership",
+                  platform: writerLeases.platform,
+                  message:
+                    "Writer subagents cannot respawn on Windows because descendant termination cannot yet be proven without Job Object ownership.",
+                });
+              const canonicalCwd = selected.canonicalWriterCwd;
+              if (!canonicalCwd)
+                return yield* invalidRequest(
+                  "writer_cwd_canonicalization_missing",
+                  `Subagent ${id} has no canonical writer cwd ownership evidence.`,
+                );
+              if (needsRespawn && !hasCurrentWriterCwd(selected))
+                return yield* invalidRequest(
+                  "writer_cwd_identity_changed",
+                  `Subagent ${id} cannot resume because its writer directory identity changed.`,
+                );
+              const writerFailure = writerConflictError(
+                records,
+                writerPools,
+                canonicalCwd,
+                selected.view.writeClaims,
+                selected,
+              );
+              if (writerFailure) return yield* writerFailure;
+            });
+          const respawnFailureLocked = (selected: RunRecord) =>
+            Effect.gen(function* () {
+              if (!selected.resumeToken)
+                return yield* invalidRequest(
+                  "backend_resume_unavailable",
+                  `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
+                );
+              const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+              const capacityFailure = processCapacityError(
+                records,
+                parentRunId,
+                yield* dependencies.currentChildLimit,
+                selected,
+                dependencies.heldLaunchSlots(parentRunId),
+              );
+              if (capacityFailure) return yield* capacityFailure;
+            });
+          /** Every resume admission check, run under the lock at the claim. */
+          const admitLocked = Effect.gen(function* () {
+            const selected = yield* requireRecord(id);
+            if (!isCurrentCandidate(selected))
+              return yield* invalidRequest(
+                "resume_state_invalid",
+                `Subagent ${id} changed while resume was being prepared.`,
+              );
+            yield* requireCapability(selected, "resume");
+            const stateFailure = resumeStateError(selected);
+            if (stateFailure) return yield* stateFailure;
+            const needsRespawn = selected.process === undefined;
+            if (selected.view.writeIntent === "writer")
+              yield* writerFailureLocked(selected, needsRespawn);
+            if (needsRespawn) yield* respawnFailureLocked(selected);
+            return { selected, needsRespawn };
+          });
+          const prompt = message?.trim()
+            ? yield* validateParentMessage(message, "Resume message is required.")
+            : "Continue the assigned task from the current session state.";
+          // One locked claim checks everything, including the writer's workspace, before the
+          // assignment rolls over. The workspace changes only as the claim commits, so a refused
+          // resume keeps its reviewed revision and preparation.
           return yield* runSessionOwned(
             ownerScope,
             Effect.gen(function* () {
-              const prompt = message?.trim()
-                ? yield* validateParentMessage(message, "Resume message is required.")
-                : "Continue the assigned task from the current session state.";
               const now = yield* Clock.currentTimeMillis;
               const claimed = yield* withLock(
                 Effect.gen(function* () {
-                  const selected = yield* requireRecord(id);
-                  if (!isCurrentCandidate(selected))
-                    return yield* invalidRequest(
-                      "resume_state_invalid",
-                      `Subagent ${id} changed while resume was validating its directory.`,
-                    );
-                  yield* requireCapability(selected, "resume");
-                  if (selected.evictionClaim)
-                    return yield* invalidRequest(
-                      "resume_state_invalid",
-                      `Subagent ${id} is being evicted by start admission and can no longer resume.`,
-                    );
-                  if (selected.runStateReclaimState === "reclaimed")
-                    return yield* invalidRequest(
-                      "resume_state_reclaimed",
-                      `Subagent ${id} cannot resume because its private continuation state was already reclaimed.`,
-                    );
-                  if (selected.view.state !== "paused" && selected.view.state !== "completed")
-                    return yield* invalidRequest(
-                      "resume_state_invalid",
-                      selected.view.state === "reported"
-                        ? `Subagent ${id} is retained after report generation ${selected.view.reportGeneration}; use subagent_send to begin its next assignment on the same backend resource.`
-                        : `Subagent ${id} cannot resume while ${selected.view.state}.`,
-                    );
-                  if (!hasCompletionGenerationCapacity(selected))
-                    return yield* invalidRequest(
-                      "report_delivery_backlog",
-                      `Subagent ${id} has ${selected.completionGenerations.size} unresolved outcome generations; wait for parent delivery or claim the latest outcome before resuming.`,
-                    );
-                  const needsRespawn = selected.process === undefined;
-                  if (selected.view.writeIntent === "writer") {
-                    if (writerLeases.platform === "win32")
-                      return yield* new UnsupportedSafeWriterOwnershipError({
-                        code: "unsupported_safe_writer_ownership",
-                        platform: writerLeases.platform,
-                        message:
-                          "Writer subagents cannot respawn on Windows because descendant termination cannot yet be proven without Job Object ownership.",
-                      });
-                    const canonicalCwd = selected.canonicalWriterCwd;
-                    if (!canonicalCwd)
-                      return yield* invalidRequest(
-                        "writer_cwd_canonicalization_missing",
-                        `Subagent ${id} has no canonical writer cwd ownership evidence.`,
-                      );
-                    if (needsRespawn) {
-                      if (!hasCurrentWriterCwd(selected))
-                        return yield* invalidRequest(
-                          "writer_cwd_identity_changed",
-                          `Subagent ${id} cannot resume because its writer directory identity changed.`,
-                        );
-                    }
-                    const writerFailure = writerConflictError(
-                      records,
-                      writerPools,
-                      canonicalCwd,
-                      selected.view.writeClaims,
-                      selected,
-                    );
-                    if (writerFailure) return yield* writerFailure;
-                  }
-                  if (needsRespawn) {
-                    if (!selected.resumeToken)
-                      return yield* invalidRequest(
-                        "backend_resume_unavailable",
-                        `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
-                      );
-                    const capacityFailure = processCapacityError(
-                      records,
-                      selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID,
-                      yield* dependencies.currentChildLimit,
-                      selected,
-                    );
-                    if (capacityFailure) return yield* capacityFailure;
-                  }
-                  yield* dependencies.invalidateWorkspace(selected);
+                  const { selected, needsRespawn } = yield* admitLocked;
+                  const invalidateWorkspace = yield* dependencies.invalidateWorkspace(selected);
                   const attemptToken = allocateAssignmentAttemptToken();
                   selected.pauseRequested = false;
                   selected.pauseOutcome = undefined;
@@ -254,131 +405,14 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                     question: undefined,
                     currentTool: undefined,
                   });
+                  invalidateWorkspace();
                   yield* publish;
                   return { record: selected, needsRespawn, attemptToken };
                 }),
               );
               return { prompt, now, claimed };
             }),
-            ({ prompt, now, claimed }) =>
-              Effect.gen(function* () {
-                const record = claimed.record;
-                if (claimed.needsRespawn) {
-                  const nextScope = yield* Scope.make();
-                  const nextCleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
-                  const installed = yield* withLock(
-                    Effect.gen(function* () {
-                      if (
-                        record.stoppedByParent ||
-                        record.view.state !== "starting" ||
-                        record.process !== undefined
-                      )
-                        return false;
-                      const writerPool = record.canonicalWriterCwd
-                        ? yield* addWriterPoolMemberLocked(
-                            writerPools,
-                            record.canonicalWriterCwd,
-                            record.view.id,
-                            record.view.writeClaims,
-                          )
-                        : undefined;
-                      record.scope = nextScope;
-                      record.cleanupSettlement = nextCleanupSettlement;
-                      record.cleanupPending = false;
-                      record.closingScope = undefined;
-                      record.closingScopeSettled = undefined;
-                      record.writerPool = writerPool;
-                      record.writeViolationContainmentStarted = false;
-                      record.launch = {
-                        ...record.launch,
-                        resumeToken: record.resumeToken,
-                      };
-                      return true;
-                    }),
-                  );
-                  if (!installed) {
-                    yield* Scope.close(nextScope, Exit.void);
-                    return yield* invalidRequest(
-                      "resume_cancelled",
-                      `Subagent ${id} stopped before its session could be restored.`,
-                    );
-                  }
-                  const state = yield* initializeProcess(record);
-                  const committed = yield* withLock(
-                    Effect.gen(function* () {
-                      if (record.view.state !== "starting") return undefined;
-                      const pendingSettlement = commitRunInitialization(record, state);
-                      yield* publish;
-                      return pendingSettlement;
-                    }),
-                  );
-                  if (committed) {
-                    if (committed.state === "failed")
-                      return yield* failRun(
-                        record,
-                        committed.error ?? "Subagent failed while resuming.",
-                      ).pipe(Effect.tap(() => closeRecordScope(record)));
-                    return yield* settle(record, committed.state, committed.error);
-                  }
-                }
-                const issued = yield* submitPrompt(
-                  claimed.record,
-                  prompt,
-                  "resume",
-                  claimed.attemptToken,
-                );
-                const view = yield* withLock(
-                  Effect.gen(function* () {
-                    const record = claimed.record;
-                    if (issued.state !== "running") return snapshotView(record.view);
-                    record.view = {
-                      ...record.view,
-                      sessionEvents: appendNoticeSessionEvent(
-                        record.view.sessionEvents,
-                        "parent",
-                        `Resume: ${prompt}`,
-                        now,
-                      ),
-                    };
-                    yield* publish;
-                    return snapshotView(record.view);
-                  }),
-                );
-                if (view.state !== "running" && !isTerminalRunState(view.state))
-                  return yield* new SubagentProcessError({
-                    operation: "resume",
-                    message: view.error ?? `Subagent ${id} stopped before resume completed.`,
-                  });
-                yield* sendPeerNotices(id);
-                return view;
-              }).pipe(
-                Effect.tapError((error) =>
-                  error._tag === "SubagentProcessError" && error.code === "resume_outcome_uncertain"
-                    ? withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
-                        Effect.flatMap((pending) =>
-                          pending
-                            ? pending.state === "failed"
-                              ? failRun(
-                                  claimed.record,
-                                  pending.error ?? "Subagent failed while resuming.",
-                                ).pipe(Effect.asVoid)
-                              : settle(claimed.record, pending.state, pending.error).pipe(
-                                  Effect.asVoid,
-                                )
-                            : retainUncertainAssignment(
-                                claimed.record,
-                                claimed.attemptToken,
-                                error.message,
-                              ),
-                        ),
-                      )
-                    : withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
-                        Effect.andThen(failRun(claimed.record, error.message)),
-                        Effect.andThen(closeRecordScope(claimed.record)),
-                        Effect.asVoid,
-                      ),
-                ),
-              ),
+            ({ prompt, now, claimed }) => commitResume(id, claimed, prompt, now),
           );
         }),
       ),

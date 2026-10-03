@@ -1,9 +1,11 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { describe, expect } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { SubagentService } from "../../src/run/service.ts";
+import type { WorkspaceIntegrationOutcome } from "../../src/run/workspace-integration.ts";
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
 import { compactWorkspaceSummary } from "../../src/tools/compact-workspace-summary.ts";
 import type { WorkspaceRecord } from "../../src/workspace/model.ts";
@@ -197,5 +199,56 @@ describe("workspace tool", () => {
       Effect.orDie,
     );
     expect(failed).toMatchObject({ code: "workspace_input_invalid" });
+  });
+
+  effectTest("warns about what a committed integration left behind", function* () {
+    const integrate = (outcome: Partial<WorkspaceIntegrationOutcome>) =>
+      executeWorkspaceAction({
+        action: "integrate",
+        workspaceId: "w",
+        revisionId: "r",
+        preparationId: "p",
+      }).pipe(
+        Effect.provideService(
+          SubagentService,
+          subagentServiceDouble({
+            workspaceIntegrate: () =>
+              Effect.succeed({
+                workerRoot: "/agent/git-workspaces/w/worker",
+                uncapturedPaths: [],
+                treeRemovalFailed: false,
+                leaseReleaseUnconfirmed: false,
+                ...outcome,
+              }),
+          }),
+        ),
+        Effect.orDie,
+      );
+    const clean = yield* integrate({});
+    expect(compactWorkspaceSummary(clean.details, "integrate")).toMatchObject({
+      issues: [],
+      outcome: "success",
+    });
+
+    const leftover = yield* integrate({
+      uncapturedPaths: ["src/Billing/Invoice.cs", "go.mod"],
+      treeRemovalFailed: true,
+      leaseReleaseUnconfirmed: true,
+    });
+    const summary = compactWorkspaceSummary(leftover.details, "integrate");
+    expect(summary?.outcome).toBe("warning");
+    const issues = summary?.issues ?? [];
+    expect(issues).toHaveLength(3);
+    const text = leftover.content[0]?.type === "text" ? leftover.content[0].text : "";
+    for (const issue of issues) {
+      expect(issue.severity).toBe("warning");
+      expect(
+        issueMessageStyleProblems(issue.message, { forbidden: ["/agent/git-workspaces"] }),
+      ).toEqual([]);
+      expect(text).toContain(issue.detail);
+    }
+    // The agent learns which files were kept and where.
+    expect(text).toContain("src/Billing/Invoice.cs");
+    expect(text).toContain("/agent/git-workspaces/w/worker");
   });
 });

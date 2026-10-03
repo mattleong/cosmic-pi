@@ -11,6 +11,7 @@ import type {
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { RuntimeApiKey, SubagentCapability, SubagentUsage } from "../run/model.ts";
+import type { ResultContract } from "../domain/result-contract.ts";
 
 /** Backend-owned continuation evidence. Orchestration stores and returns it without inspection. */
 export type BackendResumeToken = object;
@@ -52,6 +53,8 @@ export interface BackendLaunchRequest {
   readonly parentLeafId?: string | undefined;
   readonly resumeToken?: BackendResumeToken | undefined;
   readonly systemPrompt: string;
+  /** The run returns one validated JSON value instead of a prose report. */
+  readonly resultContract?: ResultContract | undefined;
 }
 
 export interface BackendStartupState {
@@ -153,6 +156,17 @@ export type BackendEvent =
       ) => Effect.Effect<void, SubagentProcessError>;
     } & BackendProxyRequest)
   | { readonly type: "proxy_cancel"; readonly requestId: string }
+  | {
+      /** A child's submitted result arguments; `respond` must always answer the waiting child. */
+      readonly type: "structured_result";
+      readonly assignmentEpoch: number;
+      readonly requestId: string;
+      readonly valueJson: string;
+      readonly respond: (
+        ok: boolean,
+        message?: string,
+      ) => Effect.Effect<void, SubagentProcessError>;
+    }
   | { readonly type: "protocol_error"; readonly message: string }
   | {
       readonly type: "exit";

@@ -53,6 +53,8 @@ export interface SessionProfileSetSnapshotWrite extends Omit<
 }
 
 export interface FleetManagerActions {
+  /** False only before unified-view admission; rejection must never open a second surface. */
+  readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
   readonly isAvailable: () => boolean;
   readonly captureModelRefresh: () => {
     readonly isCurrent: () => boolean;
@@ -196,7 +198,14 @@ export function registerSubagentManagerCommand(
   registerExtensionCommand(pi, {
     name: "subagents",
     description: "Open the subagent fleet, or edit profiles and settings",
-    bare: { handler: (_args, ctx) => openFleetManager(ctx, bridge, actions) },
+    bare: {
+      handler: (_args, ctx) =>
+        ctx.mode === "tui" && actions.isAvailable() && actions.openActivity
+          ? actions
+              .openActivity(ctx.signal)
+              .then((opened) => (opened ? undefined : openFleetManager(ctx, bridge, actions)))
+          : openFleetManager(ctx, bridge, actions),
+    },
     subcommands: [profilesSubcommand(pi, actions), subagentSettingsSubcommand(actions)],
   });
 }

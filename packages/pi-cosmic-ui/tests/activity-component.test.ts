@@ -2,7 +2,15 @@ import { describe, expect, it } from "@effect/vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import { activityRow, mountActivity } from "./support/activity.ts";
+import {
+  activityRow,
+  memberRow,
+  mountActivity,
+  withStatus,
+  workflowRow,
+} from "./support/activity.ts";
+import { activitySectionId, phaseRowId } from "../src/activity/grouped-tree.ts";
+import type { ActivityActionRequest, ActivityDetailRequest } from "../src/activity/service.ts";
 
 const routed = activityRow("Long task title ".repeat(30), "running", undefined, {
   profile: "worker",
@@ -209,26 +217,39 @@ describe("activity presentation", () => {
     expect(closed[0]).toMatchObject({ revision: "1", actionId: "open" });
   });
   it("requires a separate confirmation and retains the displayed destructive scope", () => {
-    let current = {
-      ...activityRow("a"),
-      actions: [
-        {
-          id: "stop",
-          label: "Stop branch",
-          confirmation: "Stop this branch and its two descendants?",
-        },
-      ],
+    const stop = {
+      id: "stop",
+      label: "Stop branch",
+      confirmation: "Stop this branch and its two descendants?",
+      handoff: false,
     };
+    let current = { ...activityRow("a"), actions: [stop] };
+    const invoked: ActivityActionRequest[] = [];
     const { component, closed } = mountActivity(() => [current], {
       matchesKeybinding: (data, id) => data === "accept" && id === "tui.select.confirm",
+      invoke: (request) => {
+        invoked.push(request);
+      },
     });
     component.render(80);
     component.handleInput("1");
     component.handleInput("1");
-    expect(closed).toEqual([]);
-    current = { ...current, revision: "2" };
+    expect(invoked).toEqual([]);
+    // The source's own progress leaves the confirmed scope and action unchanged.
+    current = { ...current, revision: "2", summary: "still running" };
     component.handleInput("accept");
-    expect(closed[0]).toMatchObject({ revision: "1", actionId: "stop" });
+    expect(invoked[0]).toMatchObject({ revision: "2", actionId: "stop" });
+    component.render(80);
+    component.handleInput("1");
+    current = {
+      ...current,
+      revision: "3",
+      actions: [{ ...stop, confirmation: "Stop this branch and its three descendants?" }],
+    };
+    component.handleInput("accept");
+    // A changed scope keeps the displayed revision, which the service rejects as stale.
+    expect(invoked[1]).toMatchObject({ revision: "2", actionId: "stop" });
+    expect(closed).toEqual([]);
   });
   it("keeps inspected detail across revisions until explicit refresh", () => {
     let current = activityRow("a");
@@ -305,5 +326,337 @@ describe("activity presentation", () => {
     expect(component.shell.state.selectedId).toBe(selected);
     expect(component.presentation.focus).toBe(focus);
     expect([...component.presentation.collapsed]).toEqual(collapsed);
+  });
+});
+
+const reviewWorkflow = (overrides: Partial<ActivityRow> = {}) =>
+  workflowRow("review", ["Find", "Verify"], "running", "Find", overrides);
+const mountGrouped = (
+  snapshot: () => readonly ActivityRow[],
+  options: Parameters<typeof mountActivity>[1] = {},
+) => mountActivity(snapshot, { height: 24, ...options });
+
+describe("grouped activity interaction", () => {
+  it("traverses the workflow row, its phases and members, fetching only source details", () => {
+    const workflow = reviewWorkflow({ detail: "workflow-evidence" });
+    const worker = memberRow("worker", workflow, "Find");
+    const loads: Array<{ request: ActivityDetailRequest; deliver: (text: string) => void }> = [];
+    const { component, closed } = mountGrouped(() => [workflow, worker], {
+      loadDetail: (request, deliver) => {
+        loads.push({ request, deliver });
+      },
+    });
+    component.render(140);
+    expect(component.shell.state.selectedId).toBe(workflow.key);
+    expect(loads).toEqual([]);
+    component.handleInput("\r");
+    expect(loads[0]!.request).toEqual({
+      key: workflow.key,
+      revision: workflow.revision,
+      generation: workflow.generation,
+    });
+    loads[0]!.deliver("live-workflow-evidence");
+    expect(component.render(140).join("\n")).toContain("live-workflow-evidence");
+    component.handleInput("h");
+    component.handleInput("j");
+    expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
+    component.handleInput("\r");
+    for (const key of ["1", "x", "m", "r", "f"]) component.handleInput(key);
+    expect(loads).toHaveLength(1);
+    component.handleInput("h");
+    component.handleInput("j");
+    expect(component.shell.state.selectedId).toBe(worker.key);
+    component.handleInput("\r");
+    expect(loads[1]!.request.key).toBe(worker.key);
+    expect(closed).toEqual([]);
+    for (const width of [30, 80, 140])
+      expect(component.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
+  });
+  it("dispatches only displayed workflow actions with confirmation and captured revision", () => {
+    let workflow = reviewWorkflow({
+      actions: [{ id: "stop", label: "Stop workflow", confirmation: "Stop this workflow?" }],
+    });
+    const { component, closed } = mountGrouped(() => [workflow]);
+    component.render(140);
+    component.handleInput("m");
+    expect(closed).toEqual([]);
+    component.handleInput("x");
+    expect(closed).toEqual([]);
+    workflow = { ...workflow, revision: "2", actions: [] };
+    component.update();
+    component.handleInput("\r");
+    expect(closed).toEqual([
+      { key: workflow.key, revision: "1", generation: workflow.generation, actionId: "stop" },
+    ]);
+  });
+  it("runs only actions declared without handoff in place and closes first for the rest", () => {
+    const workflow = reviewWorkflow({
+      actions: [
+        {
+          id: "stop",
+          label: "Stop workflow",
+          confirmation: "Stop this workflow?",
+          handoff: false,
+        },
+      ],
+    });
+    const queued = memberRow("queued", workflow, "Find", "pending", {
+      actions: [{ id: "skip", label: "Skip", handoff: false }],
+    });
+    // A producer that never declares handoff may open its own UI, so the manager closes first.
+    const asking = memberRow("asking", workflow, "Find", "needs-input", {
+      actions: [{ id: "reply", label: "Reply" }],
+    });
+    const invoked: ActivityActionRequest[] = [];
+    const { component, closed } = mountGrouped(() => [workflow, queued, asking], {
+      invoke: (request) => {
+        invoked.push(request);
+      },
+    });
+    const select = (row: ActivityRow) => {
+      component.render(140);
+      component.handleInput("g");
+      component.handleInput("g");
+      for (let step = 0; step < 8 && component.shell.state.selectedId !== row.key; step++)
+        component.handleInput("j");
+      expect(component.shell.state.selectedId).toBe(row.key);
+      component.render(140);
+    };
+    select(queued);
+    component.handleInput("x");
+    expect(invoked).toEqual([
+      { key: queued.key, generation: 1, revision: queued.revision, actionId: "skip" },
+    ]);
+    expect(closed).toEqual([]);
+    select(workflow);
+    component.handleInput("x");
+    component.handleInput("\r");
+    expect(invoked.map((request) => request.actionId)).toEqual(["skip", "stop"]);
+    expect(closed).toEqual([]);
+    select(asking);
+    component.handleInput("m");
+    expect(closed).toEqual([
+      { key: asking.key, generation: 1, revision: asking.revision, actionId: "reply" },
+    ]);
+    expect(invoked).toHaveLength(2);
+  });
+  it("rejects stale workflow detail delivery and never offers retained actions", () => {
+    let workflow = reviewWorkflow({
+      status: "done",
+      actions: [{ id: "clear", label: "Clear" }],
+    });
+    const loads: Array<{ request: ActivityDetailRequest; deliver: (text: string) => void }> = [];
+    const { component, closed } = mountGrouped(() => [workflow], {
+      loadDetail: (request, deliver) => {
+        loads.push({ request, deliver });
+      },
+    });
+    component.render(140);
+    component.handleInput("\r");
+    workflow = { ...workflow, revision: "2" };
+    loads[0]!.deliver("outdated-detail");
+    expect(component.render(140).join("\n")).not.toContain("outdated-detail");
+    component.handleInput("r");
+    loads[1]!.deliver("fresh-detail");
+    expect(component.render(140).join("\n")).toContain("fresh-detail");
+    workflow = { ...workflow, retained: true };
+    component.update();
+    loads[1]!.deliver("revoked-detail");
+    component.render(140);
+    for (const key of ["1", "c", "r", "f"]) component.handleInput(key);
+    expect(loads).toHaveLength(2);
+    expect(closed).toEqual([]);
+    expect(component.render(140).join("\n")).not.toContain("revoked-detail");
+  });
+  it.each(["subagents", "tasks"] as const)(
+    "opens %s on standalone work or reveals the matching workflow member",
+    (section) => {
+      const workflow = reviewWorkflow();
+      const kind = section === "tasks" ? "command" : "agent";
+      const member = memberRow("member", workflow, "Find", "running", { kind });
+      const standalone = activityRow("standalone", "running", undefined, { kind });
+      for (const rows of [
+        [workflow, member],
+        [workflow, member, standalone],
+      ]) {
+        const { component } = mountGrouped(() => rows, { initialSection: section });
+        component.presentation.collapsed.add(workflow.key);
+        component.render(120);
+        expect(component.shell.state.selectedId).toBe(
+          rows.length === 3 ? standalone.key : member.key,
+        );
+        expect(component.presentation.focus).toBeUndefined();
+        if (rows.length === 2)
+          expect(component.presentation.collapsed.has(workflow.key)).toBe(false);
+        component.handleInput("g");
+        component.handleInput("g");
+        expect(component.shell.state.selectedId).toBe(activitySectionId("workflows"));
+      }
+    },
+  );
+  it("keeps a selected member through settlement, history and resize", () => {
+    let workflow = reviewWorkflow();
+    let member = memberRow("member", workflow, "Find");
+    const { component } = mountGrouped(() => [workflow, member], {
+      initialSection: "subagents",
+    });
+    component.render(120);
+    expect(component.shell.state.selectedId).toBe(member.key);
+    workflow = withStatus(workflow, "done", { revision: "2" });
+    member = withStatus(member, "done", { revision: "2" });
+    component.update();
+    for (const width of [20, 80, 160]) {
+      component.render(width);
+      expect(component.shell.state.selectedId).toBe(member.key);
+    }
+    component.handleInput("h");
+    expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
+  });
+  it("keeps a queued selection when its placeholder starts running", () => {
+    const workflow = reviewWorkflow();
+    let member = memberRow("member", workflow, "Find", "pending");
+    const { component } = mountGrouped(() => [workflow, member], {
+      initialSection: "subagents",
+    });
+    component.render(120);
+    member = withStatus(member, "running", { startedAt: 10, revision: "2" });
+    component.update();
+    component.render(120);
+    expect(component.shell.state.selectedId).toBe(member.key);
+  });
+  it("reveals urgent owned questions across collapsed workflow and section headings", () => {
+    const workflow = reviewWorkflow();
+    const owner = memberRow("owner", workflow, "Find");
+    const human = activityRow("human", "needs-input", owner.id, { kind: "question" });
+    const { component } = mountGrouped(() => [workflow, owner, human]);
+    component.render(120);
+    component.presentation.collapsed.add(workflow.key);
+    component.presentation.collapsed.add(activitySectionId("workflows"));
+    component.handleInput("w");
+    expect(component.shell.state.selectedId).toBe(human.key);
+    expect(component.presentation.collapsed.has(workflow.key)).toBe(false);
+    expect(component.presentation.collapsed.has(activitySectionId("workflows"))).toBe(false);
+  });
+  it("follows only by explicit opt-in plus host update, never during rendering or resize", () => {
+    let row = activityRow("task", "running", undefined, { kind: "command" });
+    const loads: Array<{ request: ActivityDetailRequest; deliver: (text: string) => void }> = [];
+    let cancelled = false;
+    const { component } = mountGrouped(() => [row], {
+      initialSection: "tasks",
+      loadDetail: (request, deliver) => {
+        loads.push({ request, deliver });
+      },
+      cancelDetail: () => {
+        cancelled = true;
+      },
+    });
+    for (const width of [80, 30, 160]) {
+      component.invalidate();
+      component.render(width);
+    }
+    component.update();
+    expect(loads).toEqual([]);
+    expect(cancelled).toBe(false);
+    component.handleInput("\r");
+    loads[0]!.deliver("baseline-log");
+    row = { ...row, revision: "2" };
+    component.update();
+    expect(loads).toHaveLength(1);
+    component.handleInput("f");
+    loads[1]!.deliver("followed-log");
+    row = { ...row, revision: "3" };
+    for (const width of [80, 40, 160]) component.render(width);
+    expect(loads).toHaveLength(2);
+    component.update();
+    expect(loads[2]?.request.revision).toBe("3");
+    component.handleInput("f");
+    expect(cancelled).toBe(true);
+    loads[2]!.deliver("cancelled-log");
+    expect(component.render(120).join("\n")).toContain("followed-log");
+    expect(component.render(120).join("\n")).not.toContain("cancelled-log");
+  });
+  it("cancels source loads on phase selection and never revives a stale callback", () => {
+    const workflow = reviewWorkflow();
+    const member = memberRow("member", workflow, "Find");
+    const deliveries: Array<(text: string) => void> = [];
+    let cancelled = false;
+    const { component } = mountGrouped(() => [workflow, member], {
+      initialSection: "subagents",
+      loadDetail: (_request, deliver) => {
+        deliveries.push(deliver);
+      },
+      cancelDetail: () => {
+        cancelled = true;
+      },
+    });
+    component.render(120);
+    component.handleInput("\r");
+    component.handleInput("f");
+    component.handleInput("h");
+    component.handleInput("h");
+    expect(cancelled).toBe(true);
+    expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
+    component.handleInput("j");
+    deliveries[1]!("revoked-log");
+    expect(component.render(120).join("\n")).not.toContain("revoked-log");
+    component.handleInput("q");
+    deliveries[0]!("closed-log");
+    expect(component.render(120).join("\n")).not.toContain("closed-log");
+  });
+  it.each([
+    ["x", "stop"],
+    ["x", "skip"],
+    ["i", "interrupt"],
+    ["u", "resume"],
+    ["m", "reply"],
+    ["m", "message"],
+    ["e", "rename"],
+    ["c", "clear"],
+    ["c", "clear-finished"],
+  ])("keeps the %s source shortcut revision-safe for %s", (key, actionId) => {
+    const workflow = reviewWorkflow();
+    let row = memberRow("member", workflow, "Find", "running", {
+      actions: [{ id: actionId!, label: "Action" }],
+    });
+    const { component, closed } = mountGrouped(() => [workflow, row], {
+      initialSection: "subagents",
+    });
+    component.render(120);
+    row = { ...row, revision: "replacement", actions: [] };
+    component.handleInput(key!);
+    expect(closed[0]).toMatchObject({ key: row.key, revision: "1", actionId });
+  });
+  it("never dispatches an old source generation after provider replacement", () => {
+    let row = activityRow("same", "running", undefined, {
+      actions: [{ id: "stop", label: "Stop" }],
+    });
+    const { component, closed } = mountGrouped(() => [row], { initialSection: "subagents" });
+    component.render(120);
+    row = { ...row, generation: 2 };
+    component.handleInput("x");
+    component.handleInput("1");
+    expect(closed).toEqual([]);
+    component.render(120);
+    component.handleInput("x");
+    expect(closed[0]).toMatchObject({ generation: 2 });
+  });
+  it("keeps retained member evidence non-executable even if it still advertises actions", () => {
+    const workflow = reviewWorkflow({ status: "done" });
+    const row = {
+      ...memberRow("old", workflow, "Find", "done", { actions: [{ id: "clear", label: "Clear" }] }),
+      retained: true as const,
+    };
+    const loads: ActivityDetailRequest[] = [];
+    const { component, closed } = mountGrouped(() => [workflow, row], {
+      initialSection: "subagents",
+      loadDetail: (request) => {
+        loads.push(request);
+      },
+    });
+    component.render(120);
+    expect(component.shell.state.selectedId).toBe(row.key);
+    for (const key of ["\r", "1", "c", "r", "f"]) component.handleInput(key);
+    expect(loads).toEqual([]);
+    expect(closed).toEqual([]);
   });
 });

@@ -16,5 +16,5 @@ export const scriptOriginForStart = (
 export const scriptedWriterAdmissionError = () =>
   invalidRequest(
     "scripted_subtree_writer_not_supported",
-    "Workflow descendants can only launch read-only agents\n\nThe root main agent can authorize separate writer work outside this workflow tree.",
+    "Agents started by a codemode script can only launch read-only agents\n\nThe main agent can start separate writer work outside this script's agents.",
   );

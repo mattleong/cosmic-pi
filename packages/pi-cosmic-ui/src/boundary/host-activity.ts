@@ -22,8 +22,15 @@ import {
   type ActivityServiceContract,
 } from "../activity/service.ts";
 import { renderActivityWidget } from "../activity/widget.ts";
+import { activityWidgetHeight } from "../activity/widget-projection.ts";
 import { fullScreenKeybindingOptions } from "../manager/key-labels.ts";
 import { openOwnedSurface } from "./host-surface.ts";
+import type { ActivitySection } from "../activity/view-protocol.ts";
+import { installActivityView, type ActivityHostRun } from "./host-activity-view.ts";
+import { inputDockVisible } from "./host-input-dock.ts";
+
+/** Activity rows kept while an input dock needs the shared above-editor space. */
+const COMPACT_WIDGET_ROWS = 3;
 
 const DiscoverySchema = Schema.Struct({ version: Schema.Literal(1), sessionId: Schema.String });
 /** Host callbacks are best effort. */
@@ -42,6 +49,7 @@ interface Binding {
   ctx?: ExtensionContext;
   sessionId?: string;
   render: () => void;
+  update: () => void;
   close: () => void;
   manager: object | undefined;
 }
@@ -52,16 +60,21 @@ export interface ActivityHost {
     rows: readonly ActivityRow[],
     starting?: number,
   ) => void;
+  readonly update: (service: ActivityServiceContract) => void;
   readonly tick: (service: ActivityServiceContract, now: number) => void;
   readonly activate: (ctx: ExtensionContext, service: ActivityServiceContract) => void;
   readonly deactivate: () => void;
-  readonly open: (ctx: ExtensionContext) => Effect.Effect<void, ActivityError>;
+  readonly open: (
+    ctx: ExtensionContext,
+    section?: ActivitySection,
+  ) => Effect.Effect<boolean, ActivityError>;
 }
 
 /** Pi callback/Promise and Effect submission boundary. The session service owns binding release. */
 export function makeActivityHost(
   pi: ExtensionAPI,
   submit: (effect: Effect.Effect<void, ActivityError>, signal?: AbortSignal) => void,
+  run?: ActivityHostRun,
 ): ActivityHost {
   const bindings = new Map<ActivityServiceContract, Binding>();
   let current: Binding | undefined;
@@ -79,14 +92,16 @@ export function makeActivityHost(
     if (current === binding) announce(binding);
     for (const cleanup of binding.cleanups.splice(0)) safe(cleanup);
     safe(binding.close);
+    binding.manager = undefined;
     if (current === binding) {
       current = undefined;
       safe(() => binding.ctx?.ui.setWidget("cosmic-activity", undefined));
     }
     binding.installed = false;
     binding.render = () => undefined;
+    binding.update = () => undefined;
   };
-  return {
+  const host: ActivityHost = {
     bind(service) {
       const binding: Binding = {
         service,
@@ -99,6 +114,7 @@ export function makeActivityHost(
         active: false,
         installed: false,
         render: () => undefined,
+        update: () => undefined,
         close: () => undefined,
         manager: undefined,
       };
@@ -115,6 +131,10 @@ export function makeActivityHost(
       binding.starting = starting;
       if (binding.active) safe(binding.render);
     },
+    update(service) {
+      const binding = bindings.get(service);
+      if (binding?.active && current === binding) safe(binding.update);
+    },
     tick(service, now) {
       const binding = bindings.get(service);
       if (!binding) return;
@@ -129,12 +149,12 @@ export function makeActivityHost(
       binding.ctx = ctx;
       binding.sessionId = ctx.sessionManager.getSessionId();
       binding.active = true;
+      const isCurrent = () => binding.active && current === binding;
       const accept: Parameters<ActivityEvents["on"]>[1] = (data) => {
         try {
           if (
-            !binding.active ||
+            !isCurrent() ||
             !binding.installed ||
-            current !== binding ||
             !Schema.is(ActivityEnvelopeSchema)(data) ||
             data.sessionId !== binding.sessionId ||
             data.hostToken !== binding.nonce
@@ -158,15 +178,12 @@ export function makeActivityHost(
             Object.assign(event, {
               acknowledge: (available: boolean) =>
                 safe(() => {
-                  if (binding.active && current === binding)
-                    acknowledge(available && binding.installed);
+                  if (isCurrent()) acknowledge(available && binding.installed);
                 }),
             });
           submit(
             Effect.suspend(() =>
-              binding.active && binding.installed && current === binding
-                ? service.receive(event)
-                : Effect.void,
+              isCurrent() && binding.installed ? service.receive(event) : Effect.void,
             ),
           );
         } catch {
@@ -178,17 +195,40 @@ export function makeActivityHost(
         binding.cleanups.push(
           pi.events.on(ACTIVITY_DISCOVER, (data) =>
             safe(() => {
-              if (Schema.is(DiscoverySchema)(data) && data.sessionId === binding.sessionId)
+              if (
+                isCurrent() &&
+                Schema.is(DiscoverySchema)(data) &&
+                data.sessionId === binding.sessionId
+              )
                 announce(binding);
             }),
           ),
         ),
       );
+      if (run)
+        safe(() =>
+          binding.cleanups.push(
+            installActivityView(pi.events, {
+              sessionId: binding.sessionId!,
+              hostToken: binding.nonce,
+              current: () => isCurrent() && binding.installed,
+              open: (section, signal) =>
+                run(
+                  Effect.suspend(() =>
+                    isCurrent() && binding.installed
+                      ? host.open(ctx, section)
+                      : Effect.fail(new ActivityError({ reason: "stale" })),
+                  ),
+                  signal,
+                ),
+            }),
+          ),
+        );
       let returned = false;
       let mounted = false;
       let disposed = false;
       const acknowledgeInstall = () => {
-        if (!returned || !mounted || disposed || !binding.active || current !== binding) return;
+        if (!returned || !mounted || disposed || !isCurrent()) return;
         binding.installed = true;
         announce(binding);
       };
@@ -196,25 +236,36 @@ export function makeActivityHost(
         ctx.ui.setWidget(
           "cosmic-activity",
           (tui, theme) => {
-            if (!binding.active || current !== binding || disposed) return neutral();
+            if (!isCurrent() || disposed) return neutral();
             binding.render = () => tui.requestRender();
             mounted = true;
             acknowledgeInstall();
             return {
               render: (width) =>
-                binding.active && binding.installed
-                  ? renderActivityWidget(binding.rows, width, 8, {
-                      starting: binding.starting,
-                      theme,
-                      now: binding.now,
-                      collapsed: binding.presentation.collapsed,
-                    })
+                isCurrent() && binding.installed
+                  ? renderActivityWidget(
+                      binding.rows,
+                      width,
+                      inputDockVisible()
+                        ? Math.min(
+                            COMPACT_WIDGET_ROWS,
+                            activityWidgetHeight(binding.rows, tui.terminal.rows),
+                          )
+                        : activityWidgetHeight(binding.rows, tui.terminal.rows),
+                      {
+                        starting: binding.starting,
+                        theme,
+                        now: binding.now,
+                        collapsed: binding.presentation.collapsed,
+                      },
+                    )
                   : [],
               invalidate() {},
               dispose() {
                 disposed = true;
-                if (current === binding) {
+                if (isCurrent()) {
                   binding.installed = false;
+                  safe(binding.close);
                   announce(binding);
                 }
               },
@@ -233,17 +284,17 @@ export function makeActivityHost(
     deactivate() {
       if (current) release(current);
     },
-    open: (ctx) =>
+    open: (ctx, section) =>
       Effect.gen(function* () {
         const binding = current;
         if (
           !binding?.active ||
           !binding.installed ||
-          binding.manager ||
           ctx.mode !== "tui" ||
           ctx.sessionManager.getSessionId() !== binding.sessionId
         )
-          return;
+          return false;
+        if (binding.manager) return yield* new ActivityError({ reason: "stale" });
         const owner = {};
         binding.manager = owner;
         const previousRender = binding.render;
@@ -265,16 +316,29 @@ export function makeActivityHost(
               previousRender();
               tui.requestRender();
             };
-            return new ActivityComponent({
+            const owned = () =>
+              !closing && binding.active && current === binding && binding.manager === owner;
+            const component = new ActivityComponent({
               snapshot: () => binding.rows,
+              ...(section && { initialSection: section }),
+              title:
+                section === "subagents"
+                  ? "Subagents"
+                  : section === "tasks"
+                    ? "Background tasks"
+                    : "Activity",
               starting: () => binding.starting,
               presentation: binding.presentation,
               theme,
               now: () => binding.now,
               height: getHeight,
               close: finish,
+              invoke: (request) => {
+                if (owned()) submit(invokeOrWarn(binding.service, request, ctx));
+              },
               requestRender: () => tui.requestRender(),
               ...fullScreenKeybindingOptions(keybindings),
+              cancelDetail: () => safe(() => detailController?.abort()),
               loadDetail: (request, deliver) => {
                 safe(() => detailController?.abort());
                 if (closing) return;
@@ -282,18 +346,16 @@ export function makeActivityHost(
                 detailController = controller;
                 submit(
                   serviceDetail(binding.service, request, (text) => {
-                    if (
-                      !controller.signal.aborted &&
-                      !closing &&
-                      current === binding &&
-                      binding.manager === owner
-                    )
-                      deliver(text);
+                    if (!controller.signal.aborted && owned()) deliver(text);
                   }),
                   controller.signal,
                 );
               },
             });
+            binding.update = () => {
+              if (owned()) component.update();
+            };
+            return component;
           },
         }).pipe(
           Effect.mapError(() => new ActivityError({ reason: "failed" })),
@@ -302,26 +364,34 @@ export function makeActivityHost(
               if (binding.manager !== owner) return;
               binding.manager = undefined;
               binding.close = () => undefined;
+              binding.update = () => undefined;
               binding.render = previousRender;
               if (binding.active) safe(binding.render);
             }),
           ),
         );
+        // Handoff actions open producer UI, so they run only after the manager has closed.
         if (action && binding.active && current === binding)
-          yield* binding.service
-            .invoke(action)
-            .pipe(
-              Effect.tapError(() =>
-                Effect.sync(() =>
-                  safe(() =>
-                    notifyAtHostBoundary(ctx, "That action is no longer available", "warning"),
-                  ),
-                ),
-              ),
-            );
+          yield* invokeOrWarn(binding.service, action, ctx);
+        return true;
       }),
   };
+  return host;
 }
+const invokeOrWarn = (
+  service: ActivityServiceContract,
+  request: ActivityActionRequest,
+  ctx: ExtensionContext,
+) =>
+  service
+    .invoke(request)
+    .pipe(
+      Effect.tapError(() =>
+        Effect.sync(() =>
+          safe(() => notifyAtHostBoundary(ctx, "That action is no longer available", "warning")),
+        ),
+      ),
+    );
 const serviceDetail = (
   service: ActivityServiceContract,
   request: Parameters<ActivityServiceContract["detail"]>[0],

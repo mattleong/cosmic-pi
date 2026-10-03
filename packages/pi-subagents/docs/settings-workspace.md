@@ -69,7 +69,7 @@ Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, ne
 
 `/subagents settings` also has the `scriptedWorkflows` on/off setting, on by default. It takes `true`, `false`, or `inherit` in Global or trusted Project scope, for example `/subagents settings global scriptedWorkflows false`. There is no Session scope. An unset Project value inherits Global, and an unset Global value uses the default. A session keeps the value it started with, including across `/tree`; saved changes apply after `/reload`.
 
-`scriptedWorkflows` lets native codemode scripts call the four root orchestration tools: `subagent_start`, `subagent_await`, `subagent_status`, and `subagent_lifecycle` with `action: "stop"`. Off registers them model-only. The main agent still calls them normally, and native Pi codemode stays available for other tools. Local Pi child proxies are always model-only, whatever this setting says.
+`scriptedWorkflows` registers the dynamic workflow tool, `subagent_workflow`, and lets native codemode scripts call the four root orchestration tools: `subagent_start`, `subagent_await`, `subagent_status`, and `subagent_lifecycle` with `action: "stop"`. Off leaves `subagent_workflow` unregistered and registers the four tools model-only. The main agent still calls them normally, and native Pi codemode stays available for other tools. Local Pi child proxies are always model-only, whatever this setting says.
 
 ## Module responsibilities
 

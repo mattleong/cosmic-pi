@@ -2,7 +2,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "./errors.ts";
-import type { RunContext, RunRecord } from "./internal.ts";
+import { type RunContext, type RunRecord, workflowOwnedRunError } from "./internal.ts";
 import {
   hasUnresolvedSteeringDelivery,
   type FailedStartRecovery,
@@ -66,7 +66,8 @@ export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartReco
 export function makeRunRetry(
   dependencies: RunContext & { readonly allocateClaimToken: () => string },
 ) {
-  const { records, withLock, publish, allocateClaimToken, requireRecord } = dependencies;
+  const { records, withLock, publish, recheckAdmission, allocateClaimToken, requireRecord } =
+    dependencies;
 
   const claimRetryContinuation = (
     id: string,
@@ -75,6 +76,8 @@ export function makeRunRetry(
       withLock(
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
+          const ownedFailure = workflowOwnedRunError(record, "be retried");
+          if (ownedFailure) return yield* ownedFailure;
           if (record.view.state !== "failed")
             return yield* invalid(
               "retry_source_not_failed",
@@ -171,7 +174,7 @@ export function makeRunRetry(
       Effect.sync(() => {
         const record = records.get(id);
         if (record?.retryClaim?.token === claimToken) record.retryClaim = undefined;
-      }),
+      }).pipe(Effect.andThen(recheckAdmission)),
     );
 
   /** Consumes a live retry claim and publishes the run's exhausted or blocked route. */

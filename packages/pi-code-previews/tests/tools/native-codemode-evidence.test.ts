@@ -198,3 +198,22 @@ test("only observed argument receipts supply targets, never source, output, or p
   assert.equal(projected?.children?.entries.length, 1);
   assert.ok(!projected?.children?.entries[0]?.subject);
 });
+
+const modelCall = (name: string) => ({
+  id: `private/${name}`,
+  name,
+  args: "provider/model-id",
+  status: "ok",
+  cost: 0.02,
+});
+
+test("native model rows keep their resolved model reference as argument evidence", () => {
+  const rows = summary({
+    calls: [modelCall("models.classify"), modelCall("models.generateImages")],
+  })?.children?.entries;
+  assert.equal(rows?.length, 2);
+  for (const row of rows ?? []) {
+    const evidence = row.issues?.find((issue) => issue.code === "native-call-args");
+    assert.ok(evidence?.detail?.includes("provider/model-id"), row.label);
+  }
+});

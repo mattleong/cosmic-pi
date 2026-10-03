@@ -783,8 +783,9 @@ describe("SubagentService", () => {
         RunRecord,
         "view" | "stoppedByParent" | "warningSlots" | "assignment" | "lastBackendReport"
       >;
-      // SAFETY: Rejection and issuing-phase buffering use only these fields; no settlement runs.
-      const record = fields as RunRecord;
+      // SAFETY: Rejection and issuing-phase buffering use only these fields and the launch's
+      // absent result contract; no settlement runs.
+      const record = { ...fields, launch: {} } as RunRecord;
       // SAFETY: Rejected and buffered reports never enter completion delivery.
       const delivery = {} as RunNotificationDelivery;
       const settlement = makeRunSettlement({

@@ -181,7 +181,7 @@ const createBlankChildSessionFileAt = (
  * Creates one blank persisted Pi session with exclusive ownership. Starting Pi
  * with `--session` against this header makes even a no-prompt side session
  * resumable immediately; Pi does not flush a brand-new `--session-id` session
- * until its first assistant message.
+ * until its first user or assistant message.
  */
 export const createBlankChildSessionFile = (
   input: BlankChildSessionFileInput,

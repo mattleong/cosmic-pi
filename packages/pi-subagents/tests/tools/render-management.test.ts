@@ -17,6 +17,12 @@ describe("failure recovery guidance", () => {
     );
   });
 
+  it("sends workflow-owned rejections to the workflow instead of a generic retry", () => {
+    const owned = failureRecovery("workflow_owned_run", "");
+    expect(owned).toContain("subagent_workflow");
+    expect(owned).not.toEqual(failureRecovery("mystery", "", "action"));
+  });
+
   it("falls back to context-specific generic guidance for unknown failures", () => {
     const actionFallback = failureRecovery("mystery", "unexplained", "action");
     const startFallback = failureRecovery("mystery", "unexplained", "start");

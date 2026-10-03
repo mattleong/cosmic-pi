@@ -12,6 +12,16 @@ export const detachActivityItem = (
   if (item.route !== undefined) Object.assign(detached, { route: text(item.route, 512) });
   if (item.summary !== undefined) Object.assign(detached, { summary: text(item.summary, 4096) });
   if (item.detail !== undefined) Object.assign(detached, { detail: detail(item.detail) });
+  if (item.phase !== undefined) Object.assign(detached, { phase: text(item.phase, 160) });
+  if (item.phases)
+    Object.assign(detached, {
+      phases: item.phases.map((phase) => {
+        const value = { ...phase, title: text(phase.title, 160) };
+        if (phase.detail !== undefined) Object.assign(value, { detail: text(phase.detail, 4096) });
+        if (phase.work) Object.assign(value, { work: { ...phase.work } });
+        return value;
+      }),
+    });
   if (item.actions)
     Object.assign(detached, {
       actions: item.actions.map((action) => {

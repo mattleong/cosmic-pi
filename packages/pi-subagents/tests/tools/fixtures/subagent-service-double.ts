@@ -111,5 +111,18 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     setWriterWorkspaceMode:
       base.setWriterWorkspaceMode ?? (() => unexpected("setWriterWorkspaceMode")),
     projection: base.projection ?? unexpected("projection"),
+    reserveRunId: base.reserveRunId ?? unexpected("reserveRunId"),
+    openOwner: base.openOwner ?? (() => unexpected("openOwner")),
+    startOwned: base.startOwned ?? (() => unexpected("startOwned")),
+    awaitOwned: base.awaitOwned ?? (() => unexpected("awaitOwned")),
+    releaseOwned: base.releaseOwned ?? (() => unexpected("releaseOwned")),
+    closeOwner: base.closeOwner ?? (() => unexpected("closeOwner")),
+    waitForRevision: base.waitForRevision ?? (() => unexpected("waitForRevision")),
+    admissionRevision: base.admissionRevision ?? unexpected("admissionRevision"),
+    waitForAdmissionChange:
+      base.waitForAdmissionChange ?? (() => unexpected("waitForAdmissionChange")),
+    queuedStartRefused: base.queuedStartRefused ?? (() => unexpected("queuedStartRefused")),
+    workspaceBindingStatus:
+      base.workspaceBindingStatus ?? (() => unexpected("workspaceBindingStatus")),
   };
 }

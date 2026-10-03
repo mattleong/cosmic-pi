@@ -24,7 +24,16 @@ export class SubagentHistoryCapacityError extends Schema.TaggedError<SubagentHis
 
 export class SubagentWriterConflictError extends Schema.TaggedError<SubagentWriterConflictError>()(
   "SubagentWriterConflictError",
-  { activeId: Schema.String, activeName: Schema.String, message: Schema.String },
+  {
+    activeId: Schema.String,
+    activeName: Schema.String,
+    message: Schema.String,
+    /**
+     * True when the conflict clears by itself once one of this session's runs finishes or
+     * releases its claim. Paused, quarantined and cross-process conflicts need someone to act.
+     */
+    transient: Schema.optional(Schema.Boolean),
+  },
 ) {}
 
 export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedError<UnsupportedSafeWriterOwnershipError>()(

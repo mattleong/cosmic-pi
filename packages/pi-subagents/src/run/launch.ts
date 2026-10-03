@@ -22,6 +22,7 @@ import {
   commitRunInitialization,
   completeRunInitialization,
   type RunContext,
+  type RunOwnership,
   type RunRecord,
 } from "./internal.ts";
 import { descendantRunIds } from "./tree.ts";
@@ -99,8 +100,14 @@ export interface RunLaunchDependencies extends RunContext {
   readonly delivery: RunNotificationDelivery;
   /** Service-owned shutdown flag, observed under the admission lock. */
   readonly isClosed: () => boolean;
-  /** Service-owned run ordinal/name allocation, invoked under the admission lock. */
-  readonly allocateRunIdentity: (requestedName: string) => {
+  /**
+   * Service-owned run ordinal/name allocation, invoked under the admission lock. A trusted
+   * owner's reserved id replaces the next ordinal.
+   */
+  readonly allocateRunIdentity: (
+    requestedName: string,
+    reservedId?: string,
+  ) => {
     readonly id: string;
     readonly name: string;
   };
@@ -112,6 +119,7 @@ export interface RunLaunchDependencies extends RunContext {
   readonly submitPrompt: RunAssignment["submitPrompt"];
   readonly initializeProcess: RunProcessInitializer;
   readonly bindWorkspace: RunWorkspaceControl["bind"];
+  readonly heldLaunchSlots: RunWorkspaceControl["heldLaunchSlots"];
 }
 
 /**
@@ -129,6 +137,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     writerPools,
     withLock,
     publish,
+    recheckAdmission,
     delivery,
     isClosed,
     allocateRunIdentity,
@@ -160,6 +169,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const start = (
     request: StartSubagentRequest,
     scriptedRoot = false,
+    ownership?: RunOwnership,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -216,7 +226,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           withLock(
             Effect.sync(() => {
               if (records.get(candidate.view.id) === candidate) candidate.evictionClaim = undefined;
-            }),
+            }).pipe(Effect.andThen(recheckAdmission)),
           );
         const runtimeClosedError = () =>
           new SubagentRuntimeClosedError({
@@ -285,6 +295,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               parentRunId,
               nestingPolicy.maxDirectChildren,
               ownReservation,
+              dependencies.heldLaunchSlots(parentRunId, request),
             );
             if (capacityFailure) return yield* capacityFailure;
             if (!canonicalWriterCwd) return;
@@ -342,6 +353,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               workspaceId: request.workspace.workspaceId,
               sourceCwd: request.workspace.sourceCwd,
             }),
+            ...(request.workflow && { workflow: request.workflow }),
             state: "starting",
             context: request.context,
             writeIntent: request.writeIntent,
@@ -368,6 +380,16 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           };
         };
 
+        const promptRequest = (base: StartSubagentRequest): StartSubagentRequest =>
+          writeClaims === undefined ? base : { ...base, writes: writeClaims };
+        // An owned run becomes an ordinary root child once its owner relinquishes it.
+        const releasedSystemPrompt =
+          request.workflow === undefined && request.resultContract === undefined
+            ? undefined
+            : childSystemPrompt(
+                promptRequest({ ...request, workflow: undefined, resultContract: undefined }),
+              );
+
         const buildBackendLaunch = (id: string, name: string): BackendLaunchRequest => ({
           runId: id,
           name,
@@ -384,9 +406,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           parentSessionId: request.parentSessionId,
           ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
           ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
-          systemPrompt: childSystemPrompt(
-            writeClaims === undefined ? request : { ...request, writes: writeClaims },
-          ),
+          systemPrompt: childSystemPrompt(promptRequest(request)),
+          ...(request.resultContract && { resultContract: request.resultContract }),
         });
 
         /**
@@ -402,6 +423,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
          */
         const admitLocked = (evicted: RunRecord | undefined, ownReservation?: RunRecord) =>
           Effect.gen(function* () {
+            // Reclaimed admission re-enters here, so the owner check repeats under this lock.
+            if (ownership) yield* ownership.checkLocked;
             const predecessor = yield* retryPredecessorLocked();
             const parent = yield* admissionParentLocked(predecessor);
             yield* validateCapacityLocked(ownReservation, predecessor);
@@ -416,7 +439,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const scope = yield* Scope.make();
             const initializationSettled = Deferred.makeUnsafe<void>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
-            const { id, name } = allocateRunIdentity(requestedName);
+            const { id, name } = allocateRunIdentity(requestedName, ownership?.runId);
             const attemptToken = allocateAssignmentAttemptToken();
             const writerPool = yield* writerPoolForAdmissionLocked(id);
             const record: RunRecord = {
@@ -438,6 +461,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               runStateReclaimState: "pending",
               writeViolationContainmentStarted: false,
               ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
+              ...(releasedSystemPrompt !== undefined && { releasedSystemPrompt }),
               initializationPending: true,
               initializationSettled,
               notificationGeneration: 0,
@@ -459,8 +483,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
               predecessor.retryClaim = undefined;
               predecessor.view = { ...predecessor.view, supersededByRunId: id };
             }
+            ownership?.admittedLocked(record);
             records.set(id, record);
-            dependencies.bindWorkspace(record, request);
+            dependencies.bindWorkspace(request, record);
             yield* publish;
             return record;
           });
@@ -475,6 +500,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           withLock(
             Effect.gen(function* () {
               if (isClosed()) return yield* runtimeClosedError();
+              if (ownership) yield* ownership.checkLocked;
               yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
               let candidate: RunRecord | undefined;
               const terminalHistoryCount = [...records.values()].filter((record) =>
@@ -505,6 +531,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                         writeClaims,
                       }
                     : { parentRunId };
+                  // The claim now reserves this start's process slot, so a worktree launch's
+                  // own slot hold ends here rather than counting twice while history is reclaimed.
+                  dependencies.bindWorkspace(request);
                   return { kind: "reclaim" as const, candidate };
                 }
               }

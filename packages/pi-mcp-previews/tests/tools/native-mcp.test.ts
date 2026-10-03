@@ -29,8 +29,15 @@ const resourceTools: readonly ResourceTool[] = [
   "read_mcp_resource",
 ];
 
-/** Mirrors Pi's fresh `createMcpToolDefinition` output; renderers are Pi's own, never shown. */
-function dynamicTool(server = "docs", tool = "lookup", name = `mcp__${server}__${tool}`) {
+/**
+ * Mirrors Pi's fresh `createMcpToolDefinition` output: identifier-safe names and namespaces,
+ * with the configured server name kept in the label. Renderers are Pi's own, never shown.
+ */
+function dynamicTool(
+  server = "docs",
+  tool = "lookup",
+  name = `mcp__${server}__${tool}`.replaceAll(/[^A-Za-z0-9_]/g, "_"),
+) {
   const definition: NativeDefinition = {
     name,
     label: `${server}/${tool}`,
@@ -38,7 +45,7 @@ function dynamicTool(server = "docs", tool = "lookup", name = `mcp__${server}__$
     parameters: opaqueFixture({ type: "object", properties: { query: { type: "string" } } }),
     outputSchema: opaqueFixture({ type: "object", required: ["content"] }),
     exposure: "direct",
-    namespace: { name: `mcp__${server}`, description: `Tools in the mcp__${server} namespace.` },
+    namespace: { name: `mcp__${server.replaceAll("-", "_")}` },
     annotations: { readOnlyHint: true, openWorldHint: true },
     renderCall: () => new Text("NATIVE_CALL_RENDERER", 0, 0),
     renderResult: () => new Text("NATIVE_RESULT_RENDERER", 0, 0),
@@ -152,6 +159,28 @@ for (const style of ["compact", "preview"] as const)
     resource.call({ server: "docs", uri: "docs://guide/start" });
     assert.ok(stripAnsi(resource.render(100).join("\n")).includes("docs://guide/start"));
   });
+
+test("dashed server names keep the labeled server and tool across namespace forms", () => {
+  const current = dynamicTool("team-docs", "find-page");
+  assert.deepEqual(nativeMcpIdentity(current), {
+    kind: "tool",
+    label: "team-docs/find-page",
+    server: "team-docs",
+    tool: "find-page",
+  });
+  // Releases before Pi 0.99.2 used the configured server name verbatim in the namespace.
+  const verbatim = { ...current, namespace: { name: "mcp__team-docs" } };
+  assert.deepEqual(nativeMcpIdentity(verbatim), nativeMcpIdentity(current));
+  for (const namespace of [{ name: "mcp__other" }, undefined])
+    assert.deepEqual(nativeMcpIdentity({ ...current, namespace }), {
+      kind: "tool",
+      label: "team-docs/find-page",
+    });
+  const found = result("Found 3 pages", { server: "team-docs", tool: "find-page" });
+  assert.equal(summarize(current, found, {})?.outcome, "returned");
+  const foreign = result("Found 3 pages", { server: "team_docs", tool: "find-page" });
+  assert.equal(summarize(current, foreign, {}), undefined);
+});
 
 test("settled native dispatch is neutral; only native evidence raises warnings", () => {
   const tool = dynamicTool();

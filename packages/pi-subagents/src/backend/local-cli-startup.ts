@@ -15,7 +15,10 @@ export const startLocalCli = (
   Effect.gen(function* () {
     const launch = withLocalSupervisorInstructions(request);
     const supervisor = yield* Effect.mapError(
-      supervisors.open({ runId: request.runId }),
+      supervisors.open({
+        runId: request.runId,
+        ...(request.resultContract && { resultContract: request.resultContract }),
+      }),
       supervisorError("open supervisor channel"),
     );
     const child = yield* processes.spawn({ runtime, launch, supervisor: supervisor.metadata });

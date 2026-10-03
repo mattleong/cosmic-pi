@@ -55,7 +55,7 @@ Everything lives under one command, `/code-previews`; type it and a space to aut
 
 The health panel shows configured tools, installed replacements, registration errors, inactive/unavailable native tools, disabled tools, and replacements skipped because another extension owns that tool. Individual tool toggles are available in the Preview tools submenu in `/code-previews settings` and take effect after `/reload`.
 
-Renderer installation is best effort after planning completes. A discovery or definition-construction failure stops startup before registration begins. If one `registerTool` call fails, later replacements are still attempted and successful replacements keep a live session runtime. Attempted names and successful installs are tracked separately, so a Pi 0.84 refresh failure after registry mutation remains retryable on the next session start. There is no rollback of successful installs.
+Renderer installation is best effort after planning completes. A discovery or definition-construction failure stops startup before registration begins. If one `registerTool` call fails, later replacements are still attempted and successful replacements keep a live session runtime. Attempted names and successful installs are tracked separately, so a Pi refresh failure after registry mutation remains retryable on the next session start. There is no rollback of successful installs.
 
 ### Native codemode
 

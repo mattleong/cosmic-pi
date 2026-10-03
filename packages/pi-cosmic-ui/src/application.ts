@@ -235,9 +235,13 @@ export function registerCosmicUiApplication(
     },
   });
 
-  const activityHost = makeActivityHost(pi, (effect, signal) => {
-    slot.fork(effect.pipe(Effect.ignore), signal);
-  });
+  const activityHost = makeActivityHost(
+    pi,
+    (effect, signal) => {
+      slot.fork(effect.pipe(Effect.ignore), signal);
+    },
+    (effect, signal) => slot.run(effect, signal),
+  );
   pi.registerCommand("activity", {
     description: "Browse session activity and actions",
     handler: (_args, ctx) => runFrom(activityHost.open(ctx).pipe(Effect.ignore), ctx),

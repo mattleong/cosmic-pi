@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine, clipText } from "pi-cosmic-core";
+import type { SubagentWorkflowMembership } from "../run/model.ts";
 
 export interface SubagentCompletionNotification {
   readonly id: string;
@@ -27,7 +28,31 @@ export type SubagentNotification =
       readonly requestId: string;
       readonly message: string;
       readonly generation: number;
+      /** A workflow agent's question; the workflow keeps waiting until the reply arrives. */
+      readonly workflow?: SubagentWorkflowMembership | undefined;
     };
+
+/**
+ * One finished workflow run; `content` carries its result or failure for the main agent. A run
+ * the user stopped, or one an earlier activation left running at teardown (`interrupted`),
+ * informs the next turn instead of starting one.
+ */
+export interface SubagentWorkflowNotification {
+  readonly type: "workflow";
+  readonly runId: string;
+  readonly name: string;
+  readonly outcome: "completed" | "failed" | "stopped" | "interrupted";
+  readonly durationMs: number;
+  readonly content: string;
+  readonly agents: {
+    readonly total: number;
+    readonly failed: number;
+    readonly skipped: number;
+    readonly reused: number;
+  };
+  /** Worktree proposals the main agent reviews with subagent_workspace. */
+  readonly workspaces: ReadonlyArray<string>;
+}
 
 export interface SubagentNotificationDelivery {
   readonly deliveredCompletionKeys?: ReadonlyArray<string> | undefined;
@@ -35,15 +60,23 @@ export interface SubagentNotificationDelivery {
 }
 
 export type SubagentNotifier = (
-  notification: SubagentNotification,
+  notification: SubagentNotification | SubagentWorkflowNotification,
 ) => SubagentNotificationDelivery | undefined;
 
 const MAX_NOTIFICATION_CHARS = 32 * 1024;
 
-const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string => {
-  const sanitized = sanitizeDiagnosticContent(value, { maximumLength: maximumLength + 2 }).trim();
-  return clipText(sanitized, maximumLength);
-};
+/**
+ * The secret redaction and control-character cleanup every notification's content gets before
+ * the host clips it. Producers that budget their content apply it first, so redaction can't push
+ * budgeted text past the clip; applying it again changes nothing.
+ */
+export const sanitizeNotificationContent = (
+  value: string,
+  maximumLength = Number.POSITIVE_INFINITY,
+): string => sanitizeDiagnosticContent(value, { maximumLength }).trim();
+
+const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string =>
+  clipText(sanitizeNotificationContent(value, maximumLength + 2), maximumLength);
 
 interface CompletionChunk {
   readonly content: string;
@@ -165,11 +198,59 @@ const completionChunks = (
   return chunks;
 };
 
+const questionContent = (
+  notification: Extract<SubagentNotification, { readonly type: "question" }>,
+): string => {
+  const reply = `subagent_reply({ runId: "${notification.id}", message: "..." })`;
+  const workflow = notification.workflow;
+  if (!workflow)
+    return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}, then call subagent_await again.`;
+  const label = workflow.name ? `${workflow.name} (${workflow.workflowId})` : workflow.workflowId;
+  return `Workflow ${label} agent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}; the workflow continues automatically after the reply.`;
+};
+
 /** A display name for compact rows, bounded like the transcript's other one-line labels. */
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
+const sendWorkflow = (
+  pi: ExtensionAPI,
+  notification: SubagentWorkflowNotification,
+): SubagentNotificationDelivery => {
+  try {
+    pi.sendMessage(
+      {
+        customType: "pi-subagents-workflow",
+        content: clip(notification.content),
+        details: {
+          version: 1,
+          kind: "workflow",
+          name: displayName(notification.name),
+          outcome: notification.outcome,
+          durationMs: Math.max(0, Math.round(notification.durationMs)),
+          agents: notification.agents.total,
+          failed: notification.agents.failed,
+          skipped: notification.agents.skipped,
+          reused: notification.agents.reused,
+        },
+        display: true,
+      },
+      // A result joins an active turn or wakes an idle parent, like completions. The user's
+      // own stop and a torn-down run wait for the next turn instead of prompting new work.
+      {
+        deliverAs: "steer",
+        triggerTurn: notification.outcome === "completed" || notification.outcome === "failed",
+      },
+    );
+    return { actionAccepted: true };
+  } catch {
+    // A replaced or closing session leaves the result for the workflow service to retry.
+    return { actionAccepted: false };
+  }
+};
+
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   return (notification) => {
+    if (notification.type === "workflow") return sendWorkflow(pi, notification);
     if (notification.type === "completed") {
       const deliveredCompletionKeys: string[] = [];
       for (const chunk of completionChunks(notification.runs)) {
@@ -202,9 +283,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       return { deliveredCompletionKeys };
     }
 
-    const content = clip(
-      `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }), then call subagent_await again.`,
-    );
+    const content = clip(questionContent(notification));
     try {
       pi.sendMessage(
         {

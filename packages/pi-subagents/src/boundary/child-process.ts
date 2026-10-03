@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
   PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
+  SUBAGENT_RESULT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
@@ -32,10 +33,12 @@ import {
 export { releaseChildProcess, type ChildProcessReleaseOperations } from "./process-transport.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
-import type {
-  LocalPiContact,
-  LocalPiParentControl,
-  RpcCommand,
+import {
+  LOCAL_PI_RESULT_CONTRACT_FLAG,
+  LocalPiResultContractDocument,
+  type LocalPiContact,
+  type LocalPiParentControl,
+  type RpcCommand,
 } from "../backend/local-pi-protocol.ts";
 
 const { mkdir, readFile, rm, rmdir, writeFile } = nodeFsPromises;
@@ -131,10 +134,41 @@ export interface ChildToolPolicy {
   readonly excluded: string;
 }
 
-export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>): ChildToolPolicy => ({
-  enabled: [...new Set([...rootActiveTools, "contact_parent", ...SUBAGENT_TOOL_NAMES])],
+export const childToolPolicy = (
+  rootActiveTools: ReadonlyArray<string>,
+  returnsResult = false,
+): ChildToolPolicy => ({
+  enabled: [
+    ...new Set([
+      ...rootActiveTools,
+      "contact_parent",
+      ...SUBAGENT_TOOL_NAMES,
+      ...(returnsResult ? [SUBAGENT_RESULT_TOOL_NAME] : []),
+    ]),
+  ],
   excluded: PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
 });
+
+const encodeResultContractDocument = Schema.encodeEffect(
+  Schema.fromJsonString(LocalPiResultContractDocument),
+);
+
+/** Writes the private result contract a child reads at session start; returns its CLI flag. */
+const writeResultContract = (request: ChildLaunchRequest, runDir: string) =>
+  Effect.gen(function* () {
+    const contract = request.resultContract;
+    if (!contract) return [];
+    const path = join(runDir, "result-schema.json");
+    const source = yield* encodeResultContractDocument({
+      parameters: contract.parameters,
+      strictSafe: contract.strictSafe,
+    }).pipe(Effect.mapError((error) => processError("encode subagent result schema", error)));
+    yield* Effect.tryPromise({
+      try: () => writeFile(path, source, { encoding: "utf8", mode: 0o600 }),
+      catch: (error) => processError("write subagent result schema", error),
+    });
+    return [`--${LOCAL_PI_RESULT_CONTRACT_FLAG}`, path];
+  });
 
 export const requestCooperativeAbort = (
   send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>,
@@ -290,6 +324,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     try: () => writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
     catch: (error) => processError("write subagent system prompt", error),
   });
+  const resultContractArgs = yield* writeResultContract(request, runDir);
   const sessionFile =
     request.resumeSessionFile === undefined && request.context === "fork"
       ? yield* createForkedSession(request, runDir)
@@ -297,7 +332,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
 
   // Pi's published CLI bundles dependencies absent from the unbundled dist/cli.js.
   const cliEntry = join(getPackageDir(), "dist", "bundle", "cli.js");
-  const toolPolicy = childToolPolicy(request.activeTools);
+  const toolPolicy = childToolPolicy(request.activeTools, request.resultContract !== undefined);
   const cliArgs = [
     "--mode",
     "rpc",
@@ -306,6 +341,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     "--thinking",
     request.effort,
     ...(request.openaiFastMode ? ["--pi-subagents-fast-mode"] : []),
+    ...resultContractArgs,
     "--tools",
     toolPolicy.enabled.join(","),
     "--exclude-tools",

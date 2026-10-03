@@ -24,10 +24,17 @@ export type NativeMcpIdentity =
   | {
       readonly kind: "tool";
       readonly label: string;
-      /** Present only when the label splits exactly at the namespace's server name. */
+      /** Present only when the label's server prefix names the definition's namespace. */
       readonly server?: string;
       readonly tool?: string;
     };
+
+/**
+ * Pi 0.99.2 and later replace `-` with `_` in the namespace (`my-server` is `mcp__my_server`)
+ * but keep the configured server name in the label; earlier releases used it verbatim.
+ */
+const namesServerNamespace = (namespace: string, server: string): boolean =>
+  namespace === `mcp__${server}` || namespace === `mcp__${server.replaceAll("-", "_")}`;
 
 interface NativeMcpDefinitionIdentity {
   readonly name: string;
@@ -43,12 +50,12 @@ export function nativeMcpIdentity(definition: NativeMcpDefinitionIdentity): Nati
   const label = invokeHostCallback(() => definition.label, "");
   const namespace = invokeHostCallback(() => definition.namespace?.name, undefined);
   const text = Predicate.isString(label) ? label : "";
-  if (Predicate.isString(namespace) && namespace.startsWith("mcp__")) {
-    const server = namespace.slice("mcp__".length);
-    const tool = text.slice(server.length + 1);
-    if (server && tool && text.startsWith(`${server}/`))
-      return { kind: "tool", label: text, server, tool };
-  }
+  // Server names cannot contain `/`, so the label's first separator ends the server.
+  const separator = text.indexOf("/");
+  const server = text.slice(0, Math.max(0, separator));
+  const tool = text.slice(separator + 1);
+  if (server && tool && Predicate.isString(namespace) && namesServerNamespace(namespace, server))
+    return { kind: "tool", label: text, server, tool };
   return { kind: "tool", label: text };
 }
 

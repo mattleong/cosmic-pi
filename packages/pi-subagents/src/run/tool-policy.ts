@@ -21,6 +21,9 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
 export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
 export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
+/** Private local Pi child tool for a run with a result contract; never inherited from the root. */
+export const SUBAGENT_RESULT_TOOL_NAME = "subagent_result";
+
 /** External competing orchestrators stay disabled, independent of the installed backend adapters. */
 export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES = [
   "herdr_agent_start",
@@ -108,6 +111,15 @@ export const validateParentMessage = (
   return Effect.succeed(normalized);
 };
 
+/** How the run returns its result: a validated value for contract runs, else a prose report. */
+const completionInstruction = (request: StartSubagentRequest): string => {
+  if (!request.resultContract)
+    return "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.";
+  return request.runtime === "pi"
+    ? `A program started you and receives only the arguments of your ${SUBAGENT_RESULT_TOOL_NAME} call. When the task is complete, call ${SUBAGENT_RESULT_TOOL_NAME} exactly once with the final result matching its schema. That call is your return value and ends your run; text you write is not returned. If you cannot finish, still call it with the most accurate result the schema allows.`
+    : "A program started you and receives only your final report, parsed as JSON. Your report must be exactly one JSON value matching the result schema below, with the actual findings or work completed. If you cannot finish, still report the most accurate result the schema allows.";
+};
+
 export const childSystemPrompt = (request: StartSubagentRequest): string =>
   [
     "You are a subagent working for a supervising Pi session.",
@@ -119,8 +131,13 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
     "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
     "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
+    ...(request.workflow
+      ? [
+          "You are one step of an automated workflow. Your final response is returned to the workflow program as data, not shown to a person: return only the requested result, and state assumptions instead of asking unless you are truly blocked.",
+        ]
+      : []),
     "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue or the risk could invalidate work the parent is doing now.",
-    "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
+    completionInstruction(request),
     ...(request.workspace
       ? [
           `Your isolated workspace is ${request.workspace.cwd}. Its source checkout is ${request.workspace.sourceCwd}. Work only in the isolated workspace; do not write into the source checkout or another worker's directory.`,

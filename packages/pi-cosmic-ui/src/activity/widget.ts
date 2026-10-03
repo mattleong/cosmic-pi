@@ -8,29 +8,33 @@ import {
   managerNoticeGlyph,
   clipToWidth,
   spinnerFrameAt,
+  type ManagerStatusColor,
 } from "../manager/chrome.ts";
 import {
   activityAttention,
   activityAttentionLabels,
-  activityAttentionTotals,
+  activityAttentionCounts,
+  activityQueued,
   activityStatus,
+  type ActivityAttentionCounts,
 } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
-import {
-  activityPath,
-  activityTree,
-  needsYou,
-  type ActivityTreeOptions,
-  type ActivityTreeRow,
-} from "./tree.ts";
+import { activityPath, needsYou, type ActivityTreeRow } from "./tree.ts";
+import type { GroupedActivityRow, PhaseState } from "./grouped-tree.ts";
+import { addGroupSummaries, emptyGroupSummary, type GroupSummary } from "./group-summary.ts";
+import { activityWidgetSections, type WidgetOptions } from "./widget-projection.ts";
+export { activityWidgetSections } from "./widget-projection.ts";
+import { renderActivityRow } from "./row-render.ts";
 
 export const activityGlyph = (row: ActivityRow, now = 0): string =>
   row.status === "needs-input" || row.status === "blocked"
     ? managerNoticeGlyph("warning")
-    : managerActivityGlyph(
-        row.status === "cancelled" ? "stopped" : row.status,
-        spinnerFrameAt(now),
-      );
+    : activityQueued(row)
+      ? "○"
+      : managerActivityGlyph(
+          row.status === "cancelled" ? "stopped" : row.status,
+          spinnerFrameAt(now),
+        );
 export const activityStartupGlyph = (
   rows: readonly ActivityRow[],
   starting: number,
@@ -49,8 +53,13 @@ export const activityElapsed = (row: ActivityRow, now?: number, compact = false)
   const text = formatElapsed(elapsed);
   return compact ? (text.split(" ")[0] ?? text) : text;
 };
-export const activityType = (row: ActivityRow): string =>
-  row.kind === "agent" ? "SUBAGENT" : row.kind === "command" ? "TASK" : "QUESTION";
+const activityTypes = {
+  agent: "SUBAGENT",
+  command: "TASK",
+  question: "QUESTION",
+  workflow: "WORKFLOW",
+} as const;
+export const activityType = (row: ActivityRow): string => activityTypes[row.kind];
 export function activityOwnerLabel(
   rows: readonly ActivityRow[],
   row: ActivityRow,
@@ -67,24 +76,29 @@ export function activityOwnerLabel(
   return clipToWidth(parts[0] ?? "", Math.max(0, width), "…");
 }
 
-const treeGuide = (entry: ActivityTreeRow, levels: number): string => {
-  const clipped = entry.continuations.length > levels;
-  const shown = levels > 0 ? entry.continuations.slice(-levels) : [];
-  return `${clipped ? "… " : ""}${shown
-    .map((continues, index) =>
-      index === shown.length - 1 ? (continues ? "├─ " : "└─ ") : continues ? "│  " : "   ",
-    )
-    .join("")}`;
-};
 // Use theme palette tokens for blue, violet, and amber rather than fixed RGB colors.
 const widgetTypeColors = {
   command: "syntaxKeyword",
   agent: "thinkingHigh",
   question: "warning",
+  workflow: managerTone.identity,
+} as const;
+const managerTypeColors = {
+  command: "muted",
+  agent: managerTone.identity,
+  question: "warning",
+  workflow: managerTone.identity,
 } as const;
 
-const foldMarker = (entry: ActivityTreeRow): string =>
-  entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
+const activityColor = (row: ActivityRow, interactive: boolean): ManagerStatusColor =>
+  row.status === "needs-input" || row.status === "blocked"
+    ? "warning"
+    : activityQueued(row)
+      ? "muted"
+      : !interactive && row.status === "running"
+        ? "accent"
+        : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
+
 export function activityRowLine(
   entry: ActivityTreeRow,
   width: number,
@@ -95,104 +109,304 @@ export function activityRowLine(
 ): string {
   const row = entry.row;
   const interactive = presentation === "manager";
-  const kind = activityType(row);
   const warnings = entry.expanded ? "" : activityAttentionLabels(entry.attention).join(" · ");
   const attention =
-    activityAttention(row) !== undefined || row.status === "failed" ? activityStatus(row) : "";
-  const status = warnings || `${attention} ${activityElapsed(row, now, width < 60)}`.trim();
-  const color =
-    row.status === "needs-input" || row.status === "blocked"
-      ? "warning"
-      : !interactive && row.status === "running"
-        ? "accent"
-        : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
-  const typeColor = !interactive
-    ? widgetTypeColors[row.kind]
-    : row.kind === "agent"
-      ? managerTone.identity
-      : row.kind === "question"
-        ? "warning"
-        : "muted";
-  const paint = (tone: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(tone, text) ?? text;
-  // Only the interactive manager reserves alignment slots for optional markers.
-  const awaited = row.awaited ? "◎ " : interactive ? "  " : "";
-  const fold = interactive ? foldMarker(entry) : "";
-  const markerWidth = visibleWidth(awaited);
-  const profileName = row.kind === "agent" ? (row.profile ?? "") : "";
-  const identityWidth = visibleWidth(kind) + (profileName ? visibleWidth(profileName) + 1 : 0);
-  const rightBudget = Math.max(0, width - identityWidth - markerWidth - 6);
-  const showStatus =
-    status.length > 0 &&
-    (width >= 48 || (warnings.length > 0 && width >= 32)) &&
-    rightBudget >= Math.min(9, visibleWidth(status));
-  const rightWidth = showStatus ? Math.min(visibleWidth(status), rightBudget) : 0;
-  const leftWidth = Math.max(0, width - (showStatus ? rightWidth + 2 : 0));
-  const guideBudget = Math.max(0, leftWidth - identityWidth - markerWidth - 3);
-  const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - visibleWidth(fold) - 2) / 3)));
-  const guide = paint("dim", clipToWidth(`${treeGuide(entry, levels)}${fold}`, guideBudget, ""));
-  const glyph = paint(color, activityGlyph(row, now));
-  const profile = profileName ? `${profileName} · ` : "";
-  const omitted = interactive && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
-  const route =
-    !interactive && width >= 100 && row.route
-      ? paint("muted", clipToWidth(row.route, Math.floor(leftWidth / 2), "…"))
+    activityAttention(row) !== undefined || row.status === "failed" || activityQueued(row)
+      ? activityStatus(row)
       : "";
-  const routeWidth = route ? visibleWidth(route) + 2 : 0;
-  const name = focusedStyle
-    ? focusedStyle(`${kind} ${profile}${row.title}`)
-    : `${paint(typeColor, kind)} ${paint(interactive ? managerTone.identity : "muted", profile)}${paint(interactive ? managerTone.identity : "text", row.title)}`;
-  const identity = clipToWidth(
-    `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`,
-    Math.max(0, leftWidth - routeWidth),
-    "…",
+  const status = warnings || `${attention} ${activityElapsed(row, now, width < 60)}`.trim();
+  const color = activityColor(row, interactive);
+  return renderActivityRow(
+    {
+      kind: activityType(row),
+      title: row.title,
+      continuations: entry.continuations,
+      children: entry.children,
+      expanded: entry.expanded,
+      glyph: activityGlyph(row, now),
+      color,
+      typeColor: (interactive ? managerTypeColors : widgetTypeColors)[row.kind],
+      status,
+      statusColor: warnings ? "warning" : !interactive && !attention ? "muted" : color,
+      compactStatus: warnings.length > 0,
+      ...(row.kind === "agent" && row.profile && { profile: row.profile }),
+      ...(row.route && { route: row.route }),
+      ...(row.awaited && { awaited: true }),
+      ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
+    },
+    width,
+    theme,
+    presentation,
+    focusedStyle,
   );
-  const left = route ? `${identity}  ${route}` : identity;
-  const statusColor = warnings ? "warning" : !interactive && !attention ? "muted" : color;
-  return showStatus
-    ? `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(statusColor, clipToWidth(status, rightWidth, "…"))}`
-    : left;
 }
-interface WidgetOptions extends ActivityTreeOptions {
-  readonly starting?: number;
-  readonly now?: number;
+
+/** Branch attention below a row, excluding the row's own state. */
+const descendantAttention = (summary: GroupSummary, row: ActivityRow): ActivityAttentionCounts => {
+  const own = activityAttentionCounts(row);
+  return {
+    user: summary.attention.user - own.user,
+    parent: summary.attention.parent - own.parent,
+    blocked: summary.attention.blocked - own.blocked,
+    failed: summary.attention.failed - own.failed,
+  };
+};
+interface RowPaint {
+  readonly now?: number | undefined;
   readonly theme?: Pick<Theme, "fg">;
 }
-/** A bounded, read-only ownership projection. /activity owns keyboard focus. */
+
+export function groupedMemberLine(
+  entry: Extract<GroupedActivityRow, { readonly type: "member" }>,
+  width: number,
+  options: RowPaint,
+  presentation: "manager" | "widget",
+  focusedStyle?: (text: string) => string,
+): string {
+  return activityRowLine(
+    {
+      row: entry.row,
+      depth: entry.depth,
+      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
+      children: entry.children,
+      history: entry.history,
+      expanded: entry.expanded,
+      attention: descendantAttention(entry.summary, entry.row),
+    },
+    width,
+    options.now,
+    options.theme,
+    presentation,
+    focusedStyle,
+  );
+}
+
+const compactNotices = (attention: ActivityAttentionCounts): string[] => [
+  ...(attention.user ? [`${attention.user} you`] : []),
+  ...(attention.parent ? [`${attention.parent} parent`] : []),
+  ...(attention.blocked ? [`${attention.blocked} blocked`] : []),
+  ...(attention.failed ? [`${attention.failed} failed`] : []),
+];
+const progressLabels = (summary: GroupSummary): string[] => [
+  ...(summary.running ? [`${summary.running} running`] : []),
+  ...(summary.pending > summary.queued ? [`${summary.pending - summary.queued} starting`] : []),
+  ...(summary.queued ? [`${summary.queued} queued`] : []),
+  ...(summary.stopping ? [`${summary.stopping} stopping`] : []),
+];
+const phaseLabels = {
+  pending: "not started",
+  running: "running",
+  done: "finished",
+  stopped: "stopped",
+  skipped: "skipped",
+} satisfies Readonly<Record<PhaseState, string>>;
+const phaseColors = {
+  pending: "muted",
+  running: "accent",
+  done: "success",
+  stopped: "muted",
+  skipped: "muted",
+} satisfies Readonly<Record<PhaseState, ManagerStatusColor>>;
+const phaseGlyph = (state: PhaseState, now: number): string =>
+  state === "pending"
+    ? "○"
+    : state === "skipped"
+      ? "–"
+      : managerActivityGlyph(state, spinnerFrameAt(now));
+
+function phaseRowLine(
+  entry: Extract<GroupedActivityRow, { readonly type: "phase" }>,
+  width: number,
+  options: RowPaint,
+  presentation: "manager" | "widget",
+  focusedStyle?: (text: string) => string,
+): string {
+  const summary = entry.summary;
+  const notices = compactNotices(summary.attention);
+  const finished = summary.terminal - summary.attention.failed - summary.stopped;
+  const progress = [...progressLabels(summary), ...(finished > 0 ? [`${finished} finished`] : [])];
+  const color = notices.length ? "warning" : phaseColors[entry.state];
+  return renderActivityRow(
+    {
+      kind: "PHASE",
+      title: entry.title,
+      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
+      children: entry.children,
+      expanded: entry.expanded,
+      glyph: notices.length
+        ? managerNoticeGlyph("warning")
+        : phaseGlyph(entry.state, options.now ?? 0),
+      color,
+      typeColor: managerTone.value,
+      status: [
+        ...notices,
+        ...(entry.state === "running" && progress.length ? progress : [phaseLabels[entry.state]]),
+      ].join(" · "),
+      statusColor: notices.length ? "warning" : "muted",
+      compactStatus: notices.length > 0,
+    },
+    width,
+    options.theme,
+    presentation,
+    focusedStyle,
+  );
+}
+
+/** Workflow and phase rows; a workflow row also carries its own provider state and actions. */
+export function workflowRowLine(
+  entry: Extract<GroupedActivityRow, { readonly type: "workflow" | "phase" }>,
+  width: number,
+  options: RowPaint,
+  presentation: "manager" | "widget" = "widget",
+  focusedStyle?: (text: string) => string,
+): string {
+  if (entry.type === "phase")
+    return phaseRowLine(entry, width, options, presentation, focusedStyle);
+  const row = entry.row;
+  const interactive = presentation === "manager";
+  const notices = compactNotices(entry.summary.attention);
+  const phases = row.phases?.length ?? 0;
+  // The workflow's own failure keeps its glyph; member attention overlays a live or ended run.
+  const overlay = notices.length > 0 && row.status !== "failed";
+  const ended = row.status === "failed" || row.status === "cancelled" || row.status === "stopping";
+  return renderActivityRow(
+    {
+      kind: activityType(row),
+      title: row.title,
+      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
+      children: entry.children,
+      expanded: entry.expanded,
+      glyph: overlay ? managerNoticeGlyph("warning") : activityGlyph(row, options.now),
+      color: overlay ? "warning" : activityColor(row, interactive),
+      typeColor: (interactive ? managerTypeColors : widgetTypeColors).workflow,
+      status: [
+        ...notices,
+        ...(phases ? [`${entry.finishedPhases}/${phases} phases`] : progressLabels(entry.summary)),
+        ...(ended ? [activityStatus(row)] : []),
+        activityElapsed(row, options.now, width < 60),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      statusColor: notices.length ? "warning" : "muted",
+      compactStatus: notices.length > 0,
+      ...(row.awaited && { awaited: true }),
+      ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
+    },
+    width,
+    options.theme,
+    presentation,
+    focusedStyle,
+  );
+}
+
+/** Reserve space for attention and omitted evidence before routine progress or long names. */
+const widgetGroupLine = (
+  title: string,
+  summary: GroupSummary,
+  width: number,
+  omissions: readonly string[] = [],
+): string => {
+  const omitted = omissions.join(" · ");
+  const notices = [...compactNotices(summary.attention), ...omissions];
+  const full = [
+    title,
+    ...notices,
+    ...(summary.stopped ? [`${summary.stopped} stopped`] : []),
+    ...progressLabels(summary),
+    ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
+  ].join(" · ");
+  if (visibleWidth(full) <= width) return full;
+  let evidence = notices.join(" · ");
+  if (visibleWidth(evidence) + Math.min(12, visibleWidth(title)) + 3 > width)
+    evidence = notices.join(" ");
+  if (visibleWidth(evidence) > width) {
+    const attention = Object.values(summary.attention).reduce((sum, count) => sum + count, 0);
+    evidence = [attention ? `${attention} attention` : "", omitted].filter(Boolean).join(" · ");
+  }
+  const active = summary.running + summary.pending + summary.stopping;
+  const progress = active
+    ? `${active} active`
+    : summary.awaited
+      ? `${summary.awaited} awaited`
+      : "";
+  if (progress && visibleWidth([title, evidence, progress].filter(Boolean).join(" · ")) <= width)
+    evidence = [evidence, progress].filter(Boolean).join(" · ");
+  if (!evidence) return clipToWidth(title, width, "…");
+  if (visibleWidth(evidence) + 4 > width) return clipToWidth(evidence, width, "…");
+  return `${clipToWidth(title, Math.max(1, width - visibleWidth(evidence) - 3), "…")} · ${evidence}`;
+};
+
+const omissionLabels = (sources: number, phases: number, workflows: number): string[] => [
+  ...(sources ? [`+${sources} items`] : []),
+  ...(phases ? [`+${phases} phases`] : []),
+  ...(workflows ? [`+${workflows} workflows`] : []),
+];
+
+/** A bounded read-only overview. All execution capabilities stay in the manager. */
 export function renderActivityWidget(
   rows: readonly ActivityRow[],
   width: number,
   maxRows = 8,
   options: WidgetOptions = {},
 ): string[] {
-  const starting = options.starting ?? 0;
-  if (width <= 0 || (rows.length === 0 && starting === 0) || maxRows <= 0) return [];
-  const tree = activityTree(rows, { ...options, hideHistory: true });
+  if (width <= 0 || maxRows <= 0) return [];
+  const sections = activityWidgetSections(rows, maxRows, options);
   const urgent = needsYou(rows);
-  const live = tree.filter((entry) => !entry.history);
-  if (live.length === 0 && starting === 0) return [];
   const style = (text: string) => options.theme?.fg("muted", text) ?? text;
-  const counts = activityAttentionTotals(rows);
-  const attention = activityAttentionLabels({ ...counts, failed: 0 }).join(" · ");
-  const heading =
-    width < 22 && urgent.length
-      ? activityAttentionLabels({ ...counts, parent: 0, blocked: 0, failed: 0 }).join(" · ")
-      : `Activity${attention ? ` · ${attention}` : ""}`;
-  const startup = activityStartupGlyph(rows, starting, options.now);
-  const combined = `${heading}${startup ? ` ${startup}` : ""}`;
-  const lines = [style(combined)];
+  const lines: string[] = [];
   if (urgent.length)
     lines.push(
       style(
-        `Needs you: ${activityOwnerLabel(rows, urgent[0]!, Math.max(0, width - 11 - (urgent.length > 1 ? ` +${urgent.length - 1}`.length : 0)))}${urgent.length > 1 ? ` +${urgent.length - 1}` : ""}`,
+        `Needs you (${urgent.length}): ${activityOwnerLabel(rows, urgent[0]!, Math.max(0, width - 16))}`,
       ),
     );
-  const capacity = Math.max(0, maxRows - lines.length - 1);
-  lines.push(
-    ...live
-      .slice(0, capacity)
-      .map((entry) => activityRowLine(entry, width, options.now, options.theme, "widget")),
-  );
-  const hidden = Math.max(0, live.length - capacity);
-  if (hidden) lines.push(style(`+${hidden} rows`));
+  if (sections.length > maxRows - lines.length) {
+    // At tiny heights, preserve all sections' evidence rather than only the first question.
+    const total = sections
+      .map(({ heading }) => heading.summary)
+      .reduce(addGroupSummaries, emptyGroupSummary);
+    const hidden = (type: GroupedActivityRow["type"]) =>
+      sections.reduce(
+        (sum, section) => sum + section.entries.filter((entry) => entry.type === type).length,
+        0,
+      );
+    const hiddenSources = sections.reduce((sum, section) => sum + section.hiddenSources, 0);
+    const hiddenPhases = sections.reduce((sum, section) => sum + section.hiddenPhases, 0);
+    const hiddenWorkflows = sections.reduce((sum, section) => sum + section.hiddenWorkflows, 0);
+    return [
+      style(
+        widgetGroupLine(
+          "…",
+          total,
+          width,
+          omissionLabels(
+            hiddenSources + hidden("member"),
+            hiddenPhases + hidden("phase"),
+            hiddenWorkflows + hidden("workflow"),
+          ),
+        ),
+      ),
+    ];
+  }
+  for (const section of sections) {
+    for (const entry of section.entries) {
+      if (entry.type === "member") lines.push(groupedMemberLine(entry, width, options, "widget"));
+      else if (entry.type === "workflow" || entry.type === "phase")
+        lines.push(workflowRowLine(entry, width, options));
+    }
+    if (section.omittedRows)
+      lines.push(
+        style(
+          widgetGroupLine(
+            "…",
+            section.heading.summary,
+            width,
+            omissionLabels(section.hiddenSources, section.hiddenPhases, section.hiddenWorkflows),
+          ),
+        ),
+      );
+  }
+  if (!lines.length && (options.starting ?? 0) > 0)
+    lines.push(style(`Subagents ${activityStartupGlyph(rows, options.starting!, options.now)}`));
   return lines.slice(0, maxRows).map((line) => clipToWidth(line, width, ""));
 }

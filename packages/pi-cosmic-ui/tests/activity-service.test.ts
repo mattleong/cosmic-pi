@@ -97,6 +97,61 @@ describe("activity service", () => {
         expect(starting()).toBe(0);
       }),
   );
+  it.effect("withdraws inconsistent workflow metadata and restores valid publication", () =>
+    Effect.gen(function* () {
+      const { service, rows } = yield* recordingService;
+      let available = false;
+      const workflow: ActivityItem = {
+        id: "flow",
+        title: "Review",
+        kind: "workflow",
+        status: "running",
+        revision: "1",
+        phases: [{ title: "Find" }, { title: "Verify", detail: "Run the checks" }],
+        phase: "Find",
+        actions: [{ id: "stop", label: "Stop workflow" }],
+      };
+      const member: ActivityItem = {
+        id: "queued",
+        title: "Queued agent",
+        kind: "agent",
+        status: "pending",
+        revision: "1",
+        parent: { providerId: "tasks", itemId: "flow" },
+        phase: "Find",
+        actions: [{ id: "skip", label: "Skip" }],
+      };
+      const event = {
+        ...registration({}, undefined, [workflow, member]),
+        acknowledge: (next: boolean) => {
+          available = next;
+        },
+      };
+      for (const invalid of [
+        [workflow, { ...member, phases: [{ title: "Find" }] }],
+        [{ ...workflow, phases: [{ title: "Find" }, { title: "Find" }] }],
+        [{ ...workflow, phases: [{ title: "Find" }, { title: "Find \u0007" }] }],
+        [{ ...workflow, phase: "Ship" }],
+        [{ ...workflow, phases: undefined }],
+        [{ ...workflow, phases: [{ title: "Find", work: { items: 1, finished: 2, stopped: 0 } }] }],
+        [{ ...workflow, phases: [{ title: "Find", work: { items: 2, finished: 1, stopped: 2 } }] }],
+        [{ ...workflow, status: "needs-input", inputTarget: "user" }],
+        [{ ...workflow, status: "blocked" }],
+      ]) {
+        yield* service.receive(event);
+        expect(available).toBe(true);
+        expect(rows().map((row) => row.id)).toEqual(["flow", "queued"]);
+        yield* Effect.flip(service.receive({ ...event, operation: "publish", items: invalid }));
+        expect(rows()).toEqual([]);
+        expect(available).toBe(false);
+      }
+      // Members are placed leniently: retained history can outlive a workflow's phase list.
+      yield* service.receive({ ...event, items: [workflow, { ...member, phase: "Elsewhere" }] });
+      expect(available).toBe(true);
+      expect(rows()).toHaveLength(2);
+      yield* service.invoke({ ...action(rows()[1]!), actionId: "skip" });
+    }),
+  );
   it.effect("withdraws invalid attention metadata and restores valid publication and actions", () =>
     Effect.gen(function* () {
       const { service, rows, starting } = yield* recordingService;

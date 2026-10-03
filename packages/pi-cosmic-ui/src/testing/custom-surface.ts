@@ -21,7 +21,7 @@ type CustomOptions = Parameters<ExtensionUIContext["custom"]>[1];
 const empty = (): Component => ({ render: () => [], invalidate() {} });
 
 /**
- * Models pinned Pi 0.86's custom UI host. The factory runs synchronously inside `custom`,
+ * Models Pi's custom UI host, unchanged from 0.86 through the pinned 1.0. The factory runs synchronously inside `custom`,
  * and a throw rejects its Promise. Mounting (`showOverlay` plus `onHandle`, or the editor
  * slot) waits for `mount()`. `done` pops the top overlay, not its own, then disposes the
  * mounted component. Non-capturing overlays are treated as close guards.

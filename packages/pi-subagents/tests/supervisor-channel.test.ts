@@ -33,6 +33,7 @@ import {
   type SupervisorChannelHandle,
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
+import { compileResultContract, type ResultContract } from "../src/domain/result-contract.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
   SupervisorAuthTokenSchema,
@@ -101,6 +102,7 @@ const stageAgentHome = (prefix: string) =>
 const openChannel = (
   runId = "agent-supervisor-test",
   options: Omit<SupervisorChannelLayerOptions, "agentDirectory"> = {},
+  resultContract?: ResultContract,
 ): Promise<OpenTestChannel> =>
   stageAgentHome("pi-subagents-supervisor-").then(({ root, agentDirectory, scope }) => {
     const projectDirectory = join(root, "project");
@@ -109,7 +111,7 @@ const openChannel = (
       .then(() =>
         Effect.runPromise(
           makeSupervisorChannel({ agentDirectory, ...options })
-            .open({ runId })
+            .open({ runId, resultContract })
             .pipe(Effect.provideService(Scope.Scope, scope)),
         ),
       )
@@ -1235,6 +1237,48 @@ describe("private supervisor channel", () => {
       });
 
       yield* step(() => direct.close());
+    },
+    20_000,
+  );
+
+  effectTest(
+    "rejects a report that is not a valid result, recording no delivery identity",
+    function* () {
+      const contract = yield* compileResultContract({
+        type: "object",
+        properties: { verdict: { type: "string", enum: ["ok", "bad"] } },
+        required: ["verdict"],
+        additionalProperties: false,
+      }).pipe(Effect.orDie);
+      const { handle } = yield* step(() => openChannel("agent-supervisor-result", {}, contract));
+      const { rpc } = yield* readyHelper(handle);
+
+      for (const [id, report] of [
+        ["prose-result", "The verdict is ok."],
+        ["mismatched-result", '{"verdict":"maybe"}'],
+      ] as const) {
+        const rejected = yield* step(() =>
+          toolCall(rpc, id, "supervisor_submit_report", { delivery_id: "result-1", report }),
+        );
+        expect(rejected).toMatchObject({ result: { isError: true } });
+      }
+      const noEvent = yield* step(() => Effect.runPromise(Queue.poll(handle.events)));
+      expect(Option.isNone(noEvent)).toBe(true);
+
+      const accepted = yield* step(() =>
+        toolCall(rpc, "valid-result", "supervisor_submit_report", {
+          delivery_id: "result-1",
+          report: '{"verdict":"ok"}',
+        }),
+      );
+      expect(accepted).toMatchObject({ result: { content: [{ text: expect.any(String) }] } });
+      expect(accepted).not.toMatchObject({ result: { isError: true } });
+      expect(yield* step(() => takeEvent(handle))).toMatchObject({
+        type: "report",
+        sequence: 1,
+        deliveryId: "result-1",
+        text: '{"verdict":"ok"}',
+      });
     },
     20_000,
   );

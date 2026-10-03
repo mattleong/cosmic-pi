@@ -346,6 +346,139 @@ it.live(
 );
 
 it.live(
+  "removes spent editable trees only after a committed integration",
+  () =>
+    fixture((root) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n"));
+        const { prepared, integration } = yield* prepareIntegration(handle);
+        yield* io(() => fs.writeFile(path.join(root, "src/main.ts"), "late parent\n"));
+        expect(yield* fails(service.integrate(integration))).toBe(true);
+        expect(yield* exists(handle.cwd)).toBe(true);
+        expect(yield* exists(prepared.cwd)).toBe(true);
+        yield* io(() => fs.writeFile(path.join(root, "src/main.ts"), "baseline\n"));
+        yield* service.integrate(integration);
+        expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+        expect((yield* service.inspect(target(handle))).status).toBe("integrated");
+        expect(yield* exists(handle.cwd)).toBe(false);
+        expect(yield* exists(prepared.cwd)).toBe(false);
+      }),
+    ),
+  60_000,
+);
+
+it.live(
+  "retains integrated trees on request",
+  () =>
+    fixture((root) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "other.txt"), "worker\n"));
+        const { prepared, integration } = yield* prepareIntegration(handle);
+        yield* service.integrate({ ...integration, retainTrees: true });
+        expect(yield* readText(root, "other.txt")).toBe("worker\n");
+        expect(yield* readText(handle.cwd, "other.txt")).toBe("worker\n");
+        expect(yield* exists(prepared.cwd)).toBe(true);
+      }),
+    ),
+  60_000,
+);
+
+it.live(
+  "keeps the worker when it holds files the integrated revision left out",
+  () =>
+    fixture((root) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        const invoice = path.join(handle.cwd, "src/Billing/Invoice.cs");
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n"));
+        yield* io(() => fs.mkdir(path.dirname(invoice), { recursive: true }));
+        yield* io(() => fs.writeFile(invoice, "class Invoice {}\n"));
+        // Ignored by the source's own rules, so it is disposable output that keeps nothing.
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "ignored.ts"), "output\n"));
+        const { revision, prepared, integration } = yield* prepareIntegration(handle);
+        expect(revision.changedPaths).toEqual(["src/main.ts"]);
+        const integrated = yield* service.integrate(integration);
+        expect(integrated.uncapturedPaths).toEqual(["src/Billing/Invoice.cs"]);
+        expect(integrated.record.status).toBe("integrated");
+        expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+        expect(yield* exists(path.join(root, "src/Billing/Invoice.cs"))).toBe(false);
+        expect(yield* readText(integrated.workerRoot, "src/Billing/Invoice.cs")).toBe(
+          "class Invoice {}\n",
+        );
+        expect(yield* exists(prepared.cwd)).toBe(false);
+        // Discarding the integrated workspace afterwards deletes the kept worker.
+        yield* service.discard(target(handle));
+        expect(yield* exists(handle.cwd)).toBe(false);
+      }),
+    ),
+  60_000,
+);
+
+it.live(
+  "keeps the worker for writer files at paths the source itself left out",
+  () =>
+    fixture((root) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        // The source tracks an excluded vendor file and holds an ineligible untracked file.
+        yield* io(() => fs.mkdir(path.join(root, "vendor")));
+        yield* io(() => fs.writeFile(path.join(root, "vendor/lib.go"), "package lib\n"));
+        yield* git(root, ["add", "vendor/lib.go"]);
+        yield* git(root, ["commit", "-m", "vendor"]);
+        yield* io(() => fs.writeFile(path.join(root, "notes.cs"), "source notes\n"));
+        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        expect(yield* exists(path.join(handle.cwd, "vendor/lib.go"))).toBe(false);
+        expect(yield* exists(path.join(handle.cwd, "notes.cs"))).toBe(false);
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n"));
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "notes.cs"), "writer notes\n"));
+        yield* io(() => fs.mkdir(path.join(handle.cwd, "vendor")));
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "vendor/lib.go"), "package patched\n"));
+        yield* io(() => fs.writeFile(path.join(handle.cwd, ".env"), "LOCAL=1\n"));
+        const { revision, integration } = yield* prepareIntegration(handle);
+        expect(revision.changedPaths).toEqual(["src/main.ts"]);
+        const integrated = yield* service.integrate(integration);
+        expect([...integrated.uncapturedPaths].sort()).toEqual([
+          ".env",
+          "notes.cs",
+          "vendor/lib.go",
+        ]);
+        expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+        expect(yield* readText(root, "notes.cs")).toBe("source notes\n");
+        expect(yield* readText(root, "vendor/lib.go")).toBe("package lib\n");
+        expect(yield* readText(integrated.workerRoot, "notes.cs")).toBe("writer notes\n");
+        expect(yield* readText(integrated.workerRoot, "vendor/lib.go")).toBe("package patched\n");
+      }),
+    ),
+  60_000,
+);
+
+it.live(
+  "keeps a fork's worker for writer files at paths its source left out",
+  () =>
+    fixture((root) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const original = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        const fork = yield* service.fork(target(original));
+        expect(yield* exists(path.join(fork.cwd, ".env"))).toBe(false);
+        yield* io(() => fs.writeFile(path.join(fork.cwd, "src/main.ts"), "retry\n"));
+        yield* io(() => fs.writeFile(path.join(fork.cwd, ".env"), "LOCAL=1\n"));
+        const { integration } = yield* prepareIntegration(fork);
+        const integrated = yield* service.integrate(integration);
+        expect(integrated.uncapturedPaths).toEqual([".env"]);
+        expect(yield* readText(root, "src/main.ts")).toBe("retry\n");
+        expect(yield* readText(integrated.workerRoot, ".env")).toBe("LOCAL=1\n");
+      }),
+    ),
+  60_000,
+);
+
+it.live(
   "forks the original baseline, invalidates revisions and retains recovery metadata",
   () =>
     fixture((root, agent) =>

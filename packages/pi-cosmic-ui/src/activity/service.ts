@@ -13,6 +13,8 @@ import {
   ActivityStartingSchema,
   activityKey,
   type ActivityEnvelope,
+  type ActivityItem,
+  type ActivityPhase,
   type ActivityProviderOptions,
 } from "./protocol.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
@@ -58,6 +60,8 @@ interface ActivityViewSnapshot {
 }
 export interface ActivityServiceOptions {
   readonly publish: (rows: readonly ActivityRow[], starting: number) => void;
+  /** Runs after each committed change; may request followed details. */
+  readonly changed?: () => void;
   readonly tick?: (now: number) => void;
   readonly connect?: (service: ActivityServiceContract) => () => void;
 }
@@ -70,6 +74,27 @@ const cleanDetail = (text: string) =>
     maximumLength: 16384,
   });
 type Acknowledgement = readonly [Provider, boolean];
+const uniqueIds = (ids: readonly string[]) => new Set(ids).size === ids.length;
+const consistentWork = ({ work }: ActivityPhase) =>
+  !work || (work.finished <= work.items && work.stopped <= work.finished);
+/** Workflow phases describe the workflow row; attention rolls up from its members only. */
+const consistentWorkflow = (item: ActivityItem) => {
+  if (item.kind !== "workflow") return item.phases === undefined;
+  const titles = item.phases?.map((phase) => phase.title) ?? [];
+  return (
+    uniqueIds(titles) &&
+    (item.phases ?? []).every(consistentWork) &&
+    (item.phase === undefined || titles.includes(item.phase)) &&
+    item.status !== "needs-input" &&
+    item.status !== "blocked"
+  );
+};
+/** Runs on cleaned items so titles that collide after sanitizing are rejected too. */
+const consistentSnapshot = (items: readonly ActivityItem[]) =>
+  uniqueIds(items.map((item) => item.id)) &&
+  items.every(
+    (item) => uniqueIds(item.actions?.map((action) => action.id) ?? []) && consistentWorkflow(item),
+  );
 export class ActivityService extends Context.Service<ActivityService, ActivityServiceContract>()(
   "pi-cosmic-ui/activity/service/ActivityService",
 ) {
@@ -90,6 +115,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         }),
         (view) => options.publish(view.rows, view.starting),
       ).pipe(Effect.mapError(failed));
+      const changed = callback(() => options.changed?.()).pipe(Effect.ignore);
       const receive = (event: ActivityEnvelope) =>
         Effect.gen(function* () {
           const notices = yield* state
@@ -122,14 +148,10 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                 const starting = yield* Schema.decodeUnknownEffect(ActivityStartingSchema)(
                   event.starting === undefined ? 0 : event.starting,
                 ).pipe(Effect.mapError(() => new ActivityError({ reason: "invalid" })));
-                if (
-                  new Set(decoded.map((item) => item.id)).size !== decoded.length ||
-                  decoded.some(
-                    (item) =>
-                      new Set(item.actions?.map((action) => action.id)).size !==
-                      (item.actions?.length ?? 0),
-                  )
-                )
+                const cleaned = decoded.map((item) =>
+                  detachActivityItem(item, cleanText, cleanDetail),
+                );
+                if (!consistentSnapshot(cleaned))
                   return yield* new ActivityError({ reason: "invalid" });
                 const isNew = current?.token !== event.token;
                 if (
@@ -142,16 +164,13 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                 )
                   return unchanged;
                 const generation = isNew ? old.serial + 1 : current!.generation;
-                const items: readonly ActivityRow[] = decoded.map((item) => {
-                  const detached = detachActivityItem(item, cleanText, cleanDetail);
-                  return {
-                    ...detached,
-                    actions: detached.actions ?? [],
-                    key: activityKey(event.providerId, item.id),
-                    providerId: event.providerId,
-                    generation,
-                  };
-                });
+                const items: readonly ActivityRow[] = cleaned.map((item) => ({
+                  ...item,
+                  actions: item.actions ?? [],
+                  key: activityKey(event.providerId, item.id),
+                  providerId: event.providerId,
+                  generation,
+                }));
                 const provider: Provider = isNew
                   ? {
                       token: event.token,
@@ -192,6 +211,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
               continue;
             yield* callback(() => provider.acknowledge(available)).pipe(Effect.ignore);
           }
+          yield* changed;
         }).pipe(
           Effect.tapError((error) => {
             if (error.reason !== "invalid") return Effect.void;
@@ -215,6 +235,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                 ] as const);
               })
               .pipe(
+                Effect.tap(() => changed),
                 Effect.flatMap((acknowledge) =>
                   acknowledge ? callback(() => acknowledge(false)) : Effect.void,
                 ),
@@ -224,7 +245,12 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         );
       const checkedRow = (request: ActivityDetailRequest): ActivityRow => {
         const row = state.getSnapshot().rows.find((item) => item.key === request.key);
-        if (!row || row.generation !== request.generation || row.revision !== request.revision)
+        if (
+          !row ||
+          row.retained ||
+          row.generation !== request.generation ||
+          row.revision !== request.revision
+        )
           throw new ActivityError({ reason: "stale" });
         return row;
       };

@@ -171,6 +171,13 @@ const scenarios: ReadonlyArray<
         durationMs: 2600,
         cost: 0.03,
       },
+      {
+        ...nativeCall("ok"),
+        name: "models.generateImages",
+        args: "provider/image-model",
+        durationMs: 9100,
+        cost: 0.04,
+      },
     ]),
   },
   {

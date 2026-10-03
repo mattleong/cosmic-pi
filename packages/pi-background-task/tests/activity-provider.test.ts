@@ -23,6 +23,63 @@ const task: BackgroundTaskView = {
 };
 
 describe("background task activity provider", () => {
+  it.effect("clears only finished producer records and cannot reuse a cleared action", () =>
+    Effect.gen(function* () {
+      const transport = fakeActivityHost();
+      const bridge = makeProjectionBridge();
+      bridge.publish({
+        tasks: [task, { ...task, id: "finished", state: "exited", exitCode: 0, endedAt: 2 }],
+      });
+      const clear = vi.fn(() => {
+        bridge.publish({ tasks: bridge.get().tasks.filter((entry) => entry.state === "running") });
+        return Promise.resolve();
+      });
+      const stop = vi.fn(() => Promise.resolve());
+      const dispose = registerBackgroundTaskActivity({
+        events: transport.events,
+        sessionId: "session",
+        bridge,
+        isCurrent: () => true,
+        stop,
+        clear,
+      });
+      const finished = backgroundTaskActivityItems(bridge.get()).find(
+        (item) => item.id === "finished",
+      )!;
+      expect(finished.actions?.find((action) => action.id === "clear")?.confirmation).toBeTruthy();
+      const invoke = transport.capability()!.invoke!;
+      const signal = new AbortController().signal;
+      yield* Effect.promise(() => invoke("finished", "clear", finished.revision, signal));
+      expect(bridge.get().tasks).toEqual([task]);
+      yield* Effect.promise(() =>
+        expect(invoke("finished", "clear", finished.revision, signal)).rejects.toThrow(),
+      );
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      dispose();
+    }),
+  );
+
+  it("retains technical task evidence alongside the selected bounded log tail", () => {
+    const detail = backgroundTaskActivityDetail(
+      {
+        tasks: [
+          {
+            ...task,
+            pid: 17,
+            state: "failed",
+            exitCode: 2,
+            signal: "SIGTERM",
+            droppedLogBytes: 42,
+          },
+        ],
+      },
+      task.id,
+    )!;
+    for (const evidence of ["17", "SIGTERM", "42", "private output", task.cwd])
+      expect(detail).toContain(evidence);
+  });
+
   it("projects wait ownership without changing task status", () => {
     for (const awaited of [true, false]) {
       const items = backgroundTaskActivityItems({ tasks: [{ ...task, awaited }] });

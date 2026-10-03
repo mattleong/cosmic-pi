@@ -1,8 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
+import { effectTest, step } from "./support/effect-test.ts";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
+import type { SubagentRunView } from "../src/run/model.ts";
 import {
   registerSubagentActivity,
   subagentActivityItems,
@@ -12,6 +15,163 @@ import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { view } from "./tools/fixtures/tool-harness.ts";
 
 describe("subagent activity provider", () => {
+  it("preserves the fleet action matrix without enabling claims or unresolved steering", () => {
+    const actions = (patch: Partial<SubagentRunView>) =>
+      subagentActivityItems({ revision: 1, runs: [view(patch)] })[0]!.actions!.map(
+        (action) => action.id,
+      );
+    expect(actions({ state: "completed" })).toEqual(expect.arrayContaining(["resume", "rename"]));
+    expect(actions({ state: "reported", closeOnReport: false })).toContain("message");
+    expect(
+      actions({
+        state: "waiting_for_parent",
+        question: { requestId: "q", message: "Question", createdAt: 1 },
+      }),
+    ).toContain("reply");
+    for (const steeringDelivery of ["pending", "unresolved"] as const) {
+      const offered = actions({ state: "running", steeringDelivery });
+      expect(offered).not.toContain("message");
+      expect(offered).not.toContain("interrupt");
+      expect(offered).toContain("stop");
+    }
+    expect(actions({ state: "paused", writeAdmissionPaused: true })).not.toContain("resume");
+    expect(actions({ state: "running", capabilities: [] })).toEqual(["stop"]);
+  });
+
+  for (const action of ["message", "reply", "rename", "resume"] as const) {
+    effectTest(
+      `applies ${action} after input despite unrelated progress, with captured user text`,
+      function* () {
+        const transport = fakeActivityHost();
+        const bridge = makeSubagentProjectionBridge();
+        const selected = view({
+          id: "selected",
+          state:
+            action === "reply" ? "waiting_for_parent" : action === "resume" ? "paused" : "running",
+          ...(action === "reply" && {
+            question: { requestId: "q", message: "Question", createdAt: 1 },
+          }),
+        });
+        bridge.publish({ revision: 1, runs: [selected, view({ id: "other" })] });
+        const pending = deferredPromise<string | undefined>();
+        const admitted = deferredPromise<void>();
+        const act = vi.fn(() => Promise.resolve());
+        const dispose = registerSubagentActivity({
+          events: transport.events,
+          sessionId: "session",
+          bridge,
+          isCurrent: () => true,
+          input: () => {
+            admitted.resolve();
+            return pending.promise;
+          },
+          act,
+        });
+        const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation()).find(
+          (item) => item.id === "selected",
+        )!;
+        const signal = new AbortController().signal;
+        const call = transport.capability()!.invoke!(item.id, action, item.revision, signal);
+        yield* step(() => admitted.promise);
+        bridge.publish({
+          revision: 2,
+          runs: [{ ...selected, progress: "Progress" }, view({ id: "other", state: "completed" })],
+        });
+        pending.resolve(action === "resume" ? "" : " user text ");
+        yield* step(() => call);
+        expect(act).toHaveBeenCalledWith(
+          "selected",
+          action,
+          signal,
+          action === "resume" ? undefined : "user text",
+        );
+        dispose();
+      },
+    );
+  }
+
+  for (const changed of [
+    "assignment",
+    "question",
+    "session",
+    "cancel",
+    "dispose",
+    "policy",
+    "host-withdrawal",
+    "host-restored",
+    "host-replaced",
+  ] as const) {
+    effectTest(`rejects a prompted action after ${changed} changes`, function* () {
+      const transport = fakeActivityHost();
+      const bridge = makeSubagentProjectionBridge();
+      const selected = view({
+        id: "selected",
+        state: "waiting_for_parent",
+        question: { requestId: "q", message: "Question", createdAt: 1 },
+      });
+      bridge.publish({ revision: 1, runs: [selected] });
+      const pending = deferredPromise<string | undefined>();
+      const admitted = deferredPromise<void>();
+      const act = vi.fn(() => Promise.resolve());
+      let current = true;
+      const dispose = registerSubagentActivity({
+        events: transport.events,
+        sessionId: "session",
+        bridge,
+        isCurrent: () => current,
+        input: () => {
+          admitted.resolve();
+          return pending.promise;
+        },
+        act,
+      });
+      const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation())[0]!;
+      const controller = new AbortController();
+      const call = transport.capability()!.invoke!(
+        item.id,
+        "reply",
+        item.revision,
+        controller.signal,
+      );
+      yield* step(() => admitted.promise);
+      if (changed === "session") current = false;
+      else if (changed === "cancel") controller.abort();
+      else if (changed === "dispose") dispose();
+      else if (changed.startsWith("host-")) {
+        transport.events.emit(ACTIVITY_HOST, {
+          version: 1,
+          sessionId: "session",
+          hostToken: transport.hostToken,
+          available: false,
+        });
+        if (changed !== "host-withdrawal")
+          transport.events.emit(ACTIVITY_HOST, {
+            version: 1,
+            sessionId: "session",
+            hostToken: changed === "host-replaced" ? {} : transport.hostToken,
+            available: true,
+          });
+      } else
+        bridge.publish({
+          revision: 2,
+          runs: [
+            {
+              ...selected,
+              ...(changed === "assignment" && { reportGeneration: selected.reportGeneration + 1 }),
+              ...(changed === "question" && {
+                question: { requestId: "q-new", message: "Another question", createdAt: 2 },
+              }),
+              ...(changed === "policy" && { writeAdmissionPaused: true }),
+            },
+          ],
+        });
+      pending.resolve("reply text");
+      yield* step(() => expect(call).rejects.toThrow());
+      expect(act).not.toHaveBeenCalled();
+      dispose();
+    });
+  }
+
   it("projects the selected profile independently of the run name or hierarchy", () => {
     const items = subagentActivityItems({
       revision: 1,
@@ -53,7 +213,7 @@ describe("subagent activity provider", () => {
     expect(items.map((item) => item.id)).toEqual(["parent", "child", "old"]);
     expect(items[1]?.parent).toEqual({ providerId: "pi-subagents", itemId: "parent" });
     expect(items[0]?.status).toBe("done");
-    expect(items[0]?.actions).toEqual([]);
+    expect(items[0]?.actions?.map((action) => action.id)).not.toContain("stop");
   });
 
   it("keeps terminal transitions discoverable and redacts producer payloads", () => {
@@ -205,14 +365,16 @@ describe("subagent activity provider", () => {
         .filter((item) => item.awaited)
         .map((item) => item.id),
     ).toEqual(["run", "child"]);
-    const revision = items()[0]!.revision;
+    const revisions = () => items().map((item) => item.revision);
+    const [run, child, other] = revisions();
     overlap();
     expect(
       items()
         .filter((item) => item.awaited)
         .map((item) => item.id),
     ).toEqual(["run"]);
-    expect(items()[0]!.revision).not.toBe(revision);
+    // Only the item whose await marker changed gets a new revision.
+    expect(revisions()).toEqual([run, expect.not.stringMatching(`^${child}$`), other]);
     stopAwait();
     expect(items().some((item) => item.awaited)).toBe(false);
     expect(items()).toHaveLength(3);

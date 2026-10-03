@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import {
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
   MAX_BACKEND_REPORT_ID_CHARS,
@@ -9,6 +10,7 @@ import {
   type BackendHandle,
   type BackendReport,
 } from "../backend/model.ts";
+import { canonicalResultJson, decodeResultText } from "../domain/result-contract.ts";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
   clearRunNativeActivity,
@@ -61,6 +63,87 @@ const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => 
     default:
       return "Assignment settled without a successful nonempty final report.";
   }
+};
+
+/** The contract value accepted for this assignment; it completes the assignment once settled. */
+const acceptedResult = (record: RunRecord, assignmentEpoch: number): string | undefined =>
+  record.structuredResult?.assignmentEpoch === assignmentEpoch
+    ? record.structuredResult.json
+    : undefined;
+
+/**
+ * How a settled assignment proceeds; caller holds the run lock. A pause committed for the
+ * assignment ignores the settlement unless a result was already accepted, which outlives the pause.
+ */
+const settledAssignmentLocked = (
+  record: RunRecord,
+  assignmentEpoch: number,
+  terminal: BackendAssistantTerminal | undefined,
+): "ignored" | "buffered" | "running" => {
+  if (
+    record.assignment.epoch !== assignmentEpoch ||
+    (record.pausedAssignmentEpoch === assignmentEpoch &&
+      acceptedResult(record, assignmentEpoch) === undefined) ||
+    record.assignment.phase === "preparing" ||
+    record.assignment.phase === "reported" ||
+    isInactiveRunRecord(record)
+  )
+    return "ignored";
+  if (record.assignment.phase === "issuing") {
+    record.assignment.pendingRunSettled = { terminal };
+    return "buffered";
+  }
+  return "running";
+};
+
+/** Text a settled assignment wrote: its report, or a contract result written as JSON text. */
+const settledText = (record: RunRecord, terminal?: BackendAssistantTerminal) =>
+  Effect.gen(function* () {
+    const text =
+      terminal?.stopReason === "stop" && terminal.text
+        ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
+        : undefined;
+    const contract = record.launch.resultContract;
+    if (!contract || !text) return { text, problem: undefined };
+    const decoded = yield* Effect.result(decodeResultText(contract, text));
+    return Result.isSuccess(decoded)
+      ? { text: canonicalResultJson(decoded.success), problem: undefined }
+      : { text: undefined, problem: decoded.failure.message };
+  });
+
+const settledFailureMessage = (
+  record: RunRecord,
+  terminal: BackendAssistantTerminal | undefined,
+  problem: string | undefined,
+): string => {
+  const reason =
+    record.launch.resultContract && terminal?.stopReason === "stop"
+      ? problem
+        ? `Assignment finished without submitting its structured result, and its final text is not a valid result: ${problem}`
+        : "Assignment finished without submitting its structured result."
+      : terminalFailureMessage(terminal);
+  return `${reason} Work and writes may already exist; inspect them before an explicit retry.`;
+};
+
+/** A backend report as the run's final text; a contract run's report must be its JSON result. */
+const reportFinalText = (record: RunRecord, text: string) => {
+  const contract = record.launch.resultContract;
+  if (!contract)
+    return Effect.succeed(sanitizeOutputText(text, MAX_BACKEND_REPORT_TEXT_CHARS).trim());
+  return decodeResultText(contract, text).pipe(
+    Effect.mapBoth({
+      onFailure: (error) =>
+        new SubagentProcessError({
+          operation: "accept report from",
+          code: "backend_report_schema_invalid",
+          message: sanitizeDiagnosticText(
+            `Subagent ${record.view.id} reported a result that does not match its schema: ${error.message}`,
+            MAX_ERROR_CHARS,
+          ),
+        }),
+      onSuccess: canonicalResultJson,
+    }),
+  );
 };
 
 const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
@@ -186,6 +269,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       }),
     );
 
+  /** Commits a requested pause at settlement, unless the assignment already returned its result. */
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
     withLock(
       Effect.gen(function* () {
@@ -193,7 +277,8 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           !record.pauseRequested ||
           isInactiveRunRecord(record) ||
           record.assignment.epoch !== assignmentEpoch ||
-          record.assignment.phase !== "running"
+          record.assignment.phase !== "running" ||
+          acceptedResult(record, assignmentEpoch) !== undefined
         )
           return undefined;
         const view = commitRunPauseLocked(record, now);
@@ -516,7 +601,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           code: "backend_report_invalid",
           message: `Subagent ${record.view.id} emitted an invalid bounded report event.`,
         });
-      const text = sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim();
+      const text = yield* reportFinalText(record, rawReport.text);
       if (!text)
         return yield* new SubagentProcessError({
           operation: "accept report from",
@@ -570,21 +655,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     Effect.gen(function* () {
       if (record.view.closeOnReport === false) return;
       const phase = yield* withLock(
-        Effect.sync(() => {
-          if (
-            record.assignment.epoch !== assignmentEpoch ||
-            record.pausedAssignmentEpoch === assignmentEpoch ||
-            record.assignment.phase === "preparing" ||
-            record.assignment.phase === "reported" ||
-            isInactiveRunRecord(record)
-          )
-            return "ignored" as const;
-          if (record.assignment.phase === "issuing") {
-            record.assignment.pendingRunSettled = { terminal };
-            return "buffered" as const;
-          }
-          return "running" as const;
-        }),
+        Effect.sync(() => settledAssignmentLocked(record, assignmentEpoch, terminal)),
       );
       if (phase !== "running") return;
       if (record.pauseRequested) {
@@ -593,29 +664,31 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         if (paused || record.stoppedByParent) return;
       }
       if (record.stoppedByParent) return;
-      const text = terminal?.text
-        ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
-        : undefined;
-      if (terminal?.stopReason === "stop" && text) {
-        const prepared = yield* withLock(
-          Effect.sync(() => {
-            if (
-              isInactiveRunRecord(record) ||
-              record.assignment.epoch !== assignmentEpoch ||
-              record.assignment.phase !== "running"
-            )
-              return false;
-            record.latestAssistantText = text;
-            return true;
-          }),
-        );
-        if (prepared) yield* settle(record, "completed");
-        return;
-      }
-      yield* failRun(
-        record,
-        `${terminalFailureMessage(terminal)} Work and writes may already exist; inspect them before an explicit retry.`,
+      // Settled text is decoded only when no value was accepted; it could not replace one.
+      const written =
+        acceptedResult(record, assignmentEpoch) === undefined
+          ? yield* settledText(record, terminal)
+          : { text: undefined, problem: undefined };
+      const outcome = yield* withLock(
+        Effect.sync(() => {
+          // An accepted contract result completes the run even after tool use, a later turn, or
+          // a pause that raced its settlement.
+          const finalText = acceptedResult(record, assignmentEpoch) ?? written.text;
+          if (!finalText) return "failed";
+          if (
+            isInactiveRunRecord(record) ||
+            record.assignment.epoch !== assignmentEpoch ||
+            record.assignment.phase !== "running"
+          )
+            return "ignored";
+          record.latestAssistantText = finalText;
+          record.pausedAssignmentEpoch = undefined;
+          return "completed";
+        }),
       );
+      if (outcome === "completed") yield* settle(record, "completed");
+      if (outcome === "failed")
+        yield* failRun(record, settledFailureMessage(record, terminal, written.problem));
     });
 
   return {

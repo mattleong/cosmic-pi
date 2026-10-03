@@ -1,6 +1,6 @@
 # MCP Previews
 
-Always-on previews for Pi's native MCP tools and resources. Requires Pi 0.99's public `createMcpExtension()` factory.
+Always-on previews for Pi's native MCP tools and resources. Requires the public `createMcpExtension()` factory from Pi 0.99 or later; the workspace pins Pi 1.0.0.
 
 ## Install
 

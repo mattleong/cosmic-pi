@@ -12,13 +12,28 @@ export const ACTIVITY_HOST = "cosmic-ui:activity:host:v1";
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+const PhaseTitle = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160));
+const Count = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(1_000_000),
+);
+export const ActivityPhaseSchema = Schema.Struct({
+  title: PhaseTitle,
+  detail: Schema.optional(Text),
+  /**
+   * The producer's own count of the phase's work, including members it no longer publishes or
+   * the host no longer retains. When present, the phase state comes from it, not visible members.
+   */
+  work: Schema.optional(Schema.Struct({ items: Count, finished: Count, stopped: Count })),
+});
+export type ActivityPhase = typeof ActivityPhaseSchema.Type;
 export const ActivityStartingSchema = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
   Schema.isLessThanOrEqualTo(16384),
 );
 const ActivityFields = {
   id: Id,
-  kind: Schema.Literals(["agent", "command", "question"]),
+  kind: Schema.Literals(["agent", "command", "question", "workflow"]),
   title: Schema.String.check(Schema.isMaxLength(512)),
   profile: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
   route: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
@@ -30,10 +45,23 @@ const ActivityFields = {
   parent: Schema.optional(Schema.Struct({ providerId: Id, itemId: Id })),
   summary: Schema.optional(Text),
   detail: Schema.optional(Schema.String.check(Schema.isMaxLength(16384))),
+  /** Workflow items only: ordered display phases, at most 32. */
+  phases: Schema.optional(Schema.Array(ActivityPhaseSchema).check(Schema.isMaxLength(32))),
+  /** A workflow's current phase, or the phase a direct workflow member belongs to. */
+  phase: Schema.optional(PhaseTitle),
   actions: Schema.optional(
-    Schema.Array(Schema.Struct({ id: Id, label: Text, confirmation: Schema.optional(Text) })).check(
-      Schema.isMaxLength(16),
-    ),
+    Schema.Array(
+      Schema.Struct({
+        id: Id,
+        label: Text,
+        confirmation: Schema.optional(Text),
+        /**
+         * Whether the producer opens its own UI for this action, so the manager closes first.
+         * Defaults to true; only `false` actions, which open no UI, run with the manager open.
+         */
+        handoff: Schema.optional(Schema.Boolean),
+      }),
+    ).check(Schema.isMaxLength(16)),
   ),
 };
 export const ActivityItemSchema = Schema.Union([
@@ -113,7 +141,10 @@ export const ActivityHostSchema = Schema.Struct({
 const safeSummary = (text: string, limit: number) =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(text.slice(0, limit)), { maximumLength: limit });
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] | undefined => {
-  if (items.length > 512 || items.some((item) => (item.actions?.length ?? 0) > 16))
+  if (
+    items.length > 512 ||
+    items.some((item) => (item.actions?.length ?? 0) > 16 || (item.phases?.length ?? 0) > 32)
+  )
     return undefined;
   return items.map((item) =>
     detachActivityItem(item, safeSummary, (detail) =>
@@ -219,8 +250,13 @@ export interface RevisionedActivityProviderOptions {
   readonly items: () => readonly ActivityItem[];
   /** Detail for an item that passed the session and exact-revision checks. */
   readonly detail: (item: ActivityItem) => string;
-  /** Runs an action that the checked item revision currently offers. */
-  readonly act: (item: ActivityItem, actionId: string, signal: AbortSignal) => Promise<void>;
+  /** Recheck invocationCurrent after user input or another yield before changing source state. */
+  readonly act: (
+    item: ActivityItem,
+    actionId: string,
+    signal: AbortSignal,
+    invocationCurrent: () => boolean,
+  ) => Promise<void>;
   /** Change sources that republish the snapshot; each returns its unsubscribe. */
   readonly subscriptions: ReadonlyArray<(publish: () => void) => () => void>;
   readonly starting?: () => number;
@@ -236,6 +272,7 @@ export function registerRevisionedActivityProvider(
   options: RevisionedActivityProviderOptions,
 ): () => void {
   let live = true;
+  let availabilityGeneration = 0;
   const current = () => live && options.isCurrent();
   const lookup = (id: string, revision: string, signal: AbortSignal) => {
     if (!current() || signal.aborted) throw new Error("Activity provider is unavailable.");
@@ -251,16 +288,25 @@ export function registerRevisionedActivityProvider(
     ...(starting && { starting: () => (current() ? starting() : 0) }),
     getDetail: (id, revision, signal) =>
       Promise.resolve().then(() => options.detail(lookup(id, revision, signal))),
-    invoke: (id, action, revision, signal) =>
-      Promise.resolve().then(() => {
+    invoke: (id, action, revision, signal) => {
+      const generation = availabilityGeneration;
+      const invocationCurrent = () =>
+        current() &&
+        !signal.aborted &&
+        registration.isAvailable() &&
+        generation === availabilityGeneration;
+      return Promise.resolve().then(() => {
+        if (!invocationCurrent()) throw new Error("Activity provider is unavailable.");
         const item = lookup(id, revision, signal);
         if (!item.actions?.some((allowed) => allowed.id === action))
           throw new Error("Activity action is unavailable.");
-        return options.act(item, action, signal);
-      }),
-    ...(onAvailability && {
-      onAvailability: (available: boolean) => onAvailability(available, current),
-    }),
+        return options.act(item, action, signal, invocationCurrent);
+      });
+    },
+    onAvailability: (available: boolean) => {
+      availabilityGeneration++;
+      onAvailability?.(available, current);
+    },
   });
   const unsubscribes = options.subscriptions.map((subscribe) =>
     subscribe(() => registration.publish()),

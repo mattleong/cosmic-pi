@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 const rootDir = join(import.meta.dirname, "..");
 const packages = [
   "pi-code-previews",
+  "pi-cosmic-ui",
   "pi-subagents",
   "pi-mcp-previews",
   "pi-background-task",

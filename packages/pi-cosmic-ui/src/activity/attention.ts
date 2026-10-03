@@ -14,6 +14,12 @@ const blockedLabels = {
   "write-containment": "pausing writes for safety",
 } as const;
 
+/** Work that has not started yet, such as a workflow agent waiting for a slot. */
+export const activityQueued = (item: ActivityItem): boolean =>
+  item.status === "pending" &&
+  item.startedAt === undefined &&
+  (item.kind === "agent" || item.kind === "command");
+
 /** The shared state word; questionnaires are queued and cancelled, work starts and is stopped. */
 export function activityStatus(item: ActivityItem): string {
   const attention = activityAttention(item);
@@ -25,7 +31,9 @@ export function activityStatus(item: ActivityItem): string {
   if (item.status === "cancelled")
     return item.kind === "question" ? "cancelled" : managerActivityLabel("stopped");
   if (item.status === "pending")
-    return item.kind === "question" ? "queued" : managerActivityLabel("pending");
+    return item.kind === "question" || activityQueued(item)
+      ? "queued"
+      : managerActivityLabel("pending");
   return managerActivityLabel(item.status);
 }
 

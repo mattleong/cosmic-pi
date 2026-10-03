@@ -20,9 +20,17 @@ const registrations = (repository: string) =>
     ),
   );
 
-/** Caller holds the store lock and has confirmed process cleanup and record ownership. */
-export const removeWorkspaceTrees = (registry: string, record: WorkspaceRecord) =>
+/**
+ * Caller holds the store lock and has confirmed process cleanup and record ownership.
+ * `keepWorker` removes only the test trees, leaving a worker that still holds files.
+ */
+export const removeWorkspaceTrees = (
+  registry: string,
+  record: WorkspaceRecord,
+  keepWorker = false,
+) =>
   Effect.gen(function* () {
+    const removedWorker = (name: string) => name === "worker" && !keepWorker;
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
     const repository = path.join(directory, "repo.git");
     const names = yield* workspaceIO("discard", () => fs.readdir(directory));
@@ -78,7 +86,7 @@ export const removeWorkspaceTrees = (registry: string, record: WorkspaceRecord) 
     // Validate seed provenance before deleting any of this proposal's editable trees.
     if (seedRepository) yield* git(seedRepository, ["worktree", "remove", "--force", seed]);
     for (const name of names.filter(
-      (name) => name === "worker" || /^prepare-[a-f0-9-]{36}$/u.test(name),
+      (name) => removedWorker(name) || /^prepare-[a-f0-9-]{36}$/u.test(name),
     )) {
       const tree = path.join(directory, name);
       yield* checkDirectory(tree);
@@ -86,7 +94,9 @@ export const removeWorkspaceTrees = (registry: string, record: WorkspaceRecord) 
     }
     const remaining = yield* workspaceIO("discard", () => fs.readdir(directory));
     if (
-      remaining.some((name) => name === "seed" || name === "worker" || name.startsWith("prepare-"))
+      remaining.some(
+        (name) => name === "seed" || removedWorker(name) || name.startsWith("prepare-"),
+      )
     )
       return yield* workspaceFailure(
         "recovery",

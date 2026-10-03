@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import { SubagentProcessError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
+import { isTerminalRunState } from "./model.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 /**
@@ -13,7 +14,7 @@ import { recordRunWarning } from "./warnings.ts";
  * run record. Every field mutation stays under the shared service lock.
  */
 export function makeRunRecordCleanup(dependencies: RunContext) {
-  const { withLock, publish, writerPools } = dependencies;
+  const { withLock, publish, recheckAdmission, writerPools } = dependencies;
 
   const reclaimRecordRunState = (record: RunRecord) =>
     Effect.gen(function* () {
@@ -77,11 +78,16 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
           record.view.state === "failed" ||
           record.view.state === "stopped" ||
           record.view.state === "stopping";
+        // A terminal run settled before its process slot was released here; publish the slot
+        // release too, so admission waiters wake. Non-terminal runs publish when they settle.
+        const publishRelease =
+          record.view.pid !== undefined || isTerminalRunState(record.view.state);
         if (record.view.pid !== undefined) {
           const { pid: _pid, ...view } = record.view;
           record.view = view;
-          yield* publish;
         }
+        // Publishing rechecks admission; a pid-less, non-terminal release still frees a slot.
+        yield* publishRelease ? publish : recheckAdmission;
         return { owned: true as const, shouldReclaim, cleanupSettlement };
       }),
     ).pipe(

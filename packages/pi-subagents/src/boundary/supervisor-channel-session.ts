@@ -1,5 +1,5 @@
 // Private authenticated session state for the loopback supervisor channel.
-import { synchronousRandomHex, type TokenVerifier } from "pi-cosmic-core";
+import { clipText, synchronousRandomHex, type TokenVerifier } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,6 +10,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
+import { decodeResultText, type ResultContract } from "../domain/result-contract.ts";
 import {
   SUPERVISOR_CHANNEL_VERSION,
   SupervisorChannelIdSchema,
@@ -93,15 +94,32 @@ interface PendingEpochAcknowledgement {
 export const channelError = (operation: string, code: string, message: string) =>
   new SupervisorChannelError({ operation, code, message });
 const rpcFailure = (code: string, message: string) => new SupervisorRpcFailure({ code, message });
+const MAX_RPC_FAILURE_CHARS = 512;
+
+/** Rejects a contract run's report unless it is one JSON value the contract accepts. */
+const validateReportResult = (contract: ResultContract | undefined, text: string) =>
+  contract
+    ? decodeResultText(contract, text).pipe(
+        Effect.asVoid,
+        Effect.mapError((error) =>
+          rpcFailure(
+            "report_schema_invalid",
+            clipText(`The report is not a valid result: ${error.message}`, MAX_RPC_FAILURE_CHARS),
+          ),
+        ),
+      )
+    : Effect.void;
 
 export const makeSupervisorChannelSession = ({
   runId,
   verifyToken,
   events,
+  resultContract,
 }: {
   readonly runId: SupervisorRunId;
   readonly verifyToken: TokenVerifier;
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
+  readonly resultContract?: ResultContract | undefined;
 }) =>
   Effect.gen(function* () {
     const peers = new Map<number, RpcPeer>();
@@ -435,6 +453,8 @@ export const makeSupervisorChannelSession = ({
                 "report_identity_capacity",
                 "The report delivery identity map is full.",
               );
+            // A rejected report records no delivery identity, so the model may resubmit freely.
+            yield* validateReportResult(resultContract, payload.text);
             const sequence = nextReportSequence;
             const report: BackendReport & { readonly type: "report" } = {
               type: "report",

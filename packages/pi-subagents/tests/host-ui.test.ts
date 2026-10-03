@@ -186,7 +186,10 @@ describe("subagent activity widget host", () => {
 
   it("only yields widget ownership after acknowledgement and restores the same presentation leases", () => {
     const { getFactory, setWidget } = captureFactory();
-    const bridge = makeSubagentProjectionBridge(undefined, { startTicker: () => () => undefined });
+    const bridge = makeSubagentProjectionBridge(undefined, {
+      startTicker: () => () => undefined,
+      getNow: () => 2_000,
+    });
     bridge.publish(projectionOf([view({ id: "run" })]));
     const ctx = context(setWidget);
     bridge.setContext(ctx);

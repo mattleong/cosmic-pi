@@ -3,14 +3,26 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { countLabel, stripTerminalControls } from "pi-cosmic-core";
+import { countLabel, formatDuration, stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120));
+const WorkflowDetails = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("workflow"),
+  name: Name,
+  outcome: Schema.Literals(["completed", "failed", "stopped", "interrupted"]),
+  durationMs: Schema.Natural,
+  agents: Count,
+  failed: Count,
+  skipped: Count,
+  reused: Count,
+});
 const Details = Schema.Union([
+  WorkflowDetails,
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("question"),
@@ -64,11 +76,42 @@ const completedRow = (
   return { summary: { subject, outcome } };
 };
 
+const WORKFLOW_OUTCOMES = {
+  completed: { verb: "completed in", outcome: "success" },
+  failed: { verb: "failed after", outcome: "error" },
+  stopped: { verb: "stopped after", outcome: "cancelled" },
+  interrupted: { verb: "interrupted", outcome: "cancelled" },
+} as const;
+
+const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
+  const { verb, outcome } = WORKFLOW_OUTCOMES[details.outcome];
+  const problems = [
+    details.failed ? `${details.failed} failed` : "",
+    details.skipped ? `${details.skipped} skipped` : "",
+  ].filter(Boolean);
+  // A torn-down run's duration isn't known, only that it was cut short.
+  const ended =
+    details.outcome === "interrupted" ? verb : `${verb} ${formatDuration(details.durationMs)}`;
+  const agents =
+    details.outcome === "interrupted"
+      ? `${countLabel(details.agents, "agent")} finished`
+      : countLabel(details.agents, "agent");
+  return {
+    summary: {
+      subject: details.name,
+      counters: [[ended, agents, ...problems].join(" · "), `${ended} · ${agents}`, ended],
+      // Failed agents don't fail the workflow; the script decides what null results mean.
+      outcome: outcome === "success" && details.failed > 0 ? "warning" : outcome,
+    },
+  };
+};
+
 /** Typed counts and names when the notifier recorded them; a neutral row otherwise. */
 const notificationRow = (
   customType: string | undefined,
   details: NotificationDetails | undefined,
 ): NotificationRow => {
+  if (details?.kind === "workflow") return workflowRow(details);
   if (details?.kind === "question")
     return {
       summary: { subject: `${details.name ?? "A subagent"} needs a reply`, outcome: "warning" },
@@ -87,14 +130,23 @@ const notificationRow = (
 };
 
 /** What expanding a notification reveals, in the words of its kind. */
+const WORKFLOW_EXPANSION = {
+  completed: "result",
+  failed: "error",
+  stopped: "details",
+  interrupted: "details",
+} as const;
+
 const expansionLabel = (details: NotificationDetails | undefined): string =>
-  details?.kind === "question"
-    ? "question"
-    : details?.kind === "completed"
-      ? details.failed === details.total
-        ? countLabel(details.total, "failure detail")
-        : countLabel(details.total, "report")
-      : "message";
+  details?.kind === "workflow"
+    ? WORKFLOW_EXPANSION[details.outcome]
+    : details?.kind === "question"
+      ? "question"
+      : details?.kind === "completed"
+        ? details.failed === details.total
+          ? countLabel(details.total, "failure detail")
+          : countLabel(details.total, "report")
+        : "message";
 
 /**
  * The message content remains the agent's record; collapsed, it is one human row in either
@@ -129,7 +181,12 @@ export function renderSubagentNotification<Input>(
     render: (width) => {
       const inner = Math.max(1, width - options.outputPad * 2);
       const row = renderCompactRow(
-        { name: "subagents", phase: "settled", summary, ...(status && { status }) },
+        {
+          name: details?.kind === "workflow" ? "workflow" : "subagents",
+          phase: "settled",
+          summary,
+          ...(status && { status }),
+        },
         theme,
         inner,
       );

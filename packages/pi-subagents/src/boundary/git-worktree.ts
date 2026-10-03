@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type {
+  WorkspaceAcquired,
   WorkspaceHandle,
   WorkspaceIntegrationTarget,
   WorkspaceRecord,
@@ -126,7 +127,11 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       withWorkspaceStoreLock(registry, effect);
 
     const createInternal = (
-      input: { sourceCwd: string; ownerId: string },
+      input: {
+        sourceCwd: string;
+        ownerId: string;
+        onAcquired?: WorkspaceAcquired | undefined;
+      },
       predecessor?: WorkspaceRecord,
     ) =>
       Effect.gen(function* () {
@@ -202,7 +207,12 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
               );
             yield* git(repository(predecessor), ["worktree", "remove", snapshotRoot]);
           }
-          record = { ...record, baseline: baseline.commit, excludedPaths: baseline.excludedPaths };
+          // A fork's seed holds only captured files; the source's exclusions are its predecessor's.
+          record = {
+            ...record,
+            baseline: baseline.commit,
+            excludedPaths: predecessor ? predecessor.excludedPaths : baseline.excludedPaths,
+          };
           yield* saveWorkspaceRecord(registry, record);
           yield* git(repository(record), [
             "worktree",
@@ -215,6 +225,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           record = { ...record, status: "active" };
           yield* saveWorkspaceRecord(registry, record);
           owned.add(workspaceId);
+          input.onAcquired?.(handle);
           return handle;
         }).pipe(
           Effect.catch((error) => {
@@ -228,7 +239,11 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         );
       });
 
-    const create = (input: { sourceCwd: string; ownerId: string }) =>
+    const create = (input: {
+      sourceCwd: string;
+      ownerId: string;
+      onAcquired?: WorkspaceAcquired | undefined;
+    }) =>
       Effect.gen(function* () {
         yield* initializeWorkspaceStore(registry);
         return yield* locked(createInternal(input));
@@ -404,7 +419,30 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             );
           const integrated: WorkspaceRecord = { ...result, status: "integrated" };
           yield* saveWorkspaceRecord(registry, integrated);
-          return integrated;
+          // The snapshot leaves out ineligible and excluded files. The worker was checked out
+          // from the baseline snapshot, which never holds a path the source left out, so every
+          // such path in the worker was written there by a writer, even where the source has its
+          // own file of that name. It is not integrated work, and removing the worker would
+          // delete its only copy. Ignored files are disposable build output, as for
+          // `git worktree remove`.
+          const uncapturedPaths = workerTree.excludedPaths;
+          // The committed record keeps the private commits; the test trees are spent.
+          const treeRemovalFailed = target.retainTrees
+            ? false
+            : yield* removeWorkspaceTrees(registry, integrated, uncapturedPaths.length > 0).pipe(
+                Effect.as(false),
+                Effect.catchTag("WorkspaceError", (error) =>
+                  Effect.logWarning(
+                    `Integrated workspace trees remain on disk: ${error.message}`,
+                  ).pipe(Effect.annotateLogs("workspaceId", target.workspaceId), Effect.as(true)),
+                ),
+              );
+          return {
+            record: integrated,
+            workerRoot: worker(record),
+            uncapturedPaths,
+            treeRemovalFailed,
+          };
         }),
       );
 
@@ -431,7 +469,9 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           return next.handle;
         }),
       );
-    const fork = (target: WorkspaceSettledTarget) =>
+    const fork = (
+      target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
+    ) =>
       locked(
         Effect.gen(function* () {
           yield* settled(target);
@@ -439,7 +479,11 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           if (!record.baseline || record.status === "discarded")
             return yield* workspaceFailure("fork", "Original baseline is unavailable.");
           return yield* createInternal(
-            { sourceCwd: record.handle.sourceCwd, ownerId: record.handle.ownerId },
+            {
+              sourceCwd: record.handle.sourceCwd,
+              ownerId: record.handle.ownerId,
+              onAcquired: target.onAcquired,
+            },
             record,
           );
         }),

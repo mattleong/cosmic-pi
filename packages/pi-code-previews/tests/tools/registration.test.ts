@@ -134,7 +134,7 @@ test("a mutate-then-refresh failure remains owned and retries successfully", () 
     getAllTools: () => [...visible.values()],
     registerTool: (tool) => {
       attempts++;
-      // Pi 0.84 mutates the extension registry before refreshing the visible tool registry.
+      // Pi mutates the extension registry before refreshing the visible tool registry.
       visible.set(tool.name, toolInfo(tool.name, extensionSource));
       if (failRefresh) throw new Error("refresh failed after mutation");
     },
