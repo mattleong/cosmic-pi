@@ -90,8 +90,10 @@ export function retainActivity(
       !protectedKeys.has(row.key) &&
       !childCounts.get(row.key),
   );
+  // Work that never ran goes before real results: its producer's planned counts still cover it.
   queue.sort(
     (left, right) =>
+      Number(left.planned !== true) - Number(right.planned !== true) ||
       (left.endedAt ?? left.updatedAt ?? 0) - (right.endedAt ?? right.updatedAt ?? 0),
   );
   for (let index = 0; index < queue.length; index++) {
@@ -105,7 +107,8 @@ export function retainActivity(
     keep.delete(row.key);
     completed--;
     branchCounts.set(root, (branchCounts.get(root) ?? 1) - 1);
-    omitted.set(root, (omitted.get(root) ?? 0) + 1);
+    // Omissions count finished items; planned work never ran and is counted as planned instead.
+    if (row.planned !== true) omitted.set(root, (omitted.get(root) ?? 0) + 1);
     const parent = parents.get(row.key);
     if (parent) {
       childCounts.set(parent, (childCounts.get(parent) ?? 1) - 1);

@@ -21,12 +21,18 @@ import type { StartSubagentRequest } from "../run/model.ts";
 import type { OwnedRunHandle, OwnedRunOutcome } from "../run/owned-runs.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
 import type { WorkflowJournalContract, WorkflowJournalEntry, WorkflowReplay } from "./journal.ts";
-import { WORKFLOW_AGENT_LIMIT, type WorkflowAgentView } from "./model.ts";
+import {
+  WORKFLOW_AGENT_LIMIT,
+  type WorkflowAgentView,
+  type WorkflowPlannedAgent,
+} from "./model.ts";
 import {
   decodeWorkflowAgentOptions,
   workflowAgentJournalKey,
   type WorkflowAgentOptions,
 } from "./options.ts";
+import type { WorkflowResultLine } from "./results.ts";
+import type { WorkflowAgentDraft } from "./state.ts";
 
 /** An agent() call as profile resolution sees it. */
 export interface WorkflowAgentSpec {
@@ -66,8 +72,14 @@ export interface WorkflowAgentRun {
   readonly permits: Semaphore.Semaphore;
   /** The next live call position, or undefined once the run's agent limit is reached. */
   readonly nextCall: Effect.Effect<number | undefined>;
-  /** Publishes a queued agent whose skip request completes `skip`. */
-  readonly queue: (agent: WorkflowAgentView, skip: Deferred.Deferred<void>) => Effect.Effect<void>;
+  /**
+   * Publishes a queued agent whose skip request completes `skip`. It claims the planned entry
+   * its phase and label match, taking over that entry's run id, and otherwise reserves its own.
+   */
+  readonly queue: (
+    draft: WorkflowAgentDraft,
+    skip: Deferred.Deferred<void>,
+  ) => Effect.Effect<WorkflowAgentView>;
   readonly update: (runId: string, change: Partial<WorkflowAgentView>) => Effect.Effect<void>;
   readonly forget: (runId: string) => Effect.Effect<void>;
   readonly log: (level: "info" | "warning", message: string) => Effect.Effect<void>;
@@ -75,9 +87,16 @@ export interface WorkflowAgentRun {
   readonly count: (outputTokens: number) => Effect.Effect<void>;
   /**
    * Counts a result reused from the resumed run, with its tokens and display phase, and lists its
-   * worktree as a proposal when the entry still names one.
+   * worktree as a proposal when the entry still names one. The call claims its planned entry
+   * like a live one, and gets it back.
    */
-  readonly reuse: (entry: WorkflowJournalEntry, phase?: string) => Effect.Effect<void>;
+  readonly reuse: (
+    entry: WorkflowJournalEntry,
+    phase: string | undefined,
+    label: string | undefined,
+  ) => Effect.Effect<WorkflowPlannedAgent | undefined>;
+  /** Appends a finished call to the run's results journal file; best effort. */
+  readonly writeResult: (line: WorkflowResultLine) => Effect.Effect<void>;
 }
 
 export interface WorkflowAgentServices {
@@ -181,6 +200,25 @@ const warning = (label: string, settlement: Settlement): string => {
       return `agent "${label}" failed${reason}`;
   }
 };
+
+/** A live call's results journal line, with the profile it ran with rather than a planned one. */
+const resultLine = (
+  callId: number,
+  agent: WorkflowAgentView,
+  profile: string | undefined,
+  settlement: Settlement,
+): WorkflowResultLine => ({
+  callId,
+  label: agent.label,
+  phase: agent.phase,
+  profile,
+  state: settlement.state,
+  reason: settlement.reason,
+  runId: agent.runId,
+  workspaceId: settlement.workspaceId,
+  outputTokens: settlement.outputTokens,
+  result: settlement.result,
+});
 
 /**
  * One script `agent(prompt, options)` call. It rejects only for an invalid call; once queued it
@@ -341,7 +379,8 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       const status = yield* subagents.workspaceBindingStatus(entry.workspaceId);
       if (status === "pending") return { entry, counted: entry };
       if (status === "integrated") {
-        const { workspaceId: _integrated, ...counted } = entry;
+        const { workspaceId: _integrated, ...rest } = entry;
+        const counted: WorkflowJournalEntry = rest;
         return { entry, counted };
       }
       const label = options.label ?? entry.label ?? "agent";
@@ -370,12 +409,27 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
             );
       const key = workflowAgentJournalKey(prompt, options, contract?.digest);
       const reused = yield* replayable(key, options);
-      if (reused) {
-        // Recorded again, worktree included, so a resumed run can itself be resumed.
-        yield* journal.record(run.workflowId, reused.entry);
-        yield* run.reuse(reused.counted, options.phase);
-        return reply(reused.entry.result, reused.entry.outputTokens);
-      }
+      if (reused)
+        // Settled once taken from the replay, so a stop can't drop its journal line.
+        return yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            // Recorded again, worktree included, so a resumed run can itself be resumed.
+            yield* journal.record(run.workflowId, reused.entry);
+            const claimed = yield* run.reuse(reused.counted, options.phase, options.label);
+            yield* run.writeResult({
+              label: options.label ?? claimed?.label ?? reused.entry.label ?? "reused agent",
+              phase: options.phase,
+              profile: options.profile,
+              state: "completed",
+              reused: true,
+              runId: reused.entry.runId,
+              workspaceId: reused.counted.workspaceId,
+              outputTokens: reused.entry.outputTokens,
+              result: reused.entry.result,
+            });
+            return reply(reused.entry.result, reused.entry.outputTokens);
+          }),
+        );
       const spec: WorkflowAgentSpec = {
         task: prompt,
         name: options.label ?? "",
@@ -387,48 +441,62 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
       const callId = yield* run.nextCall;
       if (callId === undefined)
         return yield* reject(`A workflow can run at most ${WORKFLOW_AGENT_LIMIT} agents.`);
-      const label = options.label ?? `agent-${callId}`;
-      const runId = yield* subagents.reserveRunId;
       const skip = yield* Deferred.make<void>();
-      const queuedAt = yield* Clock.currentTimeMillis;
-      const settlement = yield* run
-        .queue(
-          {
-            callId,
-            runId,
-            label,
-            state: "queued",
-            queuedAt,
-            ...(options.phase !== undefined && { phase: options.phase }),
-            ...(options.profile !== undefined && { profile: options.profile }),
-          },
-          skip,
-        )
-        .pipe(
-          Effect.andThen(
-            launch({ ...spec, name: label }, options, contract, runId).pipe(
-              Effect.raceFirst(
-                Deferred.await(skip).pipe(Effect.as(nullResult("skipped", "skipped by the user"))),
+      const draft: WorkflowAgentDraft = {
+        callId,
+        queuedAt: yield* Clock.currentTimeMillis,
+        label: options.label,
+        phase: options.phase,
+        profile: options.profile,
+      };
+      const stopped = nullResult("stopped", "the workflow stopped");
+      /** Settles a call's view, tokens, resume journal and results journal line. */
+      const record = (agent: WorkflowAgentView, settlement: Settlement) =>
+        Effect.gen(function* () {
+          yield* finish(agent.runId, settlement);
+          if (settlement.state !== "completed")
+            yield* run.log("warning", warning(agent.label, settlement));
+          yield* run.count(settlement.outputTokens);
+          if (settlement.state === "completed")
+            yield* journal.record(run.workflowId, {
+              key,
+              result: settlement.result,
+              outputTokens: settlement.outputTokens,
+              chars: canonicalResultJson(settlement.result).length,
+              label: agent.label,
+              runId: agent.runId,
+              ...(settlement.workspaceId !== undefined && { workspaceId: settlement.workspaceId }),
+            });
+          yield* run.writeResult(resultLine(callId, agent, options.profile, settlement));
+          return reply(settlement.result, settlement.outputTokens);
+        });
+      // Only the launch can be interrupted: a published agent always settles its view, and a
+      // settled call always records its journal line, even when the run stops meanwhile.
+      return yield* Effect.uninterruptibleMask((restore) =>
+        run.queue(draft, skip).pipe(
+          Effect.flatMap((agent) =>
+            restore(
+              launch({ ...spec, name: agent.label }, options, contract, agent.runId).pipe(
+                Effect.raceFirst(
+                  Deferred.await(skip).pipe(
+                    Effect.as(nullResult("skipped", "skipped by the user")),
+                  ),
+                ),
               ),
+            ).pipe(
+              // The script is gone when its call is interrupted, so only the view and the
+              // journal need settling.
+              Effect.onInterrupt(() =>
+                finish(agent.runId, stopped).pipe(
+                  Effect.andThen(
+                    run.writeResult(resultLine(callId, agent, options.profile, stopped)),
+                  ),
+                ),
+              ),
+              Effect.flatMap((settlement) => record(agent, settlement)),
             ),
           ),
-          // The script is gone when its call is interrupted, so only the view needs settling.
-          Effect.onInterrupt(() => finish(runId, nullResult("stopped", "the workflow stopped"))),
-        );
-      yield* finish(runId, settlement);
-      if (settlement.state !== "completed") yield* run.log("warning", warning(label, settlement));
-      yield* run.count(settlement.outputTokens);
-      if (settlement.state === "completed")
-        yield* journal.record(run.workflowId, {
-          key,
-          result: settlement.result,
-          outputTokens: settlement.outputTokens,
-          chars: canonicalResultJson(settlement.result).length,
-          ...(settlement.workspaceId !== undefined && {
-            workspaceId: settlement.workspaceId,
-            label,
-          }),
-        });
-      return reply(settlement.result, settlement.outputTokens);
+        ),
+      );
     });
 };

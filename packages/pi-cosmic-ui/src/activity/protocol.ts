@@ -25,6 +25,11 @@ export const ActivityPhaseSchema = Schema.Struct({
    * the host no longer retains. When present, the phase state comes from it, not visible members.
    */
   work: Schema.optional(Schema.Struct({ items: Count, finished: Count, stopped: Count })),
+  /**
+   * The producer's own count of planned members in this phase that never started, including
+   * planned rows it does not publish. When present, phase rows show it instead of visible rows.
+   */
+  planned: Schema.optional(Count),
 });
 export type ActivityPhase = typeof ActivityPhaseSchema.Type;
 export const ActivityStartingSchema = Schema.Int.check(
@@ -49,6 +54,18 @@ const ActivityFields = {
   phases: Schema.optional(Schema.Array(ActivityPhaseSchema).check(Schema.isMaxLength(32))),
   /** A workflow's current phase, or the phase a direct workflow member belongs to. */
   phase: Schema.optional(PhaseTitle),
+  /**
+   * Workflow items only: the producer's own count of planned members outside its published
+   * `phases`, such as those in phases past the 32 shown, including rows it does not publish. When
+   * present, it replaces the count of visible planned rows directly under the workflow.
+   */
+  unphasedPlanned: Schema.optional(Count),
+  /**
+   * Display-only: work its producer declared but has not started, such as a workflow agent its
+   * script has not called yet. Planned items are never workflows and offer no actions; they are
+   * `pending` while their owner may still start them and `cancelled` once it never will.
+   */
+  planned: Schema.optional(Schema.Boolean),
   actions: Schema.optional(
     Schema.Array(
       Schema.Struct({

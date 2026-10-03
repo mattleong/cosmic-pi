@@ -2,10 +2,16 @@ import { formatDuration } from "pi-cosmic-core";
 import {
   countWorkflowAgents,
   isWorkflowRunFinished,
+  workflowPlannedByPhase,
   workflowWorkspaces,
   type WorkflowAgentView,
   type WorkflowRunView,
 } from "../workflow/model.ts";
+import {
+  workflowJournalLine,
+  workflowRestart,
+  workflowRetryLine,
+} from "../workflow/notification.ts";
 import type { WorkflowListing } from "../workflow/store.ts";
 import type { WorkflowRunSummary } from "./workflow-schema.ts";
 
@@ -32,10 +38,27 @@ export const workflowRunSummary = (run: WorkflowRunView): WorkflowRunSummary => 
   };
 };
 
-const phaseList = (run: WorkflowRunView): string =>
-  run.phases.length === 0
-    ? "no declared phases"
-    : `phases ${run.phases.map((phase) => phase.title).join(", ")}`;
+const phaseList = (run: WorkflowRunView): string => {
+  if (run.phases.length === 0) return "no declared phases";
+  const planned = workflowPlannedByPhase(run);
+  return `phases ${run.phases
+    .map((phase) => {
+      const count = planned.get(phase.title);
+      return count ? `${phase.title} (${count} planned)` : phase.title;
+    })
+    .join(", ")}`;
+};
+
+/** The edit-and-restart loop over the run's script: its own file, or an inline script's copy. */
+const scriptLine = (run: WorkflowRunView): string | undefined => {
+  const restart = workflowRestart(run.source, run.scriptPath);
+  if (restart === undefined) return undefined;
+  const edit =
+    run.source.kind === "inline"
+      ? `Its script is saved at ${restart.file}: to change the workflow, edit that file`
+      : `To change the workflow, edit ${restart.file}`;
+  return `${edit} with your file tools and start it again with ${restart.argument}, adding resumeFromRunId: "${run.id}" to reuse agents that finished.`;
+};
 
 export const workflowStartText = (run: WorkflowRunView): string =>
   [
@@ -44,6 +67,7 @@ export const workflowStartText = (run: WorkflowRunView): string =>
       ? `Identical agent() calls reuse the results of ${run.resumedFrom}.`
       : undefined,
     `It runs in the background; you'll get one notification with its result. Continue with other work; use action "status" to check progress or "stop" to cancel.`,
+    scriptLine(run),
   ]
     .filter(Boolean)
     .join(" ");
@@ -67,10 +91,15 @@ const phaseLines = (run: WorkflowRunView): ReadonlyArray<string> => {
     ...run.phases.map((phase) => phase.title),
     ...(run.agents.some((agent) => agent.phase === undefined) ? [NO_PHASE] : []),
   ];
+  const planned = workflowPlannedByPhase(run);
+  // Planned agents of a finished run were never called.
+  const notStarted = isWorkflowRunFinished(run.state) ? "not run" : "planned";
   return titles.map((title) => {
     const members = run.agents.filter((agent) => (agent.phase ?? NO_PHASE) === title);
     const marker = title === run.currentPhase ? " (current)" : "";
-    return `- ${title}${marker}: ${countsText(members) || "no agents"}`;
+    const count = planned.get(title);
+    const parts = [countsText(members), count ? `${count} ${notStarted}` : ""].filter(Boolean);
+    return `- ${title}${marker}: ${parts.join(" · ") || "no agents"}`;
   });
 };
 
@@ -99,9 +128,18 @@ const outcomeLines = (run: WorkflowRunView): ReadonlyArray<string> => {
     return [
       `Error: ${run.failure.name ? `${run.failure.name}: ` : ""}${run.failure.message}`,
       ...(run.failure.stack ? [run.failure.stack] : []),
-      `Fix the script, then start it again with resumeFromRunId: "${run.id}".`,
+      workflowRetryLine(run),
     ];
   return [];
+};
+
+/** The script a fix edits and the run's results journal. */
+const fileLines = (run: WorkflowRunView): ReadonlyArray<string> => {
+  const restart = workflowRestart(run.source, run.scriptPath);
+  return [
+    ...(restart === undefined ? [] : [`Script: ${restart.file}`]),
+    ...(run.journalPath === undefined ? [] : [workflowJournalLine(run.journalPath)]),
+  ];
 };
 
 /** Progress for the main agent: phases, counts, recent log, workspaces and any outcome. */
@@ -111,8 +149,9 @@ export const workflowStatusText = (run: WorkflowRunView, now: number): string =>
   return [
     stateLine(run, now),
     run.currentPhase !== undefined ? `Current phase: ${run.currentPhase}` : undefined,
-    `Agents: ${run.agents.length + run.reused} total${countsText(run.agents, run.reused) ? ` · ${countsText(run.agents, run.reused)}` : ""}`,
+    `Agents: ${run.agents.length + run.reused} total${countsText(run.agents, run.reused) ? ` · ${countsText(run.agents, run.reused)}` : ""} · ${run.outputTokens} output tokens`,
     ["Phases:", ...phaseLines(run)].join("\n"),
+    ...fileLines(run),
     workspaces.length > 0
       ? [
           "Worktree workspaces (review with subagent_workspace):",

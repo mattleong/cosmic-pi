@@ -18,6 +18,10 @@ export const WORKFLOW_PHASE_TITLE_MAX_CHARS = 160;
 export const WORKFLOW_AGENT_LABEL_MAX_CHARS = 80;
 /** meta.phases plus phases added at runtime. */
 export const WORKFLOW_RUN_PHASE_LIMIT = 64;
+/** Planned agents one run shows: its script's and those of the workflows it nests. */
+export const WORKFLOW_RUN_PLANNED_LIMIT = 256;
+/** The narrator line: the newest log line, on one line. */
+export const WORKFLOW_NARRATOR_MAX_CHARS = 200;
 /** Result text carried by status and the notification, leaving room in its 32 KiB for the rest. */
 export const WORKFLOW_RESULT_MAX_CHARS = 28 * 1024;
 /**
@@ -76,6 +80,19 @@ export interface WorkflowAgentView {
   readonly reason?: string | undefined;
 }
 
+/**
+ * An agent a phase of the script's meta declares. It never starts anything: the first matching
+ * agent() call claims it and takes over its run id, so its Activity row keeps one id from planned
+ * through queued, running and finished.
+ */
+export interface WorkflowPlannedAgent {
+  /** A subagent run id reserved when the run started. */
+  readonly runId: string;
+  readonly phase: string;
+  readonly label: string;
+  readonly profile?: string | undefined;
+}
+
 /** A worktree an earlier run's writer left for review, carried by the run that reused it. */
 export interface WorkflowReusedWorkspace {
   readonly workspaceId: string;
@@ -129,6 +146,11 @@ export interface WorkflowRunView {
   readonly endedAt?: number | undefined;
   /** Live agent() calls; results reused from a resumed run are only counted. */
   readonly agents: ReadonlyArray<WorkflowAgentView>;
+  /**
+   * Declared agents no call has claimed yet, in declaration order. A finished run keeps the
+   * entries that never ran.
+   */
+  readonly planned: ReadonlyArray<WorkflowPlannedAgent>;
   readonly reused: number;
   /** Reused results per display phase; read them with {@link workflowReusedByPhase}. */
   readonly reusedPhases?: ReadonlyArray<WorkflowReusedPhase> | undefined;
@@ -137,11 +159,20 @@ export interface WorkflowRunView {
   /** Who asked the run to stop; unset when nobody did or the main agent's stop call ended early. */
   readonly stoppedBy?: WorkflowStopOrigin | undefined;
   readonly logs: ReadonlyArray<WorkflowLogEntry>;
+  /** The newest non-blank log line on one line, at most {@link WORKFLOW_NARRATOR_MAX_CHARS}. */
+  readonly lastLog?: string | undefined;
   /** The newest {@link WORKFLOW_WARNING_LIMIT} warnings, which outlive the log's eviction. */
   readonly warnings?: ReadonlyArray<WorkflowLogEntry> | undefined;
   /** Every warning the run logged, including those no longer kept. */
   readonly warningCount?: number | undefined;
   readonly outputTokens: number;
+  /**
+   * The run's private copy of its script. The main agent edits and starts it again only for an
+   * inline script; a saved workflow or script file is fixed in its own file.
+   */
+  readonly scriptPath?: string | undefined;
+  /** One JSON line per finished agent() call; set once the first line is written. */
+  readonly journalPath?: string | undefined;
   readonly resumedFrom?: string | undefined;
   readonly args: Schema.Json;
   readonly result?: WorkflowResult | undefined;
@@ -223,6 +254,17 @@ const displayText = (text: string, maximum: number): string => {
   const trimmed = text.trim();
   return trimmed.length > maximum ? `${safeTextPrefix(trimmed, maximum - 1)}…` : trimmed;
 };
+
+/** A log message as the narrator line shows it; undefined when it is blank. */
+export const workflowNarratorLine = (message: string): string | undefined =>
+  displayText(message.replace(/\s+/gu, " "), WORKFLOW_NARRATOR_MAX_CHARS) || undefined;
+
+/** Planned agents per raw phase title. */
+export const workflowPlannedByPhase = (run: WorkflowRunView): ReadonlyMap<string, number> =>
+  run.planned.reduce(
+    (counts, agent) => counts.set(agent.phase, (counts.get(agent.phase) ?? 0) + 1),
+    new Map<string, number>(),
+  );
 
 /** A phase title bounded for display; nested prefixes can push a valid title past the limit. */
 export const workflowPhaseTitle = (title: string): string =>

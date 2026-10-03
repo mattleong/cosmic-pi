@@ -1,4 +1,5 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -12,6 +13,7 @@ import type {
 } from "../../../src/boundary/host-notifier.ts";
 import type { StartSubagentRequest, SubagentProjection } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
+import { WorkflowRunFileError } from "../../../src/boundary/workflow-run-files.ts";
 import type { WorkspaceRecord } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
 import { WorkflowAgentCallError, type WorkflowHost } from "../../../src/workflow/agent.ts";
@@ -63,8 +65,45 @@ export const testHost = (
     }),
 });
 
+/** Run files kept in memory, with switches that make writing them fail. */
+export interface MemoryRunFiles {
+  /** Saved script copies by run id. */
+  readonly scripts: Map<string, string>;
+  /** Results journal lines by journal path. */
+  readonly journals: Map<string, string[]>;
+  /** The live runs each creation was told not to prune. */
+  readonly live: Array<ReadonlySet<string>>;
+  failCreate: boolean;
+  failAppend: boolean;
+  /** The next append writes its line, then waits on this, still holding the journal lock. */
+  holdNextAppend: Effect.Effect<void> | undefined;
+  /** Run directories marked recent, in order. */
+  readonly touches: string[];
+}
+
+export const memoryRunFiles = (): MemoryRunFiles => ({
+  scripts: new Map(),
+  journals: new Map(),
+  live: [],
+  failCreate: false,
+  failAppend: false,
+  holdNextAppend: undefined,
+  touches: [],
+});
+
+/** The decoded results journal lines a run wrote. */
+export const journalLines = (files: MemoryRunFiles, path: string | undefined) =>
+  (path === undefined ? [] : (files.journals.get(path) ?? [])).map((line) => decodeLine(line));
+
+const decodeLine = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+);
+
 /** Saved workflows from memory; script paths are their names. */
-export const memoryStore = (scripts: Readonly<Record<string, string>>): WorkflowStoreContract => {
+export const memoryStore = (
+  scripts: Readonly<Record<string, string>>,
+  files: MemoryRunFiles = memoryRunFiles(),
+): WorkflowStoreContract => {
   const load = (name: string) => {
     const source = scripts[name];
     return source === undefined
@@ -83,6 +122,33 @@ export const memoryStore = (scripts: Readonly<Record<string, string>>): Workflow
     load,
     loadPath: load,
     list: Effect.succeed({ workflows: [], diagnostics: [], truncated: false }),
+    createRunFiles: (runId, source, live) =>
+      Effect.suspend(() => {
+        files.live.push(live);
+        if (files.failCreate)
+          return Effect.fail(
+            new WorkflowRunFileError({ message: "Couldn't save the script: EACCES" }),
+          );
+        files.scripts.set(runId, source);
+        const directory = `/agent/subagents/workflow-runs/${runId}`;
+        return Effect.succeed({
+          directory,
+          script: `${directory}/script.js`,
+          journal: `${directory}/journal.jsonl`,
+        });
+      }),
+    appendRunJournal: (paths, line) =>
+      Effect.suspend(() => {
+        if (files.failAppend)
+          return Effect.fail(
+            new WorkflowRunFileError({ message: "Couldn't write the results journal: ENOSPC" }),
+          );
+        files.journals.set(paths.journal, [...(files.journals.get(paths.journal) ?? []), line]);
+        const hold = files.holdNextAppend;
+        files.holdNextAppend = undefined;
+        return hold ?? Effect.void;
+      }),
+    touchRunFiles: (paths) => Effect.sync(() => void files.touches.push(paths.directory)),
   };
 };
 
@@ -195,6 +261,10 @@ export interface WorkflowFixtureOptions {
   readonly decorate?: (service: SubagentServiceContract) => SubagentServiceContract;
   /** Shares resume journals with another fixture, like a later activation of one session. */
   readonly sessionKey?: string;
+  /** Where runs save their script and results journal. */
+  readonly runFiles?: MemoryRunFiles;
+  /** How often live runs mark their directory recent. */
+  readonly runFilesRefresh?: Duration.Input;
 }
 
 /** The real subagent service over a native-report backend, plus the workflow service. */
@@ -208,6 +278,7 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
     : subagents.layer;
   const workflowNotifications: SubagentWorkflowNotification[] = [];
   const delivered: SubagentWorkflowNotification[] = [];
+  const runFiles = options.runFiles ?? memoryRunFiles();
   const decorate = options.decorate;
   const workflowSubagents = decorate
     ? Layer.effect(
@@ -217,6 +288,7 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
     : subagentLayer;
   const layer = WorkflowService.layer({
     concurrency: options.concurrency ?? 4,
+    ...(options.runFilesRefresh !== undefined && { runFilesRefresh: options.runFilesRefresh }),
     notify: (notification) => {
       workflowNotifications.push(notification);
       if (options.notify) return options.notify(notification);
@@ -230,7 +302,7 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
       Layer.mergeAll(
         subagentLayer,
         WorkflowJournal.layer(options.sessionKey ?? workflowSessionKey()),
-        Layer.succeed(WorkflowStore, memoryStore(options.scripts ?? {})),
+        Layer.succeed(WorkflowStore, memoryStore(options.scripts ?? {}, runFiles)),
         nodeFilePlatformLayer,
       ),
     ),
@@ -241,6 +313,7 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
     rootNotifications: subagents.notifications,
     workflowNotifications,
     delivered,
+    runFiles,
     layer,
   };
 };

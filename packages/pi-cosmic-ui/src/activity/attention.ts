@@ -1,4 +1,5 @@
 import { managerActivityLabel } from "../manager/chrome.ts";
+import { isFinished } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
 
 /** Roles and reasons come from producers, never from provider identity or display text. */
@@ -14,14 +15,21 @@ const blockedLabels = {
   "write-containment": "pausing writes for safety",
 } as const;
 
+/** Declared work that has not been requested; it is not queued and may never run. */
+export const activityPlanned = (item: Pick<ActivityItem, "planned">): boolean =>
+  item.planned === true;
+
 /** Work that has not started yet, such as a workflow agent waiting for a slot. */
 export const activityQueued = (item: ActivityItem): boolean =>
+  !activityPlanned(item) &&
   item.status === "pending" &&
   item.startedAt === undefined &&
   (item.kind === "agent" || item.kind === "command");
 
 /** The shared state word; questionnaires are queued and cancelled, work starts and is stopped. */
 export function activityStatus(item: ActivityItem): string {
+  // A planned item that ended never ran; its producer no longer intends to start it.
+  if (activityPlanned(item)) return isFinished(item) ? "not run" : "planned";
   const attention = activityAttention(item);
   if (attention === "user") return "waiting for you";
   if (attention === "parent") return "waiting for parent";

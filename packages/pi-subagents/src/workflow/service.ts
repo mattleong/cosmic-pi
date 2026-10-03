@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -25,6 +26,7 @@ import type {
 } from "../boundary/host-notifier.ts";
 import { nodeAvailableParallelism } from "../boundary/node-builtins.ts";
 import { saveWorkflowResult } from "../boundary/workflow-result-file.ts";
+import type { WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import { SubagentService } from "../run/service.ts";
 import { makeWorkflowAgentCall, type WorkflowHost } from "./agent.ts";
 import { WorkflowJournal, type WorkflowReplay } from "./journal.ts";
@@ -32,7 +34,10 @@ import {
   isWorkflowRunFinished,
   WORKFLOW_AGENT_LIMIT,
   WORKFLOW_ARGS_MAX_CHARS,
+  WORKFLOW_RUN_PLANNED_LIMIT,
   workflowConcurrency,
+  type WorkflowAgentView,
+  type WorkflowPlannedAgent,
   type WorkflowResult,
   type WorkflowRunView,
   type WorkflowSource,
@@ -44,17 +49,28 @@ import {
   workflowNotification,
   workflowValueText,
 } from "./notification.ts";
-import { parseWorkflowScript, type WorkflowScript, type WorkflowScriptError } from "./script.ts";
+import { workflowResultJsonLine, type WorkflowResultLine } from "./results.ts";
 import {
+  parseWorkflowScript,
+  workflowPlannedAgents,
+  type WorkflowPlannedAgentSpec,
+  type WorkflowScript,
+  type WorkflowScriptError,
+} from "./script.ts";
+import {
+  claimWorkflowPlanned,
   concludeWorkflow,
   decodeWorkflowEvent,
   finishWorkflowRun,
+  nestedWorkflowPlanned,
   retainWorkflowRuns,
+  reuseWorkflowResult,
   withAgent,
   withAgentChange,
   withNestedPhases,
-  withReusedResult,
   withWorkflowEvent,
+  workflowAgentFromDraft,
+  type WorkflowAgentDraft,
   type WorkflowEvent,
 } from "./state.ts";
 import { WorkflowStore, type WorkflowSourceError } from "./store.ts";
@@ -112,8 +128,12 @@ export interface WorkflowServiceOptions {
     | undefined;
   /** Agents one run executes at once; defaults from the CPU count. */
   readonly concurrency?: number | undefined;
+  /** How often a live run marks its directory recent; defaults to hourly. */
+  readonly runFilesRefresh?: Duration.Input | undefined;
 }
 
+/** Well inside the run-directory pruning grace, so a live run's files never age out. */
+const RUN_FILES_REFRESH = "1 hour";
 const DELIVERY_RETRY_INITIAL_MS = 100;
 const DELIVERY_RETRY_MAX_MS = 30_000;
 
@@ -130,6 +150,10 @@ interface RunControl {
   readonly skips: Map<string, Deferred.Deferred<void>>;
   /** Completes when the run is asked to stop; the script aborts and keeps its output. */
   readonly stop: Deferred.Deferred<void>;
+  /** Serializes results journal appends, so concurrent agents never interleave lines. */
+  readonly journalLock: Semaphore.Semaphore;
+  /** Whether a journal line was written, which shows the file, and whether a failure was logged. */
+  journal: { written: boolean; warned: boolean };
 }
 
 interface RunSetup {
@@ -140,6 +164,14 @@ interface RunSetup {
   readonly replay: WorkflowReplay | undefined;
   readonly permits: Semaphore.Semaphore;
   readonly control: RunControl;
+  /** The run's private files; undefined when they couldn't be created. */
+  readonly files: WorkflowRunFiles | undefined;
+}
+
+/** A starting run's private files, or the warning it logs instead. */
+interface SavedRunFiles {
+  readonly files?: WorkflowRunFiles | undefined;
+  readonly warning?: string | undefined;
 }
 
 const requestError = (code: string, message: string) => new WorkflowRequestError({ code, message });
@@ -181,23 +213,30 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
   ) => SubscriptionRef.update(state, change).pipe(Effect.andThen(publishLatest));
 
   /**
-   * Atomically applies `change` to one run, which also returns a value derived from the run as
-   * it was; undefined once the run is evicted.
+   * Atomically applies an effectful `change` to one run, under the state's lock, which also
+   * returns a value derived from the run as it was; undefined once the run is evicted.
    */
+  const modifyRunEffect = <A>(
+    id: string,
+    change: (run: WorkflowRunView) => Effect.Effect<readonly [A, WorkflowRunView]>,
+  ): Effect.Effect<A | undefined> =>
+    SubscriptionRef.modifyEffect(
+      state,
+      (runs): Effect.Effect<readonly [A | undefined, ReadonlyArray<WorkflowRunView>]> => {
+        const index = runs.findIndex((run) => run.id === id);
+        const current = runs[index];
+        if (!current) return Effect.succeed([undefined, runs]);
+        return change(current).pipe(
+          Effect.map(([value, updated]) => [value, runs.with(index, updated)] as const),
+        );
+      },
+    ).pipe(Effect.tap(() => publishLatest));
+
+  /** {@link modifyRunEffect} with a pure change. */
   const modifyRun = <A>(
     id: string,
     change: (run: WorkflowRunView) => readonly [A, WorkflowRunView],
-  ): Effect.Effect<A | undefined> =>
-    SubscriptionRef.modify(
-      state,
-      (runs): readonly [A | undefined, ReadonlyArray<WorkflowRunView>] => {
-        const index = runs.findIndex((run) => run.id === id);
-        const current = runs[index];
-        if (!current) return [undefined, runs];
-        const [value, updated] = change(current);
-        return [value, runs.with(index, updated)];
-      },
-    ).pipe(Effect.tap(() => publishLatest));
+  ): Effect.Effect<A | undefined> => modifyRunEffect(id, (run) => Effect.sync(() => change(run)));
 
   /** Applies `change` to one run and returns the result, or undefined once evicted. */
   const updateRun = (id: string, change: (run: WorkflowRunView) => WorkflowRunView) =>
@@ -276,6 +315,14 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       return replay;
     });
 
+  /** Planned agents with the subagent run ids their claiming calls will start under. */
+  const reservePlanned = (specs: ReadonlyArray<WorkflowPlannedAgentSpec>) =>
+    Effect.forEach(
+      specs.slice(0, WORKFLOW_RUN_PLANNED_LIMIT),
+      (spec): Effect.Effect<WorkflowPlannedAgent> =>
+        subagents.reserveRunId.pipe(Effect.map((runId) => ({ runId, ...spec }))),
+    );
+
   const loadNested = (id: string, reference: Schema.Json) =>
     Effect.gen(function* () {
       const decoded = decodeNestedReference(reference);
@@ -286,9 +333,75 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       const loaded = yield* Predicate.isString(decoded.value)
         ? store.load(decoded.value)
         : store.loadPath(decoded.value.scriptPath);
-      yield* updateRun(id, (run) => withNestedPhases(run, loaded.script, loaded.name));
+      yield* modifyRunEffect(id, (run) =>
+        reservePlanned(nestedWorkflowPlanned(run, loaded.script, loaded.name)).pipe(
+          Effect.map(
+            (planned) =>
+              [undefined, withNestedPhases(run, loaded.script, loaded.name, planned)] as const,
+          ),
+        ),
+      );
       return { name: loaded.name, body: loaded.script.body };
     });
+
+  /**
+   * Queues a call atomically: it claims a planned entry, or reserves its own run id, and its skip
+   * is registered before Activity can offer it.
+   */
+  const queueAgent = (
+    setup: RunSetup,
+    draft: WorkflowAgentDraft,
+    skip: Deferred.Deferred<void>,
+  ) => {
+    const register = (runId: string, claimed?: WorkflowPlannedAgent) =>
+      Effect.sync(() => {
+        setup.control.skips.set(runId, skip);
+        return workflowAgentFromDraft(draft, runId, claimed);
+      });
+    return modifyRunEffect(setup.id, (run) => {
+      const [claimed, rest] = claimWorkflowPlanned(run, draft.phase, draft.label);
+      return (claimed ? Effect.succeed(claimed.runId) : subagents.reserveRunId).pipe(
+        Effect.flatMap((runId) => register(runId, claimed)),
+        Effect.map((agent) => [agent, withAgent(rest, agent)] as const),
+      );
+    }).pipe(
+      // A live run is never evicted, but a call must still get a view of its own.
+      Effect.filterOrElse(
+        (agent): agent is WorkflowAgentView => agent !== undefined,
+        () => subagents.reserveRunId.pipe(Effect.flatMap((runId) => register(runId))),
+      ),
+    );
+  };
+
+  /**
+   * Appends a finished call to the run's results journal. The file shows in the view once its
+   * first line is written; the first failure is logged, and later lines are still tried.
+   */
+  const writeResult = (setup: RunSetup, line: WorkflowResultLine): Effect.Effect<void> => {
+    const files = setup.files;
+    if (!files) return Effect.void;
+    const journal = setup.control.journal;
+    return store.appendRunJournal(files, workflowResultJsonLine(line)).pipe(
+      setup.control.journalLock.withPermits(1),
+      Effect.matchEffect({
+        onSuccess: () => {
+          if (journal.written) return Effect.void;
+          journal.written = true;
+          return updateRun(setup.id, (run) => ({ ...run, journalPath: files.journal }));
+        },
+        onFailure: (error) => {
+          if (journal.warned) return Effect.void;
+          journal.warned = true;
+          return recordEvent(setup.id, {
+            type: "log",
+            level: "warning",
+            message: `The results journal may be incomplete: ${error.message}`,
+          });
+        },
+      }),
+      Effect.asVoid,
+    );
+  };
 
   const members = (setup: RunSetup): WorkflowSandboxHost<never> => ({
     agent: makeWorkflowAgentCall(
@@ -301,11 +414,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
         nextCall: Effect.sync(() =>
           setup.control.calls >= WORKFLOW_AGENT_LIMIT ? undefined : ++setup.control.calls,
         ),
-        queue: (agent, skip) =>
-          Effect.sync(() => void setup.control.skips.set(agent.runId, skip)).pipe(
-            Effect.andThen(updateRun(setup.id, (run) => withAgent(run, agent))),
-            Effect.asVoid,
-          ),
+        queue: (draft, skip) => queueAgent(setup, draft, skip),
         update: (runId, change) =>
           updateRun(setup.id, (run) => withAgentChange(run, runId, change)).pipe(Effect.asVoid),
         forget: (runId) => Effect.sync(() => void setup.control.skips.delete(runId)),
@@ -315,8 +424,9 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
             ...run,
             outputTokens: run.outputTokens + outputTokens,
           })).pipe(Effect.asVoid),
-        reuse: (entry, phase) =>
-          updateRun(setup.id, (run) => withReusedResult(run, entry, phase)).pipe(Effect.asVoid),
+        reuse: (entry, phase, label) =>
+          modifyRun(setup.id, (run) => reuseWorkflowResult(run, entry, phase, label)),
+        writeResult: (line) => writeResult(setup, line),
       },
       { subagents, journal },
     ),
@@ -410,15 +520,51 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       if (!tornDown) yield* report(id, finished && workflowNotification(finished));
     });
 
+  /** Keeps a live run's directory recent for other Pi processes' pruning, hourly. */
+  const keepRunFilesRecent = (setup: RunSetup) =>
+    setup.files === undefined
+      ? Effect.void
+      : store
+          .touchRunFiles(setup.files)
+          .pipe(
+            Effect.delay(options.runFilesRefresh ?? RUN_FILES_REFRESH),
+            Effect.forever,
+            Effect.forkScoped,
+            Effect.asVoid,
+          );
+
   const runFiber = (setup: RunSetup) =>
     Effect.scoped(
-      runWorkflowSandbox(
-        setup.script.body,
-        setup.args,
-        members(setup),
-        Deferred.await(setup.control.stop),
+      keepRunFilesRecent(setup).pipe(
+        Effect.andThen(
+          runWorkflowSandbox(
+            setup.script.body,
+            setup.args,
+            members(setup),
+            Deferred.await(setup.control.stop),
+          ),
+        ),
       ),
     ).pipe(Effect.onExit((exit) => finish(setup.id, exit)));
+
+  /**
+   * Saves the run's script in its private directory; a failure becomes a warning in the run's
+   * log instead of failing the start.
+   */
+  const saveRunFiles = (id: string, source: string) =>
+    SubscriptionRef.get(state).pipe(
+      Effect.map(
+        (runs) =>
+          new Set(runs.filter((run) => !isWorkflowRunFinished(run.state)).map((run) => run.id)),
+      ),
+      Effect.flatMap((live) => store.createRunFiles(id, source, live)),
+      Effect.match({
+        onSuccess: (files): SavedRunFiles => ({ files }),
+        onFailure: (error): SavedRunFiles => ({
+          warning: `Couldn't save an editable copy of the script: ${error.message}`,
+        }),
+      }),
+    );
 
   const start: WorkflowServiceContract["start"] = (request, host) =>
     Effect.gen(function* () {
@@ -435,13 +581,17 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
           : yield* resumeReplay(request.resumeFromRunId);
       const permits = yield* Semaphore.make(concurrency);
       const startedAt = yield* Clock.currentTimeMillis;
+      const id = `wf-${namespace}-${nextRunOrdinal++}`;
+      const planned = yield* reservePlanned(
+        (script.meta.phases ?? []).flatMap((phase) => workflowPlannedAgents(phase)),
+      );
+      const saved = yield* saveRunFiles(id, script.source);
       // Registration is atomic: an open owner always has a run fiber that will close it.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          const id = `wf-${namespace}-${nextRunOrdinal++}`;
-          yield* journal.open(id, script.meta.name);
+          yield* journal.open(id, script.meta.name, { source, scriptPath: saved.files?.script });
           yield* subagents.openOwner(id);
-          const view: WorkflowRunView = {
+          const created: WorkflowRunView = {
             id,
             name: script.meta.name,
             description: script.meta.description,
@@ -451,23 +601,44 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
             state: "running",
             startedAt,
             agents: [],
+            planned,
             reused: 0,
             logs: [],
             outputTokens: 0,
             args: request.args,
+            ...(saved.files && { scriptPath: saved.files.script }),
             ...(request.resumeFromRunId !== undefined && { resumedFrom: request.resumeFromRunId }),
           };
+          const view =
+            saved.warning === undefined
+              ? created
+              : withWorkflowEvent(
+                  created,
+                  { type: "log", level: "warning", message: saved.warning },
+                  startedAt,
+                );
           yield* mutate((runs) => retainWorkflowRuns([...runs, view]));
           const control: RunControl = {
             calls: 0,
             skips: new Map(),
             stop: Deferred.makeUnsafe<void>(),
+            journalLock: Semaphore.makeUnsafe(1),
+            journal: { written: false, warned: false },
           };
           controls.set(id, control);
           yield* FiberMap.run(
             fibers,
             id,
-            runFiber({ id, script, args: request.args, host, replay, permits, control }),
+            runFiber({
+              id,
+              script,
+              args: request.args,
+              host,
+              replay,
+              permits,
+              control,
+              files: saved.files,
+            }),
           );
           return view;
         }),

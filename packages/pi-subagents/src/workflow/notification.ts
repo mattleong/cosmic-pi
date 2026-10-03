@@ -14,6 +14,7 @@ import {
   type WorkflowLogEntry,
   type WorkflowResult,
   type WorkflowRunView,
+  type WorkflowSource,
   type WorkflowWorkspace,
 } from "./model.ts";
 
@@ -67,9 +68,49 @@ const agentsLine = (run: WorkflowRunView): string => {
     counts.failed > 0 ? `${counts.failed} failed` : "",
     counts.skipped > 0 ? `${counts.skipped} skipped or stopped` : "",
     run.reused > 0 ? `${run.reused} reused from ${run.resumedFrom ?? "the resumed run"}` : "",
+    run.planned.length > 0 ? `${run.planned.length} planned in meta but never called` : "",
   ]
     .filter(Boolean)
-    .join(" · ")}.`;
+    .join(" · ")}. Output tokens: ${run.outputTokens}.`;
+};
+
+/** Where the main agent reads every finished agent's actual return value. */
+export const workflowJournalLine = (path: string): string =>
+  `Results journal: ${path} has one JSON line per finished agent() call (label, phase, state, reason, result); Read it to check what each agent actually returned.`;
+
+/** The file a fix edits and the start argument that runs it again. */
+export interface WorkflowRestart {
+  readonly file: string;
+  readonly argument: string;
+}
+
+/**
+ * Where a run's script is fixed and started again: a saved workflow's or script file's own path,
+ * so the fix outlives the run, and only an inline script's private copy. Undefined for an inline
+ * script whose copy couldn't be saved.
+ */
+export const workflowRestart = (
+  source: WorkflowSource,
+  scriptPath: string | undefined,
+): WorkflowRestart | undefined => {
+  switch (source.kind) {
+    case "saved":
+      return { file: source.path, argument: `name: ${JSON.stringify(source.name)}` };
+    case "file":
+      return { file: source.path, argument: `scriptPath: ${JSON.stringify(source.path)}` };
+    case "inline":
+      return scriptPath === undefined
+        ? undefined
+        : { file: scriptPath, argument: `scriptPath: ${JSON.stringify(scriptPath)}` };
+  }
+};
+
+/** How the main agent fixes a run's script and starts it again, reusing finished agents. */
+export const workflowRetryLine = (run: WorkflowRunView): string => {
+  const restart = workflowRestart(run.source, run.scriptPath);
+  return restart === undefined
+    ? `Fix the script, then start it again with resumeFromRunId: "${run.id}" to reuse the results of agents that already finished.`
+    : `Fix the script: edit ${restart.file} with your file tools, then start it again with ${restart.argument} and resumeFromRunId: "${run.id}" to reuse the results of agents that already finished.`;
 };
 
 const workspaceLines = <Workspace>(
@@ -142,7 +183,7 @@ const failureSection = (run: WorkflowRunView): string => {
   return [
     `Error: ${boundedText(message, FAILURE_MESSAGE_MAX_CHARS)}`,
     failure?.stack && boundedText(failure.stack, STACK_MAX_CHARS),
-    `Fix the script, then start it again with resumeFromRunId: "${run.id}" to reuse the results of agents that already finished.`,
+    workflowRetryLine(run),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -150,7 +191,12 @@ const failureSection = (run: WorkflowRunView): string => {
 
 /** Sections in order; a completed run's result comes last, sized to the room left for it. */
 const sections = (run: WorkflowRunView): ReadonlyArray<string | undefined> => {
-  const frame = [headline(run), agentsLine(run), workspacesSection(run)];
+  const frame = [
+    headline(run),
+    agentsLine(run),
+    run.journalPath === undefined ? undefined : workflowJournalLine(run.journalPath),
+    workspacesSection(run),
+  ];
   if (run.state === "completed")
     return [
       ...frame,
@@ -230,6 +276,7 @@ export const workflowNotification = (
     name: run.name,
     outcome,
     durationMs: Math.max(0, (run.endedAt ?? run.startedAt) - run.startedAt),
+    outputTokens: run.outputTokens,
     content: content(run),
     agents: {
       total: run.agents.length + run.reused,
@@ -252,9 +299,11 @@ const interruptedOpening = (run: WorkflowInterruptedRun): ReadonlyArray<string> 
     run.workspaces.length === 0
       ? ""
       : " Writers that worked in worktrees run again, since this session can't manage those worktrees.";
+  const restart = run.origin && workflowRestart(run.origin.source, run.origin.scriptPath);
+  const script = restart === undefined ? "" : `${restart.argument} and `;
   return [
     `${subject} was interrupted when the session was reloaded, navigated or replaced, so its result will not arrive.`,
-    `${run.finished} of its agents had finished. Start it again with resumeFromRunId: "${run.runId}" to reuse their results.${rerun}`,
+    `${run.finished} of its agents had finished. Start it again with ${script}resumeFromRunId: "${run.runId}" to reuse their results.${rerun}`,
   ];
 };
 

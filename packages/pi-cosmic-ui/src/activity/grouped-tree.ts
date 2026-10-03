@@ -1,5 +1,7 @@
+import { activityPlanned } from "./attention.ts";
 import {
   addGroupSummaries,
+  declaredPlanned,
   emptyGroupSummary,
   phaseFinished,
   phaseProgress,
@@ -38,6 +40,8 @@ export type GroupedActivityRow = PresentationBase &
         /** Source ancestry above the workflow row, root first. */
         readonly context: readonly ActivityRow[];
         readonly finishedPhases: number;
+        /** Planned declarations outside the workflow's phases, which no phase row counts. */
+        readonly unphased: Pick<GroupSummary, "planned" | "unrun">;
       }
     | {
         readonly type: "phase";
@@ -175,7 +179,10 @@ export function groupedActivityTree(
     // A workflow row is a container: its own row shows its state, and summaries count its work.
     const row = node.row;
     const own = row && row.kind !== "workflow" ? summarizeGroup([row]) : emptyGroupSummary;
-    node.total = node.children.reduce((sum, child) => addGroupSummaries(sum, child.total), own);
+    node.total = withDeclaredPlanned(
+      node,
+      node.children.reduce((sum, child) => addGroupSummaries(sum, child.total), own),
+    );
     // Workflows and phases keep finished work in view (failures stay visible as attention).
     node.summary =
       options.hideHistory && node.type !== "workflow" && node.type !== "phase"
@@ -231,12 +238,14 @@ export function groupedActivityTree(
     };
     result.push(groupedEntry(node, base, context));
     if (!expanded) return;
-    // Phases keep their declared order; other work lists live rows before history.
-    const ordered = [
-      ...children.filter((child) => child.type === "phase"),
-      ...children.filter((child) => child.type !== "phase" && !child.history),
-      ...children.filter((child) => child.type !== "phase" && child.history),
-    ];
+    // Phases keep their declared order; other work lists live rows before history, and real
+    // work, finished or not, before what is only planned.
+    const rank = (child: Node) =>
+      child.type === "phase"
+        ? 0
+        : 1 + 2 * Number(child.row?.planned === true) + Number(child.history);
+    // Sorting is stable, so each group keeps its published order.
+    const ordered = [...children].sort((left, right) => rank(left) - rank(right));
     ordered.forEach((child, index) =>
       visit(child, [...continuations, index < ordered.length - 1], base.breadcrumbs),
     );
@@ -245,6 +254,34 @@ export function groupedActivityTree(
   if (focused) visit(focused, [], []);
   else for (const section of sections) visit(section, [], []);
   return result;
+}
+
+/** A workflow's planned members outside its phases: visible rows, and what its producer counts. */
+const unphasedPlanned = (node: Node) => {
+  const visible = summarizeGroup(
+    node.children.flatMap((child) =>
+      child.type === "member" && activityPlanned(child.row!) ? [child.row!] : [],
+    ),
+  );
+  return { visible, declared: declaredPlanned(node.row!, node.row!.unphasedPlanned, visible) };
+};
+
+/**
+ * Replaces visible planned rows with the producer's own counts, which include planned rows it
+ * doesn't publish and rows retention dropped: a phase's `planned`, and a workflow's
+ * `unphasedPlanned` for planned members outside its phases. Workflow and section totals then
+ * agree with the phase rows.
+ */
+function withDeclaredPlanned(node: Node, total: GroupSummary): GroupSummary {
+  if (node.type === "phase")
+    return { ...total, ...declaredPlanned(node.workflow!, node.phase!.planned, total) };
+  if (node.type !== "workflow") return total;
+  const { visible, declared } = unphasedPlanned(node);
+  return {
+    ...total,
+    planned: total.planned - visible.planned + declared.planned,
+    unrun: total.unrun - visible.unrun + declared.unrun,
+  };
 }
 
 const groupedEntry = (
@@ -272,6 +309,7 @@ const groupedEntry = (
     finishedPhases: node.children.filter(
       (child) => child.type === "phase" && phaseFinished(child.state!),
     ).length,
+    unphased: unphasedPlanned(node).declared,
   };
 };
 

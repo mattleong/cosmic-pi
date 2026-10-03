@@ -12,7 +12,11 @@ import {
 } from "../../src/boundary/host-activity.ts";
 import { makeSubagentProjectionBridge } from "../../src/boundary/host-ui.ts";
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
-import type { WorkflowAgentView, WorkflowRunView } from "../../src/workflow/model.ts";
+import type {
+  WorkflowAgentView,
+  WorkflowPlannedAgent,
+  WorkflowRunView,
+} from "../../src/workflow/model.ts";
 import { effectTest, step } from "../support/effect-test.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 
@@ -37,12 +41,23 @@ const workflow = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => ({
   state: "running",
   startedAt: 1,
   agents: [],
+  planned: [],
   reused: 0,
   logs: [],
   outputTokens: 0,
   args: { scope: "src" },
   ...patch,
 });
+
+const plan = (index: number, patch: Partial<WorkflowPlannedAgent> = {}): WorkflowPlannedAgent => ({
+  runId: `agent-r1-p${index}`,
+  phase: "Verify",
+  label: `verify:${index}`,
+  ...patch,
+});
+
+const items = (...runs: ReadonlyArray<WorkflowRunView>) =>
+  subagentActivityItems({ revision: 1, runs: [] }, undefined, snapshot(...runs));
 
 const snapshot = (...runs: ReadonlyArray<WorkflowRunView>): WorkflowActivitySnapshot => ({
   runs,
@@ -385,6 +400,158 @@ describe("workflow activity", () => {
     expect(subagentActivityDetail({ revision: 1, runs: [] }, "agent-r1-1", workflows)).toContain(
       "finder",
     );
+  });
+
+  it("publishes declared agents as inert planned rows beneath their phase", () => {
+    const planned = [plan(1, { profile: "reviewer" }), plan(2)];
+    for (const [state, status] of [
+      ["running", "pending"],
+      ["completed", "cancelled"],
+      ["stopped", "cancelled"],
+    ] as const) {
+      const published = items(workflow({ state, planned }));
+      expect(isSnapshot(published)).toBe(true);
+      const rows = published.filter((item) => item.planned === true);
+      expect(rows.map((item) => item.id)).toEqual(["agent-r1-p1", "agent-r1-p2"]);
+      for (const row of rows) {
+        // Display only: never actionable, never under way, and never counted as phase work.
+        expect(row).toMatchObject({
+          kind: "agent",
+          status,
+          phase: "Verify",
+          parent: { providerId: "pi-subagents", itemId: "workflow:wf-a-1" },
+        });
+        expect(row.actions ?? []).toEqual([]);
+        expect(row.startedAt).toBeUndefined();
+      }
+      expect(rows[0]?.profile).toBe("reviewer");
+      expect(published[0]?.phases).toEqual([
+        { title: "Find", work: { items: 0, finished: 0, stopped: 0 } },
+        { title: "Verify", work: { items: 0, finished: 0, stopped: 0 }, planned: 2 },
+      ]);
+    }
+  });
+
+  it("keeps a planned row's id when the script's call claims it", () => {
+    const planned = items(workflow({ planned: [plan(1), plan(2)] }));
+    const claimed = items(
+      workflow({
+        planned: [plan(2)],
+        agents: [agent({ runId: "agent-r1-p1", label: "verify:1", phase: "Verify" })],
+      }),
+    );
+    expect(byId(planned).get("agent-r1-p1")?.planned).toBe(true);
+    // The same row moves from planned to queued work that can be skipped.
+    expect(byId(claimed).get("agent-r1-p1")).toMatchObject({
+      status: "pending",
+      actions: [expect.objectContaining({ id: "skip" })],
+    });
+    expect(byId(claimed).get("agent-r1-p1")?.planned).toBeUndefined();
+    expect(claimed.filter((item) => item.id === "agent-r1-p1")).toHaveLength(1);
+    expect(claimed[0]?.phases?.[1]).toMatchObject({ planned: 1, work: { items: 1 } });
+    // A running claimed agent is shown by its own run; the planned id never repeats.
+    const running = subagentActivityItems(
+      { revision: 1, runs: [owned("agent-r1-p2", "Verify")] },
+      undefined,
+      snapshot(workflow({ planned: [plan(2)] })),
+    );
+    expect(running.filter((item) => item.id === "agent-r1-p2")).toHaveLength(1);
+  });
+
+  it("bounds planned rows per workflow while phases count every planned agent", () => {
+    const planned = Array.from({ length: 200 }, (_, index) => plan(index));
+    const one = items(workflow({ planned }));
+    expect(one.filter((item) => item.planned === true)).toHaveLength(64);
+    expect(one[0]?.phases?.[1]).toMatchObject({ planned: 200 });
+    const queued = Array.from({ length: 64 }, (_, index) =>
+      agent({ callId: index + 1, runId: `agent-r1-q${index}` }),
+    );
+    const many = items(
+      ...Array.from({ length: 12 }, (_, index) =>
+        workflow({
+          id: `wf-a-${index}`,
+          agents: queued.map((entry) => ({ ...entry, runId: `${entry.runId}-${index}` })),
+          planned: planned.map((entry) => ({ ...entry, runId: `${entry.runId}-${index}` })),
+        }),
+      ),
+    );
+    expect(many.length).toBeLessThanOrEqual(512);
+    expect(isSnapshot(many)).toBe(true);
+    expect(many.filter((item) => item.kind === "workflow")).toHaveLength(12);
+    // Queued work the script already asked for takes slots before planned rows do.
+    const placeholders = many.filter((item) => item.status === "pending" && !item.planned);
+    expect(placeholders.length).toBe(Math.min(12 * 64, 512 - 12));
+  });
+
+  it("counts planned agents in phases past the ones Activity shows on the workflow", () => {
+    const titles = Array.from({ length: 40 }, (_, index) => `P${index + 1}`);
+    const planned = titles.flatMap((phase, index) => [
+      plan(2 * index, { phase }),
+      plan(2 * index + 1, { phase }),
+    ]);
+    const published = items(
+      workflow({ phases: titles.map((title) => ({ title })), currentPhase: "P1", planned }),
+    );
+    expect(isSnapshot(published)).toBe(true);
+    const [run] = published;
+    const phased = (run?.phases ?? []).reduce((sum, phase) => sum + (phase.planned ?? 0), 0);
+    expect(phased).toBeLessThan(planned.length);
+    // Every planned agent is counted once: by its shown phase, or by the workflow.
+    expect(phased + (run?.unphasedPlanned ?? 0)).toBe(planned.length);
+    expect(items(workflow({ planned: [plan(1)] }))[0]?.unphasedPlanned).toBeUndefined();
+  });
+
+  it("dates never-run agents to their workflow's end, so history drops older ones first", () => {
+    const ended = items(workflow({ state: "completed", endedAt: 9, planned: [plan(1)] }));
+    expect(ended.find((item) => item.planned === true)?.endedAt).toBe(9);
+    const live = items(workflow({ planned: [plan(1)] }));
+    expect(live.find((item) => item.planned === true)?.endedAt).toBeUndefined();
+  });
+
+  it("shows the newest log line as the workflow's narrator summary", () => {
+    expect(items(workflow({ lastLog: "Reviewing 4 call sites" }))[0]?.summary).toBe(
+      "Reviewing 4 call sites",
+    );
+    expect(items(workflow())[0]?.summary).toBeUndefined();
+  });
+
+  it("revises only the items a change touches", () => {
+    const before = byId(items(workflow({ planned: [plan(1)], agents: [agent()] })));
+    const after = byId(
+      items(
+        workflow({
+          planned: [plan(1)],
+          agents: [agent()],
+          lastLog: "Found 4 call sites",
+          logs: [{ at: 5, level: "info", message: "Found 4 call sites" }],
+        }),
+      ),
+    );
+    expect(after.get("workflow:wf-a-1")?.revision).not.toBe(
+      before.get("workflow:wf-a-1")?.revision,
+    );
+    for (const id of ["agent-r1-p1", "agent-r1-1"])
+      expect(after.get(id)?.revision).toBe(before.get(id)?.revision);
+  });
+
+  it("explains a planned agent in the detail pane until its call claims it", () => {
+    const detail = (run: WorkflowRunView) =>
+      subagentActivityDetail({ revision: 1, runs: [] }, "agent-r1-p1", snapshot(run));
+    const live = detail(workflow({ planned: [plan(1, { profile: "reviewer" })] }));
+    expect(live).toContain("verify:1");
+    expect(live).toContain("reviewer");
+    const ended = detail(
+      workflow({ state: "completed", endedAt: 9, planned: [plan(1, { profile: "reviewer" })] }),
+    );
+    expect(ended).toContain("verify:1");
+    expect(ended).not.toBe(live);
+    expect(
+      subagentActivityDetail(
+        { revision: 1, runs: [] },
+        "workflow:wf-a-1",
+        snapshot(workflow({ planned: [plan(1)] })),
+      ),
+    ).toContain("verify:1");
   });
 
   effectTest("routes skip and workflow stop to the workflow service", function* () {

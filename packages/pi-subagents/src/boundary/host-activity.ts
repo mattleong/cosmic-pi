@@ -29,6 +29,7 @@ import { MAX_NAME_CHARS } from "../run/state.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
 import { isWorkflowRunFinished, type WorkflowRunView } from "../workflow/model.ts";
 import {
+  plannedAgentDetail,
   queuedAgentDetail,
   withActivityRevision,
   workflowActivityDetail,
@@ -288,6 +289,8 @@ const workflowDetail = (workflows: WorkflowActivitySnapshot, id: string): string
   for (const run of workflows.runs) {
     const agent = run.agents.find((candidate) => candidate.runId === id);
     if (agent?.state === "queued") return queuedAgentDetail(run, agent);
+    const planned = run.planned.find((candidate) => candidate.runId === id);
+    if (planned) return plannedAgentDetail(run, planned);
   }
   return undefined;
 };

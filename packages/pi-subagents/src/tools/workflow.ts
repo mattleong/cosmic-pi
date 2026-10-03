@@ -53,8 +53,8 @@ const DESCRIPTION = `Run a JavaScript workflow that orchestrates subagents in th
 start returns at once with a run id. The script runs in a sandbox while you keep working, and exactly one notification arrives with its return value or error; don't wait or poll for it. status shows progress, stop cancels and returns the final state (no notification follows unless the stop call itself is interrupted), list shows saved workflows and this session's runs. Reloading, /tree navigation or replacing the session stops running workflows and their agents; the next session start posts one notice per interrupted run.
 
 A script is plain JavaScript (not TypeScript) that begins with a pure-literal
-export const meta = { name: "review", description: "…", whenToUse: "…", phases: [{ title: "Find", detail: "…" }] };
-(whenToUse, phases and detail are optional), followed by top-level code that awaits agents and returns a JSON value.
+export const meta = { name: "review", description: "…", whenToUse: "…", phases: [{ title: "Find", detail: "…", agents: ["finder", { label: "checker", profile: "reviewer" }] }] };
+(whenToUse, phases, detail and agents are optional), followed by top-level code that awaits agents and returns a JSON value. List the agents you already know in each phase's agents (labels up to 80 characters; 64 per phase, 256 in all) so the user sees the plan before they run. They are display-only and set no options (pass profile to agent() too): an agent() call in that phase with the same label, or with no label, takes the next planned entry.
 
 Globals:
 - agent(prompt, options?) resolves to the agent's final text, or with options.schema to the validated JSON value. It resolves null when the agent fails, is stopped or is skipped, and rejects only for an invalid call. Options: label (display name, clipped to 80 characters), phase, profile (a subagent profile, default generalist; profiles choose model and effort, so model, effort and agentType are rejected), schema (JSON Schema without $ref or $defs), writes (exact workspace-relative files for a writer profile such as worker), isolation: "worktree" (runs a writer in its own worktree).
@@ -66,13 +66,13 @@ Globals:
 
 Rules: prompts must be self-contained, because agents don't see this conversation. Await every agent() call: agents still running when the script returns are stopped. Date.now(), new Date() and Math.random() throw, so runs can resume; there are no timers, fetch, files or modules. Up to min(16, CPUs - 2) agents run at once and 1000 per run; extra calls queue. Agents are ordinary subagents: writers follow the session's writer mode and file claims (shared-checkout writers without disjoint writes run one at a time; the others queue), worktree proposals are listed in the notification for review with subagent_workspace, and an agent may ask you a question (answer with subagent_reply; the workflow then continues).
 
-Saved workflows are <project>/.pi/workflows/<name>.js (trusted projects only) and <agent-dir>/workflows/<name>.js. Write them with your file tools and start them with name; scriptPath runs any .js file. After fixing a failed script, or one you stopped yourself to change it, start it with resumeFromRunId to reuse results of agent() calls with the same prompt, profile, schema, isolation and writes. Don't restart a run the user stopped unless they ask.
+Saved workflows are <project>/.pi/workflows/<name>.js (trusted projects only) and <agent-dir>/workflows/<name>.js. Write them with your file tools and start them with name; scriptPath runs any .js file. To change a saved workflow or script file, edit that file and start it again with name or scriptPath. An inline script is saved to a private file named in the start result: to change it, edit that file and start it with scriptPath. After fixing a failed script, or one you stopped yourself to change it, start it with resumeFromRunId to reuse results of agent() calls with the same prompt, profile, schema, isolation and writes. Don't restart a run the user stopped unless they ask. The notification and status name the run's results journal, one JSON line per finished agent() call (label, phase, state, result); Read it to check what each agent actually returned.
 
 Example:
-export const meta = { name: "review", description: "Review the diff, then verify findings", phases: [{ title: "Review" }, { title: "Verify" }] };
+export const meta = { name: "review", description: "Review the diff, then verify findings", phases: [{ title: "Review", agents: ["correctness", "security"] }, { title: "Verify" }] };
 const BUGS = { type: "object", properties: { bugs: { type: "array", items: { type: "string" } } }, required: ["bugs"], additionalProperties: false };
 const found = await parallel(["correctness", "security"].map((area) => () =>
-  agent(\`Review the uncommitted diff in this repository for \${area} bugs. Report only real defects, each with file and line.\`, { phase: "Review", profile: "reviewer", schema: BUGS })));
+  agent(\`Review the uncommitted diff in this repository for \${area} bugs. Report only real defects, each with file and line.\`, { label: area, phase: "Review", profile: "reviewer", schema: BUGS })));
 phase("Verify");
 const bugs = found.flatMap((review) => review?.bugs ?? []);
 const verdicts = await parallel(bugs.map((bug) => () => agent(\`Check this reported bug against the code. Answer "real" or "false" first: \${bug}\`, { profile: "reviewer" })));

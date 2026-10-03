@@ -3,7 +3,11 @@ import { plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentMessageRenderers } from "../../src/application/messages.ts";
 import { makeHostNotifier } from "../../src/boundary/host-notifier.ts";
-import { WORKFLOW_LOG_LIMIT, type WorkflowRunView } from "../../src/workflow/model.ts";
+import {
+  WORKFLOW_LOG_LIMIT,
+  type WorkflowRunView,
+  type WorkflowSource,
+} from "../../src/workflow/model.ts";
 import {
   clipWorkflowText,
   fitWorkflowResult,
@@ -36,6 +40,7 @@ const finishedRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => (
     },
     { callId: 3, runId: "agent-3", label: "flaky", state: "failed", queuedAt: 1_000 },
   ],
+  planned: [],
   reused: 2,
   logs: [{ at: 2_000, level: "warning", message: "agent flaky failed: timeout" }],
   outputTokens: 10,
@@ -197,6 +202,72 @@ describe("workflow notification", () => {
     expect(byUser.content).not.toContain("resumeFromRunId");
   });
 
+  it("names the results journal, the output tokens and planned agents that never ran", () => {
+    const journalPath = "/agent/subagents/workflow-runs/wf-a-7/journal.jsonl";
+    const notification = workflowNotification(
+      finishedRun({
+        outputTokens: 48_213,
+        journalPath,
+        planned: [{ runId: "agent-9", phase: "Find", label: "unused" }],
+      }),
+    )!;
+    expect(notification.outputTokens).toBe(48_213);
+    expect(notification.content).toContain(journalPath);
+    expect(notification.content).toContain("48213");
+    expect(notification.content).not.toContain("agent-9");
+    const without = workflowNotification(finishedRun())!;
+    expect(without.content).not.toContain("journal.jsonl");
+  });
+
+  it("points a failed run's fix at its saved script", () => {
+    const scriptPath = "/agent/subagents/workflow-runs/wf-a-7/script.js";
+    const notification = workflowNotification(
+      finishedRun({
+        state: "failed",
+        result: undefined,
+        scriptPath,
+        failure: { name: "TypeError", message: "bad input" },
+      }),
+    )!;
+    expect(notification.content).toContain(scriptPath);
+    expect(notification.content).toContain('resumeFromRunId: "wf-a-7"');
+  });
+
+  it("points a failed script file's fix at that file, not the run's copy", () => {
+    const copy = "/agent/subagents/workflow-runs/wf-a-7/script.js";
+    const notification = workflowNotification(
+      finishedRun({
+        state: "failed",
+        result: undefined,
+        source: { kind: "file", path: "/project/scripts/review.js" },
+        scriptPath: copy,
+        failure: { name: "TypeError", message: "bad input" },
+      }),
+    )!;
+    expect(notification.content).toContain('scriptPath: "/project/scripts/review.js"');
+    expect(notification.content).toContain('resumeFromRunId: "wf-a-7"');
+    expect(notification.content).not.toContain(copy);
+  });
+
+  it("restarts an interrupted inline run from its saved copy, and a file run from its file", () => {
+    const copy = "/runs/wf-a-3/script.js";
+    const interrupted = (source: WorkflowSource) =>
+      interruptedWorkflowNotification({
+        runId: "wf-a-3",
+        name: "migration",
+        finished: 1,
+        workspaces: [],
+        origin: { source, scriptPath: copy },
+      }).content;
+    const inline = interrupted({ kind: "inline" });
+    expect(inline).toContain(`scriptPath: "${copy}"`);
+    expect(inline).toContain('resumeFromRunId: "wf-a-3"');
+    const file = interrupted({ kind: "file", path: "/project/migrate.js" });
+    expect(file).toContain('scriptPath: "/project/migrate.js"');
+    expect(file).toContain('resumeFromRunId: "wf-a-3"');
+    expect(file).not.toContain(copy);
+  });
+
   it("names an interrupted run, how to resume it and its worktrees", () => {
     const notice = interruptedWorkflowNotification({
       runId: "wf-a-3",
@@ -226,6 +297,14 @@ describe("workflow notification", () => {
     expect(workflowNotification(finishedRun({ state: "running", endedAt: undefined }))).toBe(
       undefined,
     );
+  });
+
+  it("records the run's output tokens for its row", () => {
+    const sendMessage = vi.fn();
+    makeHostNotifier(extensionApiFixture({ sendMessage }))(
+      workflowNotification(finishedRun({ outputTokens: 1_234 }))!,
+    );
+    expect(sendMessage.mock.calls[0]![0].details).toMatchObject({ outputTokens: 1_234 });
   });
 
   it("steers the root once and reports a host that couldn't accept it", () => {

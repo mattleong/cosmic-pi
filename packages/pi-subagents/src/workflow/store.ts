@@ -6,6 +6,16 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { SafeFile } from "pi-cosmic-core";
 import {
+  appendWorkflowRunJournal,
+  createWorkflowRunFiles,
+  pruneWorkflowRunDirectories,
+  touchWorkflowRunDirectory,
+  WORKFLOW_RUN_DIRECTORIES_KEPT,
+  workflowRunsDirectory,
+  type WorkflowRunFileError,
+  type WorkflowRunFiles,
+} from "../boundary/workflow-run-files.ts";
+import {
   parseWorkflowScript,
   WORKFLOW_SCRIPT_MAX_CHARS,
   type WorkflowMeta,
@@ -51,6 +61,23 @@ export interface WorkflowStoreContract {
   /** A script file the agent wrote, absolute or relative to the session cwd. */
   readonly loadPath: (path: string) => Effect.Effect<LoadedWorkflow, WorkflowSourceError>;
   readonly list: Effect.Effect<WorkflowListing>;
+  /**
+   * Saves a starting run's script in its own private directory under the agent directory, after
+   * pruning run directories that are neither among the newest nor written in the last day; runs
+   * named in `live` are never pruned.
+   */
+  readonly createRunFiles: (
+    runId: string,
+    source: string,
+    live: ReadonlySet<string>,
+  ) => Effect.Effect<WorkflowRunFiles, WorkflowRunFileError>;
+  /** Appends one line to a run's results journal, which also keeps its directory from pruning. */
+  readonly appendRunJournal: (
+    files: WorkflowRunFiles,
+    line: string,
+  ) => Effect.Effect<void, WorkflowRunFileError>;
+  /** Marks a live run's directory as recent, so no Pi process prunes it; failures are ignored. */
+  readonly touchRunFiles: (files: WorkflowRunFiles) => Effect.Effect<void>;
 }
 
 export interface WorkflowStoreOptions {
@@ -177,7 +204,35 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           return { workflows, diagnostics, truncated: unique.length > WORKFLOW_LIST_LIMIT };
         });
 
-        return WorkflowStore.of({ load, loadPath, list });
+        const runsRoot = workflowRunsDirectory(paths, options.agentDirectory);
+        const platform = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
+          effect.pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, paths),
+          );
+
+        const createRunFiles = (runId: string, source: string, live: ReadonlySet<string>) =>
+          platform(
+            // The new run's directory makes up the number kept.
+            pruneWorkflowRunDirectories(runsRoot, WORKFLOW_RUN_DIRECTORIES_KEPT - 1, live).pipe(
+              Effect.andThen(createWorkflowRunFiles(runsRoot, runId, source)),
+            ),
+          );
+
+        const appendRunJournal = (files: WorkflowRunFiles, line: string) =>
+          platform(appendWorkflowRunJournal(files, line));
+
+        const touchRunFiles = (files: WorkflowRunFiles) =>
+          platform(touchWorkflowRunDirectory(files));
+
+        return WorkflowStore.of({
+          load,
+          loadPath,
+          list,
+          createRunFiles,
+          appendRunJournal,
+          touchRunFiles,
+        });
       }),
     );
 }

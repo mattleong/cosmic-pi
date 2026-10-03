@@ -61,13 +61,23 @@ export function groupedDetail(options: GroupedDetailOptions): string {
     return sourceDetail(options, selected.row, selected.context, breadcrumb);
   if (selected.type === "workflow") {
     const phases = selected.row.phases ?? [];
-    return sourceDetail(options, selected.row, selected.context, breadcrumb, [
-      ...(phases.length
-        ? [{ label: "Phases", value: `${selected.finishedPhases}/${phases.length} finished` }]
-        : []),
-      ...(selected.row.phase ? [{ label: "Current phase", value: selected.row.phase }] : []),
-      ...memberFields(selected.summary),
-    ]);
+    // A workflow's summary is its narrator line, such as its latest log line.
+    const narrator = selected.row.summary?.trim();
+    return sourceDetail(
+      options,
+      selected.row,
+      selected.context,
+      breadcrumb,
+      [
+        ...(phases.length
+          ? [{ label: "Phases", value: `${selected.finishedPhases}/${phases.length} finished` }]
+          : []),
+        ...(selected.row.phase ? [{ label: "Current phase", value: selected.row.phase }] : []),
+        ...memberFields(selected.summary),
+        ...(narrator ? [{ label: "Latest", value: narrator }] : []),
+      ],
+      false,
+    );
   }
   const heading = listDetailHeading(theme, selected.title, options.focused, managerTone.identity);
   const summary = selected.summary;
@@ -90,14 +100,18 @@ export function groupedDetail(options: GroupedDetailOptions): string {
     );
   });
   const span = workflowMemberSpan(members, options.now);
-  // Producer counts include members that are no longer shown.
+  // Producer counts include members and planned work that are no longer, or never, shown; the
+  // summary already carries the planned count.
   const work = selected.phase.work;
   return [
     heading,
     breadcrumb,
     ...detailFieldRows(theme, [
       { label: "State", value: PHASE_STATES[selected.state] },
-      ...memberFields(work ? { ...summary, items: work.items, terminal: work.finished } : summary),
+      ...memberFields({
+        ...summary,
+        ...(work && { items: work.items, terminal: work.finished }),
+      }),
       ...(span === undefined ? [] : [{ label: "Member span", value: formatElapsed(span) }]),
     ]),
     selected.phase.detail ?? "",
@@ -112,6 +126,7 @@ function sourceDetail(
   context: readonly ActivityRow[],
   breadcrumb: string,
   fields: readonly ListDetailField[] = [],
+  showSummary = true,
 ): string {
   const { theme } = options;
   const sourcePath = activityOwnerLabel(options.rows, row);
@@ -135,7 +150,7 @@ function sourceDetail(
     options.now !== undefined && row.updatedAt !== undefined
       ? `Updated ${formatRelativeAge(options.now - row.updatedAt)}`
       : "",
-    row.summary ?? "",
+    showSummary ? (row.summary ?? "") : "",
     ...(options.technical
       ? detailFieldRows(theme, [
           { label: "Source", value: `${row.providerId} / ${row.id}`, tone: managerTone.identity },

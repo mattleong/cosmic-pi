@@ -3,7 +3,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { countLabel, formatDuration, stripTerminalControls } from "pi-cosmic-core";
+import { countLabel, formatDuration, formatTokens, stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
@@ -16,6 +16,7 @@ const WorkflowDetails = Schema.Struct({
   name: Name,
   outcome: Schema.Literals(["completed", "failed", "stopped", "interrupted"]),
   durationMs: Schema.Natural,
+  outputTokens: Schema.optional(Schema.Natural),
   agents: Count,
   failed: Count,
   skipped: Count,
@@ -96,10 +97,16 @@ const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
     details.outcome === "interrupted"
       ? `${countLabel(details.agents, "agent")} finished`
       : countLabel(details.agents, "agent");
+  const tokens = details.outputTokens ? [`${formatTokens(details.outputTokens)} tokens`] : [];
   return {
     summary: {
       subject: details.name,
-      counters: [[ended, agents, ...problems].join(" · "), `${ended} · ${agents}`, ended],
+      counters: [
+        [ended, agents, ...problems, ...tokens].join(" · "),
+        [ended, agents, ...problems].join(" · "),
+        `${ended} · ${agents}`,
+        ended,
+      ],
       // Failed agents don't fail the workflow; the script decides what null results mean.
       outcome: outcome === "success" && details.failed > 0 ? "warning" : outcome,
     },

@@ -1,6 +1,11 @@
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
-import { parseWorkflowScript } from "../../src/workflow/script.ts";
+import {
+  parseWorkflowScript,
+  WORKFLOW_PHASE_AGENT_LIMIT,
+  WORKFLOW_SCRIPT_AGENT_LIMIT,
+  workflowPlannedAgents,
+} from "../../src/workflow/script.ts";
 
 const parse = (source: string) => Effect.runSync(Effect.result(parseWorkflowScript(source)));
 
@@ -85,5 +90,66 @@ describe("workflow script parsing", () => {
       "export const meta = { name: 'a', description: 'b' };\nconst r = await agent('x');\nreturn r;",
     );
     expect(result._tag).toBe("Success");
+  });
+
+  it("keeps the script source exactly as given", () => {
+    const source = "export const meta = { name: 'a', description: 'b' };\nreturn 1;\n";
+    const result = parse(source);
+    if (result._tag === "Failure") throw new Error(result.failure.message);
+    expect(result.success.source).toBe(source);
+  });
+});
+
+describe("planned agents in meta", () => {
+  const withAgents = (agents: string) =>
+    `export const meta = { name: 'a', description: 'b', phases: [{ title: 'Find', agents: ${agents} }, { title: 'Verify' }] };`;
+
+  it("accepts labels and labelled profiles, in declaration order", () => {
+    const result = parse(withAgents("['finder', { label: ' checker ', profile: 'reviewer' }]"));
+    if (result._tag === "Failure") throw new Error(result.failure.message);
+    const [find, verify] = result.success.meta.phases ?? [];
+    expect(workflowPlannedAgents(find!)).toEqual([
+      { phase: "Find", label: "finder" },
+      { phase: "Find", label: "checker", profile: "reviewer" },
+    ]);
+    expect(workflowPlannedAgents(verify!)).toEqual([]);
+    expect(workflowPlannedAgents(find!, "▸ nested · Find")[0]?.phase).toBe("▸ nested · Find");
+  });
+
+  it("trims phase titles once, so planned agents use the title phase() calls give", () => {
+    const result = parse(
+      "export const meta = { name: 'a', description: 'b', phases: [{ title: ' Find  ', agents: ['finder'] }] };",
+    );
+    if (result._tag === "Failure") throw new Error(result.failure.message);
+    const [find] = result.success.meta.phases ?? [];
+    expect(find?.title).toBe("Find");
+    expect(workflowPlannedAgents(find!)).toEqual([{ phase: "Find", label: "finder" }]);
+    expect(
+      failure("export const meta = { name: 'a', description: 'b', phases: [{ title: '   ' }] };"),
+    ).toContain("title");
+  });
+
+  it("rejects malformed entries with the offending path", () => {
+    expect(failure(withAgents(`['${"x".repeat(81)}']`))).toContain("agents");
+    expect(failure(withAgents("[{ label: '' }]"))).toContain("label");
+    expect(failure(withAgents("[{ label: 'a', model: 'x' }]"))).toContain("model");
+    expect(failure(withAgents("[3]"))).toContain("Invalid meta");
+    expect(failure(withAgents("['   ']"))).toContain("blank");
+  });
+
+  it("bounds planned agents per phase and per script", () => {
+    const labels = (count: number) =>
+      JSON.stringify(Array.from({ length: count }, (_, index) => `agent-${index}`));
+    expect(parse(withAgents(labels(WORKFLOW_PHASE_AGENT_LIMIT)))._tag).toBe("Success");
+    expect(failure(withAgents(labels(WORKFLOW_PHASE_AGENT_LIMIT + 1)))).toContain("Invalid meta");
+    const phases = Array.from(
+      { length: WORKFLOW_SCRIPT_AGENT_LIMIT / WORKFLOW_PHASE_AGENT_LIMIT + 1 },
+      (_, index) => `{ title: 'P${index}', agents: ${labels(WORKFLOW_PHASE_AGENT_LIMIT)} }`,
+    );
+    expect(
+      failure(
+        `export const meta = { name: 'a', description: 'b', phases: [${phases.join(", ")}] };`,
+      ),
+    ).toContain(String(WORKFLOW_SCRIPT_AGENT_LIMIT));
   });
 });

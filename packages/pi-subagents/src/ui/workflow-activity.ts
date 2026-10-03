@@ -2,12 +2,14 @@ import type { ActivityItem, ActivityPhase } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine, sha256Text } from "pi-cosmic-core";
 import type { SubagentWorkflowMembership } from "../run/model.ts";
 import {
-  countWorkflowAgents,
   isWorkflowAgentFinished,
   isWorkflowRunFinished,
+  WORKFLOW_NARRATOR_MAX_CHARS,
+  workflowPlannedByPhase,
   workflowReusedByPhase,
   workflowWorkspaces,
   type WorkflowAgentView,
+  type WorkflowPlannedAgent,
   type WorkflowRunState,
   type WorkflowRunView,
 } from "../workflow/model.ts";
@@ -15,8 +17,10 @@ import {
 const WORKFLOW_ITEM_PREFIX = "workflow:";
 /** Activity shows at most this many phases per workflow. */
 const ACTIVITY_PHASE_LIMIT = 32;
-/** Queued rows per workflow; the rest are counted in the workflow summary. */
+/** Queued rows per workflow; their phases' `work` counts include the rest. */
 const QUEUED_ROWS_PER_WORKFLOW = 64;
+/** Planned rows per workflow; the phase and workflow planned counts include the rest. */
+const PLANNED_ROWS_PER_WORKFLOW = 64;
 const DETAIL_LOG_LINES = 20;
 
 const WORKFLOW_STATUS = {
@@ -83,19 +87,35 @@ const phaseWork = (run: WorkflowRunView): ReadonlyMap<string, PhaseWork> => {
   return work;
 };
 
-/** Display phases: unique after cleaning, bounded for the protocol, with their work counts. */
+/** Unclaimed planned agents per cleaned phase title, including those without a row. */
+const phasePlanned = (run: WorkflowRunView): ReadonlyMap<string, number> => {
+  const planned = new Map<string, number>();
+  for (const [phase, count] of workflowPlannedByPhase(run)) {
+    const title = line(phase, 160);
+    planned.set(title, (planned.get(title) ?? 0) + count);
+  }
+  return planned;
+};
+
+/**
+ * Display phases: unique after cleaning, bounded for the protocol, with their work counts and
+ * planned agents. Planned agents never count as work.
+ */
 const workflowActivityPhases = (run: WorkflowRunView): ReadonlyArray<ActivityPhase> => {
   const work = phaseWork(run);
+  const planned = phasePlanned(run);
   const seen = new Set<string>();
   const phases: ActivityPhase[] = [];
   for (const phase of run.phases) {
     const title = line(phase.title, 160);
     if (!title || seen.has(title)) continue;
     seen.add(title);
+    const plannedCount = planned.get(title) ?? 0;
     phases.push({
       title,
       ...(phase.detail !== undefined && { detail: line(phase.detail, 4096) }),
       work: work.get(title) ?? NO_WORK,
+      ...(plannedCount > 0 && { planned: plannedCount }),
     });
     if (phases.length === ACTIVITY_PHASE_LIMIT) break;
   }
@@ -125,27 +145,22 @@ export const workflowMembership = (
   };
 };
 
-const workflowSummary = (run: WorkflowRunView, phases: ReadonlyArray<ActivityPhase>): string => {
-  const counts = countWorkflowAgents(run.agents);
-  const current =
-    run.currentPhase === undefined
-      ? -1
-      : run.phases.findIndex((phase) => phase.title === run.currentPhase);
-  return [
-    isWorkflowRunFinished(run.state)
-      ? run.state
-      : current >= 0 && phases.length > 0
-        ? `phase ${current + 1}/${run.phases.length}`
-        : "running",
-    counts.running ? `${counts.running} running` : "",
-    counts.queued ? `${counts.queued} queued` : "",
-    counts.completed ? `${counts.completed} done` : "",
-    counts.failed ? `${counts.failed} failed` : "",
-    counts.skipped ? `${counts.skipped} skipped` : "",
-    run.reused ? `${run.reused} reused` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+/**
+ * Planned agents no shown phase holds, such as those in phases past the ones Activity shows. Their
+ * rows sit under the workflow, and the workflow counts them, so none is silently dropped.
+ */
+const unphasedPlanned = (
+  run: WorkflowRunView,
+  phases: ReadonlyArray<ActivityPhase>,
+): Pick<ActivityItem, "unphasedPlanned"> => {
+  const count = run.planned.filter((agent) => shownPhase(agent.phase, phases) === undefined).length;
+  return count > 0 ? { unphasedPlanned: count } : {};
+};
+
+/** The narrator line Activity shows beneath the workflow: its newest log line, when there is one. */
+const narrator = (run: WorkflowRunView): Pick<ActivityItem, "summary"> => {
+  const text = run.lastLog === undefined ? "" : line(run.lastLog, WORKFLOW_NARRATOR_MAX_CHARS);
+  return text ? { summary: text } : {};
 };
 
 const lastUpdate = (run: WorkflowRunView): number =>
@@ -155,9 +170,98 @@ const lastUpdate = (run: WorkflowRunView): number =>
     ...run.agents.map((agent) => agent.endedAt ?? agent.startedAt ?? agent.queuedAt),
   );
 
+type Parent = NonNullable<ActivityItem["parent"]>;
+
+const workflowItem = (run: WorkflowRunView, phases: ReadonlyArray<ActivityPhase>): ActivityItem => {
+  const title = line(run.name, 512);
+  const live = !isWorkflowRunFinished(run.state);
+  return withActivityRevision({
+    id: workflowItemId(run.id),
+    kind: "workflow" as const,
+    title,
+    status: WORKFLOW_STATUS[run.state],
+    startedAt: run.startedAt,
+    updatedAt: lastUpdate(run),
+    ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
+    ...narrator(run),
+    phases: Object.freeze(phases),
+    ...shownPhase(run.currentPhase, phases),
+    ...unphasedPlanned(run, phases),
+    actions: Object.freeze(
+      live
+        ? [
+            Object.freeze({
+              id: "stop",
+              label: "Stop workflow",
+              confirmation: `Stop workflow "${title}" and its agents?`,
+              handoff: false,
+            }),
+          ]
+        : [],
+    ),
+  });
+};
+
+const queuedItem = (
+  agent: WorkflowAgentView,
+  parent: Parent,
+  phases: ReadonlyArray<ActivityPhase>,
+): ActivityItem => {
+  const label = line(agent.label, 512);
+  return withActivityRevision({
+    id: agent.runId,
+    kind: "agent" as const,
+    title: label,
+    status: "pending" as const,
+    parent,
+    ...shownPhase(agent.phase, phases),
+    ...(agent.profile !== undefined && { profile: line(agent.profile, 80) }),
+    summary: "queued",
+    // Skipping is final for the script, so it asks first like every other stop.
+    actions: Object.freeze([
+      Object.freeze({
+        id: "skip",
+        label: "Skip",
+        confirmation: `Skip queued agent "${label}"? Its agent() call returns null.`,
+        handoff: false,
+      }),
+    ]),
+  });
+};
+
 /**
- * Workflow items and queued placeholders. Placeholders use the reserved run id, so selection
- * survives from queued through running; an id the projection already shows is never repeated.
+ * A declared agent no call has claimed, under the run id its call will take over. It is display
+ * only: no actions, pending while the script can still call it and cancelled once it never will.
+ * A never-run row ends with its workflow, so history retention drops older ones first.
+ */
+const plannedItem = (
+  run: WorkflowRunView,
+  agent: WorkflowPlannedAgent,
+  parent: Parent,
+  phases: ReadonlyArray<ActivityPhase>,
+): ActivityItem =>
+  withActivityRevision({
+    id: agent.runId,
+    kind: "agent" as const,
+    title: line(agent.label, 512),
+    status: isWorkflowRunFinished(run.state) ? ("cancelled" as const) : ("pending" as const),
+    ...(isWorkflowRunFinished(run.state) && run.endedAt !== undefined && { endedAt: run.endedAt }),
+    planned: true,
+    parent,
+    ...shownPhase(agent.phase, phases),
+    ...(agent.profile !== undefined && { profile: line(agent.profile, 80) }),
+  });
+
+interface ShownWorkflow {
+  readonly run: WorkflowRunView;
+  readonly phases: ReadonlyArray<ActivityPhase>;
+  readonly parent: Parent;
+}
+
+/**
+ * Workflow items, then queued placeholders, then planned rows, each in the slots left. Queued and
+ * planned rows use reserved run ids, so selection survives from planned through queued and
+ * running; an id already shown is never repeated.
  */
 export const workflowActivityItems = (input: {
   readonly runs: ReadonlyArray<WorkflowRunView>;
@@ -166,76 +270,39 @@ export const workflowActivityItems = (input: {
   /** Item slots left for workflows and their placeholders. */
   readonly budget: number;
 }): ReadonlyArray<ActivityItem> => {
-  const items: ActivityItem[] = [];
   // Live workflows first, so history yields its slots before running work does. Every shown
   // workflow gets its row before any placeholder takes a slot.
-  const ordered = [
+  const shown: ReadonlyArray<ShownWorkflow> = [
     ...input.runs.filter((run) => !isWorkflowRunFinished(run.state)),
     ...input.runs.filter((run) => isWorkflowRunFinished(run.state)).reverse(),
-  ].slice(0, Math.max(0, input.budget));
-  let budget = Math.max(0, input.budget) - ordered.length;
-  for (const run of ordered) {
-    const phases = workflowActivityPhases(run);
-    const id = workflowItemId(run.id);
-    const title = line(run.name, 512);
-    const parent = Object.freeze({ providerId: input.providerId, itemId: id });
-    const live = !isWorkflowRunFinished(run.state);
-    items.push(
-      withActivityRevision({
-        id,
-        kind: "workflow" as const,
-        title,
-        status: WORKFLOW_STATUS[run.state],
-        startedAt: run.startedAt,
-        updatedAt: lastUpdate(run),
-        ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
-        summary: line(workflowSummary(run, phases), 4096),
-        phases: Object.freeze(phases),
-        ...shownPhase(run.currentPhase, phases),
-        actions: Object.freeze(
-          live
-            ? [
-                Object.freeze({
-                  id: "stop",
-                  label: "Stop workflow",
-                  confirmation: `Stop workflow "${title}" and its agents?`,
-                  handoff: false,
-                }),
-              ]
-            : [],
-        ),
-      }),
-    );
-    if (!live) continue;
-    const queued = run.agents
-      .filter((agent) => agent.state === "queued" && !input.visibleRunIds.has(agent.runId))
-      .slice(0, Math.min(QUEUED_ROWS_PER_WORKFLOW, budget));
-    budget -= queued.length;
-    for (const agent of queued) {
-      const label = line(agent.label, 512);
-      items.push(
-        withActivityRevision({
-          id: agent.runId,
-          kind: "agent" as const,
-          title: label,
-          status: "pending" as const,
-          parent,
-          ...shownPhase(agent.phase, phases),
-          ...(agent.profile !== undefined && { profile: line(agent.profile, 80) }),
-          summary: "queued",
-          // Skipping is final for the script, so it asks first like every other stop.
-          actions: Object.freeze([
-            Object.freeze({
-              id: "skip",
-              label: "Skip",
-              confirmation: `Skip queued agent "${label}"? Its agent() call returns null.`,
-              handoff: false,
-            }),
-          ]),
-        }),
-      );
-    }
+  ]
+    .slice(0, Math.max(0, input.budget))
+    .map((run) => ({
+      run,
+      phases: workflowActivityPhases(run),
+      parent: Object.freeze({ providerId: input.providerId, itemId: workflowItemId(run.id) }),
+    }));
+  const items = shown.map(({ run, phases }) => workflowItem(run, phases));
+  const used = new Set(input.visibleRunIds);
+  const take = <Entry extends { readonly runId: string }>(
+    entries: ReadonlyArray<Entry>,
+    limit: number,
+  ): ReadonlyArray<Entry> => {
+    const taken = entries
+      .filter((entry) => !used.has(entry.runId))
+      .slice(0, Math.max(0, Math.min(limit, input.budget - items.length)));
+    for (const entry of taken) used.add(entry.runId);
+    return taken;
+  };
+  for (const { run, phases, parent } of shown) {
+    if (isWorkflowRunFinished(run.state)) continue;
+    const queued = run.agents.filter((agent) => agent.state === "queued");
+    for (const agent of take(queued, QUEUED_ROWS_PER_WORKFLOW))
+      items.push(queuedItem(agent, parent, phases));
   }
+  for (const { run, phases, parent } of shown)
+    for (const agent of take(run.planned, PLANNED_ROWS_PER_WORKFLOW))
+      items.push(plannedItem(run, agent, parent, phases));
   return items;
 };
 
@@ -253,6 +320,8 @@ const sourceText = (run: WorkflowRunView): string => {
 const agentLine = (agent: WorkflowAgentView): string =>
   `- ${agent.label} · ${agent.state}${agent.reason ? ` · ${agent.reason}` : ""}`;
 
+const plannedLine = (agent: WorkflowPlannedAgent): string => `- ${agent.label} · ${agent.phase}`;
+
 /** Detail pane text for a workflow: what it is, its progress, log and outcome. */
 export const workflowActivityDetail = (run: WorkflowRunView): string => {
   const workspaces = workflowWorkspaces(run);
@@ -268,6 +337,9 @@ export const workflowActivityDetail = (run: WorkflowRunView): string => {
         ? `Phases:\n${run.phases.map((phase) => `- ${phase.title}${phase.title === run.currentPhase ? " (current)" : ""}`).join("\n")}`
         : "",
       run.agents.length > 0 ? `Agents:\n${run.agents.slice(-40).map(agentLine).join("\n")}` : "",
+      run.planned.length > 0
+        ? `${isWorkflowRunFinished(run.state) ? "Planned, never called" : "Planned, not called yet"}:\n${run.planned.slice(0, 40).map(plannedLine).join("\n")}`
+        : "",
       workspaces.length > 0
         ? `Worktree proposals:\n${workspaces.map((agent) => `- ${agent.workspaceId} · ${agent.label}`).join("\n")}`
         : "",
@@ -287,6 +359,22 @@ export const workflowActivityDetail = (run: WorkflowRunView): string => {
     { maximumLength: 16_384 },
   );
 };
+
+/** Detail pane text for a declared agent that no agent() call has claimed. */
+export const plannedAgentDetail = (run: WorkflowRunView, agent: WorkflowPlannedAgent): string =>
+  sanitizeDiagnosticContent(
+    [
+      `${agent.label}: planned in workflow ${run.name}`,
+      `Phase: ${agent.phase}`,
+      agent.profile ? `Profile: ${agent.profile}` : "",
+      isWorkflowRunFinished(run.state)
+        ? "Not run: the workflow ended before its script called agent() for it."
+        : "Not started yet. It becomes queued work when the script calls agent() for it.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    { maximumLength: 4_096 },
+  );
 
 /** Detail pane text for an agent still waiting for a slot. */
 export const queuedAgentDetail = (run: WorkflowRunView, agent: WorkflowAgentView): string =>

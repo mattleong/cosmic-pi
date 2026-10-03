@@ -79,7 +79,8 @@ const consistentWork = ({ work }: ActivityPhase) =>
   !work || (work.finished <= work.items && work.stopped <= work.finished);
 /** Workflow phases describe the workflow row; attention rolls up from its members only. */
 const consistentWorkflow = (item: ActivityItem) => {
-  if (item.kind !== "workflow") return item.phases === undefined;
+  if (item.kind !== "workflow")
+    return item.phases === undefined && item.unphasedPlanned === undefined;
   const titles = item.phases?.map((phase) => phase.title) ?? [];
   return (
     uniqueIds(titles) &&
@@ -89,12 +90,24 @@ const consistentWorkflow = (item: ActivityItem) => {
     item.status !== "blocked"
   );
 };
+/** Planned work is display-only: never a workflow, never actionable, and never under way. */
+const consistentPlan = (item: ActivityItem) =>
+  item.planned !== true ||
+  (item.kind !== "workflow" &&
+    !item.actions?.length &&
+    (item.status === "pending" || item.status === "cancelled"));
 /** Runs on cleaned items so titles that collide after sanitizing are rejected too. */
 const consistentSnapshot = (items: readonly ActivityItem[]) =>
   uniqueIds(items.map((item) => item.id)) &&
   items.every(
-    (item) => uniqueIds(item.actions?.map((action) => action.id) ?? []) && consistentWorkflow(item),
+    (item) =>
+      uniqueIds(item.actions?.map((action) => action.id) ?? []) &&
+      consistentWorkflow(item) &&
+      consistentPlan(item),
   );
+/** Work waiting to start; planned items are declarations, not launches. */
+const startingWork = (item: ActivityItem) =>
+  item.kind === "agent" && item.status === "pending" && item.planned !== true;
 export class ActivityService extends Context.Service<ActivityService, ActivityServiceContract>()(
   "pi-cosmic-ui/activity/service/ActivityService",
 ) {
@@ -106,10 +119,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
           rows: value.rows,
           starting: [...value.providers.values()].reduce(
             (count, provider) =>
-              count +
-              (provider.starting ||
-                provider.items.filter((item) => item.kind === "agent" && item.status === "pending")
-                  .length),
+              count + (provider.starting || provider.items.filter(startingWork).length),
             0,
           ),
         }),
@@ -344,7 +354,11 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
               const { rows, starting } = state.getSnapshot();
               return Effect.sleep(
                 starting > 0 ||
-                  rows.some((row) => row.status === "running" || row.status === "pending")
+                  rows.some(
+                    (row) =>
+                      row.status === "running" ||
+                      (row.status === "pending" && row.planned !== true),
+                  )
                   ? `${SPINNER_FRAME_MS} millis`
                   : "1 second",
               ).pipe(Effect.andThen(updateClock));

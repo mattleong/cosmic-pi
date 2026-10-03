@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Schema from "effect/Schema";
-import { WORKFLOW_RETAINED_RUNS } from "./model.ts";
+import { WORKFLOW_RETAINED_RUNS, type WorkflowSource } from "./model.ts";
 
 /** Sessions whose journals one Pi process keeps. */
 export const WORKFLOW_JOURNAL_SESSIONS = 16;
@@ -17,11 +17,19 @@ export interface WorkflowJournalEntry {
   /** A writer's worktree, which a run reusing this result still has to report for review. */
   readonly workspaceId?: string | undefined;
   readonly label?: string | undefined;
+  /** The subagent run that produced the result, which a reusing run's results journal names. */
+  readonly runId?: string | undefined;
 }
 
 /** Per-key FIFO over an earlier run's results. */
 export interface WorkflowReplay {
   readonly take: (key: string) => WorkflowJournalEntry | undefined;
+}
+
+/** What a run starts again from: its source, and its private script copy once saved. */
+export interface WorkflowRunOrigin {
+  readonly source: WorkflowSource;
+  readonly scriptPath?: string | undefined;
 }
 
 /** A run an earlier activation left running when the session was torn down. */
@@ -34,11 +42,16 @@ export interface WorkflowInterruptedRun {
   readonly workspaces: ReadonlyArray<string>;
   /** Someone asked the run to stop before the teardown, so it isn't offered for a restart. */
   readonly stopped?: boolean | undefined;
+  /** Where a restart starts the run again from. */
+  readonly origin?: WorkflowRunOrigin | undefined;
 }
 
 export interface WorkflowJournalContract {
-  /** Registers a running run so it can be resumed even before it records a result. */
-  readonly open: (runId: string, name: string) => Effect.Effect<void>;
+  /**
+   * Registers a running run so it can be resumed even before it records a result, with where a
+   * restart starts it again from.
+   */
+  readonly open: (runId: string, name: string, origin?: WorkflowRunOrigin) => Effect.Effect<void>;
   readonly record: (runId: string, entry: WorkflowJournalEntry) => Effect.Effect<void>;
   /** Notes a worktree one of the run's writers works in. */
   readonly noteWorkspace: (runId: string, workspaceId: string) => Effect.Effect<void>;
@@ -61,6 +74,7 @@ export interface WorkflowJournalContract {
 
 interface RunJournal {
   readonly name: string;
+  readonly origin?: WorkflowRunOrigin | undefined;
   readonly entries: WorkflowJournalEntry[];
   readonly workspaces: Set<string>;
   /** Open until its outcome, or a later activation's notice about the teardown, is accepted. */
@@ -175,12 +189,13 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
           if (run) change(run);
         });
       return WorkflowJournal.of({
-        open: (runId, name) =>
+        open: (runId, name, origin) =>
           Effect.sync(() => {
             const runs = journals();
             if (!runs.has(runId))
               runs.set(runId, {
                 name,
+                ...(origin !== undefined && { origin }),
                 entries: [],
                 workspaces: new Set(),
                 open: true,
@@ -226,6 +241,7 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
                     finished: run.entries.length,
                     workspaces: [...run.workspaces],
                     ...(run.stopped && { stopped: true }),
+                    ...(run.origin !== undefined && { origin: run.origin }),
                   },
                 ]
               : [],

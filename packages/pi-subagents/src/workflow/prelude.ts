@@ -62,7 +62,7 @@ const preludeSource = `(() => {
     let current;
     const phase = (title) => {
       if (typeof title !== "string" || title.trim() === "") throw new TypeError("phase(title) expects a non-empty string");
-      current = bounded(scope.prefix + title);
+      current = bounded(scope.prefix + title.trim());
       emit({ type: "phase", title: current });
     };
     const log = (message) => emit({ type: "log", message: text(message) });
@@ -72,7 +72,7 @@ const preludeSource = `(() => {
       if (options !== undefined && (options === null || typeof options !== "object" || Array.isArray(options)))
         return Promise.reject(new TypeError("agent(prompt, options) expects an options object"));
       const resolved = { ...options };
-      if (typeof resolved.phase === "string") resolved.phase = bounded(scope.prefix + resolved.phase);
+      if (typeof resolved.phase === "string") resolved.phase = bounded(scope.prefix + resolved.phase.trim());
       else if ((resolved.phase === undefined || resolved.phase === null) && current !== undefined) resolved.phase = current;
       return host.agent(prompt, resolved).then((reply) => {
         spent += reply.outputTokens;

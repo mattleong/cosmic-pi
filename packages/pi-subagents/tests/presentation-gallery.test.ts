@@ -62,7 +62,11 @@ import {
   interruptedWorkflowNotification,
   workflowNotification,
 } from "../src/workflow/notification.ts";
-import { parseWorkflowScript } from "../src/workflow/script.ts";
+import {
+  parseWorkflowScript,
+  workflowPlannedAgents,
+  type WorkflowScript,
+} from "../src/workflow/script.ts";
 import {
   WorkflowNotFoundError,
   WorkflowService,
@@ -1183,6 +1187,7 @@ const workflowRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => (
       queuedAt: now - 30_000,
     },
   ],
+  planned: [],
   reused: 0,
   logs: [{ at: now - 60_000, level: "info", message: "correctness review found 2 findings" }],
   outputTokens: 4_200,
@@ -1247,13 +1252,38 @@ const writerWorkflow = workflowRun({
 
 const workflowRuns: ReadonlyArray<WorkflowRunView> = [completedWorkflow, failedWorkflow];
 
+const runDirectory = "/home/me/.pi/agent/subagents/workflow-runs/wf-mg3k2l-1";
+
+const plannedReviewScript = `export const meta = {
+  name: "review-changes",
+  description: "Review the diff by dimension, then verify each finding",
+  phases: [
+    { title: "Review", agents: ["correctness", "security", { label: "performance", profile: "reviewer" }] },
+    { title: "Verify", agents: ["verifier"] },
+  ],
+};
+const found = await parallel(["correctness", "security", "performance"].map((area) => () =>
+  agent(\`Review the uncommitted diff for \${area} bugs.\`, { label: area, phase: "Review", profile: "reviewer" })));
+phase("Verify");
+return await agent(\`Verify: \${JSON.stringify(found)}\`);`;
+
+/** A started run as the service returns it: planned agents from meta, and its saved script. */
+const startedRun = (script: WorkflowScript) =>
+  workflowRun({
+    agents: [],
+    logs: [],
+    phases: script.meta.phases ?? [],
+    planned: (script.meta.phases ?? [])
+      .flatMap((phase) => workflowPlannedAgents(phase))
+      .map((agent, index) => ({ ...agent, runId: `agent-${20 + index}` })),
+    scriptPath: `${runDirectory}/script.js`,
+  });
+
 /** A fixed workflow service: the tool's real execute path, deterministic views. */
 const galleryWorkflows: WorkflowServiceContract = {
   start: (request) =>
     request.source.kind === "inline"
-      ? parseWorkflowScript(request.source.script).pipe(
-          Effect.as(workflowRun({ agents: [], logs: [] })),
-        )
+      ? parseWorkflowScript(request.source.script).pipe(Effect.map(startedRun))
       : Effect.succeed(workflowRun({ agents: [], logs: [] })),
   stop: () => Effect.succeed(stoppedWorkflow),
   status: (runId) => {
@@ -1278,6 +1308,9 @@ const workflowRuntime: WorkflowToolRuntime = {
         Effect.provideService(WorkflowStore, {
           load: () => Effect.die(new Error("unused")),
           loadPath: () => Effect.die(new Error("unused")),
+          createRunFiles: () => Effect.die(new Error("unused")),
+          appendRunJournal: () => Effect.die(new Error("unused")),
+          touchRunFiles: () => Effect.void,
           list: Effect.succeed({
             workflows: [
               {
@@ -1323,6 +1356,11 @@ const workflowScenarios = Effect.gen(function* () {
     yield* execute("start an inline script", {
       action: "start",
       script: reviewScript,
+      args: { scope: "src/auth" },
+    }),
+    yield* execute("start a script that declares its agents", {
+      action: "start",
+      script: plannedReviewScript,
       args: { scope: "src/auth" },
     }),
     yield* execute("script without meta is rejected", { action: "start", script: "return 1;" }),
@@ -1396,6 +1434,23 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     ],
   }),
   ...notified("workflow completed", workflowNotification(completedWorkflow)!),
+  ...notified(
+    "workflow completed with a results journal",
+    workflowNotification({
+      ...completedWorkflow,
+      scriptPath: `${runDirectory}/script.js`,
+      journalPath: `${runDirectory}/journal.jsonl`,
+      planned: [{ runId: "agent-23", phase: "Verify", label: "verifier" }],
+    })!,
+  ),
+  ...notified(
+    "workflow script failed with a saved script",
+    workflowNotification({
+      ...failedWorkflow,
+      scriptPath: `${runDirectory}/script.js`,
+      journalPath: `${runDirectory}/journal.jsonl`,
+    })!,
+  ),
   ...notified("resumed workflow with a worktree proposal", workflowNotification(writerWorkflow)!),
   ...notified("workflow script failed", workflowNotification(failedWorkflow)!),
   ...notified("workflow stopped", workflowNotification(stoppedWorkflow)!),

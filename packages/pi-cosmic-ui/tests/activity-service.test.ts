@@ -129,6 +129,7 @@ describe("activity service", () => {
       };
       for (const invalid of [
         [workflow, { ...member, phases: [{ title: "Find" }] }],
+        [workflow, { ...member, unphasedPlanned: 1 }],
         [{ ...workflow, phases: [{ title: "Find" }, { title: "Find" }] }],
         [{ ...workflow, phases: [{ title: "Find" }, { title: "Find \u0007" }] }],
         [{ ...workflow, phase: "Ship" }],
@@ -149,7 +150,50 @@ describe("activity service", () => {
       yield* service.receive({ ...event, items: [workflow, { ...member, phase: "Elsewhere" }] });
       expect(available).toBe(true);
       expect(rows()).toHaveLength(2);
+      // A workflow keeps its producer's count of planned members outside its phases.
+      yield* service.receive({ ...event, items: [{ ...workflow, unphasedPlanned: 3 }, member] });
+      expect(rows()[0]?.unphasedPlanned).toBe(3);
       yield* service.invoke({ ...action(rows()[1]!), actionId: "skip" });
+    }),
+  );
+  it.effect("accepts only inert planned work and never counts it as starting", () =>
+    Effect.gen(function* () {
+      const { service, rows, starting } = yield* recordingService;
+      let available = false;
+      const planned: ActivityItem = {
+        id: "planned",
+        title: "Planned agent",
+        kind: "agent",
+        status: "pending",
+        revision: "1",
+        planned: true,
+      };
+      const event = {
+        ...registration({}, undefined, [planned]),
+        acknowledge: (next: boolean) => {
+          available = next;
+        },
+      };
+      yield* service.receive(event);
+      expect(available).toBe(true);
+      expect(rows().map((row) => row.id)).toEqual(["planned"]);
+      // Declared work isn't a launch, so it neither shows the startup spinner nor counts.
+      expect(starting()).toBe(0);
+      for (const invalid of [
+        { ...planned, kind: "workflow", phases: [] },
+        { ...planned, actions: [{ id: "skip", label: "Skip" }] },
+        { ...planned, status: "running" },
+        { ...planned, status: "done" },
+      ]) {
+        yield* service.receive(event);
+        expect(available).toBe(true);
+        yield* Effect.flip(service.receive({ ...event, operation: "publish", items: [invalid] }));
+        expect(rows()).toEqual([]);
+        expect(available).toBe(false);
+      }
+      yield* service.receive({ ...event, items: [{ ...planned, status: "cancelled" }] });
+      expect(available).toBe(true);
+      expect(rows()[0]).toMatchObject({ planned: true, status: "cancelled", actions: [] });
     }),
   );
   it.effect("withdraws invalid attention metadata and restores valid publication and actions", () =>

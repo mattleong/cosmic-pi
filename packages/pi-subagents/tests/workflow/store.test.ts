@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -150,6 +151,143 @@ describe("saved workflows", () => {
       setup.trust.value = false;
       const untrusted = yield* withStore(setup, (store) => store.list);
       expect(untrusted.workflows.map((workflow) => workflow.meta.name)).toEqual(["shadowed", "b"]);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+});
+
+describe("workflow run files", () => {
+  const source = script("iterate");
+  const runsOf = (setup: Fixture) => setup.join(setup.agentDirectory, "subagents", "workflow-runs");
+  const permissions = (path: string) =>
+    FileSystem.FileSystem.use((fs) => fs.stat(path)).pipe(Effect.map((info) => info.mode & 0o777));
+
+  it.effect("saves each run's script privately, never over an existing run, for scriptPath", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* withStore(setup, (store) =>
+        store.createRunFiles("wf-a-1", source, new Set()),
+      );
+      expect(files.directory).toBe(setup.join(runsOf(setup), "wf-a-1"));
+      expect(yield* fs.readFileString(files.script)).toBe(source);
+      expect(yield* permissions(files.directory)).toBe(0o700);
+      expect(yield* permissions(files.script)).toBe(0o600);
+
+      const again = yield* Effect.flip(
+        withStore(setup, (store) => store.createRunFiles("wf-a-1", "replaced", new Set())),
+      );
+      expect(again._tag).toBe("WorkflowRunFileError");
+      expect(yield* fs.readFileString(files.script)).toBe(source);
+
+      // The saved copy is what the main agent edits and starts again.
+      const loaded = yield* withStore(setup, (store) => store.loadPath(files.script));
+      expect(loaded.script.meta.name).toBe("iterate");
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("appends results journal lines to a private file", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const lines = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-a-2", source, new Set());
+          yield* store.appendRunJournal(files, '{"callId":1}');
+          yield* store.appendRunJournal(files, '{"callId":2}');
+          return files;
+        }),
+      );
+      expect(yield* fs.readFileString(lines.journal)).toBe('{"callId":1}\n{"callId":2}\n');
+      expect(yield* permissions(lines.journal)).toBe(0o600);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  /** Run directories `wf-<prefix>-1..count`, each last written at its time in seconds. */
+  const runDirectories = (
+    setup: Fixture,
+    prefix: string,
+    count: number,
+    writtenAt: (ordinal: number) => number,
+  ) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      for (let ordinal = 1; ordinal <= count; ordinal++) {
+        const directory = setup.join(runsOf(setup), `wf-${prefix}-${ordinal}`);
+        yield* fs.makeDirectory(directory, { recursive: true });
+        // Node reads numeric times as seconds since the epoch.
+        yield* fs.utimes(directory, writtenAt(ordinal), writtenAt(ordinal));
+      }
+    });
+
+  const removedOf = (left: ReadonlySet<string>, prefix: string, count: number) =>
+    Array.from({ length: count }, (_, index) => `wf-${prefix}-${index + 1}`).filter(
+      (name) => !left.has(name),
+    );
+
+  // A day old and more: outside the window in which another Pi process may still run them.
+  const OLD = 1_767_225_600;
+  const nowSeconds = Clock.currentTimeMillis.pipe(
+    Effect.map((millis) => Math.floor(millis / 1_000)),
+  );
+
+  it.live("keeps the newest run directories, a live run's, and anything else", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const root = runsOf(setup);
+      yield* runDirectories(setup, "a", 70, (ordinal) => OLD + ordinal);
+      yield* fs.makeDirectory(setup.join(root, "notes"));
+      yield* withStore(setup, (store) =>
+        store.createRunFiles("wf-b-1", source, new Set(["wf-a-1"])),
+      );
+      const left = new Set(yield* fs.readDirectory(root));
+      expect(removedOf(left, "a", 70)).toEqual([
+        "wf-a-2",
+        "wf-a-3",
+        "wf-a-4",
+        "wf-a-5",
+        "wf-a-6",
+        "wf-a-7",
+      ]);
+      expect(left.has("wf-a-1")).toBe(true);
+      expect(left.has("wf-b-1")).toBe(true);
+      expect(left.has("notes")).toBe(true);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.live("never prunes a run directory written in the last day, whichever process runs it", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const recent = (yield* nowSeconds) - 60 * 60;
+      // Other processes' runs, none live here, all written within the last hour.
+      yield* runDirectories(setup, "a", 70, (ordinal) => recent + ordinal);
+      yield* runDirectories(setup, "c", 3, (ordinal) => OLD + ordinal);
+      yield* withStore(setup, (store) => store.createRunFiles("wf-b-1", source, new Set()));
+      const left = new Set(yield* fs.readDirectory(runsOf(setup)));
+      expect(removedOf(left, "a", 70)).toEqual([]);
+      expect(removedOf(left, "c", 3)).toEqual(["wf-c-1", "wf-c-2", "wf-c-3"]);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.live("keeps an old run's directory once the run appends to its journal again", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      yield* runDirectories(setup, "a", 70, (ordinal) => OLD + ordinal);
+      yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-d-1", source, new Set());
+          yield* store.appendRunJournal(files, '{"callId":1}');
+          // Quiet for a long time, then another line.
+          yield* fs.utimes(files.directory, OLD, OLD);
+          yield* store.appendRunJournal(files, '{"callId":2}');
+          // Another process starts a run: wf-d-1 isn't live there, and it is the oldest by far.
+          yield* store.createRunFiles("wf-e-1", source, new Set());
+        }),
+      );
+      const left = new Set(yield* fs.readDirectory(runsOf(setup)));
+      expect(left.has("wf-d-1")).toBe(true);
     }).pipe(Effect.provide(nodeFilePlatformLayer)),
   );
 });

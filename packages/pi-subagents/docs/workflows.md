@@ -15,9 +15,9 @@ The main agent calls `subagent_workflow` with `action: "start"` and exactly one 
 - `name`: a saved workflow (see [Saved workflows](#saved-workflows));
 - `scriptPath`: a `.js` file, absolute or relative to the session directory.
 
-Optional `args` (any JSON value, at most 64 KiB as JSON) reach the script verbatim, and `resumeFromRunId` reuses results from an earlier run (see [Resume](#resume)). Script, `meta`, file, `args` and resume errors reject the call before anything runs. Otherwise the call returns at once with a run id, and the script runs in the background in Pi's QuickJS sandbox (`@earendil-works/pi-codemode`) while the main agent and the user keep working. When the script returns or fails, one notification reaches the main agent (see [Notifications](#notifications)).
+Optional `args` (any JSON value, at most 64 KiB as JSON) reach the script verbatim, and `resumeFromRunId` reuses results from an earlier run (see [Resume](#resume)). Script, `meta`, file, `args` and resume errors reject the call before anything runs. Otherwise the call returns at once with a run id and the path of the script to edit for a change (see [Run files](#run-files)), and the script runs in the background in Pi's QuickJS sandbox (`@earendil-works/pi-codemode`) while the main agent and the user keep working. When the script returns or fails, one notification reaches the main agent (see [Notifications](#notifications)).
 
-- `action: "status"` shows a run's phases, agents, worktree proposals, last 20 log lines and outcome.
+- `action: "status"` shows a run's phases with their agent counts, including planned agents that haven't started (or, once the run ends, never ran), total output tokens, worktree proposals, the script to edit and the results journal, last 20 log lines and outcome.
 - `action: "stop"` stops a run and returns its final state (see [Stopping and interruption](#stopping-and-interruption)).
 - `action: "list"` lists saved workflows and the runs this extension instance knows: every live run and the 32 most recently finished. Runs from before a `/reload` or `/tree` aren't listed, but can still be resumed.
 
@@ -27,7 +27,13 @@ The script is plain JavaScript (not TypeScript) of at most 262,144 characters. I
 export const meta = {
   name: "review-changes",
   description: "Review the diff by dimension, then verify each finding",
-  phases: [{ title: "Review" }, { title: "Verify", detail: "independent re-check" }],
+  phases: [
+    {
+      title: "Review",
+      agents: ["review:correctness", "review:concurrency", "review:error handling"],
+    },
+    { title: "Verify", detail: "independent re-check" },
+  ],
 };
 
 const FINDINGS = {
@@ -84,7 +90,13 @@ const verified = await pipeline(
 return verified.flat().filter(Boolean);
 ```
 
-`meta` has a `name` (up to 80 characters), a `description` (up to 1,000), an optional `whenToUse` (up to 1,000) and optional `phases`: up to 64 `{ title, detail? }` entries with titles of up to 160 characters. The script can read `meta`. It returns a JSON value; `undefined` becomes `null`.
+`meta` has a `name` (up to 80 characters), a `description` (up to 1,000), an optional `whenToUse` (up to 1,000) and optional `phases`: up to 64 `{ title, detail?, agents? }` entries with titles of 1 to 160 characters once trimmed. Titles are trimmed when the script is parsed, as `phase()` titles are, so `phase(" Review ")` is the meta phase `"Review"`. The script can read `meta`. It returns a JSON value; `undefined` becomes `null`.
+
+### Planned agents
+
+A phase's `agents` lists the agents the script already knows it will run, so the user sees the whole plan before any of them starts. Each entry is a label (1 to 80 characters, not blank) or `{ label, profile? }`; a phase declares at most 64 and a script at most 256. Planned agents are display-only: they never start anything and never limit which calls the script makes. The tool description encourages the main agent to declare them.
+
+When the run starts, each planned agent reserves the subagent run id it will later run under, and the run's view lists the unclaimed ones in declaration order. An `agent()` call queued in a phase claims an entry there: the first unclaimed one with the call's label or, for a call without a label, the phase's first unclaimed one. The call then shows the entry's label when it has none. A planned profile only labels the planned row: the call runs with its own `profile`, and once claimed its row shows that profile. The claiming call keeps the entry's run id, so its Activity row stays the same from planned through queued, running and finished. A call with a label no entry has, or outside any phase, claims nothing and reserves its own id. On resume, a reused call claims its entry too and counts as reused work. Entries no call claimed stay in a finished run's view as agents that never ran, and its notification counts them. A nested `workflow()` adds its phases' planned agents under `▸ name · phase` the first time it runs, within the run's 256.
 
 ### Script API
 
@@ -141,7 +153,7 @@ An agent that never returns a valid value fails, and its `agent()` call resolves
 
 ### Progress and control
 
-With Cosmic UI installed, the Activity widget and the `/activity` and `/subagents` managers show each workflow above its phases (up to 32) and agents. Queued agents appear before they start, up to 64 per workflow, and the workflow summary counts the rest. Results reused on resume count as finished work in their phase, so a phase whose calls were all reused shows as done. The workflow's detail shows its description, source, args, phases, agents, worktree proposals, recent log and result or error.
+With Cosmic UI installed, the Activity widget and the `/activity` and `/subagents` managers show each workflow above its phases (up to 32) and agents. Planned agents appear as soon as the run starts, dimmed and marked planned (or "not run" once the workflow ends); they never count as running or queued work. Queued agents appear before they start, up to 64 per workflow; the rest get a row once they start and until then still keep their phase running. The workflow row's narrator line shows the newest log line (at most 200 characters, on one line). Results reused on resume count as finished work in their phase, so a phase whose calls were all reused shows as done. The workflow's detail shows its description, source, args, phases, agents, worktree proposals, recent log and result or error.
 
 Pressing `x` on a queued agent skips it, and on a running agent stops it; each asks for confirmation first, and either way its `agent()` call resolves `null`. `x` on the workflow also asks for confirmation, then stops the whole run. Activity offers Resume on a completed workflow agent only once its workflow has ended, since the workflow still owns its report; a paused agent can still be resumed while the workflow runs. A former agent resumed after its workflow ended shows in the Subagents section while it works, and moves back under the finished workflow as history once it finishes. Workflows also run without a terminal UI (print or RPC mode), where `action: "status"` reports progress.
 
@@ -150,10 +162,11 @@ Pressing `x` on a queued agent skips it, and on a running agent stops it; each a
 A completed or failed run sends one notification, which joins the main agent's current turn or starts one. It contains:
 
 - the workflow name, run id, outcome and duration;
-- agent counts: started, failed, skipped or stopped, and reused;
+- agent counts: started, failed, skipped or stopped, reused, and planned agents that were never called; and the run's total output tokens, which the notification row also shows;
+- the results journal's path, once it has a line (see [Run files](#run-files));
 - worktree proposals as `workspace id · label · state`, where a reused writer's worktree shows `reused`; at most 40 are listed and the rest counted;
 - for a completed run, the newest 12 warnings (each clipped to 400 characters), which explain `null` results, with a count of any earlier warnings not shown, then the result. Warnings are kept apart from the 200-line log, so later output can't push them out;
-- for a failed run, the error name and message (up to 4 KiB) and stack (up to 8 KiB), a reminder to fix the script and start it again with `resumeFromRunId`, and the last 12 log lines.
+- for a failed run, the error name and message (up to 4 KiB) and stack (up to 8 KiB), a reminder to fix the script and start it again with `resumeFromRunId` (see [Run files](#run-files) for which file), and the last 12 log lines.
 
 String results appear verbatim and other values as indented JSON. Credentials are redacted from every section before the notification is measured, so redaction can't push it past Pi's limit. The result gets whatever room the other sections leave, up to 28 KiB. A longer result, or one that redaction lengthens past that room, is clipped to about the largest head and tail that fit and saved in full to a temporary file, whose path comes before the text; the file outlives the session. While the session is current, delivery is retried with backoff until Pi accepts it.
 
@@ -165,7 +178,7 @@ A stop from Activity counts as the user's. Its notification says the user stoppe
 
 Either way, queued agents never start, running agents are stopped, and the script's text output stays in the log; the aborted script gets about 10 seconds to hand it back.
 
-`/reload`, `/tree` navigation and session replacement end running workflows and stop their agents without a notification. The next time the same Pi session starts in this process, such as after `/reload` or `/tree`, the main agent gets one `interrupted` notice per run, again without a new turn. This includes a run that had finished but whose notification Pi hadn't accepted yet. The notice says how many agents had finished and suggests starting the script again with `resumeFromRunId`; worktree writers run again on resume. It lists the worktrees the run's writers created, which this session can't review, integrate or discard, and asks the main agent to recover any changes it needs by hand from each worktree's path, which `subagent_workspace list` shows. A run that was being stopped at teardown gets a notice that says so, without the agent count or the resume suggestion. A notice lost to another teardown is posted again at the next session start, until Pi accepts one.
+`/reload`, `/tree` navigation and session replacement end running workflows and stop their agents without a notification. The next time the same Pi session starts in this process, such as after `/reload` or `/tree`, the main agent gets one `interrupted` notice per run, again without a new turn. This includes a run that had finished but whose notification Pi hadn't accepted yet. The notice says how many agents had finished and suggests starting the run again with `resumeFromRunId`: by `name` or `scriptPath` for a saved workflow or script file, or with an inline script's saved copy as `scriptPath`; worktree writers run again on resume. It lists the worktrees the run's writers created, which this session can't review, integrate or discard, and asks the main agent to recover any changes it needs by hand from each worktree's path, which `subagent_workspace list` shows. A run that was being stopped at teardown gets a notice that says so, without the agent count or the resume suggestion. A notice lost to another teardown is posted again at the next session start, until Pi accepts one.
 
 ### Resume
 
@@ -173,9 +186,18 @@ Either way, queued agents never start, running agents are stopped, and the scrip
 
 A worktree writer's result is reused only while this session still tracks its worktree. If the worktree still awaits review, the new run's status and notification list it as `reused`. If this session integrated it, the result is reused and the worktree isn't listed again. A writer whose worktree was discarded, whose integration wasn't confirmed, or that ran before a `/reload`, `/tree` navigation or session replacement runs again, and the run's log says why.
 
-The tool tells the main agent to resume runs that failed or that it stopped itself to fix, and not to restart a run the user stopped unless they ask.
+The tool tells the main agent to resume runs that failed or that it stopped itself to fix, and not to restart a run the user stopped unless they ask. The usual loop edits the script with the file tools and starts it again with `resumeFromRunId`: a saved workflow or script file in its own file, started by `name` or `scriptPath`, and an inline script in the run's saved copy, started with `scriptPath`.
 
 The journal keeps results in process memory for each Pi session: the 32 most recent runs and up to 16 MiB of result text, for at most 16 sessions. Runs that are still open, and the most recently closed run, are never dropped; a run stays open until Pi accepts its notification. Journals survive `/reload` and `/tree` but not a Pi restart.
+
+### Run files
+
+Every run gets a private directory, `<agent-dir>/subagents/workflow-runs/<run id>/` (mode 0700), like Claude Code's saved workflow scripts:
+
+- `script.js` (mode 0600) is the script exactly as started, whether inline, saved or from a file. Each run writes its own copy and never overwrites an existing file or directory. For an inline script, the start result names it: to change the workflow, the main agent edits it with its file tools and starts it with `scriptPath`, adding `resumeFromRunId` to reuse finished agents. A saved workflow or script file is changed in its own file instead and started again by `name` or `scriptPath`, so the fix outlives the run; the start result, status and failure guidance name that file, not the copy.
+- `journal.jsonl` (mode 0600) gets one JSON line per finished `agent()` call, in finishing order: `{ callId, label, phase?, profile?, state, reason?, reused?, runId, workspaceId?, outputTokens, result }`. `state` is `completed`, `failed`, `stopped` or `skipped`, and `result` is the value the script received (`null` unless completed). `profile` is the one the call ran with. A reused result has `reused: true`, no `callId`, and the `runId` of the agent that produced it. A result over 32 KiB of canonical JSON keeps its head, the text itself or a value's JSON, with `resultTruncated: true` and `resultChars`. The notification and status name the journal once its first line is written, so the main agent can read what each agent actually returned.
+
+Every Pi process shares these directories. A run start removes those outside the 64 most recently written that also weren't written in the last 24 hours, and never the directory of a run this session still runs. Creating a run's directory, appending to its journal and an hourly refresh while the run lives all count as writes, so no process prunes the files of a live run in another process. Run files are best effort: if the script can't be saved, the run starts anyway with a warning and no path, and if a journal line can't be written, the run logs one warning and keeps trying later lines.
 
 ### Saved workflows
 

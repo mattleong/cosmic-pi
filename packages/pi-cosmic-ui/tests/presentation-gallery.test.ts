@@ -8,7 +8,7 @@ import { plainTheme } from "pi-cosmic-core/testing";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
-import type { ActivityRow } from "../src/activity/model.ts";
+import { isFinished, type ActivityRow } from "../src/activity/model.ts";
 import { activityRow, memberRow, workflowRow } from "./support/activity.ts";
 
 const directory = Effect.runSync(
@@ -34,7 +34,7 @@ const standalone = [
 ];
 const review = workflowRow("review", ["Find", "Review", "Verify"], "running", "Review", {
   title: "Review authentication",
-  summary: "phase 2/3 · 3 queued",
+  summary: "Found 5 call sites; reviewing each one for token reuse",
   detail: 'Args: { "scope": "src/auth" }\nfound 4 risky call sites',
   startedAt: 0,
   actions: [stop],
@@ -149,8 +149,153 @@ const looseRows: readonly ActivityRow[] = [
     title: "Approve the dependency",
   }),
 ];
+/** Declared agents the script hasn't called; finished workflows never ran them. */
+const plannedRow = (
+  id: string,
+  workflow: ActivityRow,
+  phase: string,
+  title: string,
+  profile: string,
+): ActivityRow =>
+  memberRow(id, workflow, phase, isFinished(workflow) ? "cancelled" : "pending", {
+    title,
+    profile,
+    planned: true,
+  });
+const plan = workflowRow("plan", ["Map", "Review", "Verify"], "running", "Map", {
+  title: "Audit payment flows",
+  summary: "Mapping checkout, refunds and payouts",
+  startedAt: 0,
+  actions: [stop],
+});
+const planRows: readonly ActivityRow[] = [
+  plan,
+  memberRow("mapper", plan, "Map", "running", {
+    title: "Map payment entry points",
+    profile: "scout",
+    startedAt: 10_000,
+  }),
+  plannedRow("plan-checkout", plan, "Review", "review:checkout", "reviewer"),
+  plannedRow("plan-refunds", plan, "Review", "review:refunds", "reviewer"),
+  plannedRow("plan-payouts", plan, "Review", "review:payouts", "reviewer"),
+  plannedRow("plan-verify", plan, "Verify", "Verify findings", "reviewer"),
+];
+const claimed = workflowRow("claimed", ["Map", "Review", "Verify"], "running", "Review", {
+  title: "Audit payment flows",
+  summary: "review:refunds is waiting for a free agent slot",
+  startedAt: 0,
+  actions: [stop],
+  phases: [{ title: "Map" }, { title: "Review" }, { title: "Verify", planned: 1 }],
+});
+const claimedRows: readonly ActivityRow[] = [
+  claimed,
+  memberRow("claimed-map", claimed, "Map", "done", {
+    title: "Map payment entry points",
+    profile: "scout",
+    startedAt: 10_000,
+    endedAt: 40_000,
+  }),
+  memberRow("claimed-checkout", claimed, "Review", "running", {
+    title: "review:checkout",
+    profile: "reviewer",
+    startedAt: 45_000,
+  }),
+  memberRow("claimed-refunds", claimed, "Review", "pending", {
+    title: "review:refunds",
+    profile: "reviewer",
+    actions: skip,
+  }),
+  plannedRow("claimed-payouts", claimed, "Review", "review:payouts", "reviewer"),
+  plannedRow("claimed-verify", claimed, "Verify", "Verify findings", "reviewer"),
+];
+const unrun = workflowRow("unrun", ["Map", "Review", "Verify"], "done", "Review", {
+  title: "Audit payment flows",
+  summary: "Returned early: no payment code changed",
+  startedAt: 0,
+  endedAt: 50_000,
+});
+const unrunRows: readonly ActivityRow[] = [
+  unrun,
+  memberRow("unrun-map", unrun, "Map", "done", {
+    title: "Map payment entry points",
+    profile: "scout",
+    startedAt: 0,
+    endedAt: 30_000,
+  }),
+  memberRow("unrun-checkout", unrun, "Review", "done", {
+    title: "review:checkout",
+    profile: "reviewer",
+    startedAt: 32_000,
+    endedAt: 50_000,
+  }),
+  plannedRow("unrun-refunds", unrun, "Review", "review:refunds", "reviewer"),
+  plannedRow("unrun-verify", unrun, "Verify", "Verify findings", "reviewer"),
+];
+const crowded = workflowRow(
+  "crowded",
+  ["Inventory", "Audit", "Fix", "Verify"],
+  "running",
+  "Inventory",
+  {
+    title: "Harden every service",
+    summary: "Listing services under services/",
+    startedAt: 0,
+    actions: [stop],
+  },
+);
+const crowdedRows: readonly ActivityRow[] = [
+  crowded,
+  memberRow("inventory", crowded, "Inventory", "running", {
+    title: "Inventory services",
+    profile: "scout",
+    startedAt: 5_000,
+  }),
+  ...["Audit", "Fix", "Verify"].flatMap((phase) =>
+    ["billing", "accounts", "search", "mail", "media"].map((service) =>
+      plannedRow(
+        `${phase}-${service}`,
+        crowded,
+        phase,
+        `${phase.toLowerCase()}:${service}`,
+        "worker",
+      ),
+    ),
+  ),
+];
+const passed = workflowRow("passed", ["Map", "Review", "Verify"], "running", "Verify", {
+  title: "Audit payment flows",
+  summary: "Verifying review findings",
+  startedAt: 0,
+  actions: [stop],
+  phases: [{ title: "Map", planned: 1 }, { title: "Review" }, { title: "Verify" }],
+  // Planned agents in phases past the ones Activity shows.
+  unphasedPlanned: 12,
+});
+const passedRows: readonly ActivityRow[] = [
+  passed,
+  plannedRow("passed-map", passed, "Map", "Map payout entry points", "scout"),
+  memberRow("passed-review", passed, "Review", "done", {
+    title: "review:checkout",
+    profile: "reviewer",
+    startedAt: 10_000,
+    endedAt: 40_000,
+  }),
+  memberRow("passed-verify", passed, "Verify", "running", {
+    title: "Verify findings",
+    profile: "reviewer",
+    startedAt: 45_000,
+  }),
+];
 const scenarios: ReadonlyArray<{ readonly title: string; readonly rows: readonly ActivityRow[] }> =
   [
+    { title: "Later phases show the agents a workflow plans to call", rows: planRows },
+    { title: "Partly claimed plan with a narrator line", rows: claimedRows },
+    { title: "Finished workflow with planned agents it never ran", rows: unrunRows },
+    { title: "Planned agents that don't fit are counted on their phase", rows: crowdedRows },
+    {
+      title: "A passed phase with planned agents, and planned agents in phases not shown",
+      rows: passedRows,
+    },
     { title: "Running workflow with queued placeholders that can be skipped", rows: running },
     {
       title: "Running workflow beside standalone agents and tasks",
@@ -194,11 +339,25 @@ const managerFrames = (rows: readonly ActivityRow[]) => {
   component.handleInput("\r");
   frames.push(["inspect first child", component.render(140)]);
   component.handleInput("h");
-  const queued = rows.find((row) => row.status === "pending" && row.startedAt === undefined);
+  const queued = rows.find(
+    (row) => row.status === "pending" && row.startedAt === undefined && row.planned !== true,
+  );
   for (let step = 0; queued && step < 12; step++) {
     if (component.shell.state.selectedId === queued.key) {
       component.handleInput("\r");
       frames.push(["inspect queued placeholder", component.render(140)]);
+      component.handleInput("h");
+      break;
+    }
+    component.handleInput("j");
+  }
+  component.handleInput("g");
+  component.handleInput("g");
+  const planned = rows.find((row) => row.planned === true);
+  for (let step = 0; planned && step < 16; step++) {
+    if (component.shell.state.selectedId === planned.key) {
+      component.handleInput("\r");
+      frames.push(["inspect planned agent", component.render(140)]);
       component.handleInput("h");
       break;
     }

@@ -15,6 +15,8 @@ import {
 import { makeWorkflowReplay, type WorkflowJournalEntry } from "../../src/workflow/journal.ts";
 import type { WorkflowAgentView } from "../../src/workflow/model.ts";
 import { workflowAgentJournalKey } from "../../src/workflow/options.ts";
+import type { WorkflowResultLine } from "../../src/workflow/results.ts";
+import { workflowAgentFromDraft } from "../../src/workflow/state.ts";
 import { view } from "../fixtures/run-view.ts";
 import { testHost } from "./fixtures/workflow-harness.ts";
 
@@ -25,6 +27,7 @@ interface Recorded {
   readonly counted: Array<readonly [number, boolean]>;
   readonly updates: Array<Partial<WorkflowAgentView>>;
   readonly logs: string[];
+  readonly results: WorkflowResultLine[];
 }
 
 const admitted = (owner: OwnedRunStart): OwnedRunHandle => ({
@@ -39,7 +42,7 @@ const harness = (
   outcome?: OwnedRunOutcome,
   subagents: Partial<WorkflowAgentServices["subagents"]> = {},
 ) => {
-  const recorded: Recorded = { journal: [], counted: [], updates: [], logs: [] };
+  const recorded: Recorded = { journal: [], counted: [], updates: [], logs: [], results: [] };
   const services: WorkflowAgentServices = {
     subagents: {
       reserveRunId: Effect.succeed("agent-r1-1"),
@@ -65,12 +68,13 @@ const harness = (
       replay: undefined,
       permits: Semaphore.makeUnsafe(1),
       nextCall: Effect.succeed(1),
-      queue: () => Effect.void,
+      queue: (draft) => Effect.succeed(workflowAgentFromDraft(draft, "agent-r1-1")),
       update: (_runId, change) => Effect.sync(() => void recorded.updates.push(change)),
       forget: () => Effect.void,
       log: (_level, message) => Effect.sync(() => void recorded.logs.push(message)),
       count: (outputTokens) => Effect.sync(() => void recorded.counted.push([outputTokens, false])),
       reuse: (entry) => Effect.sync(() => void recorded.counted.push([entry.outputTokens, true])),
+      writeResult: (line) => Effect.sync(() => void recorded.results.push(line)),
       ...run,
     },
     services,

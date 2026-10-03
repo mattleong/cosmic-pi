@@ -22,6 +22,8 @@ export interface ActivityRowVisual {
   readonly route?: string;
   readonly awaited?: boolean;
   readonly omittedChildren?: number;
+  /** Declared work that has not started: the whole identity recedes. */
+  readonly dim?: boolean;
 }
 
 const treeGuide = (continuations: readonly boolean[], levels: number): string => {
@@ -71,9 +73,10 @@ export function renderActivityRow(
       : "";
   const routeWidth = route ? visibleWidth(route) + 2 : 0;
   const kind = row.kind ? `${row.kind} ` : "";
+  const identityTone = row.dim ? "dim" : interactive ? managerTone.identity : undefined;
   const name = focusedStyle
     ? focusedStyle(`${kind}${profile}${row.title}`)
-    : `${paint(row.typeColor, kind)}${paint(interactive ? managerTone.identity : "muted", profile)}${paint(interactive ? managerTone.identity : "text", row.title)}`;
+    : `${paint(row.dim ? "dim" : row.typeColor, kind)}${paint(identityTone ?? "muted", profile)}${paint(identityTone ?? "text", row.title)}`;
   const identity = clipToWidth(
     `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`,
     Math.max(0, leftWidth - routeWidth),

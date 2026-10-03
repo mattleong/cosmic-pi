@@ -11,12 +11,18 @@ import {
 } from "acorn";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import { sha256Text } from "pi-cosmic-core";
 
 /** Workflow scripts are model-authored programs, never bulk data. */
 export const WORKFLOW_SCRIPT_MAX_CHARS = 256 * 1024;
 export const WORKFLOW_PHASE_LIMIT = 64;
+/** Planned agents one meta phase may declare. */
+export const WORKFLOW_PHASE_AGENT_LIMIT = 64;
+/** Planned agents one script may declare across its phases. */
+export const WORKFLOW_SCRIPT_AGENT_LIMIT = 256;
 
 export class WorkflowScriptError extends Schema.TaggedError<WorkflowScriptError>()(
   "WorkflowScriptError",
@@ -26,9 +32,27 @@ export class WorkflowScriptError extends Schema.TaggedError<WorkflowScriptError>
 const Text = (maximum: number) =>
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 
+/** A display-only agent a phase plans to run: a label, or a label with its profile. */
+const WorkflowPlannedAgentSchema = Schema.Union([
+  Text(80),
+  Schema.Struct({ label: Text(80), profile: Schema.optional(Text(80)) }),
+]);
+
+/**
+ * A phase title, trimmed once here to the form runtime `phase()` titles take, so meta phases,
+ * their planned agents and the phases calls name all match.
+ */
+const PhaseTitle = Schema.String.pipe(Schema.decode(SchemaTransformation.trim())).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(160),
+);
+
 const WorkflowPhaseSchema = Schema.Struct({
-  title: Text(160),
+  title: PhaseTitle,
   detail: Schema.optional(Text(1_000)),
+  agents: Schema.optional(
+    Schema.Array(WorkflowPlannedAgentSchema).check(Schema.isMaxLength(WORKFLOW_PHASE_AGENT_LIMIT)),
+  ),
 });
 
 export const WorkflowMetaSchema = Schema.Struct({
@@ -43,8 +67,44 @@ export const WorkflowMetaSchema = Schema.Struct({
 export type WorkflowMeta = typeof WorkflowMetaSchema.Type;
 export type WorkflowPhase = typeof WorkflowPhaseSchema.Type;
 
+/** A planned agent as a run shows it, before it reserves a run id. */
+export interface WorkflowPlannedAgentSpec {
+  readonly phase: string;
+  readonly label: string;
+  readonly profile?: string | undefined;
+}
+
+/** A phase's planned agents in declaration order, labels and profiles trimmed. */
+export const workflowPlannedAgents = (
+  phase: WorkflowPhase,
+  title = phase.title,
+): ReadonlyArray<WorkflowPlannedAgentSpec> =>
+  (phase.agents ?? []).map((agent) => {
+    const { label, profile } = Predicate.isString(agent)
+      ? { label: agent, profile: undefined }
+      : agent;
+    const shownProfile = profile?.trim();
+    return { phase: title, label: label.trim(), ...(shownProfile && { profile: shownProfile }) };
+  });
+
+/** Why the declared planned agents are invalid beyond their shape, if they are. */
+const plannedAgentsProblem = (meta: WorkflowMeta): string | undefined => {
+  const phases = meta.phases ?? [];
+  const planned = phases.flatMap((phase) => workflowPlannedAgents(phase));
+  if (planned.length > WORKFLOW_SCRIPT_AGENT_LIMIT)
+    return `Invalid meta: phases declare ${planned.length} planned agents; a script can declare at most ${WORKFLOW_SCRIPT_AGENT_LIMIT}.`;
+  const blank = phases.findIndex((phase) =>
+    workflowPlannedAgents(phase).some((agent) => agent.label === ""),
+  );
+  return blank === -1
+    ? undefined
+    : `Invalid meta: planned agent labels can't be blank, in phase "${phases[blank]?.title}".`;
+};
+
 export interface WorkflowScript {
   readonly meta: WorkflowMeta;
+  /** The script exactly as given, which each run saves for the main agent to edit. */
+  readonly source: string;
   /** The script with `export` removed from its meta declaration; line and column positions are unchanged. */
   readonly body: string;
   readonly sha256: string;
@@ -210,7 +270,9 @@ export const parseWorkflowScript = (
         (error) => new WorkflowScriptError({ message: `Invalid meta: ${error.message}` }),
       ),
     );
+    const problem = plannedAgentsProblem(meta);
+    if (problem !== undefined) return yield* new WorkflowScriptError({ message: problem });
     // Keep `const meta` so the script can read it; blanking `export` keeps every position intact.
     const body = `${source.slice(0, first.start)}${" ".repeat("export".length)}${source.slice(first.start + "export".length)}`;
-    return { meta, body, sha256: sha256Text(source) };
+    return { meta, source, body, sha256: sha256Text(source) };
   });
