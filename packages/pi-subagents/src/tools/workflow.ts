@@ -59,30 +59,30 @@ import {
 } from "./workflow-schema.ts";
 
 /**
- * The description's example script: find by dimension, then three refuters per finding with a
- * majority vote. Exported so tests can run it; the authoring guide holds the longer patterns.
+ * The description's example script, the focused-check shape: a few finders, a barrier that dedups
+ * their reports, then one skeptic per bug. Exported so tests can run it; the authoring guide holds
+ * the thorough patterns.
  */
-export const workflowToolExample = `export const meta = { name: "review", description: "Find bugs by dimension, merge reports of one location, then verify each with three refuters", phases: [{ title: "Find", agents: ["correctness", "security", "error handling"] }, { title: "Verify" }] };
-const BUGS = { type: "object", properties: { bugs: { type: "array", items: { type: "object", properties: { file: { type: "string" }, line: { type: "integer" }, claim: { type: "string" } }, required: ["file", "line", "claim"], additionalProperties: false } } }, required: ["bugs"], additionalProperties: false };
+export const workflowToolExample = `export const meta = { name: "find-bugs", description: "A few finders, dedup, then one skeptic per bug", phases: [{ title: "Find", agents: ["logic", "errors"] }, { title: "Verify" }] };
+const BUGS = { type: "object", properties: { bugs: { type: "array", items: { type: "object", properties: { file: { type: "string" }, line: { type: "integer" }, desc: { type: "string" } }, required: ["file", "line", "desc"], additionalProperties: false } } }, required: ["bugs"], additionalProperties: false };
 const VERDICT = { type: "object", properties: { refuted: { type: "boolean" }, reason: { type: "string" } }, required: ["refuted", "reason"], additionalProperties: false };
-const found = await parallel(["correctness", "security", "error handling"].map((area) => () =>
-  agent(\`Review the uncommitted diff in this repository for \${area} bugs. Report only real defects, each with file, line and claim.\`, { label: area, phase: "Find", profile: "reviewer", schema: BUGS })));
-// A deliberate barrier: merge the finders' reports of one location before paying to verify it.
-const byLocation = new Map();
-for (const bug of found.flatMap((review) => review?.bugs ?? [])) {
-  const location = \`\${bug.file}:\${bug.line}\`;
-  byLocation.set(location, [...(byLocation.get(location) ?? []), bug.claim]);
-}
-const verified = await parallel([...byLocation].map(([location, claims]) => () =>
-  parallel([1, 2, 3].map((n) => () =>
-    agent(\`Try to refute these reported bugs at \${location} against the code. Answer refuted: true unless you can confirm one is real.\\n\${claims.join("\\n")}\`, { label: \`refute \${location} #\${n}\`, phase: "Verify", profile: "reviewer", schema: VERDICT })))
-    .then((votes) => (votes.filter((vote) => vote && !vote.refuted).length >= 2 ? { location, claims } : null))));
-return verified.filter(Boolean);`;
+// From scouting the diff: the changed files. Each finder takes one lens.
+const FILES = ["src/config/store.ts", "src/config/path-key.ts"];
+const sameBug = (a, b) => a.file === b.file && Math.abs(a.line - b.line) <= 3;
+const found = await parallel(["logic", "errors"].map((lens) => () =>
+  agent(\`Review the uncommitted changes to \${FILES.join(", ")} for \${lens} bugs. Report each real one with file, line and desc.\`, { label: lens, phase: "Find", profile: "reviewer", schema: BUGS })));
+// A justified barrier: dedup across all finders (same file, lines within 3) before paying to verify.
+const bugs = [];
+for (const bug of found.flatMap((review) => review?.bugs ?? [])) if (!bugs.some((other) => sameBug(other, bug))) bugs.push(bug);
+if (bugs.length === 0) return [];
+const verdicts = await parallel(bugs.map((bug) => () =>
+  agent(\`Try to refute this reported bug against the code. Default to refuted: true if uncertain.\\n\${JSON.stringify(bug)}\`, { label: \`verify \${bug.file}:\${bug.line}\`, phase: "Verify", profile: "reviewer", schema: VERDICT })));
+return bugs.filter((_, index) => verdicts[index]?.refuted === false);`;
 
 /** The model's documentation for workflow scripts; `locations` resolves saved workflows. */
 const description = (
   locations: WorkflowLocations,
-): string => `Run a JavaScript workflow that orchestrates subagents in the background. Use it for planned fan-out or multi-stage work: reviews by dimension, per-file or per-item processing, find-then-verify, implement-then-check. Use subagent_start instead for one to three agents you steer yourself, and work solo on small, specific tasks. Size the workflow to the request: a few agents for a focused check, dozens with adversarial verification for a thorough audit or a large implementation. Read the workflow authoring guide (${workflowAuthoringGuidePath()}) before writing a non-trivial script.
+): string => `Run a JavaScript workflow that orchestrates subagents in the background. Use it for planned fan-out or multi-stage work: reviews by dimension, per-file or per-item processing, find-then-verify, implement-then-check. Use subagent_start instead for one to three agents you steer yourself, and work solo on conversational turns and trivial mechanical edits. Scale to what the user asked for: "find any bugs" → a few finders, single-vote verify; "thoroughly audit" or "be comprehensive" → a larger finder pool over rounds until nothing new, a 3–5 vote adversarial pass, a synthesis stage. Default to pipeline(); use a barrier only when a stage needs all earlier results, such as deduplicating findings by file and nearby line before verifying them. Read the workflow authoring guide (${workflowAuthoringGuidePath()}) before writing a non-trivial script.
 
 start returns at once with a run id, and the script runs in a sandbox. Then end your turn, after any unrelated work: the run's one notification, with its return value or error, starts your next turn automatically, so don't call status to wait for it. Pass budget (output tokens) whenever the user states a token limit for the work, such as 500000 for "cap this at 500k": a hard ceiling on what the run's agents spend, the subagents they start included; agents already running when it is reached finish, so the run can overshoot. status shows a run's progress, usage and anything that needs you, with how to act on it; a repeat within a minute while nothing changed gets one line instead. stop cancels a run and returns its final state, and no notification follows. ${WORKFLOW_STOP_GUIDANCE} list shows saved workflows and this session's runs.
 
@@ -102,7 +102,7 @@ Rules: prompts must be self-contained, because agents don't see this conversatio
 
 Pass one-off work as an inline script, which is saved to a private file named in the start result; write a saved workflow only when the user wants one to reuse. Saved workflows are ${savedWorkflowFiles(locations)}. Write them with your file tools and start them with name; scriptPath runs any .js file. To fix a failed run, adjust one you stopped yourself, or extend a completed one, edit its script file and start it again with resumeFromRunId: agent() calls with the same prompt, profile, schema, isolation and writes reuse their results, until a writer call without isolation: "worktree" runs live, after which every later call runs live. Don't restart a run the user stopped unless they ask. The notification and status name the run's results journal, one JSON line per finished agent() call; read it before diagnosing an empty or surprising result.
 
-Example (find by dimension, merge reports by location, then three reviewer refuters per location and a majority vote):
+Example of a focused check ("find any bugs"); the guide's exhaustive review shows the thorough shape:
 ${workflowToolExample}`;
 
 const SAVED_LISTED = 20;

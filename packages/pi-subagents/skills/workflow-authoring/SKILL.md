@@ -1,352 +1,392 @@
 ---
 name: workflow-authoring
-description: How to size, structure and verify a subagent_workflow script for a workflow the user opted into with ultracode or /ultracode. Read before writing a non-trivial workflow script.
+description: Claude Code's workflow-authoring reference adapted to Pi's subagent_workflow tool, covering when to run a workflow, pipelines and barriers, quality patterns, scaling to the request, claims-first implementations and budgets. Read before writing a non-trivial script for a workflow the user opted into with ultracode or /ultracode.
 ---
 
 # Workflow authoring
 
-A workflow runs work across many agents so the result is **comprehensive** (decompose and cover in parallel), **confident** (independent perspectives and adversarial checks before anything is reported), or **bigger than one context can hold** (audits, migrations, broad sweeps, large implementations). The script encodes that structure: what fans out, what verifies, and what synthesizes.
+A workflow structures work across many agents: to be **comprehensive** (decompose and cover in parallel), to be **confident** (independent perspectives and adversarial checks before committing), or to take on **scale one context can't hold** (migrations, audits, broad sweeps, large implementations). The script is where you encode that structure: what fans out, what verifies, what synthesizes.
 
-The `subagent_workflow` tool description is the API reference: hooks, options, limits, saved workflows and resume. This guide covers how to shape a script. Complete examples run as written; blocks marked `fragment` reuse the schemas, helpers and `args` of the examples around them.
+This guide follows Claude Code's workflow-authoring reference, translated to Pi's API; the sections from [Large implementations](#large-implementations-claims-first) on cover what only Pi has. The `subagent_workflow` tool description is the API reference: hooks, options, limits, saved workflows and resume. Complete examples run as written; blocks marked `fragment` reuse the schemas, helpers and `args` of the examples around them.
 
 ## When to use a workflow
 
-- **Work solo** on small, specific tasks, even when the ultracode setting is on: a conversational turn such as a quick question, or a trivial edit such as a rename. A workflow adds latency and cost there without adding confidence.
-- **Use `subagent_start`** for one to three agents you steer yourself, or when you need their answers to decide what to do next in this turn.
-- **Use a workflow** when the work splits into many independent pieces, when findings need independent verification before you report them, or when it is too big for one context.
+Use a workflow when the work splits into many independent pieces, when findings need independent verification before you commit to them, or when it is too big for one context. Use `subagent_start` for one to three agents you steer yourself, and work solo on conversational turns and trivial mechanical edits. A `/ultracode <task>` request asks for a workflow explicitly: run one even for a small task.
 
-A `/ultracode <task>` request asks for a workflow explicitly: run one even for a small task, sized as a focused check.
+When you do call it, the right move is often **hybrid**: scout inline first (list the files, find the call sites, scope the diff) to discover the work list, then call `subagent_workflow` to pipeline over it. Pass the list as `args` (at most 64 KiB of JSON), or make discovery the first stage: a `scout` whose schema returns the list. You don't need to know the shape before the _task_, only before the _orchestration step_.
 
-Scout first. List the files, scope the diff or find the call sites yourself, then pass that work list to the workflow as `args` (at most 64 KiB of JSON), or make discovery the first stage: a `scout` whose schema returns the list. You need to know the work list before you write the orchestration, not before you start the task.
+Common single-phase workflows you can chain across turns:
 
-## Size it from the request
+- **Understand:** parallel readers over relevant subsystems → structured map.
+- **Design:** judge panel of N independent approaches → scored synthesis.
+- **Review:** dimensions → find → adversarially verify (the [find-bugs example](#scale-to-what-the-user-asked-for)), or rounds of it until nothing new for an audit (the [exhaustive review](#composing-patterns-exhaustive-review)).
+- **Research:** multi-modal sweep → deep-read → synthesize.
+- **Migrate:** discover sites → transform each (a `worker` claiming the site's files, or worktree isolation) → verify.
+- **Implement:** plan claimed units → a worker per unit → review each (see [Large implementations](#large-implementations-claims-first)).
 
-- **A focused check**, such as "any bugs in this function?" or "is this change safe?": 2 to 4 finders and one verifier per finding, 3 to 10 agents.
-- **A normal review or investigation**, such as "review this PR" or "how does auth work here?": finders per dimension or subsystem, 1 to 3 refuters per finding and one synthesis, 10 to 40 agents.
-- **"Thoroughly audit", "be comprehensive", a whole package, a large implementation or migration:** finders per dimension and area, loop until dry, 3 to 5 refuters per finding with a majority vote, a synthesis and a completeness critic; or a planner, then a worker and a reviewer per unit. That is 40 to 200 agents or more, over several workflows.
+For larger work, run several in sequence: read each result before deciding the next phase. You stay in the loop; each workflow is one well-scoped fan-out.
 
-When unsure, lean thorough for research, review and audits, and brief for quick checks.
+## Ultracode
 
-Dozens of agents in one phase is normal for large work. Each run executes up to `min(16, CPUs - 2)` agents at once (often 6 to 16), apart from the main agent's own subagent limit, and queues the rest in call order, so pass every item to `parallel()` or `pipeline()`: 100 items all complete, a few at a time. The limit of 1,000 `agent()` calls per run is a runaway backstop, not a target.
+When ultracode is on, that opt-in is standing: author and run a workflow for every substantive task by default. The goal is the most exhaustive, correct answer you can produce; token cost is not a constraint, except a budget the user gives (see [Budgets](#budgets)). For multi-phase work (understand → design → implement → review), that often means several workflows in sequence, one per phase, so you stay in the loop between them. The [quality patterns](#quality-patterns) (adversarial verify, multi-modal sweep, completeness critic, loop-until-dry) are the tools; pick what fits the task. Lean toward orchestrating with workflows and adversarially verifying your findings, unless the work is trivial or already verified. Work solo only on conversational turns or trivial mechanical edits.
 
-When the user gives a token budget, pass it as the start's `budget` and plan the whole run inside it before you write the script:
+## Pipeline by default
 
-1. **Split it across phases up front**, keeping room to verify and synthesize: for example half to find, most of the rest to verify, and about 10k output tokens for a synthesis or critic. A find phase that spends everything leaves nothing to verify.
-2. **Size each phase from its share** with realistic output-token costs per agent: a finder or worker that reads a whole package spends 30k to 60k (eight finders auditing a 5,000-line package spent about 38k each); a verifier checking one finding, 5k to 15k; a synthesis or critic, about 10k.
-3. **Never start more agents at once than the remaining budget covers.** `budget.spent()` counts finished agents only, while the ceiling also counts running ones, so a phase launched wider than `remaining() / cost` overshoots and every later call is refused. Run a wide phase in waves.
-4. **Guard every phase and every top-level call.** Check `budget.remaining()` first, shrink the phase to what fits (fewer refuters, highest-severity findings first) and `log()` what you dropped. Once the budget is spent, an `agent()` call whose agent hasn't started throws `WorkflowBudgetError`: inside `parallel()` or `pipeline()` its item becomes `null`, but a top-level call fails the run and loses everything after it.
+**Default to `pipeline()`.** Only reach for a barrier (`parallel()` between stages) when you genuinely need _all_ prior-stage results together. A barrier is correct only when stage N needs cross-item context from all of stage N-1:
 
-`budget.total` is `null` without a budget and `budget.remaining()` is then `Infinity`, so guard on `budget.total`:
+- deduplicating or merging across the full result set before expensive downstream work;
+- an early exit when the total count is zero ("0 bugs found → skip verification entirely");
+- stage N's prompt references "the other findings" for comparison.
 
-```js fragment
-// FINDINGS and VERDICT are the review example's schemas, below; AREAS comes from scouting.
-const FINDER = 45_000; // output tokens a finder reading a package spends
-const VERIFIER = 10_000; // output tokens a verifier checking one finding spends
-const fit = (count, cost, pool) => Math.max(1, Math.min(count, Math.floor(pool / cost)));
+A barrier is not justified by:
 
-// Find with half the budget, in waves no wider than the find share left can pay for.
-const findPool = budget.total ? budget.total * 0.5 : Infinity;
-const findStart = budget.spent();
-const candidates = [];
-let next = 0;
-while (next < AREAS.length && budget.spent() - findStart + FINDER <= findPool) {
-  const wave = AREAS.slice(
-    next,
-    next + fit(AREAS.length - next, FINDER, findPool - (budget.spent() - findStart)),
-  );
-  next += wave.length;
-  const found = await parallel(
-    wave.map(
-      (area) => () =>
-        agent(`Find real bugs in ${area}. Report file, line and claim for each.`, {
-          label: area,
-          phase: "Find",
-          profile: "reviewer",
-          schema: FINDINGS,
-        }),
-    ),
-  );
-  candidates.push(...found.filter(Boolean).flatMap((review) => review.findings));
-}
-if (next < AREAS.length)
-  log(
-    `The budget covered ${next} of ${AREAS.length} areas; skipped: ${AREAS.slice(next).join(", ")}`,
-  );
+- "I need to flatten, map or filter first": do it inside a pipeline stage, as in `pipeline(items, stageA, (r) => transform([r]).flat(), stageB)`.
+- "The stages are conceptually separate": that's what `pipeline()` models. Separate stages aren't synchronized stages.
+- "It's cleaner code": barrier latency is real. If 5 finders run and the slowest takes 3× the fastest, a barrier wastes 2/3 of the fast finders' time.
 
-// Verify with most of what is left, keeping 10k for the summary: three refuters each, fewer when short.
-const verifyPool = budget.total ? Math.max(0, budget.remaining() - 10_000) : Infinity;
-const refuters = Math.min(3, Math.floor(verifyPool / VERIFIER / Math.max(1, candidates.length)));
-if (refuters < 3) log(`The budget allows ${refuters} refuter(s) per finding instead of 3`);
-const verdicts =
-  refuters === 0
-    ? []
-    : await parallel(
-        candidates.map(
-          (bug) => () =>
-            parallel(
-              Array.from(
-                { length: refuters },
-                (_, n) => () =>
-                  agent(
-                    `Try to refute this reported bug against the code; answer refuted: true unless you confirm it.\n${JSON.stringify(bug)}`,
-                    {
-                      label: `refute ${bug.file}:${bug.line} #${n + 1}`,
-                      phase: "Verify",
-                      profile: "reviewer",
-                      schema: VERDICT,
-                    },
-                  ),
-              ),
-            ),
-        ),
-      );
-const confirmed = candidates.filter(
-  (_, index) =>
-    (verdicts[index] ?? []).filter((vote) => vote && !vote.refuted).length > refuters / 2,
-);
+The smell test: if you wrote
 
-// A top-level call fails the run once the budget is spent, so check before the summary.
-const summary =
-  !budget.total || budget.remaining() >= 10_000
-    ? await agent(`Summarize these confirmed bugs by impact:\n${JSON.stringify(confirmed)}`, {
-        label: "summary",
-        profile: "reviewer",
-      })
-    : null;
-return { confirmed, summary, unverified: refuters === 0 ? candidates : [] };
+```text
+const a = await parallel(...)
+const b = transform(a)        // flatten, map, filter: no cross-item dependency
+const c = await parallel(b.map(...))
 ```
 
-For open-ended discovery under a budget, loop while the costliest round so far still fits:
+that middle transform doesn't need the barrier. Rewrite it as a pipeline with the transform inside a stage. When in doubt: pipeline. Stages run concurrently, so give each `agent()` call its `phase` option instead of calling `phase()`, which is shared state.
+
+## Concurrency
+
+Concurrent `agent()` calls are capped at `min(16, CPUs - 2)` per workflow (at least one), apart from your own subagent limit; excess calls queue and start in call order as slots free up. You can still pass 100 items to `parallel()` or `pipeline()` and they all complete; only that many run at any moment. Total `agent()` calls across a run's lifetime are capped at 1,000, counting calls the budget refused: a runaway-loop backstop set far above any real workflow.
+
+## Patterns
+
+### When a barrier is correct
+
+Dedup across all findings before expensive verification:
 
 ```js fragment
-// A round that fails spends nothing and never shrinks remaining(), so stop on a failed or empty
-// round, and bound the rounds anyway.
-const reported = [];
-let perRound = 0;
+// DIMENSIONS comes from scouting; BUGS, VERDICT and dedupe() are the find-bugs example's.
+const all = await parallel(
+  DIMENSIONS.map(
+    (d) => () =>
+      agent(d.prompt, { label: d.name, phase: "Find", profile: "reviewer", schema: BUGS }),
+  ),
+);
+const deduped = dedupe(all.filter(Boolean).flatMap((r) => r.bugs)); // genuinely needs ALL at once
+const verified = await parallel(
+  deduped.map(
+    (b) => () =>
+      agent(`Try to refute this reported bug against the code.\n${JSON.stringify(b)}`, {
+        phase: "Verify",
+        profile: "reviewer",
+        schema: VERDICT,
+      }),
+  ),
+);
+```
+
+### Loop until count
+
+Accumulate to a target. Bound the rounds as well, or a finder that keeps returning nothing loops to the 1,000-call cap:
+
+```js fragment
+const bugs = [];
 let round = 0;
-while (budget.total && budget.remaining() > perRound * 1.5 && round < 20) {
+while (bugs.length < 10 && round < 20) {
   round++;
-  const before = budget.spent();
-  const found = await agent(
-    `Find issues in ${args.scope}. Skip these, already reported: ${JSON.stringify(reported)}`,
-    { label: `find r${round}`, profile: "reviewer", schema: FINDINGS },
+  const result = await agent(
+    `Find bugs in this codebase. Skip these, already found: ${JSON.stringify(bugs)}`,
+    { label: `find r${round}`, profile: "reviewer", schema: BUGS },
   );
-  perRound = Math.max(perRound, budget.spent() - before);
-  if (found === null) {
-    log(`Round ${round} failed; stopping`);
+  bugs.push(...(result?.bugs ?? []));
+  log(`${bugs.length}/10 found`);
+}
+if (bugs.length < 10) log(`Stopped after ${round} rounds with ${bugs.length}/10 found`);
+```
+
+### Loop until budget
+
+Scale depth to the user's budget: the start's `budget`, from `/ultracode +500k` or a limit the user states. Guard on `budget.total`: with no budget set, `remaining()` is `Infinity` and the loop would run straight to the 1,000-call cap. A call that fails at once spends nothing and leaves `remaining()` unchanged, so stop on a failed call rather than retry it:
+
+```js fragment
+const bugs = [];
+while (budget.total && budget.remaining() > 50_000) {
+  const result = await agent(
+    `Find bugs in this codebase. Skip these, already found: ${JSON.stringify(bugs)}`,
+    { profile: "reviewer", schema: BUGS },
+  );
+  if (!result) {
+    const unspent = Math.round(budget.remaining() / 1000);
+    log(`A finder failed; stopping with ${bugs.length} found and ${unspent}k unspent`);
     break;
   }
-  if (found.findings.length === 0) break;
-  reported.push(...found.findings.map(({ file, line, claim }) => ({ file, line, claim })));
+  bugs.push(...result.bugs);
+  log(`${bugs.length} found, ${Math.round(budget.remaining() / 1000)}k remaining`);
 }
-log(
-  `Stopped after round ${round} with ${reported.length} issues and ${budget.remaining()} tokens left`,
-);
 ```
 
-## Structure
+### Composing patterns: exhaustive review
 
-**Pipeline by default.** `pipeline(items, ...stages)` runs each item through every stage on its own, so item A can be verified while item B is still being found, and the run takes as long as the slowest single chain. Use `parallel()` between stages, a barrier, only when the next stage needs every earlier result together:
-
-- deduplicating or merging across the whole set before expensive work;
-- stopping early when the total is zero;
-- a prompt that compares an item with "the other findings".
-
-A barrier is not justified by needing to flatten, map or filter first (do that inside a stage), by the stages being conceptually separate, or by cleaner code. The smell test: `parallel(...)`, then a transform with no cross-item dependency, then `parallel(...)` again should be one `pipeline()`. Inside concurrent stages, pass the `phase` option instead of calling `phase()`, which is shared state.
-
-**One workflow per phase for big jobs.** Run understand, design, implement and review as separate workflows in sequence, and read each result before you write the next. Common single-phase shapes:
-
-- **Understand:** scouts read subsystems in parallel and return a structured map.
-- **Design:** a judge panel scores several independent approaches and one planner synthesizes.
-- **Review:** find by dimension, merge duplicate reports, then verify adversarially.
-- **Research:** a multi-modal sweep, deep reads of what it found, then a synthesis.
-- **Implement:** a planner claims files, workers implement units in parallel, and reviewers check each unit (see [Large implementations](#large-implementations-claims-first)).
-- **Migrate:** a scout lists the sites and the files each one touches; a pipeline gives each site a `worker` whose `writes` are those files, then a reviewer; then one integration check. Use `isolation: "worktree"` only for sites whose edits spread to files you can't name upfront.
-
-**Declare the plan.** List the agents you already know in `meta.phases[].agents`, with exactly the labels your `agent()` calls use (a call labelled `"auth r1"` doesn't claim a planned `"auth"`), and make those calls in that phase (with `phase()` or the `phase` option), so the user sees the plan before it runs and can skip an agent. Leave a phase's `agents` out when its count depends on what earlier phases find, or when calls repeat across rounds.
-
-**No silent caps.** When you bound coverage (top N, sampling, one round only), `log()` what was dropped and return it, because a silent cut reads as "covered everything":
-
-```js fragment
-const MAX_FILES = 40;
-const files = args.files.slice(0, MAX_FILES);
-const skipped = args.files.slice(MAX_FILES);
-if (skipped.length > 0) log(`Reviewing ${files.length} files; skipped ${skipped.join(", ")}`);
-```
-
-**Return what you act on.** Return a compact structured value: confirmed findings with evidence, what was refuted or dropped, and what wasn't covered. The results journal keeps every agent's full output.
-
-## Review and verification
-
-Find by dimension, merge the reports of all finders (a justified barrier, since it needs every finder's results), then give each finding three independent `reviewer` refuters and keep it only when a majority can't refute it. Deduplicating on `file:line` alone would silently drop a second, different defect on the same line, so an agent merges the reports that share a location:
+Find → dedup against everything seen → a diverse-lens panel → loop until dry, then a synthesis and a completeness critic whose gaps become the next round. This is the shape for "thoroughly audit this" or "be comprehensive": every area through every lens, round after round, so discovery spends across rounds instead of stopping after one pass.
 
 ```js
 export const meta = {
-  name: "review-changes",
-  description: "Review a change by dimension, then adversarially verify each finding",
+  name: "exhaustive-review",
+  description:
+    "Find bugs in rounds until two find nothing new, judge each through three lenses, then synthesize and look for gaps",
   args: {
     type: "object",
-    properties: { scope: { type: "string" } },
-    required: ["scope"],
+    properties: {
+      scope: { type: "string" },
+      areas: { type: "array", items: { type: "string" }, minItems: 1 },
+    },
+    required: ["scope", "areas"],
     additionalProperties: false,
   },
   phases: [
-    {
-      title: "Find",
-      agents: ["find:correctness", "find:security", "find:error handling", "find:tests"],
-    },
-    { title: "Merge", detail: "only findings reported at the same location" },
-    { title: "Verify", detail: "three refuters per finding, majority vote" },
+    { title: "Find", detail: "every area through every lens, each round" },
+    { title: "Verify", detail: "three lenses per fresh bug; real when two agree" },
+    { title: "Synthesize" },
+    { title: "Critic", detail: "its gaps become the next round" },
   ],
 };
 
-const FINDINGS = {
+const BUGS = {
   type: "object",
   properties: {
-    findings: {
+    bugs: {
       type: "array",
       items: {
         type: "object",
         properties: {
           file: { type: "string" },
           line: { type: "integer" },
-          claim: { type: "string" },
+          desc: { type: "string" },
           evidence: { type: "string" },
         },
-        required: ["file", "line", "claim", "evidence"],
+        required: ["file", "line", "desc", "evidence"],
         additionalProperties: false,
       },
     },
   },
-  required: ["findings"],
+  required: ["bugs"],
   additionalProperties: false,
 };
 const VERDICT = {
+  type: "object",
+  properties: { real: { type: "boolean" }, reason: { type: "string" } },
+  required: ["real", "reason"],
+  additionalProperties: false,
+};
+const GAPS = {
+  type: "object",
+  properties: { gaps: { type: "array", items: { type: "string" } } },
+  required: ["gaps"],
+  additionalProperties: false,
+};
+
+const FIND_LENSES = ["logic and edge cases", "security and trust boundaries", "errors and cleanup"];
+const JUDGE_LENSES = ["correctness", "security", "reproduction"];
+const MAX_ROUNDS = 10;
+const MAX_CRITIC_PASSES = 2;
+// Output tokens, for a budget: a first guess at a finder, a judge, and a synthesis or critic.
+const FINDER_COST = 45_000;
+const JUDGE_COST = 10_000;
+const FINAL_COST = 10_000;
+// No agent runs between barriers, so remaining() is exact there. Without a budget, all fits.
+const affords = (tokens) => !budget.total || budget.remaining() >= tokens;
+
+// Reports of one bug cite lines a little apart: the same file within 3 lines is the same bug.
+const sameBug = (a, b) => a.file === b.file && Math.abs(a.line - b.line) <= 3;
+
+const seen = [];
+const confirmed = [];
+const unverified = [];
+const searched = [];
+// No silent caps: what a cap, the budget or failed finders cut short is logged and returned.
+const cutShort = [];
+const note = (message) => {
+  log(message);
+  cutShort.push(message);
+};
+let rounds = 0;
+
+// Loop until dry: another round until two in a row find nothing new. Returns whether it got there.
+const findUntilDry = async (finders) => {
+  let answeredRounds = 0;
+  let dry = 0;
+  let roundCost = finders.length * FINDER_COST; // then what the last round spent
+  while (dry < 2) {
+    const skipped = `${finders.length} finders didn't run round ${rounds + 1}`;
+    if (rounds >= MAX_ROUNDS) {
+      note(`The ${MAX_ROUNDS}-round cap stopped discovery before it ran dry; ${skipped}`);
+      break;
+    }
+    if (!affords(roundCost + 2 * FINAL_COST)) {
+      note(`The budget stopped discovery before it ran dry; ${skipped}`);
+      break;
+    }
+    rounds++;
+    const before = budget.spent();
+    const known = seen.map(({ file, line, desc }) => ({ file, line, desc }));
+    const results = await parallel(
+      finders.map(
+        (finder) => () =>
+          agent(
+            `${finder.task}\nScope: ${args.scope}\nReport only bugs you can point to in the code, each with file, line, a one-line desc and evidence. Skip these, already reported:\n${JSON.stringify(known)}`,
+            {
+              label: `${finder.label} r${rounds}`,
+              phase: "Find",
+              profile: "reviewer",
+              schema: BUGS,
+            },
+          ),
+      ),
+    );
+    // A round in which no finder answered isn't a dry round: nothing was searched.
+    const answered = results.filter(Boolean);
+    if (answered.length === 0) {
+      note(`Round ${rounds}: every finder failed or the budget refused it, so discovery stopped`);
+      break;
+    }
+    answeredRounds++;
+    const found = answered.flatMap((result) => result.bugs);
+    // Dedup against everything seen, judge-rejected bugs included: plain code, not an agent.
+    const fresh = [];
+    for (const bug of found) {
+      if (seen.some((other) => sameBug(other, bug))) continue;
+      seen.push(bug);
+      fresh.push(bug);
+    }
+    log(`Round ${rounds}: ${fresh.length} new of ${found.length} reported`);
+    if (fresh.length === 0) {
+      dry++;
+    } else {
+      dry = 0;
+      // Judge what the budget pays for, keeping room for the synthesis and critic.
+      const panelCost = JUDGE_LENSES.length * JUDGE_COST;
+      const fits = budget.total
+        ? Math.max(0, Math.floor((budget.remaining() - 2 * FINAL_COST) / panelCost))
+        : fresh.length;
+      const judging = fresh.slice(0, fits);
+      if (judging.length < fresh.length) {
+        note(
+          `The budget left ${fresh.length - judging.length} new bugs of round ${rounds} unjudged`,
+        );
+        unverified.push(...fresh.slice(judging.length));
+      }
+      // Every fresh bug judged concurrently, each through three distinct lenses.
+      const judged = await parallel(
+        judging.map(
+          (bug) => () =>
+            parallel(
+              JUDGE_LENSES.map(
+                (lens) => () =>
+                  agent(
+                    `Judge this reported bug via the ${lens} lens: is it real? It need not be a ${lens} issue to be real. Read the code.\n${JSON.stringify(bug)}`,
+                    {
+                      label: `${lens} ${bug.file}:${bug.line}`,
+                      phase: "Verify",
+                      profile: "reviewer",
+                      schema: VERDICT,
+                    },
+                  ),
+              ),
+            ).then((votes) => {
+              const cast = votes.filter(Boolean);
+              const yes = cast.filter((vote) => vote.real).length;
+              return { real: yes >= 2, decided: yes >= 2 || cast.length - yes >= 2 };
+            }),
+        ),
+      );
+      judging.forEach((bug, index) => {
+        if (judged[index]?.real) confirmed.push(bug);
+        // Too few votes came back to decide, such as judges the budget refused.
+        else if (!judged[index]?.decided) unverified.push(bug);
+      });
+    }
+    roundCost = budget.spent() - before;
+  }
+  if (answeredRounds > 0) searched.push(...finders.map((finder) => finder.task));
+  return dry >= 2;
+};
+
+let finders = args.areas.flatMap((area) =>
+  FIND_LENSES.map((lens) => ({
+    label: `${area} · ${lens}`,
+    task: `Find ${lens} bugs in ${area}.`,
+  })),
+);
+let report = null;
+let gaps = [];
+for (let pass = 1; pass <= MAX_CRITIC_PASSES; pass++) {
+  const searchedBefore = searched.length;
+  const ranDry = await findUntilDry(finders);
+  if (searched.length === searchedBefore) break; // nothing searched, so nothing new to report
+  // A top-level call the budget refuses fails the run, so check before each one.
+  if (!affords(FINAL_COST)) {
+    note("The budget left nothing for the synthesis and the critic");
+    break;
+  }
+  report = await agent(
+    `Write the final report of a review of ${args.scope}: the confirmed bugs grouped by impact, most severe first, each with file, line and evidence.\n${JSON.stringify(confirmed)}`,
+    { label: `synthesis ${pass}`, phase: "Synthesize", profile: "reviewer" },
+  );
+  if (!affords(FINAL_COST)) {
+    note("The budget left nothing for the critic");
+    break;
+  }
+  const critic = await agent(
+    `A review of ${args.scope} ran these finders over ${rounds} rounds and confirmed ${confirmed.length} of ${seen.length} reported bugs:\n${searched.join("\n")}\nReport:\n${report ?? "(none)"}\nWhat is missing: an area or file not searched, a lens not applied, a claim not verified, a source not read? Write each gap as a self-contained task for one finder; return an empty list if nothing is missing.`,
+    { label: `critic ${pass}`, phase: "Critic", profile: "reviewer", schema: GAPS },
+  );
+  gaps = critic?.gaps ?? [];
+  // What the critic finds becomes the next round of work, once discovery ran dry.
+  if (gaps.length === 0 || !ranDry) break;
+  finders = gaps.map((gap, index) => ({ label: `gap ${pass}.${index + 1}`, task: gap }));
+}
+const unsearched = gaps.filter((gap) => !searched.includes(gap));
+if (unsearched.length > 0)
+  note(`The critic's ${unsearched.length} gaps weren't searched: ${unsearched.join("; ")}`);
+if (unverified.length > 0) note(`${unverified.length} reported bugs stay unverified`);
+const rejected = seen.filter((bug) => !confirmed.includes(bug) && !unverified.includes(bug));
+return { confirmed, unverified, rejected, unsearched, cutShort, report };
+```
+
+Dedup against `seen`, not `confirmed`: otherwise judge-rejected findings reappear every round and the loop never converges. A round in which no finder answered stops discovery instead of counting as dry, and a bug with too few votes back stays unverified rather than rejected. With a budget, a round starts only while the last round's cost and the end still fit, judging shrinks to what remains, and the synthesis and critic run only when they fit; the round cap and each budget check log and return what they cut short.
+
+### Quality patterns
+
+Common shapes; pick by task and compose freely.
+
+**Adversarial verify.** Spawn N independent skeptics per finding, each prompted to refute it, and kill the finding if a majority refute. This keeps plausible-but-wrong findings from surviving:
+
+```js fragment
+// claim is one finding's text.
+const REFUTAL = {
   type: "object",
   properties: { refuted: { type: "boolean" }, reason: { type: "string" } },
   required: ["refuted", "reason"],
   additionalProperties: false,
 };
-
-const key = (finding) => `${finding.file}:${finding.line}`;
-
-// One location can hold one defect reported twice or two different defects, so an agent merges
-// the reports that share a location, against any defects already known there. A lone new report
-// passes through, and a merge that fails keeps every report.
-const distinct = (findings, known = []) => {
-  const groups = new Map();
-  for (const finding of findings)
-    groups.set(key(finding), [...(groups.get(key(finding)) ?? []), finding]);
-  return parallel(
-    [...groups].map(([location, group]) => () => {
-      const before = known.filter((finding) => key(finding) === location);
-      if (group.length === 1 && before.length === 0) return group;
-      return agent(
-        `Defects reported at ${location}:\n${JSON.stringify(group)}\nAlready known there:\n${JSON.stringify(before)}\nRead the code, then return each distinct defect that isn't already known, once, merging reports of the same defect.`,
-        { label: `merge ${location}`, phase: "Merge", profile: "reviewer", schema: FINDINGS },
-      ).then((merged) => merged?.findings ?? group);
-    }),
-  ).then((lists) => lists.filter(Boolean).flat());
-};
-
-// Three independent skeptics; the finding survives only if at least two confirm it.
-const survives = (finding) =>
-  parallel(
-    [1, 2, 3].map(
-      (n) => () =>
-        agent(
-          `Try to refute this reported defect against the actual code. Answer refuted: true unless you can confirm it is real; when unsure, it is refuted.\n${JSON.stringify(finding)}`,
-          {
-            label: `refute ${key(finding)} #${n}`,
-            phase: "Verify",
-            profile: "reviewer",
-            schema: VERDICT,
-          },
-        ),
-    ),
-  ).then((votes) => votes.filter((vote) => vote && !vote.refuted).length >= 2);
-
-const DIMENSIONS = ["correctness", "security", "error handling", "tests"];
-const reviews = await parallel(
-  DIMENSIONS.map(
-    (dimension) => () =>
-      agent(
-        `Review ${args.scope} for ${dimension} problems. Read the changed code and what it calls. Report only defects you can point to, each with file, line, claim and evidence.`,
-        { label: `find:${dimension}`, phase: "Find", profile: "reviewer", schema: FINDINGS },
-      ),
+const votes = await parallel(
+  Array.from(
+    { length: 3 },
+    (_, n) => () =>
+      agent(`Try to refute: ${claim}. Default to refuted: true if uncertain.`, {
+        label: `refute #${n + 1}`,
+        phase: "Verify",
+        profile: "reviewer",
+        schema: REFUTAL,
+      }),
   ),
 );
-
-const findings = await distinct(reviews.filter(Boolean).flatMap((review) => review.findings));
-log(`${findings.length} distinct findings to verify`);
-
-const kept = await parallel(findings.map((finding) => () => survives(finding)));
-const confirmed = findings.filter((_, index) => kept[index] === true);
-const refuted = findings.filter((_, index) => kept[index] !== true);
-return { confirmed, refuted };
+const survives = votes.filter(Boolean).filter((vote) => !vote.refuted).length >= 2;
 ```
 
-Without the merge, the same shape is a pipeline that verifies each finder's findings as soon as it returns: `pipeline(DIMENSIONS, find, (review) => parallel((review?.findings ?? []).map(...)))`.
+**Perspective-diverse verify.** When a finding can fail in more than one way, give each verifier a distinct lens (correctness, security, performance, does it reproduce) instead of N identical refuters: diversity catches failure modes redundancy can't. The exhaustive review's panel does this.
 
-**Perspective-diverse verify.** When a finding can be wrong in more than one way, give each verifier a distinct lens instead of N identical refuters:
-
-```js fragment
-const LENSES = [
-  "correctness: is the described behavior actually wrong?",
-  "reproduction: can you construct a concrete input or call sequence that triggers it?",
-  "impact: does any caller in this repository reach it?",
-];
-const holdsUp = (finding) =>
-  parallel(
-    LENSES.map(
-      (lens) => () =>
-        agent(
-          `Judge this reported defect through one lens only, ${lens} Answer refuted: true if it fails that lens.\n${JSON.stringify(finding)}`,
-          { phase: "Verify", profile: "reviewer", schema: VERDICT },
-        ),
-    ),
-  ).then((votes) => votes.filter((vote) => vote && !vote.refuted).length >= 2);
-```
-
-**Loop until dry.** For discovery of unknown size, keep finding until two consecutive rounds turn up nothing new. Deduplicate against everything seen, not only what was confirmed, or refuted findings come back every round and the loop never ends. Show the finders the known claims rather than only their locations, so they can still report a different defect on a line already seen. Bound the rounds and log when the bound cut the search short:
-
-```js fragment
-const AREAS = args.areas;
-const seen = [];
-const confirmed = [];
-let dry = 0;
-let round = 0;
-while (dry < 2 && round < 8) {
-  round++;
-  const known = seen.map(({ file, line, claim }) => ({ file, line, claim }));
-  const found = await parallel(
-    AREAS.map(
-      (area) => () =>
-        agent(`Find defects in ${area}. Skip these, already reported: ${JSON.stringify(known)}`, {
-          label: `find:${area} r${round}`,
-          phase: "Find",
-          profile: "reviewer",
-          schema: FINDINGS,
-        }),
-    ),
-  );
-  const fresh = await distinct(
-    found.filter(Boolean).flatMap((review) => review.findings),
-    seen,
-  );
-  if (fresh.length === 0) {
-    dry++;
-    continue;
-  }
-  dry = 0;
-  seen.push(...fresh);
-  const kept = await parallel(fresh.map((finding) => () => survives(finding)));
-  confirmed.push(...fresh.filter((_, index) => kept[index] === true));
-}
-if (dry < 2) log(`Stopped after ${round} rounds while still finding new defects`);
-```
-
-**Judge panel.** When the solution space is wide, generate independent attempts from different angles, score them with independent judges, and synthesize from the winner while grafting the best of the rest:
+**Judge panel.** Generate N independent attempts from different angles (MVP-first, risk-first, user-first), score them with parallel judges, and synthesize from the winner while grafting the best ideas from the runners-up. This beats one attempt iterated when the solution space is wide:
 
 ```js fragment
 const PLAN = {
@@ -365,16 +405,13 @@ const PICK = {
   required: ["best", "why"],
   additionalProperties: false,
 };
-const ANGLES = [
-  "the smallest change that works",
-  "robustness to future change",
-  "the user-facing behavior",
-];
+const ANGLES = ["MVP-first", "risk-first", "user-first"];
 const plans = (
   await parallel(
     ANGLES.map(
       (angle) => () =>
-        agent(`Design ${args.goal}. Optimize for ${angle}.`, {
+        agent(`Design ${args.goal}. Take a ${angle} approach.`, {
+          label: angle,
           phase: "Design",
           profile: "planner",
           schema: PLAN,
@@ -395,12 +432,14 @@ const picks = await parallel(
 const votes = plans.map((_, index) => picks.filter((pick) => pick?.best === index).length);
 const winner = votes.indexOf(Math.max(...votes));
 return await agent(
-  `Write the final plan for ${args.goal}. Start from plan ${winner} and graft the strongest ideas of the others.\n${JSON.stringify(plans)}`,
+  `Write the final plan for ${args.goal}. Start from plan ${winner} and graft the best ideas of the others.\n${JSON.stringify(plans)}`,
   { phase: "Synthesize", profile: "planner", schema: PLAN },
 );
 ```
 
-**Multi-modal sweep.** One search method misses things another finds, so run several blind to each other, then deep-read the union:
+**Loop-until-dry.** For discovery of unknown size (bugs, issues, edge cases), keep spawning finders until K consecutive rounds return nothing new, as the exhaustive review does with K = 2. Simple counters (`while (count < N)`) miss the tail.
+
+**Multi-modal sweep.** Parallel agents each search a different way (by container, by content, by entity, by time). Each is blind to what the others surface; use it when one search angle won't find everything:
 
 ```js fragment
 const PLACES = {
@@ -420,10 +459,10 @@ const PLACES = {
   additionalProperties: false,
 };
 const MODES = [
-  "by name: search for the symbol, its aliases and re-exports",
-  "by behavior: find code that has the same effect without naming it",
-  "by tests: find tests and fixtures that exercise it",
-  "by history: use git log -S and recent diffs that touched it",
+  "by name: the symbol, its aliases and re-exports",
+  "by behavior: code with the same effect that doesn't name it",
+  "by tests: tests and fixtures that exercise it",
+  "by history: git log -S and recent diffs that touched it",
 ];
 const sweeps = await parallel(
   MODES.map(
@@ -443,36 +482,126 @@ const notes = await parallel(
     ([path, why]) =>
       () =>
         agent(
-          `Read ${path} closely and explain how it bears on this question: ${args.question}\nA search flagged it because: ${why}`,
+          `Read ${path} closely and explain how it bears on: ${args.question}\nA search flagged it because: ${why}`,
           { label: `read ${path}`, phase: "Deep read", profile: "scout" },
         ),
   ),
 );
 ```
 
-**Completeness critic.** End with an agent that asks what is missing: an area not searched, a claim not verified, a planned file not changed. Its gaps become the next round, or the next workflow:
+**Completeness critic.** A final agent that asks "what's missing: a modality not run, a claim unverified, a source unread?" What it finds becomes the next round of work, as in the exhaustive review.
+
+**No silent caps.** If a workflow bounds coverage (top N, no retry, sampling), `log()` what was dropped and return it: silent truncation reads as "covered everything" when it didn't.
 
 ```js fragment
-const GAPS = {
+const MAX_FILES = 40;
+const files = args.files.slice(0, MAX_FILES);
+const skipped = args.files.slice(MAX_FILES);
+if (skipped.length > 0) log(`Reviewing ${files.length} files; skipped ${skipped.join(", ")}`);
+```
+
+## Scale to what the user asked for
+
+"Find any bugs" → a few finders, single-vote verify. "Thoroughly audit this" or "be comprehensive" → a larger finder pool over rounds until nothing new, a 3–5 vote adversarial pass (or a panel of distinct lenses), a synthesis stage and a completeness critic: the [exhaustive review](#composing-patterns-exhaustive-review). When unsure, lean toward thoroughness for research, review and audit requests and toward brevity for quick checks.
+
+"Find any bugs" in a change:
+
+```js
+export const meta = {
+  name: "find-bugs",
+  description: "A few finders over the changed files, dedup, then one skeptic per bug",
+  args: {
+    type: "object",
+    properties: { files: { type: "array", items: { type: "string" }, minItems: 1 } },
+    required: ["files"],
+    additionalProperties: false,
+  },
+  phases: [
+    { title: "Find", agents: ["find:logic", "find:errors", "find:edge cases"] },
+    { title: "Verify", detail: "one skeptic per bug" },
+  ],
+};
+
+const BUGS = {
   type: "object",
-  properties: { gaps: { type: "array", items: { type: "string" } } },
-  required: ["gaps"],
+  properties: {
+    bugs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          line: { type: "integer" },
+          desc: { type: "string" },
+          evidence: { type: "string" },
+        },
+        required: ["file", "line", "desc", "evidence"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["bugs"],
   additionalProperties: false,
 };
-const critic = await agent(
-  `This workflow was asked to: ${args.goal}\nIt covered ${seen.length} findings across ${AREAS.join(", ")}.\nList what is missing: areas not searched, claims not verified, modalities not run. Return an empty list if nothing is.`,
-  { phase: "Critic", profile: "reviewer", schema: GAPS },
+const VERDICT = {
+  type: "object",
+  properties: { refuted: { type: "boolean" }, reason: { type: "string" } },
+  required: ["refuted", "reason"],
+  additionalProperties: false,
+};
+
+const LENSES = ["logic", "errors", "edge cases"];
+// Reports of one bug cite lines a little apart: the same file within 3 lines is the same bug.
+const sameBug = (a, b) => a.file === b.file && Math.abs(a.line - b.line) <= 3;
+const dedupe = (bugs) => {
+  const kept = [];
+  for (const bug of bugs) if (!kept.some((other) => sameBug(other, bug))) kept.push(bug);
+  return kept;
+};
+
+const found = await parallel(
+  LENSES.map(
+    (lens) => () =>
+      agent(
+        `Review the uncommitted changes to ${args.files.join(", ")} for ${lens} bugs. Report only real defects, each with file, line, a one-line desc and evidence.`,
+        { label: `find:${lens}`, phase: "Find", profile: "reviewer", schema: BUGS },
+      ),
+  ),
 );
-if (critic && critic.gaps.length > 0) log(`Critic found ${critic.gaps.length} gaps`);
+// A justified barrier: dedup across every finder, and skip verifying when nothing was found.
+const bugs = dedupe(found.filter(Boolean).flatMap((result) => result.bugs));
+if (bugs.length === 0) return { bugs: [], unconfirmed: [] };
+const verdicts = await parallel(
+  bugs.map(
+    (bug) => () =>
+      agent(
+        `Try to refute this reported bug against the code. Default to refuted: true if uncertain.\n${JSON.stringify(bug)}`,
+        {
+          label: `verify ${bug.file}:${bug.line}`,
+          phase: "Verify",
+          profile: "reviewer",
+          schema: VERDICT,
+        },
+      ),
+  ),
+);
+return {
+  bugs: bugs.filter((_, index) => verdicts[index]?.refuted === false),
+  unconfirmed: bugs.filter((_, index) => verdicts[index]?.refuted !== false),
+};
 ```
+
+These patterns aren't exhaustive: compose novel harnesses when the task calls for it (tournament brackets, self-repair loops, staged escalation, whatever fits). Use a workflow for multi-step orchestration where control flow should be deterministic (loops, conditionals, fan-out) rather than model-driven.
+
+## What agents return
+
+Agents are told their final text is the return value, not a human-facing message, so they return raw data. For structured output, use the `schema` option: validation happens at the tool-call layer, so the agent retries on a mismatch. Agents get the workspace's instruction files (`AGENTS.md`) as you did: don't tell them to re-read those or paste their rules into the prompt; name the specific rule a stage needs, if any. They don't see this conversation, so give each prompt the goal, paths, constraints and user's words it needs.
 
 ## Large implementations: claims first
 
-Writers in the shared checkout follow file claims. `writes` lists the exact workspace-relative files an agent may change (no directories, globs, `./` or leading `/`), at most 64 per writer. Writers with disjoint claims run in parallel; overlapping claims simply queue, and a writer without `writes` runs alone. A writer that touches a file it didn't claim is contained and new writers pause until you review it, so every list must be complete, tests, fixtures and docs included. A malformed claim is an invalid call, which fails the whole run, so check the planner's lists before passing them and send any unit whose list looks doubtful to a worktree.
+Writers in the shared checkout follow file claims. `writes` lists the exact workspace-relative files an agent may change (no directories, globs, `./` or leading `/`), at most 64 per writer. Writers with disjoint claims run in parallel, overlapping claims queue, and a writer without `writes` runs alone. A writer that touches a file it didn't claim is contained, and new writers pause until you review it, so every list must be complete, tests, fixtures and docs included. A malformed claim is an invalid call that fails the run, so check the planner's lists and send a doubtful unit to a worktree.
 
-Use `isolation: "worktree"` only for units whose files can't be known upfront or that overlap heavily; in the session's worktree writer mode every writer gets one anyway. A worktree unit's proposal isn't in the checkout: it comes back in the notification for you to review and integrate with `subagent_workspace`.
-
-Plan with claims, implement each unit with a `worker`, review each unit as it finishes, then run one integration check and one completeness check against the plan:
+Use `isolation: "worktree"` only for units whose files can't be known upfront or that overlap heavily; its proposal comes back in the notification for you to review and integrate with `subagent_workspace`. Plan with claims, implement each unit with a `worker`, review each unit as it finishes, then run one integration check and one completeness check against the plan:
 
 ```js
 export const meta = {
@@ -532,9 +661,9 @@ const plan = await agent(
 );
 if (!plan || plan.units.length === 0) return { error: "The planner returned no units." };
 
-// A malformed claim fails the run and a glob claims no real file, so a unit with anything
-// doubtful runs in a worktree instead: globs, absolute or Windows paths, backslashes, control
-// characters, surrounding spaces, empty or dot segments.
+// A malformed claim fails the run, so a unit with anything doubtful runs in a worktree: globs,
+// absolute or Windows paths, backslashes, control characters, surrounding spaces, empty or dot
+// segments.
 const DOUBTFUL = /[*?[\]{}\\\u0000-\u001f\u007f-\u009f]|^[a-zA-Z]:|^\s|\s$/u;
 const claimable = (files) =>
   files.length > 0 &&
@@ -594,23 +723,49 @@ const [integration, completeness] = await parallel([
 return { units: units.filter(Boolean), integration, completeness };
 ```
 
-If the session's writer mode is worktree, every writer gets a worktree and nothing reaches the checkout until you integrate it: leave the per-unit review and the checks out of the script, review the proposals with `subagent_workspace`, and run the integration check after integrating them.
+In the session's worktree writer mode every writer gets a worktree and nothing reaches the checkout until you integrate it: leave the per-unit review and the checks out of the script, and run them after integrating the proposals. To repair as you go, add a stage after the review that runs the worker again with the review's problems and the same `writes`.
 
-To repair as you go, add a stage after the review that runs the worker again with the review's problems and the same `writes`. Worktree proposals reach the checkout only once you integrate them, so run the integration check again after that.
+## Budgets
+
+The user sets a budget with `/ultracode +500k` or by stating a limit; pass it as the start's `budget` (output tokens). It is a hard ceiling: once it is spent, an `agent()` call whose agent hasn't started throws `WorkflowBudgetError`. Plan the run inside it before you write the script:
+
+- **Scale depth to it, keeping room to finish.** Reserve what verification and the end need, and spend the rest on discovery: more finder rounds until they run dry or the budget can't pay for another, as the [exhaustive review](#composing-patterns-exhaustive-review) does. For multi-phase work, split the budget across the phases up front.
+- **Use realistic costs per agent**: a finder reading a whole package spends 30k to 60k output tokens, a verifier checking one finding 5k to 15k, a synthesis or critic about 10k. Size the next round from what the last one spent, the change in `budget.spent()`.
+- **Guard every phase and top-level call.** Check `budget.remaining()` first, shrink the phase to what fits (fewer finders or votes, the most severe findings first) and `log()` what you dropped. Inside `parallel()` or `pipeline()` a refused call becomes `null`, which is no answer: count its finding as unverified, not refuted. A refused top-level call fails the run and loses everything after it.
+- **Expect wide phases to overshoot.** `budget.spent()` counts finished agents only, while the ceiling also counts running ones, so a phase wider than `remaining() / cost` overshoots and every later call is refused. Run a wide phase in waves:
+
+```js fragment
+// items, COST (output tokens per agent) and RESERVE (kept for what follows) are yours.
+const results = [];
+let next = 0;
+while (next < items.length) {
+  const fits = budget.total ? Math.floor((budget.remaining() - RESERVE) / COST) : items.length;
+  if (fits < 1) break;
+  const wave = items.slice(next, next + fits);
+  next += wave.length;
+  results.push(
+    ...(await parallel(wave.map((item) => () => agent(item.prompt, { profile: "reviewer" })))),
+  );
+}
+if (next < items.length)
+  log(`The budget covered ${next} of ${items.length} items; skipped the rest`);
+```
 
 ## Pi specifics
 
-- **Profiles** choose the model and effort; `model`, `effort` and `agentType` are rejected. `scout` maps code cheaply without judging it, `researcher` consults external sources, `planner` designs and splits work, `reviewer` finds and verifies problems, `worker` is the writer profile, and `generalist` is the default. `oracle` forks your conversation by default, so it sees it; the others start fresh. `writes` or `isolation` on a read-only profile is an invalid call.
-- **Prompts are self-contained.** Agents don't see this conversation, so give each one the goal, the paths, the constraints and the user's words it needs. They already follow the workspace's `AGENTS.md` and know their final answer is data for your script, so don't paste repository rules; name a specific rule only when a stage depends on it.
-- **The final answer is the return value.** Without `schema`, `agent()` returns text. With `schema`, it returns the validated value, and the agent retries when its value doesn't match. Use object schemas with `required` and `additionalProperties: false`. `$ref` and `$defs` are rejected, and every pattern must compile with the `u` flag.
-- **Expect `null`.** `agent()` resolves `null` when its agent fails, is stopped or is skipped, and an item that throws inside `parallel()` or `pipeline()` becomes `null`. `pipeline()` passes a `null` result on to the next stage, so start a stage with `if (!previous) return null` or read `previous?.field ?? []`. Filter with `.filter(Boolean)` before using results.
-- **Invalid calls fail the run**, even inside `parallel()` and `pipeline()`: an unknown option or profile, a bad schema or claim, writer options on a read-only profile, or more than 1,000 calls. A budget error isn't an invalid call; a `catch` around `agent()` should rethrow errors whose `name` isn't `WorkflowBudgetError`.
-- **Determinism.** `Date.now()`, `new Date()` and `Math.random()` throw, and there are no timers, `fetch`, files or modules, so runs can resume. Vary prompts by index and pass dates through `args`. Await every `agent()` call: agents still running when the script returns are stopped.
-- **Resume and extend.** To fix a failed run or add a stage to a finished one, edit the script's file (an inline script's saved copy is named in the start result) and start it again with the same `args` and `resumeFromRunId`. Calls with the same prompt, profile, schema, isolation and writes reuse their results; labels and phases don't matter. Once a writer call without `isolation: "worktree"` runs live, because it changed, is new or didn't finish before, every later call runs live too, so add new stages after the writers you keep. Don't restart a run the user stopped unless they ask.
-- **Read the results journal** that the notification and status name before you diagnose an empty or surprising result: one line per finished `agent()` call with what it actually returned.
+- **Profiles** choose the model and effort; `model`, `effort` and `agentType` are rejected. `scout` maps code cheaply, `researcher` consults external sources, `planner` designs and splits work, `reviewer` finds and verifies problems, `worker` writes, and `generalist` is the default. `oracle` forks your conversation; the others start fresh. Writer options on a read-only profile are an invalid call.
+- **Schemas** are objects with `required` and `additionalProperties: false`; `$ref` and `$defs` are rejected, and every pattern must compile with the `u` flag.
+- **Expect `null`.** `agent()` resolves `null` when its agent fails, is stopped or is skipped, and an item that throws inside `parallel()` or `pipeline()` becomes `null`, which `pipeline()` passes to the next stage. Filter with `.filter(Boolean)` or read `previous?.field ?? []`.
+- **Invalid calls fail the run**, even inside `parallel()` and `pipeline()`: an unknown option or profile, a bad schema or claim, or more than 1,000 calls. A `catch` around `agent()` should rethrow errors whose `name` isn't `WorkflowBudgetError`.
+- **Determinism.** `Date.now()`, `new Date()` and `Math.random()` throw, and there are no timers, `fetch`, files or modules, so runs can resume. Pass dates through `args`. Await every `agent()` call: agents still running when the script returns are stopped.
+- **Declare the plan.** List the agents you already know in `meta.phases[].agents`, with exactly the labels your calls use, and make those calls in that phase, so the user sees the plan and can skip one. Leave `agents` out when a phase's count depends on earlier results or calls repeat across rounds.
+- **Return what you act on**: confirmed findings with evidence, what was rejected or dropped, and what wasn't covered. The results journal keeps every agent's full output.
+- **Resume and extend.** Edit the script's file (an inline script's saved copy is named in the start result) and start it again with the same `args` and `resumeFromRunId`. Calls with the same prompt, profile, schema, isolation and writes reuse their results. Once a writer call without `isolation: "worktree"` runs live, every later call runs live too, so add new stages after the writers you keep. Don't restart a run the user stopped unless they ask.
+- **Read the results journal** that the notification and status name before you diagnose an empty or surprising result.
 
 ## Run it
 
-- **Pass one-off work inline.** Give the script as `script`: the run keeps a private copy, named in the start result, that you can edit and start again with `resumeFromRunId`. Write a saved workflow, in `.pi/workflows/` of a trusted project or the agent directory's `workflows/` (the tool description names this session's directories), only when the user wants a workflow to reuse.
-- **End your turn after starting it.** `start` returns at once. Finish any unrelated work, then end your turn: the run's one notification starts your next turn with its result or error, and you report from it then. Don't call `status` to wait: it can't make the run finish sooner, and a repeat while nothing changed gets one line. Agents may ask you questions: answer with `subagent_reply` and the workflow continues. Use `status` when the user asks how it is going or a run seems stuck; it also shows anything else that waits on you.
-- **Don't stop a run to answer sooner.** Its unfinished agents' work is lost, and a resume reruns them at full cost. Stop a run only when the user asks or it is clearly broken, such as a wrong script or a runaway loop; a run you stop sends no notification, since the stop result has its final state.
+- **Write the script on short lines**, with schemas and prompts as named constants: a syntax error names its line, which is easy to fix on a short one.
+- **Pass one-off work inline** as `script`. Write a saved workflow, in `.pi/workflows/` of a trusted project or the agent directory's `workflows/`, only when the user wants one to reuse.
+- **End your turn after starting it.** `start` returns at once; finish any unrelated work, then end your turn. The run's one notification starts your next turn with its result, and you report from it then. Don't call `status` to wait; use it when the user asks how it is going or a run seems stuck. Answer agents' questions with `subagent_reply`.
+- **Don't stop a run to answer sooner.** Its unfinished agents' work is lost, and a resume reruns them at full cost. Stop a run only when the user asks or it is clearly broken, such as a wrong script or a runaway loop.

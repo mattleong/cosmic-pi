@@ -39,11 +39,11 @@ const REQUEST_NOTE =
 
 /** The user message for the request, with the note that opts it into a workflow. */
 export const ultracodeRequestMessage = (request: UltracodeRequest, guidePath: string): string => {
-  const note = `${REQUEST_NOTE} Read the workflow authoring guide (${guidePath}) first, then write the workflow and start it with subagent_workflow. After starting it, end your turn: its notification starts your next turn, and you report from it then. Don't poll status or stop the run to finish sooner.`;
+  const note = `${REQUEST_NOTE} Read the workflow authoring guide (${guidePath}) first, then write the workflow and start it with subagent_workflow. The goal is the most exhaustive, correct answer you can produce: token cost is not a constraint unless the request states a limit. Scale to what the request asks for, pick the guide's quality patterns that fit (adversarial verify, multi-modal sweep, completeness critic, loop-until-dry), adversarially verify findings unless they are trivial or already verified, and for multi-phase work run one workflow per phase, reading each result before the next. After starting it, end your turn: its notification starts your next turn, and you report from it then. Don't poll status or stop the run to finish sooner.`;
   const budget =
     request.budget === undefined
       ? ""
-      : `\nToken budget: ${request.budget} output tokens: pass budget: ${request.budget} to subagent_workflow start.`;
+      : `\nToken budget: ${request.budget} output tokens, the one limit on token cost: pass budget: ${request.budget} to subagent_workflow start and plan the run inside it.`;
   return `${request.task}\n\n${note}${budget}`;
 };
 
