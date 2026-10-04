@@ -26,6 +26,7 @@ import {
   nativeReportServiceFixture,
   nativeReportFrame,
   withService,
+  awaitRuns,
 } from "./fixtures/service-harness.ts";
 
 const awaitAndConsume = (service: SubagentServiceContract, ids: ReadonlyArray<string>) =>
@@ -587,9 +588,9 @@ describe("SubagentService", () => {
         expect(resumed).toMatchObject({ state: "running", reportGeneration: 1 });
         expect(resumed.finalText).toBeUndefined();
         expect(fake.controls).toHaveLength(2);
-        const cancelled = yield* service
-          .awaitTerminal([run.id], "all_finished")
-          .pipe(Effect.forkScoped);
+        const cancelled = yield* awaitRuns(service, [run.id], "all_finished").pipe(
+          Effect.forkScoped,
+        );
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(cancelled);
         fake.controls[1]!.settle("Second report.");

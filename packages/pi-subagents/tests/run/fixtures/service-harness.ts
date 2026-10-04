@@ -38,10 +38,15 @@ import {
   type ChildWireEvent,
 } from "../../../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../../../src/run/errors.ts";
-import type { StartSubagentRequest, SubagentProjection } from "../../../src/run/model.ts";
+import type {
+  StartSubagentRequest,
+  SubagentProjection,
+  SubagentRunView,
+} from "../../../src/run/model.ts";
 import type { SubagentNotification } from "../../../src/boundary/host-notifier.ts";
 import {
   SubagentService,
+  type SubagentAwaitUntil,
   type SubagentServiceContract,
   type SubagentServiceOptions,
 } from "../../../src/run/service.ts";
@@ -58,6 +63,29 @@ export const withService = <Eff extends Effect.Effect<any, any, any>, A, ROut, L
   SubagentService.use((service) => Effect.gen(() => body(service))).pipe(
     Effect.scoped,
     provideBuiltLayer(layer),
+  );
+
+/**
+ * Awaits runs the way the await tool does: through the public observation API, consuming the
+ * completion reports it observed. Resolves to the observed runs.
+ */
+export const awaitRuns = (
+  service: SubagentServiceContract,
+  ids: ReadonlyArray<string>,
+  until: SubagentAwaitUntil,
+  onUpdate?: (
+    runs: ReadonlyArray<SubagentRunView>,
+    projection?: ReadonlyArray<SubagentRunView>,
+  ) => void,
+) =>
+  service.withAwaitTerminalObservations(ids, until, onUpdate, (observations) =>
+    service
+      .consumeCompletions(
+        observations.flatMap((observation) =>
+          observation.completionReceipt ? [observation.completionReceipt] : [],
+        ),
+      )
+      .pipe(Effect.as(observations.map((observation) => observation.run))),
   );
 
 export const waitForCompleted = (service: SubagentServiceContract, id: string) =>

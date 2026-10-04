@@ -7,7 +7,12 @@ import type { BackendLaunchRequest } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
-import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
+import {
+  canonicalizeWriterCwd,
+  processCapacityError,
+  workflowCapacityError,
+  writerConflictError,
+} from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
 import {
@@ -290,13 +295,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           predecessor: RunRecord | undefined,
         ) =>
           Effect.gen(function* () {
-            const capacityFailure = processCapacityError(
-              records,
-              parentRunId,
-              nestingPolicy.maxDirectChildren,
-              ownReservation,
-              dependencies.heldLaunchSlots(parentRunId, request),
-            );
+            const held = dependencies.heldLaunchSlots(parentRunId, request);
+            const limit = nestingPolicy.maxDirectChildren;
+            // A workflow agent also leaves root slots free for the main agent.
+            const capacityFailure = request.workflow
+              ? workflowCapacityError(records, parentRunId, limit, ownReservation, held)
+              : processCapacityError(records, parentRunId, limit, ownReservation, held.total);
             if (capacityFailure) return yield* capacityFailure;
             if (!canonicalWriterCwd) return;
             const writerFailure = writerConflictError(
@@ -524,13 +528,14 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     undefined,
                     request.supersedes ? records.get(request.supersedes.runId) : undefined,
                   );
-                  candidate.evictionClaim = canonicalWriterCwd
-                    ? {
-                        parentRunId,
-                        writerCwdDigest: canonicalWriterCwd.digest,
-                        writeClaims,
-                      }
-                    : { parentRunId };
+                  candidate.evictionClaim = {
+                    parentRunId,
+                    ...(canonicalWriterCwd && {
+                      writerCwdDigest: canonicalWriterCwd.digest,
+                      writeClaims,
+                    }),
+                    ...(ownership?.runId !== undefined && { runId: ownership.runId }),
+                  };
                   // The claim now reserves this start's process slot, so a worktree launch's
                   // own slot hold ends here rather than counting twice while history is reclaimed.
                   dependencies.bindWorkspace(request);

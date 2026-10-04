@@ -102,7 +102,8 @@ describe("grouped activity projection", () => {
     ["finished work in the live current phase", "running", ["done"], "Find", "running"],
     ["finished work in a passed phase", "running", ["done"], "Verify", "done"],
     ["only stopped work", "running", ["cancelled", "cancelled"], "Verify", "stopped"],
-    ["failed and finished work", "done", ["failed", "done"], undefined, "done"],
+    ["failed and finished work", "done", ["failed", "done"], undefined, "failed"],
+    ["failed and stopped work", "running", ["failed", "cancelled"], "Verify", "failed"],
     ["no work before the current phase", "running", [], "Verify", "skipped"],
     ["no work in the live current phase", "running", [], "Find", "running"],
     ["no work in a future phase", "running", [], undefined, "pending"],
@@ -120,6 +121,12 @@ describe("grouped activity projection", () => {
   it.each([
     ["finished work no longer shown", { items: 20, finished: 20, stopped: 0 }, "running", "done"],
     ["only stopped work", { items: 3, finished: 3, stopped: 3 }, "done", "stopped"],
+    [
+      "failed work no longer shown",
+      { items: 3, finished: 3, stopped: 1, failed: 1 },
+      "running",
+      "failed",
+    ],
     [
       "unfinished work beyond the shown rows",
       { items: 2, finished: 1, stopped: 0 },
@@ -168,7 +175,7 @@ describe("grouped activity projection", () => {
       ["Verify", "running"],
     ]);
   });
-  it("counts skipped empty phases as finished after an early return", () => {
+  it("counts skipped empty phases apart from done ones after an early return", () => {
     const workflow = workflowRow("workflow", ["One", "Two", "Three"], "done", "One", {
       startedAt: 0,
       endedAt: 1000,
@@ -177,11 +184,89 @@ describe("grouped activity projection", () => {
     const rows = [workflow, member];
     const archived = groupedActivityTree(rows, expandedAll(rows));
     expect(phases(archived).map((entry) => entry.state)).toEqual(["done", "skipped", "skipped"]);
-    expect(root(archived)).toMatchObject({ finishedPhases: 3, history: true });
+    expect(root(archived)).toMatchObject({
+      phaseCounts: { done: 1, skipped: 2, stopped: 0 },
+      history: true,
+    });
     expect(groupedActivityTree(rows, checklist)).toEqual([]);
     const live = groupedActivityTree([withStatus(workflow, "running"), member], checklist);
     expect(phases(live).map((entry) => entry.state)).toEqual(["running", "pending", "pending"]);
-    expect(root(live)).toMatchObject({ finishedPhases: 0, history: false });
+    expect(root(live)).toMatchObject({ phaseCounts: { done: 0, skipped: 0 }, history: false });
+  });
+  it("counts only done phases as done after the user stops a run", () => {
+    const workflow = workflowRow(
+      "workflow",
+      ["Plan", "Implement", "Verify"],
+      "cancelled",
+      "Implement",
+    );
+    const rows = [
+      workflow,
+      memberRow("planner", workflow, "Plan", "done"),
+      memberRow("implementer", workflow, "Implement", "cancelled"),
+    ];
+    const tree = groupedActivityTree(rows, expandedAll(rows));
+    expect(phases(tree).map((entry) => entry.state)).toEqual(["done", "stopped", "skipped"]);
+    expect(root(tree).phaseCounts).toMatchObject({ done: 1, stopped: 1, skipped: 1 });
+    // Every settled phase still moves to history with its workflow.
+    expect(tree.filter((entry) => entry.type !== "section").every((entry) => entry.history)).toBe(
+      true,
+    );
+  });
+  it("counts skipped work apart from stopped work and skips a phase whose work was all skipped", () => {
+    const workflow = workflowRow("workflow", [], "cancelled", "Implement", {
+      phases: [
+        { title: "Plan", work: { items: 2, finished: 2, stopped: 0, skipped: 2 } },
+        { title: "Implement", work: { items: 2, finished: 2, stopped: 1, skipped: 1 } },
+      ],
+    });
+    const rows = [
+      workflow,
+      memberRow("refused", workflow, "Plan", "cancelled", { skipped: true }),
+      memberRow("halted", workflow, "Implement", "cancelled", { startedAt: 0 }),
+    ];
+    const tree = groupedActivityTree(rows, expandedAll(rows));
+    expect(phases(tree).map((entry) => entry.state)).toEqual(["skipped", "stopped"]);
+    expect(root(tree).summary).toMatchObject({ items: 4, stopped: 1, skipped: 3 });
+    // Without producer counts, the visible members decide.
+    const visible = groupedActivityTree(
+      [workflowRow("workflow", ["Plan"], "cancelled", "Plan"), rows[1]!],
+      expandedAll(rows),
+    );
+    expect(root(visible).summary).toMatchObject({ stopped: 0, skipped: 1 });
+    expect(phases(visible)[0]?.state).toBe("skipped");
+  });
+  it("never shows a phase with failed work as done and counts its failures once on the workflow", () => {
+    const workflow = workflowRow("workflow", [], "running", "Verify", {
+      phases: [
+        { title: "Build", work: { items: 4, finished: 4, stopped: 0, failed: 1 } },
+        { title: "Verify" },
+      ],
+    });
+    // The producer's count includes the failure it still shows.
+    const rows = [
+      workflow,
+      memberRow("broken", workflow, "Build", "failed"),
+      memberRow("verifier", workflow, "Verify"),
+    ];
+    const tree = groupedActivityTree(rows);
+    expect(phases(tree)[0]).toMatchObject({
+      state: "failed",
+      history: true,
+      summary: { items: 4, terminal: 4, attention: { failed: 1 } },
+    });
+    expect(root(tree)).toMatchObject({
+      phaseCounts: { done: 0, failed: 1 },
+      summary: { items: 5, attention: { failed: 1 } },
+    });
+    // Without a failure count, the visible failed member decides.
+    const uncounted = withStatus(workflow, "running", {
+      phases: [
+        { title: "Build", work: { items: 4, finished: 4, stopped: 0 } },
+        { title: "Verify" },
+      ],
+    });
+    expect(phases(groupedActivityTree([uncounted, ...rows.slice(1)]))[0]?.state).toBe("failed");
   });
   it("moves a workflow into history only when its row and whole subtree are finished", () => {
     const done = workflowRow("workflow", ["Find"], "done", "Find");
@@ -199,7 +284,11 @@ describe("grouped activity projection", () => {
     }
     expect(groupedActivityTree([done, finished], checklist)).toEqual([]);
     const history = groupedActivityTree([done, finished]);
-    expect(root(history)).toMatchObject({ history: true, expanded: false, finishedPhases: 1 });
+    expect(root(history)).toMatchObject({
+      history: true,
+      expanded: false,
+      phaseCounts: { done: 1 },
+    });
   });
   it("keeps the phase checklist while hiding finished member detail", () => {
     const workflow = workflowRow("workflow", ["Map", "Review", "Ship"], "running", "Review");
@@ -215,7 +304,10 @@ describe("grouped activity projection", () => {
     expect(tree.find((entry) => entry.id === reviewing.key)?.parentId).toBe(
       phaseRowId(workflow.key, "Review"),
     );
-    expect(root(tree)).toMatchObject({ finishedPhases: 1, summary: { items: 2, terminal: 1 } });
+    expect(root(tree)).toMatchObject({
+      phaseCounts: { done: 1 },
+      summary: { items: 2, terminal: 1 },
+    });
     const withoutChecklist = groupedActivityTree([workflow, mapped, reviewing], {
       hideHistory: true,
     });

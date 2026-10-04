@@ -193,6 +193,16 @@ describe("ListDetailShell detail window", () => {
     expect(window.visible.at(-1)).toBe("L25");
   });
 
+  it("opens at the first lines, then keeps that slice as more lines arrive", () => {
+    const shell = new ListDetailShell();
+    let window = shell.detailWindow(lines(20), 6, "top");
+    expect(window.visible[0]).toBe("L1");
+    window = shell.detailWindow(lines(25), 6, false);
+    expect(window.visible[0]).toBe("L1");
+    // A short text that fits shows whole either way.
+    expect(new ListDetailShell().detailWindow(lines(3), 6, "top").visible).toEqual(lines(3));
+  });
+
   it("centers the selection inside the visible list window", () => {
     const shell = new ListDetailShell();
     shell.select(10, ids(20));

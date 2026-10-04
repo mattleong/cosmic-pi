@@ -14,7 +14,8 @@ import {
   retainActivity,
   type ActivityRow,
 } from "../src/activity/model.ts";
-import { activityGlyph, renderActivityWidget } from "../src/activity/widget.ts";
+import { renderActivityWidget } from "../src/activity/widget.ts";
+import { activityGlyph } from "../src/activity/row-line.ts";
 import { activityWidgetHeight, activityWidgetSections } from "../src/activity/widget-projection.ts";
 import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
 import { memberRow, mountActivity, withStatus, workflowRow } from "./support/activity.ts";
@@ -63,7 +64,7 @@ describe("planned workflow agents", () => {
       unrun: 0,
     });
     expect(live.find((entry) => entry.type === "workflow")).toMatchObject({
-      finishedPhases: 0,
+      phaseCounts: { done: 0 },
       history: false,
       summary: { items: 1, running: 1, planned: 3 },
     });
@@ -203,7 +204,7 @@ describe("planned workflow agents", () => {
     ];
     const tree = groupedActivityTree(rows);
     expect(phases(tree).map((entry) => entry.state)).toEqual(["pending", "done", "running"]);
-    expect(entryOf(tree, "workflow")?.finishedPhases).toBe(1);
+    expect(entryOf(tree, "workflow")?.phaseCounts).toMatchObject({ done: 1, pending: 1 });
     // It stays open in the manager, with its planned agent in view.
     expect(entryOf(tree, "phase", "Map")).toMatchObject({ history: false, expanded: true });
     expect(tree.some((entry) => entry.id === rows[1]!.key)).toBe(true);
@@ -219,6 +220,25 @@ describe("planned workflow agents", () => {
       { expandedHistory: new Set([ended.key]) },
     );
     expect(phases(archived).map((entry) => entry.state)).toEqual(["skipped", "done", "done"]);
+  });
+
+  it("keeps a passed phase whose work was stopped as stopped, though planned agents remain", () => {
+    const workflow = workflowRow("audit", ["Map", "Review"], "running", "Review", {
+      phases: [
+        { title: "Map", work: { items: 1, finished: 1, stopped: 1 }, planned: 1 },
+        { title: "Review" },
+      ],
+    });
+    const rows = [
+      workflow,
+      // The user stopped the mapper while it ran; the phase never called its second agent.
+      memberRow("mapper", workflow, "Map", "cancelled", { startedAt: 1, endedAt: 2 }),
+      planned("map-2", workflow, "Map"),
+      memberRow("reviewer", workflow, "Review"),
+    ];
+    const tree = groupedActivityTree(rows);
+    expect(phases(tree).map((entry) => entry.state)).toEqual(["stopped", "running"]);
+    expect(entryOf(tree, "workflow")?.phaseCounts).toMatchObject({ stopped: 1, pending: 0 });
   });
 
   it("retains real results before never-run agents and doesn't report those as hidden items", () => {

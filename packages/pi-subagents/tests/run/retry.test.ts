@@ -20,6 +20,7 @@ import {
   request,
   localServiceFixture,
   withService,
+  awaitRuns,
 } from "./fixtures/service-harness.ts";
 import { profileCandidate } from "../fixtures/profiles.ts";
 
@@ -431,7 +432,7 @@ describe("explicit profile-route retry", () => {
       const cleanupGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateRelease(cleanupGate);
       fake.controls[0]?.exit(1);
-      yield* service.awaitTerminal([failedRun.id], "all_finished");
+      yield* awaitRuns(service, [failedRun.id], "all_finished");
       const claimed = yield* Deferred.make<void>();
       const claiming = yield* service.claimRetryContinuation(failedRun.id).pipe(
         Effect.tap(() => Deferred.succeed(claimed, undefined)),

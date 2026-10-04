@@ -1,4 +1,9 @@
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
+import {
+  emptyWorkflowUsage,
+  type WorkflowAgentView,
+  type WorkflowRunView,
+} from "../../src/workflow/model.ts";
 
 /** A running local Pi run view; tests override only the fields they assert. */
 export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
@@ -65,3 +70,32 @@ export const containedWriter = (overrides: Partial<SubagentRunView> = {}) =>
     writeAudit: violationAudit("src/b.ts"),
     ...overrides,
   });
+
+/** A running workflow run view with no agents; tests override only the fields they assert. */
+export const workflowRunView = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => ({
+  id: "wf-a-1",
+  name: "review",
+  description: "Review the diff",
+  source: { kind: "inline" },
+  sha256: "digest",
+  phases: [],
+  state: "running",
+  startedAt: 1,
+  agents: [],
+  planned: [],
+  reused: 0,
+  logs: [],
+  usage: emptyWorkflowUsage(),
+  args: null,
+  ...patch,
+});
+
+/** A queued workflow agent view; tests override only the fields they assert. */
+export const workflowAgentView = (patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView => ({
+  callId: 1,
+  runId: "agent-r1-1",
+  label: "finder",
+  state: "queued",
+  queuedAt: 2,
+  ...patch,
+});

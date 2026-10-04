@@ -6,7 +6,7 @@ import type { WorkspaceHandle } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
-import { isActiveRunState, type StartSubagentRequest } from "./model.ts";
+import { isActiveRunState, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 
 /**
@@ -17,6 +17,10 @@ export interface LaunchSlot {
   readonly caller: string;
   /** Identity of the hold in admission-signal snapshots. */
   readonly id: number;
+  /** The run id an owned start reserved, so queued-start checks don't count it twice. */
+  readonly runId?: string | undefined;
+  /** A workflow agent's launch, which counts as a workflow agent holding a slot. */
+  readonly workflow: boolean;
 }
 
 /** A revision holding its binding from its reservation until its successor's launch settles. */
@@ -103,6 +107,31 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
 
 export const mapWorkspaceError = (error: { readonly message: string }) =>
   invalid("workspace_operation_failed", error.message);
+
+/** Whether `cwd` is `root` or lies inside it. */
+export const isWithin = (cwd: string, root: string) =>
+  cwd === root || cwd.startsWith(`${root.replace(/\/$/, "")}/`);
+
+/** Whether a run still works, or still holds a process or its cleanup. */
+export const runHoldsCwd = (record: RunRecord) =>
+  isActiveRunState(record.view.state) || record.process !== undefined || record.cleanupPending;
+
+/**
+ * Under the run lock: each run other than `except` whose cwd lies inside one of a proposal's
+ * `trees`, such as a reader its writer started, with the view it has now.
+ */
+export const runsWithin = (
+  records: ReadonlyMap<string, RunRecord>,
+  trees: ReadonlyArray<string>,
+  except?: RunRecord,
+): ReadonlyMap<RunRecord, SubagentRunView> =>
+  new Map(
+    [...records.values()]
+      .filter(
+        (record) => record !== except && trees.some((tree) => isWithin(record.view.cwd, tree)),
+      )
+      .map((record) => [record, record.view]),
+  );
 
 export const workspaceFinishedError = () =>
   invalid(

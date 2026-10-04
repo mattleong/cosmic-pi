@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { runAttention } from "../../src/tools/attention.ts";
+import { runAttention } from "../../src/run/attention.ts";
 import { compactRunIssues } from "../../src/tools/compact-run-issues.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import { attentionRecoveryText } from "../../src/tools/format.ts";

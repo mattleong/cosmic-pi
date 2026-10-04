@@ -3,6 +3,7 @@ import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer
 import { firstWriteClaimConflict } from "../domain/write-claims.ts";
 import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
+import { WORKFLOW_ROOT_RESERVE } from "./limits.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { writerPoolUnavailable } from "./writer-pool.ts";
@@ -50,6 +51,62 @@ export const processCapacityError = (
     limit,
     code: "direct_child_capacity",
     message: `Direct-child capacity reached for ${parentRunId} (${limit}). Stop an active run among this parent's direct children first.`,
+  });
+};
+
+/** Direct-child slots that worktree launches still acquiring their workspaces hold for a parent. */
+export interface HeldLaunchSlots {
+  readonly total: number;
+  /** Those held by workflow agents' launches, which count as workflow agents holding a slot. */
+  readonly workflow: number;
+}
+
+export const NO_HELD_LAUNCH_SLOTS: HeldLaunchSlots = { total: 0, workflow: 0 };
+
+/** Whether a workflow agent's record holds one of the parent's process slots. */
+const workflowAgentHoldsSlot = (
+  records: ReadonlyMap<string, RunRecord>,
+  parentRunId: string,
+  excluded: RunRecord | undefined,
+): boolean =>
+  [...records.values()].some(
+    (record) =>
+      record !== excluded &&
+      record.owner?.live === true &&
+      (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId &&
+      ownsProcessSlot(record),
+  );
+
+/**
+ * The capacity refusal for a workflow agent's start. While another workflow agent holds one of
+ * the parent's slots, a workflow start also leaves {@link WORKFLOW_ROOT_RESERVE} slots free for
+ * the main agent; with none running, it may take any free slot, so a small limit still lets a
+ * workflow progress. A workflow agent holds a slot through its admitted run, through the launch
+ * slot of a worktree it is still acquiring, or as a start already let through that holds no slot
+ * yet, which `pending` counts.
+ */
+export const workflowCapacityError = (
+  records: ReadonlyMap<string, RunRecord>,
+  parentRunId: string,
+  limit: number,
+  excluded?: RunRecord,
+  held: HeldLaunchSlots = NO_HELD_LAUNCH_SLOTS,
+  pending = 0,
+): SubagentCapacityError | undefined => {
+  const occupied = held.total + pending;
+  const plain = processCapacityError(records, parentRunId, limit, excluded, occupied);
+  if (plain) return plain;
+  const workflowRunning =
+    pending > 0 || held.workflow > 0 || workflowAgentHoldsSlot(records, parentRunId, excluded);
+  if (!workflowRunning) return undefined;
+  if (
+    !processCapacityError(records, parentRunId, limit - WORKFLOW_ROOT_RESERVE, excluded, occupied)
+  )
+    return undefined;
+  return new SubagentCapacityError({
+    limit,
+    code: "direct_child_capacity",
+    message: `Workflow agents leave ${WORKFLOW_ROOT_RESERVE} of ${parentRunId}'s ${limit} direct-child slots free for the main agent.`,
   });
 };
 

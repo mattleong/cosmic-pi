@@ -26,7 +26,10 @@ export const activityQueued = (item: ActivityItem): boolean =>
   item.startedAt === undefined &&
   (item.kind === "agent" || item.kind === "command");
 
-/** The shared state word; questionnaires are queued and cancelled, work starts and is stopped. */
+/**
+ * The shared state word; questionnaires are queued and cancelled, work starts and is stopped, or
+ * is skipped before it starts.
+ */
 export function activityStatus(item: ActivityItem): string {
   // A planned item that ended never ran; its producer no longer intends to start it.
   if (activityPlanned(item)) return isFinished(item) ? "not run" : "planned";
@@ -37,7 +40,11 @@ export function activityStatus(item: ActivityItem): string {
     return item.blockedReason ? blockedLabels[item.blockedReason] : "blocked";
   if (item.status === "needs-input") return managerActivityLabel("waiting");
   if (item.status === "cancelled")
-    return item.kind === "question" ? "cancelled" : managerActivityLabel("stopped");
+    return item.kind === "question"
+      ? "cancelled"
+      : item.skipped === true
+        ? "skipped"
+        : managerActivityLabel("stopped");
   if (item.status === "pending")
     return item.kind === "question" || activityQueued(item)
       ? "queued"
@@ -81,3 +88,14 @@ export const activityAttentionLabels = (counts: ActivityAttentionCounts): string
     counts.blocked ? `${counts.blocked} blocked` : "",
     counts.failed ? `${counts.failed} failed` : "",
   ].filter(Boolean);
+
+/**
+ * Short attention notices for branch rows and section headers: who must act ("needs you" for
+ * human input, "waiting" for a parent agent's answer), then blocked and failed work.
+ */
+export const compactNotices = (attention: ActivityAttentionCounts): string[] => [
+  ...(attention.user ? [`${attention.user} ${attention.user === 1 ? "needs" : "need"} you`] : []),
+  ...(attention.parent ? [`${attention.parent} waiting`] : []),
+  ...(attention.blocked ? [`${attention.blocked} blocked`] : []),
+  ...(attention.failed ? [`${attention.failed} failed`] : []),
+];

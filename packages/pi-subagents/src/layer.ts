@@ -21,7 +21,7 @@ import {
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 import { WorkflowJournal } from "./workflow/journal.ts";
-import type { WorkflowRunView } from "./workflow/model.ts";
+import type { WorkflowActivitySink } from "./workflow/runs.ts";
 import { WorkflowService } from "./workflow/service.ts";
 import { WorkflowStore } from "./workflow/store.ts";
 
@@ -42,12 +42,15 @@ const subagentBackendRegistryLayer = Layer.effect(
 
 export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly workspaceOwnerId?: string;
-  /** Pi session whose resume journals survive /reload and /tree; absent keeps them local. */
+  /**
+   * Pi session whose resume memory survives /reload and /tree, and whose workflow run records let
+   * a restarted Pi resume and announce its runs; absent keeps both local to the activation.
+   */
   readonly sessionKey?: string | undefined;
   /** Read live before loading project workflows; defaults to the activation's trust. */
   readonly isProjectTrusted?: (() => boolean) | undefined;
   readonly publish: (projection: SubagentProjection) => void;
-  readonly publishWorkflows?: ((runs: ReadonlyArray<WorkflowRunView>) => void) | undefined;
+  readonly workflowActivity?: WorkflowActivitySink | undefined;
   readonly notify: SubagentNotifier;
   readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
   readonly questionnaireHandler?: SubagentServiceOptions["questionnaireHandler"] | undefined;
@@ -98,8 +101,9 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   }).pipe(Layer.provide(SafeFile.layer), Layer.provide(nodeFilePlatformLayer));
   // Built on the subagent service, so its runs are interrupted before that service stops.
   const workflows = WorkflowService.layer({
-    ...(options.publishWorkflows && { publish: options.publishWorkflows }),
+    ...(options.workflowActivity && { activity: options.workflowActivity }),
     notify: options.notify,
+    sessionKey: options.sessionKey,
   }).pipe(
     Layer.provide(
       Layer.mergeAll(service, WorkflowJournal.layer(options.sessionKey), workflowStore),

@@ -18,6 +18,7 @@ import {
   clipText,
   countLabel,
   failureMessage,
+  formatTokens,
   sanitizeTerminalLine,
   stripTerminalControls,
 } from "pi-cosmic-core";
@@ -27,6 +28,7 @@ import {
   renderToolHeader,
   toolRunningLine,
 } from "pi-cosmic-ui/tool";
+import { workflowStateLabel } from "../ui/run-state.ts";
 import {
   decodeWorkflowToolDetails,
   type WorkflowRunSummary,
@@ -70,22 +72,42 @@ const callSubject = (args: Partial<WorkflowToolArgs>): string => {
 const subjectOf = (args: Partial<WorkflowToolArgs>, name: string | undefined) =>
   sanitizeTerminalLine(name ?? callSubject(args));
 
-/** Counter alternatives, longest first: the row shows the first that fits. */
-const runCounters = (run: WorkflowRunSummary): ReadonlyArray<string> => {
-  const agents = countLabel(run.agents, "agent");
-  const parts = [
+/** Agents by state, in the order and words the workflow's notification row uses. */
+const agentStateParts = (run: WorkflowRunSummary): ReadonlyArray<string> =>
+  [
     run.running ? `${run.running} running` : "",
     run.queued ? `${run.queued} queued` : "",
     run.failed ? `${run.failed} failed` : "",
+    run.stopped ? `${run.stopped} stopped` : "",
+    run.skipped ? `${run.skipped} skipped` : "",
   ].filter(Boolean);
-  return [[run.state, agents, ...parts].join(" · "), `${run.state} · ${agents}`, run.state];
+
+/** Counter alternatives, longest first: the row shows the first that fits. */
+const runCounters = (run: WorkflowRunSummary): ReadonlyArray<string> => {
+  const state = workflowStateLabel(run.state);
+  const agents = countLabel(run.agents, "agent");
+  return [[state, agents, ...agentStateParts(run)].join(" · "), `${state} · ${agents}`, state];
 };
 
-const failureIssue = (run: WorkflowRunSummary): CompactIssue => ({
-  severity: "warning",
-  code: "workflow-failed",
-  message: `${sanitizeTerminalLine(run.name)} failed: ${clipText(failureMessage(run.failure ?? "", "no error message"), 80)}`,
-});
+/**
+ * Why a run failed, for people. A spent budget names its counts; the budget error's agent-facing
+ * text waits in the detail.
+ */
+const failureIssue = (run: WorkflowRunSummary): CompactIssue => {
+  const name = sanitizeTerminalLine(run.name);
+  return run.budgetFailure
+    ? {
+        severity: "warning",
+        code: "workflow-budget-spent",
+        message: `${name} failed: token budget spent (${formatTokens(run.budgetFailure.spent)} of ${formatTokens(run.budgetFailure.total)} output tokens)`,
+        ...(run.failure && { detail: run.failure }),
+      }
+    : {
+        severity: "warning",
+        code: "workflow-failed",
+        message: `${name} failed: ${clipText(failureMessage(run.failure ?? "", "no error message"), 80)}`,
+      };
+};
 
 const settledRun = (
   base: CompactSummary,
@@ -208,12 +230,10 @@ const digest = (details: WorkflowToolDetails): string => {
   if (details.action === "start")
     return `Running in the background${run.phases > 0 ? ` · ${countLabel(run.phases, "phase")}` : ""}`;
   return [
-    run.state,
+    workflowStateLabel(run.state),
     run.currentPhase ? `phase ${sanitizeTerminalLine(run.currentPhase)}` : "",
     countLabel(run.agents, "agent"),
-    run.running ? `${run.running} running` : "",
-    run.queued ? `${run.queued} queued` : "",
-    run.failed ? `${run.failed} failed` : "",
+    ...agentStateParts(run),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -254,6 +274,7 @@ export const renderWorkflowInput = (args: Partial<WorkflowToolArgs>, theme: Them
   field("Script file", args.scriptPath);
   field("Run", args.runId);
   field("Resume from", args.resumeFromRunId);
+  field("Budget", args.budget === undefined ? undefined : `${args.budget} output tokens`);
   if (args.script !== undefined)
     container.addChild(expandedSection(theme, "Script", scriptComponent(args.script, theme, true)));
   if ("args" in args) field("Args", json(args.args));

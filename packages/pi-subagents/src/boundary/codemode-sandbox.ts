@@ -11,8 +11,10 @@ import type * as Scope from "effect/Scope";
 import type { WorkflowFailure } from "../workflow/model.ts";
 import {
   WORKFLOW_ARGS_KEY,
+  WORKFLOW_BUDGET_KEY,
   WORKFLOW_HOST_NAMESPACE,
   workflowSandboxSource,
+  workflowScriptStack,
 } from "../workflow/prelude.ts";
 
 /** Matches Pi's own codemode VM memory bound. */
@@ -20,8 +22,9 @@ export const WORKFLOW_SANDBOX_MEMORY_BYTES = 256 * 1024 * 1024;
 /** How long an aborted script may take to hand back its output before it is abandoned. */
 const ABORT_SETTLE_TIMEOUT = "5 seconds";
 
-/** A host failure the script sees as an Error with this message. */
+/** An expected host failure, a tagged error, which the script sees as an Error with its message. */
 export interface WorkflowHostFailure {
+  readonly _tag: string;
   readonly message: string;
 }
 
@@ -33,11 +36,17 @@ class WorkflowHostCallError extends Schema.TaggedError<WorkflowHostCallError>()(
 
 /** Effects behind the script's `__workflow` namespace; see `workflow/prelude.ts`. */
 export interface WorkflowSandboxHost<R> {
-  /** `[prompt, options]` → `{ result, outputTokens }`. */
+  /**
+   * `[prompt, options]` → `{ result, outputTokens, refusal? }`: the tokens the call spent in this
+   * run, and the budget error's message when the budget refused it.
+   */
   readonly agent: (call: Schema.Json) => Effect.Effect<Schema.Json, WorkflowHostFailure, R>;
   readonly event: (event: Schema.Json) => Effect.Effect<void, never, R>;
-  /** Saved-workflow reference → `{ name, body }`. */
-  readonly load: (reference: Schema.Json) => Effect.Effect<Schema.Json, WorkflowHostFailure, R>;
+  /**
+   * `[reference, args]` → `{ name, body }`. It fails only for invalid `workflow()` calls, such as a
+   * reference that doesn't load or args that don't match the nested workflow's `meta.args`.
+   */
+  readonly load: (call: Schema.Json) => Effect.Effect<Schema.Json, WorkflowHostFailure, R>;
 }
 
 export type WorkflowSandboxOutcome =
@@ -53,7 +62,6 @@ export type WorkflowSandboxOutcome =
       readonly output: ReadonlyArray<string>;
     };
 
-const decodeJson = Schema.decodeUnknownEffect(Schema.Json);
 const decodeValue = Schema.decodeUnknownOption(Schema.Json);
 
 const textOutput = (result: CodemodeResult): ReadonlyArray<string> =>
@@ -69,13 +77,14 @@ const sandboxOutcome = (result: CodemodeResult): WorkflowSandboxOutcome => {
       output,
     };
   const { kind, name, message, stack } = result.error;
+  const scriptStack = stack === undefined ? undefined : workflowScriptStack(stack);
   return {
     _tag: "Failed",
     kind,
     failure: {
       message,
       ...(name !== undefined && { name }),
-      ...(stack !== undefined && { stack }),
+      ...(scriptStack !== undefined && { stack: scriptStack }),
     },
     output,
   };
@@ -96,13 +105,15 @@ const abandoned: WorkflowSandboxOutcome = {
  * caller observes the scope closed.
  *
  * When `abort` completes, the script is aborted and the run returns its `aborted` outcome with
- * the text output it produced. Interrupting the run instead discards that output.
+ * the text output it produced. Interrupting the run instead discards that output. `budget` is
+ * the script's `budget.total`.
  */
 export const runWorkflowSandbox = <R>(
   body: string,
   args: Schema.Json,
   host: WorkflowSandboxHost<R>,
-  abort: Effect.Effect<void> = Effect.never,
+  abort: Effect.Effect<void>,
+  budget: number | undefined,
 ): Effect.Effect<WorkflowSandboxOutcome, never, R | Scope.Scope> =>
   Effect.gen(function* () {
     const run = yield* FiberSet.makeRuntimePromise<R>();
@@ -113,11 +124,21 @@ export const runWorkflowSandbox = <R>(
     ): CodemodeTool => ({
       name: `${WORKFLOW_HOST_NAMESPACE}.${name}`,
       spread,
+      // Decoded synchronously, so a call's own first step runs while the sandbox issues it and
+      // host calls start in the order the script made them.
       execute: (input, context) =>
         run(
-          decodeJson(input).pipe(
-            Effect.mapError(() => ({ message: `${name}() arguments must be JSON values.` })),
-            Effect.flatMap(call),
+          Effect.suspend(() =>
+            Option.match(decodeValue(input), {
+              onNone: () =>
+                Effect.fail(
+                  new WorkflowHostCallError({
+                    message: `${name}() arguments must be JSON values.`,
+                  }),
+                ),
+              onSome: call,
+            }),
+          ).pipe(
             Effect.mapError((failure) => new WorkflowHostCallError({ message: failure.message })),
           ),
           { signal: context.signal },
@@ -132,24 +153,33 @@ export const runWorkflowSandbox = <R>(
             globals: [
               member("agent", host.agent, true),
               member("event", host.event),
-              member("load", host.load),
+              member("load", host.load, true),
             ],
           }),
       ),
-      (opened) => Effect.promise(() => opened.close()),
+      // Closing waits for every execution's worker to exit, so it is bounded like the abort.
+      (opened) =>
+        Effect.promise(() => opened.close()).pipe(
+          Effect.timeoutOption(ABORT_SETTLE_TIMEOUT),
+          Effect.asVoid,
+        ),
     );
     // Only a sandbox the run already closed refuses to execute; that run was stopped.
     const execution = Effect.tryPromise((signal) =>
       sandbox.execute(workflowSandboxSource(body), {
         signal,
-        store: { [WORKFLOW_ARGS_KEY]: args },
+        store: {
+          [WORKFLOW_ARGS_KEY]: args,
+          ...(budget !== undefined && { [WORKFLOW_BUDGET_KEY]: budget }),
+        },
       }),
     ).pipe(
       Effect.map(sandboxOutcome),
       Effect.orElseSucceed(() => abandoned),
     );
-    // Closing the sandbox aborts the script, which then settles with its output; the timeouts
-    // only bound a worker that never exits.
+    // Closing the sandbox aborts the script, which then settles with its output. The timeouts
+    // here and on the scope's release only bound a worker that never exits, so the run still
+    // finishes, records its end and reports.
     const aborted = abort.pipe(
       Effect.andThen(
         Effect.promise(() => sandbox.close()).pipe(Effect.timeoutOption(ABORT_SETTLE_TIMEOUT)),

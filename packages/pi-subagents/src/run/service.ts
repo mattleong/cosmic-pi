@@ -26,7 +26,7 @@ import {
   SubagentNotFoundError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
-import { makeQueuedStartCheck, makeRunAdmissionSignal } from "./admission-signal.ts";
+import { makeQueuedStartChecks, makeRunAdmissionSignal } from "./admission-signal.ts";
 import { makeRunAssignment } from "./assignment.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
 import { makeRunPeerNotifier } from "./coordination.ts";
@@ -162,17 +162,10 @@ export interface SubagentServiceContract
     onOwned?: () => void,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   /**
-   * Await selected observations. The optional update projection is the root-owned immutable
-   * snapshot; consumers must derive only authorized target subtrees before external rendering.
+   * Await selected observations, then run `use` while they stay claimed. The optional update
+   * projection is the root-owned immutable snapshot; consumers must derive only authorized target
+   * subtrees before external rendering.
    */
-  readonly awaitTerminal: (
-    ids: ReadonlyArray<string>,
-    until: SubagentAwaitUntil,
-    onUpdate?: (
-      runs: ReadonlyArray<SubagentRunView>,
-      projection?: ReadonlyArray<SubagentRunView>,
-    ) => void,
-  ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentError>;
   readonly withAwaitTerminalObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
@@ -714,8 +707,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       .validate(request, scriptedRoot)
       .pipe(
         Effect.andThen(
-          workspaces.withLaunch(request, (prepared) =>
-            launch.start(prepared, scriptedRoot, ownership),
+          workspaces.withLaunch(
+            request,
+            (prepared) => launch.start(prepared, scriptedRoot, ownership),
+            { runId: ownership?.runId },
           ),
         ),
       );
@@ -724,6 +719,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Effect.map((view) => observations.redactCompletionReport(view)),
     );
 
+  const rootChildLimit = profileService.capture.pipe(
+    Effect.map((snapshot) => snapshot.effectiveConfig.nesting.maxDirectChildren),
+  );
   const resume = makeRunResume({
     ...runContext,
     delivery,
@@ -735,9 +733,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     retainUncertainAssignment: assignment.retainUncertainAssignment,
     invalidateWorkspace: workspaces.invalidateForResume,
     heldLaunchSlots: workspaces.heldLaunchSlots,
-    currentChildLimit: profileService.capture.pipe(
-      Effect.map((snapshot) => snapshot.effectiveConfig.nesting.maxDirectChildren),
-    ),
+    currentChildLimit: rootChildLimit,
   });
 
   const writeClaims = makeRunWriteClaimControl(runContext);
@@ -766,9 +762,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       ),
     stop,
   });
-  const queuedStartRefused = makeQueuedStartCheck({
+  const queuedStarts = makeQueuedStartChecks({
     ...runContext,
     heldLaunchSlots: (caller) => workspaces.heldLaunchSlots(caller),
+    launchSlotHeldBy: workspaces.launchSlotHeldBy,
     withSessionNesting,
   });
 
@@ -842,10 +839,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspacePrepare: workspaces.workspacePrepare,
     workspaceIntegrate: workspaces.workspaceIntegrate,
     workspaceDiscard: workspaces.workspaceDiscard,
+    workspaceDiscardUnchanged: workspaces.workspaceDiscardUnchanged,
     // Bindings belong only to admitted writers, which can never have script origin.
     workspaceRevise: workspaces.revise((request, handle) =>
       runSessionOwned(ownerScope, Effect.void, () =>
-        workspaces.withLaunch(request, launch.start, handle),
+        workspaces.withLaunch(request, launch.start, { reuse: handle }),
       ),
     ),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
@@ -871,7 +869,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     waitForRevision,
     admissionRevision: admission.current,
     waitForAdmissionChange: admission.waitForChange,
-    queuedStartRefused,
+    queuedStartsAdmissible: queuedStarts.admissible,
+    queuedWriterConflict: queuedStarts.writerConflict,
+    rootChildLimit,
     workspaceBindingStatus: workspaces.workspaceBindingStatus,
   };
 

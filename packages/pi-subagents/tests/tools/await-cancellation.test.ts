@@ -16,6 +16,7 @@ import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
   nativeReportRequest,
   nativeReportServiceFixture,
+  awaitRuns,
 } from "../run/fixtures/service-harness.ts";
 import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { step } from "../support/effect-test.ts";
@@ -214,7 +215,7 @@ it.live(
       expect(activePresentations).toBe(1);
       // The real service owns the claim while waiting on the SubscriptionRef revision source.
       const conflict = yield* step(() =>
-        runtime.run(service.awaitTerminal([child.id], "all_finished").pipe(Effect.flip)),
+        runtime.run(awaitRuns(service, [child.id], "all_finished").pipe(Effect.flip)),
       );
       expect(conflict).toMatchObject({ code: "completion_claim_conflict" });
       controller.abort();

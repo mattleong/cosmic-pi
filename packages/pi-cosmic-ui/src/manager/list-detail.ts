@@ -165,19 +165,24 @@ export interface DetailWindow {
 }
 
 /**
+ * Where a detail window places its slice: `true` pins it to the newest lines; `false` records an
+ * explicit unfollow, so the viewed slice stays anchored even from the bottom (scroll 0) as new
+ * lines arrive; `"top"` shows the first lines, for text written most important first;
+ * `undefined` means the caller has no policy and scroll 0 keeps tracking the newest lines.
+ */
+export type DetailWindowPosition = boolean | "top" | undefined;
+
+/**
  * Computes the bottom-anchored detail window: reserves one position row on overflow (only
  * when more than one row exists — a one-row window always shows content and omits the
  * position label), keeps the viewed slice stable while new lines arrive above the fold, and
- * clamps the scroll. `follow: true` pins the window to the newest lines before computing;
- * `follow: false` records an explicit unfollow, so the viewed slice stays anchored even from
- * the bottom (scroll 0) as new lines arrive; `undefined` means the caller has no follow
- * policy and scroll 0 keeps tracking the newest lines.
+ * clamps the scroll. `follow` places the slice; see {@link DetailWindowPosition}.
  */
 export const computeDetailWindow = (options: {
   readonly lines: ReadonlyArray<string>;
   readonly height: number;
   readonly previous: DetailWindowState;
-  readonly follow?: boolean | undefined;
+  readonly follow?: DetailWindowPosition;
 }): DetailWindow => {
   const { lines, height, previous } = options;
   if (height <= 0) {
@@ -190,13 +195,13 @@ export const computeDetailWindow = (options: {
       overflow: undefined,
     };
   }
-  let scroll = options.follow ? 0 : previous.scroll;
+  let scroll = options.follow === true ? 0 : previous.scroll;
   const hasOverflow = lines.length > height;
   const bodyHeight = hasOverflow && height > 1 ? height - 1 : height;
   const anchored = options.follow === false || scroll > 0;
   if (anchored && lines.length > previous.lineCount) scroll += lines.length - previous.lineCount;
   const maxScroll = Math.max(0, lines.length - bodyHeight);
-  scroll = Math.min(scroll, maxScroll);
+  scroll = options.follow === "top" ? maxScroll : Math.min(scroll, maxScroll);
   const start = Math.max(0, lines.length - bodyHeight - scroll);
   return {
     visible: lines.slice(start, start + bodyHeight),

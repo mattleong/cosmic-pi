@@ -54,6 +54,47 @@ describe("activity presentation", () => {
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   });
+  it("keeps the start of a long workflow title beside its attention at narrow widths", () => {
+    const workflow = workflowRow("workflow", ["Build", "Test"], "running", "Test", {
+      title: "Migrate every billing service to the consolidated settings schema",
+      startedAt: 0,
+    });
+    const rows = [
+      workflow,
+      memberRow("built", workflow, "Build", "done", { startedAt: 0, endedAt: 1000 }),
+      ...[0, 1, 2].map((index) => memberRow(`failed-${index}`, workflow, "Test", "failed")),
+      memberRow("live", workflow, "Test", "running", { startedAt: 0 }),
+    ];
+    for (const width of [60, 80, 100]) {
+      const line = renderActivityWidget(rows, width, 8, { now: 90_000 })[0]!;
+      expect(line).toContain("Migrate");
+      expect(line).toMatch(/\b3\b/u);
+    }
+    const { component } = mountActivity(() => rows, { height: 20 });
+    for (const key of ["g", "g", "j", "h"]) component.handleInput(key);
+    for (const width of [80, 100, 140]) {
+      const line = component.render(width).find((text) => text.includes("Migrate"));
+      expect(line).toMatch(/\b3\b/u);
+    }
+  });
+  it("keeps every status part beside a short title when the whole row fits", () => {
+    const workflow = workflowRow("workflow", ["Plan", "Test"], "running", "Test", { startedAt: 0 });
+    const rows = [
+      workflow,
+      memberRow("running", workflow, "Test", "running", { startedAt: 0 }),
+      ...[0, 1].map((index) =>
+        memberRow(`done-${index}`, workflow, "Test", "done", { startedAt: 0, endedAt: 5 }),
+      ),
+      ...[0, 1, 2].map((index) =>
+        memberRow(`planned-${index}`, workflow, "Test", "pending", { planned: true }),
+      ),
+    ];
+    // Distinct running, finished and planned counts, without depending on wording or layout.
+    const line = renderActivityWidget(rows, 60, 12, { now: 10_000 }).find((text) =>
+      text.includes("Test"),
+    );
+    for (const count of [1, 2, 3]) expect(line).toMatch(new RegExp(`\\b${count}\\b`, "u"));
+  });
   it("keeps route metadata visible beside long titles on wide widgets", () => {
     for (const width of [100, 120, 160])
       expect(renderActivityWidget([routed], width, 8, { now: 60_000 }).join("\n")).toContain(
@@ -145,6 +186,43 @@ describe("activity presentation", () => {
     component.handleInput("r");
     deliveries[2]!(logs(45));
     expect(visibleLogs()).toEqual(scrolled);
+  });
+  it("says why work that never started was cancelled, on its row", () => {
+    const workflow = workflowRow("workflow", ["Build"], "running", "Build");
+    const refused = memberRow("refused", workflow, "Build", "cancelled", {
+      summary: "over budget",
+      endedAt: 5,
+    });
+    const { component } = mountActivity(() => [workflow, refused], { height: 20 });
+    const line = component.render(140).find((text) => text.includes("SUBAGENT refused"));
+    expect(line).toContain("over budget");
+  });
+  it("opens a newly selected item's detail at its first lines and lets the reader move it", () => {
+    const deliveries: Array<(text: string) => void> = [];
+    const text = Array.from({ length: 60 }, (_, index) => `line-${index}`).join("\n");
+    const { component } = mountActivity(() => [activityRow("work")], {
+      height: 16,
+      loadDetail: (_request, deliver) => {
+        deliveries.push(deliver);
+      },
+    });
+    const visible = () =>
+      component
+        .render(120)
+        .join("\n")
+        .match(/line-\d+/g) ?? [];
+    component.render(120);
+    component.handleInput("\r");
+    deliveries[0]!(text);
+    const opened = visible();
+    expect(opened[0]).toBe("line-0");
+    expect(opened).not.toContain("line-59");
+    // Later frames keep the place, and scrolling moves it without springing back.
+    expect(visible()).toEqual(opened);
+    component.handleInput("j");
+    const moved = visible();
+    expect(moved).not.toEqual(opened);
+    expect(visible()).toEqual(moved);
   });
   it("uses tree arrows before pane navigation and restores list navigation when selection disappears", () => {
     const parent = activityRow("parent");
@@ -385,6 +463,25 @@ describe("grouped activity interaction", () => {
     workflow = { ...workflow, revision: "2", actions: [] };
     component.update();
     component.handleInput("\r");
+    expect(closed).toEqual([
+      { key: workflow.key, revision: "1", generation: workflow.generation, actionId: "stop" },
+    ]);
+  });
+  it("confirms an action with the direct key that asked for it, never another key", () => {
+    const workflow = reviewWorkflow({
+      actions: [{ id: "stop", label: "Stop workflow", confirmation: "Stop this workflow?" }],
+    });
+    const { component, closed } = mountGrouped(() => [workflow]);
+    component.render(140);
+    component.handleInput("1");
+    component.handleInput("x");
+    component.handleInput("1");
+    expect(closed).toEqual([]);
+    component.handleInput("\u001b");
+    component.handleInput("x");
+    component.handleInput("i");
+    expect(closed).toEqual([]);
+    component.handleInput("x");
     expect(closed).toEqual([
       { key: workflow.key, revision: "1", generation: workflow.generation, actionId: "stop" },
     ]);

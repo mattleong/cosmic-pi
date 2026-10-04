@@ -353,7 +353,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 parentRunId,
                 yield* dependencies.currentChildLimit,
                 selected,
-                dependencies.heldLaunchSlots(parentRunId),
+                dependencies.heldLaunchSlots(parentRunId).total,
               );
               if (capacityFailure) return yield* capacityFailure;
             });

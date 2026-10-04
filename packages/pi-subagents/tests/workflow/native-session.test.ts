@@ -27,6 +27,7 @@ import { declaredCandidate } from "../fixtures/profiles.ts";
 import { step } from "../support/effect-test.ts";
 import {
   eventually,
+  memoryLocations,
   profileLayerFor,
   reportTask,
   script,
@@ -86,6 +87,7 @@ const workflowSession = Effect.gen(function* () {
           notifier = makeHostNotifier(pi);
           registerWorkflowTool(pi, {
             environment: { cwd: directory, projectTrusted: false },
+            savedWorkflowLocations: memoryLocations,
             run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
           });
         },

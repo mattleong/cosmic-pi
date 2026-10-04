@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import {
-  activityGlyph,
-  activityWidgetSections,
-  renderActivityWidget,
-} from "../src/activity/widget.ts";
+import { activityWidgetSections, renderActivityWidget } from "../src/activity/widget.ts";
+import { activityGlyph } from "../src/activity/row-line.ts";
 import { activityStatus } from "../src/activity/attention.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
 import { phaseRowId, type GroupedActivityRow } from "../src/activity/grouped-tree.ts";
@@ -22,6 +19,11 @@ const workflows = Array.from({ length: 20 }, (_, index) =>
 const grouped = workflows.map((workflow, index) => memberRow(`member-${index}`, workflow, "Build"));
 const members = (entries: readonly GroupedActivityRow[]) =>
   entries.filter((entry) => entry.type === "member");
+/** Members shown, counted beneath a shown failure, or counted in the omission notice. */
+const accountedMembers = (section: ReturnType<typeof activityWidgetSections>[number]) =>
+  members(section.entries).length +
+  section.hiddenSources +
+  [...section.failureOverflow.values()].reduce((total, count) => total + count, 0);
 const expectParentsFirst = (sections: ReturnType<typeof activityWidgetSections>) => {
   const seen = new Set(sections.map((section) => section.heading.id));
   for (const entry of sections.flatMap((section) => section.entries)) {
@@ -78,20 +80,96 @@ describe("grouped activity widget", () => {
       ["Verify", "pending"],
     ]);
     expect(section.entries.some((entry) => entry.id === done.key)).toBe(false);
-    expect(section.entries[0]).toMatchObject({ finishedPhases: 1 });
+    expect(section.entries[0]).toMatchObject({ phaseCounts: { done: 1 } });
     expect(section).toMatchObject({ hiddenSources: 0, hiddenPhases: 0, omittedRows: 0 });
   });
-  it("counts skipped phases after an early return as finished and leaves the widget when done", () => {
+  it("keeps a live workflow's failure in view and leaves the widget when the workflow returns", () => {
     const workflow = workflowRow("workflow", ["Inspect", "Fix", "Verify"], "running", "Inspect");
     const failed = memberRow("failed", workflow, "Inspect", "failed");
     const live = activityWidgetSections([workflow, failed], 8)[0]!;
     expect(live.entries[0]).toMatchObject({
-      finishedPhases: 0,
+      phaseCounts: { done: 0 },
       summary: { attention: { failed: 1 } },
     });
+    expect(live.entries.some((entry) => entry.id === failed.key)).toBe(true);
     const returned = withStatus(workflow, "done");
     expect(activityWidgetSections([returned, failed], 8)).toEqual([]);
     expect(activityWidgetHeight([returned, failed], 60)).toBe(8);
+  });
+  it("keeps a live workflow's latest failures in view and counts the rest until it ends", () => {
+    const workflow = workflowRow("workflow", ["Test"], "running", "Test");
+    const failures = Array.from({ length: 4 }, (_, index) =>
+      memberRow(`failed-${index}`, workflow, "Test", "failed", {
+        endedAt: index * 10,
+        summary: `reason-${index}`,
+      }),
+    );
+    const live = memberRow("live", workflow, "Test");
+    const rows = [workflow, ...failures, live];
+    const [section] = activityWidgetSections(rows, 20);
+    const shown = new Set(section!.entries.map((entry) => entry.id));
+    expect(failures.map((row) => shown.has(row.key))).toEqual([false, false, true, true]);
+    expect(shown.has(live.key)).toBe(true);
+    expect([...section!.failureOverflow.values()]).toEqual([2]);
+    expect(section).toMatchObject({ hiddenSources: 0, omittedRows: 0 });
+    expect(renderActivityWidget(rows, 100, 20).some((line) => line.includes("reason-3"))).toBe(
+      true,
+    );
+    expect(activityWidgetHeight(rows, 60)).toBeGreaterThan(activityWidgetHeight([workflow], 60));
+    // The compact widget beside an input dock budgets every line it draws, and keeps the workflow
+    // row with its failure count and the count of what it hides, capped failures included.
+    const [compact] = activityWidgetSections(rows, 3);
+    expect(
+      compact!.entries.length +
+        compact!.narrators.size +
+        compact!.failureOverflow.size +
+        Number(compact!.omittedRows > 0),
+    ).toBeLessThanOrEqual(3);
+    expect(accountedMembers(compact!)).toBe(5);
+    const dock = renderActivityWidget(rows, 80, 3);
+    expect(dock.some((line) => line.includes(workflow.title) && /\b4\b/u.test(line))).toBe(true);
+    expect(dock.some((line) => new RegExp(`\\b${compact!.hiddenSources}\\b`, "u").test(line))).toBe(
+      true,
+    );
+    // Once the workflow ends, its failures leave the widget even while a member still stops.
+    const ending = [withStatus(workflow, "cancelled"), ...failures, withStatus(live, "stopping")];
+    const [stopping] = activityWidgetSections(ending, 20);
+    expect(stopping!.entries.some((entry) => failures.some((row) => row.key === entry.id))).toBe(
+      false,
+    );
+    expect(stopping!.failureOverflow.size).toBe(0);
+    expect(activityWidgetSections([withStatus(workflow, "failed"), ...failures], 20)).toEqual([]);
+  });
+  it("counts each phase's capped failures within that phase", () => {
+    const workflow = workflowRow("workflow", ["Build", "Test"], "running", "Test");
+    const failed = (id: string, phase: string, endedAt: number) =>
+      memberRow(id, workflow, phase, "failed", { endedAt });
+    const live = memberRow("live", workflow, "Test");
+    const build = [failed("build-new", "Build", 50), failed("build-old", "Build", 10)];
+    const test = [failed("test-new", "Test", 40), failed("test-old", "Test", 5)];
+    const rows = [workflow, ...build, ...test, live];
+    const [section] = activityWidgetSections(rows, 20);
+    // The two latest failures stay; each phase's hidden one is counted beneath its own failure.
+    expect(section!.failureOverflow).toEqual(
+      new Map([
+        [build[0]!.key, 1],
+        [test[0]!.key, 1],
+      ]),
+    );
+    expect(accountedMembers(section!)).toBe(5);
+    // A phase whose failures are all past the cap counts them beneath its own row.
+    const older = [failed("build-a", "Build", 2), failed("build-b", "Build", 1)];
+    const [stale] = activityWidgetSections([workflow, ...older, ...test, live], 20);
+    expect(stale!.failureOverflow).toEqual(new Map([[phaseRowId(workflow.key, "Build"), 2]]));
+    // Collapsing that phase folds its count into the omitted work instead.
+    const collapsed = new Set([phaseRowId(workflow.key, "Build")]);
+    const [folded] = activityWidgetSections([workflow, ...older, ...test, live], 20, { collapsed });
+    expect(folded!.failureOverflow.size).toBe(0);
+    expect(accountedMembers(folded!)).toBe(5);
+    for (const budget of [3, 4, 5, 6]) {
+      const [tight] = activityWidgetSections(rows, budget);
+      expect(accountedMembers(tight!)).toBe(5);
+    }
   });
   it("prioritizes the complete phase checklist over an early phase's member detail", () => {
     const workflow = workflowRow(
@@ -108,6 +186,21 @@ describe("grouped activity widget", () => {
     expect(section).toMatchObject({ hiddenPhases: 0, hiddenSources: 19 });
     const short = activityWidgetSections([workflow], 3)[0]!;
     expect(short).toMatchObject({ hiddenPhases: 4, hiddenSources: 0, hiddenWorkflows: 0 });
+  });
+  it("shows a failing phase before earlier ones when only one phase fits", () => {
+    const workflow = workflowRow("workflow", ["Build", "Test", "Deploy"], "running", "Test");
+    const rows = [
+      workflow,
+      memberRow("built", workflow, "Build", "done", { startedAt: 0, endedAt: 1 }),
+      memberRow("tested", workflow, "Test", "failed", { startedAt: 1, endedAt: 2 }),
+    ];
+    const phases = (maxRows: number) =>
+      activityWidgetSections(rows, maxRows)[0]!.entries.flatMap((entry) =>
+        entry.type === "phase" ? [entry.title] : [],
+      );
+    expect(phases(3)).toEqual(["Test"]);
+    // With room for every phase, they keep their declared order.
+    expect(phases(12)).toEqual(["Build", "Test", "Deploy"]);
   });
   it("grows for checklists within terminal bounds, without enlarging for archived workflows", () => {
     const workflow = workflowRow(

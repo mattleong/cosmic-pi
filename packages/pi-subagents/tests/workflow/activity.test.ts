@@ -1,53 +1,44 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import { formatTokens } from "pi-cosmic-core";
 import { ActivitySnapshotSchema, type ActivityItem } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { vi } from "vitest";
 import {
   makeWorkflowActivitySource,
   registerSubagentActivity,
+} from "../../src/boundary/host-activity.ts";
+import {
   subagentActivityDetail,
   subagentActivityItems,
   type WorkflowActivitySnapshot,
-} from "../../src/boundary/host-activity.ts";
+} from "../../src/ui/run-activity.ts";
 import { makeSubagentProjectionBridge } from "../../src/boundary/host-ui.ts";
+import { workflowActivityItems } from "../../src/ui/workflow-activity.ts";
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
-import type {
-  WorkflowAgentView,
-  WorkflowPlannedAgent,
-  WorkflowRunView,
+import {
+  type WorkflowAgentView,
+  type WorkflowPlannedAgent,
+  type WorkflowRunView,
 } from "../../src/workflow/model.ts";
+import { makeWorkflowRuns } from "../../src/workflow/runs.ts";
+import { workflowAgentView, workflowRunView } from "../fixtures/run-view.ts";
 import { effectTest, step } from "../support/effect-test.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 
-const agent = (patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView => ({
-  callId: 1,
-  runId: "agent-r1-1",
-  label: "finder",
-  phase: "Find",
-  state: "queued",
-  queuedAt: 2,
-  ...patch,
-});
+const agent = (patch: Partial<WorkflowAgentView> = {}): WorkflowAgentView =>
+  workflowAgentView({ phase: "Find", ...patch });
 
-const workflow = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView => ({
-  id: "wf-a-1",
-  name: "review",
-  description: "Review the diff by dimension",
-  source: { kind: "inline" },
-  sha256: "digest",
-  phases: [{ title: "Find" }, { title: "Verify" }],
-  currentPhase: "Find",
-  state: "running",
-  startedAt: 1,
-  agents: [],
-  planned: [],
-  reused: 0,
-  logs: [],
-  outputTokens: 0,
-  args: { scope: "src" },
-  ...patch,
-});
+const workflow = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView =>
+  workflowRunView({
+    description: "Review the diff by dimension",
+    phases: [{ title: "Find" }, { title: "Verify" }],
+    currentPhase: "Find",
+    args: { scope: "src" },
+    ...patch,
+  });
 
 const plan = (index: number, patch: Partial<WorkflowPlannedAgent> = {}): WorkflowPlannedAgent => ({
   runId: `agent-r1-p${index}`,
@@ -70,6 +61,31 @@ const byId = (items: ReadonlyArray<ActivityItem>) =>
   new Map(items.map((item) => [item.id, item] as const));
 
 const isSnapshot = Schema.is(ActivitySnapshotSchema);
+
+/** The items the host was last published, as it holds them. */
+const hostItems = (transport: ReturnType<typeof fakeActivityHost>): ReadonlyArray<ActivityItem> => {
+  const published = transport.get()?.items;
+  return isSnapshot(published) ? published : [];
+};
+
+/** A registered provider over a workflow source, with a recording workflow action. */
+const registeredWorkflows = () => {
+  const transport = fakeActivityHost();
+  const bridge = makeSubagentProjectionBridge();
+  const workflows = makeWorkflowActivitySource();
+  bridge.publish({ revision: 1, runs: [] });
+  const actWorkflow = vi.fn(() => Promise.resolve());
+  const dispose = registerSubagentActivity({
+    events: transport.events,
+    sessionId: "session",
+    bridge,
+    workflows,
+    actWorkflow,
+    isCurrent: () => true,
+    act: () => Promise.reject(new Error("Unexpected subagent action")),
+  });
+  return { transport, workflows, actWorkflow, dispose };
+};
 
 describe("workflow activity", () => {
   it("nests owned runs under their phase and shows queued agents with a skip action", () => {
@@ -291,8 +307,8 @@ describe("workflow activity", () => {
       ),
     );
     expect(items[0]?.phases).toEqual([
-      { title: "Find", work: { items: 2, finished: 2, stopped: 1 } },
-      { title: "Verify", work: { items: 1, finished: 0, stopped: 0 } },
+      { title: "Find", work: { items: 2, finished: 2, stopped: 0, failed: 0, skipped: 1 } },
+      { title: "Verify", work: { items: 1, finished: 0, stopped: 0, failed: 0, skipped: 0 } },
     ]);
   });
 
@@ -319,12 +335,12 @@ describe("workflow activity", () => {
       )[0]?.phases;
     // Every Find call was reused, so Find is finished work rather than an empty, passed phase.
     expect(resumed("running")).toEqual([
-      { title: "Find", work: { items: 20, finished: 20, stopped: 0 } },
-      { title: "Verify", work: { items: 2, finished: 1, stopped: 0 } },
+      { title: "Find", work: { items: 20, finished: 20, stopped: 0, failed: 0, skipped: 0 } },
+      { title: "Verify", work: { items: 2, finished: 1, stopped: 0, failed: 0, skipped: 0 } },
     ]);
     expect(resumed("completed")).toEqual([
-      { title: "Find", work: { items: 20, finished: 20, stopped: 0 } },
-      { title: "Verify", work: { items: 2, finished: 2, stopped: 0 } },
+      { title: "Find", work: { items: 20, finished: 20, stopped: 0, failed: 0, skipped: 0 } },
+      { title: "Verify", work: { items: 2, finished: 2, stopped: 0, failed: 0, skipped: 0 } },
     ]);
   });
 
@@ -397,12 +413,31 @@ describe("workflow activity", () => {
     expect(detail).toContain("Review the diff by dimension");
     expect(detail).toContain("agent finder was skipped");
     expect(detail).toContain('"scope":"src"');
-    expect(subagentActivityDetail({ revision: 1, runs: [] }, "agent-r1-1", workflows)).toContain(
-      "finder",
-    );
+    // A queued agent has no subagent run, yet still has a detail of its own.
+    const queued = subagentActivityDetail({ revision: 1, runs: [] }, "agent-r1-1", workflows);
+    expect(queued).toBeDefined();
+    expect(queued).not.toBe(detail);
   });
 
-  it("publishes declared agents as inert planned rows beneath their phase", () => {
+  it("shows what a queued agent waits for, on its row and in its detail", () => {
+    const queued = (waiting: WorkflowAgentView["waiting"]) => {
+      const run = workflow({ agents: [agent({ waiting })] });
+      const row = items(run).find((item) => item.id === "agent-r1-1");
+      const detail = subagentActivityDetail({ revision: 1, runs: [] }, "agent-r1-1", snapshot(run));
+      return { summary: row?.summary, detail };
+    };
+    const writer = queued({ kind: "writer", runId: "agent-r1-9", name: "migrator", paused: true });
+    expect(writer.summary).toContain("migrator");
+    expect(writer.detail).toContain("migrator");
+    const summaries = new Set(
+      [undefined, { kind: "slot" as const }, { kind: "capacity" as const }].map(
+        (waiting) => queued(waiting).summary,
+      ),
+    );
+    expect(summaries.size).toBe(3);
+  });
+
+  it("publishes declared agents as planned rows beneath their phase, skippable while pending", () => {
     const planned = [plan(1, { profile: "reviewer" }), plan(2)];
     for (const [state, status] of [
       ["running", "pending"],
@@ -414,20 +449,35 @@ describe("workflow activity", () => {
       const rows = published.filter((item) => item.planned === true);
       expect(rows.map((item) => item.id)).toEqual(["agent-r1-p1", "agent-r1-p2"]);
       for (const row of rows) {
-        // Display only: never actionable, never under way, and never counted as phase work.
+        // Never under way and never counted as phase work.
         expect(row).toMatchObject({
           kind: "agent",
           status,
           phase: "Verify",
           parent: { providerId: "pi-subagents", itemId: "workflow:wf-a-1" },
         });
-        expect(row.actions ?? []).toEqual([]);
         expect(row.startedAt).toBeUndefined();
+        // The script can still call a pending one, so it can be skipped, after confirmation.
+        expect(row.actions ?? []).toEqual(
+          status === "pending"
+            ? [
+                expect.objectContaining({
+                  id: "skip",
+                  handoff: false,
+                  confirmation: expect.any(String),
+                }),
+              ]
+            : [],
+        );
       }
       expect(rows[0]?.profile).toBe("reviewer");
       expect(published[0]?.phases).toEqual([
-        { title: "Find", work: { items: 0, finished: 0, stopped: 0 } },
-        { title: "Verify", work: { items: 0, finished: 0, stopped: 0 }, planned: 2 },
+        { title: "Find", work: { items: 0, finished: 0, stopped: 0, failed: 0, skipped: 0 } },
+        {
+          title: "Verify",
+          work: { items: 0, finished: 0, stopped: 0, failed: 0, skipped: 0 },
+          planned: 2,
+        },
       ]);
     }
   });
@@ -508,6 +558,66 @@ describe("workflow activity", () => {
     expect(live.find((item) => item.planned === true)?.endedAt).toBeUndefined();
   });
 
+  it("shows a planned agent skipped before it started as skipped, and its call as skipped work", () => {
+    const skipped = plan(1, { skippedAt: 7 });
+    for (const state of ["running", "completed"] as const) {
+      const published = items(
+        workflow({
+          state,
+          planned: [skipped, plan(2)],
+          ...(state === "completed" && { endedAt: 9 }),
+        }),
+      );
+      expect(isSnapshot(published)).toBe(true);
+      // Its row is skipped work with the reason, no longer planned and no longer skippable.
+      const row = byId(published).get("agent-r1-p1");
+      expect(row).toMatchObject({
+        status: "cancelled",
+        skipped: true,
+        phase: "Verify",
+        endedAt: 7,
+      });
+      expect(row?.planned).toBeUndefined();
+      expect(row?.actions ?? []).toEqual([]);
+      expect(row?.summary).toBeTruthy();
+      // It never started, so until a call claims it, it is neither work nor planned in its phase.
+      expect(published[0]?.phases?.[1]).toMatchObject({ work: { items: 0 }, planned: 1 });
+    }
+    // The detail says it was skipped, apart from a planned agent that can still run.
+    const detail = (id: string) =>
+      subagentActivityDetail(
+        { revision: 1, runs: [] },
+        id,
+        snapshot(workflow({ planned: [skipped, plan(2)] })),
+      );
+    expect(detail("agent-r1-p1")).not.toBe(detail("agent-r1-p2"));
+    // Its claiming call keeps the row id, as skipped work too.
+    const claimed = items(
+      workflow({
+        agents: [
+          agent({
+            runId: "agent-r1-p1",
+            label: "verify:1",
+            phase: "Verify",
+            state: "skipped",
+            endedAt: 8,
+            reason: "skipped by the user before it started",
+          }),
+        ],
+        planned: [plan(2)],
+      }),
+    );
+    expect(byId(claimed).get("agent-r1-p1")).toMatchObject({
+      status: "cancelled",
+      skipped: true,
+      endedAt: 8,
+    });
+    expect(claimed[0]?.phases?.[1]).toMatchObject({
+      work: { items: 1, finished: 1, stopped: 0, skipped: 1 },
+      planned: 1,
+    });
+  });
+
   it("shows the newest log line as the workflow's narrator summary", () => {
     expect(items(workflow({ lastLog: "Reviewing 4 call sites" }))[0]?.summary).toBe(
       "Reviewing 4 call sites",
@@ -537,14 +647,18 @@ describe("workflow activity", () => {
   it("explains a planned agent in the detail pane until its call claims it", () => {
     const detail = (run: WorkflowRunView) =>
       subagentActivityDetail({ revision: 1, runs: [] }, "agent-r1-p1", snapshot(run));
-    const live = detail(workflow({ planned: [plan(1, { profile: "reviewer" })] }));
-    expect(live).toContain("verify:1");
-    expect(live).toContain("reviewer");
+    const live = workflow({ planned: [plan(1, { profile: "reviewer" })] });
+    // Its row places it in its phase with its profile; the detail says whether it can still run.
+    expect(byId(items(live)).get("agent-r1-p1")).toMatchObject({
+      phase: "Verify",
+      profile: "reviewer",
+    });
+    expect(detail(live)).toBeDefined();
     const ended = detail(
       workflow({ state: "completed", endedAt: 9, planned: [plan(1, { profile: "reviewer" })] }),
     );
-    expect(ended).toContain("verify:1");
-    expect(ended).not.toBe(live);
+    expect(ended).toBeDefined();
+    expect(ended).not.toBe(detail(live));
     expect(
       subagentActivityDetail(
         { revision: 1, runs: [] },
@@ -554,29 +668,37 @@ describe("workflow activity", () => {
     ).toContain("verify:1");
   });
 
-  effectTest("routes skip and workflow stop to the workflow service", function* () {
-    const transport = fakeActivityHost();
-    const bridge = makeSubagentProjectionBridge();
-    const workflows = makeWorkflowActivitySource();
-    bridge.publish({ revision: 1, runs: [] });
-    const actWorkflow = vi.fn(() => Promise.resolve());
-    const dispose = registerSubagentActivity({
-      events: transport.events,
-      sessionId: "session",
-      bridge,
-      workflows,
-      actWorkflow,
-      isCurrent: () => true,
-      act: () => Promise.reject(new Error("Unexpected subagent action")),
-    });
-    workflows.publish([workflow({ agents: [agent()] })]);
-    const items = subagentActivityItems(
-      bridge.get(),
-      bridge.getActivityPresentation(),
-      workflows.get(),
+  effectTest("routes a planned row's skip to the workflow service by its run id", function* () {
+    const { transport, workflows, actWorkflow, dispose } = registeredWorkflows();
+    workflows.publish([workflow({ planned: [plan(1)] })]);
+    const shown = byId(hostItems(transport)).get("agent-r1-p1")!;
+    expect(shown.planned).toBe(true);
+    const signal = new AbortController().signal;
+    const invoke = transport.capability()!.invoke!;
+    yield* step(() => invoke(shown.id, "skip", shown.revision, signal));
+    expect(actWorkflow.mock.calls).toEqual([["skip", "agent-r1-p1", signal]]);
+    // Once its call claims it, the planned row's revision is gone, so a skip offered on it is
+    // refused instead of reaching the service.
+    workflows.publish([
+      workflow({ agents: [agent({ runId: "agent-r1-p1", label: "verify:1", phase: "Verify" })] }),
+    ]);
+    expect(byId(hostItems(transport)).get(shown.id)?.revision).not.toBe(shown.revision);
+    yield* step(() => expect(invoke(shown.id, "skip", shown.revision, signal)).rejects.toThrow());
+    // And a skipped one offers no skip at all.
+    workflows.publish([workflow({ planned: [plan(1, { skippedAt: 3 })] })]);
+    const skipped = byId(hostItems(transport)).get("agent-r1-p1")!;
+    yield* step(() =>
+      expect(invoke(skipped.id, "skip", skipped.revision, signal)).rejects.toThrow(),
     );
-    const published = transport.get()?.items;
-    expect(Array.isArray(published) && published.length).toBe(2);
+    expect(actWorkflow).toHaveBeenCalledTimes(1);
+    dispose();
+  });
+
+  effectTest("routes skip and workflow stop to the workflow service", function* () {
+    const { transport, workflows, actWorkflow, dispose } = registeredWorkflows();
+    workflows.publish([workflow({ agents: [agent()] })]);
+    const items = hostItems(transport);
+    expect(items).toHaveLength(2);
     const signal = new AbortController().signal;
     const invoke = transport.capability()!.invoke!;
     const placeholder = items.find((item) => item.id === "agent-r1-1")!;
@@ -588,5 +710,332 @@ describe("workflow activity", () => {
       ["stop", "wf-a-1", signal],
     ]);
     dispose();
+  });
+  describe("calls that settled without a subagent run", () => {
+    const couldNotStart = agent({
+      state: "failed",
+      reason: "couldn't start: no eligible route\nsecond line of the error",
+      endedAt: 5,
+    });
+    const skipped = agent({
+      callId: 2,
+      runId: "agent-r1-2",
+      label: "checker",
+      state: "skipped",
+      reason: "skipped by the user",
+      endedAt: 6,
+    });
+    const failedMember = agent({
+      callId: 3,
+      runId: "agent-r1-3",
+      label: "reader",
+      state: "failed",
+      reason: "Run failed.",
+      startedAt: 3,
+      endedAt: 7,
+    });
+    const memberRun = view({
+      ...owned("agent-r1-3"),
+      state: "failed",
+      endedAt: 7,
+      error: "Backend exited with code 1\nstack line",
+    });
+
+    it("keeps a terminal row with its reason, and its phase reports the failure", () => {
+      for (const state of ["running", "completed"] as const) {
+        const published = subagentActivityItems(
+          { revision: 1, runs: [memberRun] },
+          undefined,
+          snapshot(
+            workflow({
+              state,
+              ...(state === "completed" && { endedAt: 9 }),
+              agents: [skipped, couldNotStart, failedMember],
+            }),
+          ),
+        );
+        expect(isSnapshot(published)).toBe(true);
+        const found = byId(published);
+        const parent = { providerId: "pi-subagents", itemId: "workflow:wf-a-1" };
+        expect(found.get("agent-r1-1")).toMatchObject({ status: "failed", parent, phase: "Find" });
+        expect(found.get("agent-r1-1")?.summary).toContain("no eligible route");
+        expect(found.get("agent-r1-1")?.summary).not.toContain("second line");
+        expect(found.get("agent-r1-1")?.actions ?? []).toEqual([]);
+        expect(found.get("agent-r1-2")).toMatchObject({
+          status: "cancelled",
+          skipped: true,
+          parent,
+        });
+        expect(found.get("agent-r1-2")?.summary).toContain("skipped by the user");
+        // Failures come first, so a cap or the host's history retention drops them last.
+        const order = published.map((item) => item.id);
+        expect(order.indexOf("agent-r1-1")).toBeLessThan(order.indexOf("agent-r1-2"));
+        // A member that failed after starting keeps its own run's row, with a short reason.
+        expect(published.filter((item) => item.id === "agent-r1-3")).toHaveLength(1);
+        expect(found.get("agent-r1-3")).toMatchObject({ status: "failed" });
+        expect(found.get("agent-r1-3")?.summary).toContain("Run failed.");
+        // Every failed call counts, started or not, so the phase stays failed without rows.
+        expect(published[0]?.phases?.[0]).toMatchObject({
+          title: "Find",
+          work: { items: 3, finished: 3, stopped: 0, failed: 2, skipped: 1 },
+        });
+      }
+    });
+
+    it("drops a call's reason once its run works again after the workflow ended", () => {
+      const finished = workflow({ state: "completed", endedAt: 9, agents: [failedMember] });
+      const resumed = (state: SubagentRunView["state"], endedAt?: number) =>
+        byId(
+          subagentActivityItems(
+            { revision: 1, runs: [view({ ...memberRun, state, error: undefined, endedAt })] },
+            undefined,
+            snapshot(finished),
+          ),
+        ).get("agent-r1-3")?.summary;
+      expect(resumed("running") ?? "").not.toContain("Run failed.");
+      expect(resumed("completed", 40) ?? "").not.toContain("Run failed.");
+      expect(resumed("failed", 7)).toContain("Run failed.");
+    });
+
+    it("says why the call returned null, in full in the detail when its row clips it", () => {
+      const workflows = snapshot(workflow({ agents: [couldNotStart, skipped] }));
+      const detail = (id: string) =>
+        subagentActivityDetail({ revision: 1, runs: [] }, id, workflows);
+      expect(detail("agent-r1-1")).toContain("second line of the error");
+      expect(
+        byId(items(workflow({ agents: [couldNotStart, skipped] }))).get("agent-r1-2"),
+      ).toMatchObject({
+        summary: "skipped by the user",
+      });
+      expect(detail("agent-r1-2")).toBeDefined();
+    });
+
+    it("bounds settled rows per workflow, keeping failures and then the newest", () => {
+      const settled = Array.from({ length: 40 }, (_, index) =>
+        agent({
+          callId: index + 1,
+          runId: `agent-r1-${index + 1}`,
+          state: index % 4 === 0 ? "failed" : "skipped",
+          reason: index % 4 === 0 ? "couldn't start: pool paused" : "skipped by the user",
+          endedAt: 100 + index,
+        }),
+      );
+      const published = items(workflow({ agents: settled }));
+      const rows = published.filter((item) => item.kind === "agent");
+      expect(rows.length).toBeLessThan(settled.length);
+      const failed = settled
+        .filter((entry) => entry.state === "failed")
+        .map((entry) => entry.runId);
+      expect(rows.filter((item) => item.status === "failed").map((item) => item.id)).toEqual(
+        failed.toReversed(),
+      );
+      // The oldest skipped calls are the ones dropped.
+      const shown = new Set(rows.map((item) => item.id));
+      const skippedShown = settled.filter(
+        (entry) => entry.state === "skipped" && shown.has(entry.runId),
+      );
+      const newestSkipped = settled
+        .filter((entry) => entry.state === "skipped")
+        .slice(-skippedShown.length);
+      expect(skippedShown).toEqual(newestSkipped);
+      expect(published[0]?.phases?.[0]?.work).toEqual({
+        items: 40,
+        finished: 40,
+        stopped: 0,
+        failed: 10,
+        skipped: 30,
+      });
+      const many = items(
+        ...Array.from({ length: 40 }, (_, run) =>
+          workflow({
+            id: `wf-a-${run}`,
+            state: "completed",
+            endedAt: 10 + run,
+            agents: settled.map((entry) => ({ ...entry, runId: `${entry.runId}-${run}` })),
+          }),
+        ),
+      );
+      expect(isSnapshot(many)).toBe(true);
+    });
+
+    it("shows a member whose run completed but whose call failed as failed", () => {
+      const contract = agent({
+        callId: 4,
+        runId: "agent-r1-4",
+        label: "parser",
+        state: "failed",
+        reason: "The structured result wasn't valid JSON.",
+        startedAt: 3,
+        endedAt: 8,
+      });
+      const completed = view({ ...owned("agent-r1-4"), state: "completed", endedAt: 8 });
+      const published = subagentActivityItems(
+        { revision: 1, runs: [completed] },
+        undefined,
+        snapshot(workflow({ agents: [contract] })),
+      );
+      // The row agrees with its phase, and the widget keeps it while the workflow runs.
+      const row = byId(published).get("agent-r1-4");
+      expect(row).toMatchObject({ status: "failed" });
+      expect(row?.summary).toContain("wasn't valid JSON");
+      expect(published[0]?.phases?.[0]?.work).toMatchObject({ failed: 1 });
+    });
+
+    it("gives a running workflow's plan its slots before finished workflows' history", () => {
+      const history = Array.from({ length: 8 }, (_, index) =>
+        agent({
+          callId: index + 1,
+          runId: `agent-r0-${index + 1}`,
+          state: "stopped",
+          reason: "the workflow stopped",
+          endedAt: 5 + index,
+        }),
+      );
+      const published = workflowActivityItems({
+        runs: [
+          workflow({ id: "wf-a-0", state: "stopped", endedAt: 20, agents: history }),
+          workflow({ planned: [plan(1), plan(2)] }),
+        ],
+        visibleRunIds: new Set(),
+        providerId: "pi-subagents",
+        budget: 4,
+      });
+      expect(published.map((item) => item.id)).toEqual([
+        "workflow:wf-a-1",
+        "workflow:wf-a-0",
+        "agent-r1-p1",
+        "agent-r1-p2",
+      ]);
+    });
+  });
+
+  describe("actions between coalesced publishes", () => {
+    effectTest(
+      "acts on the row Activity last showed while later changes are held back",
+      function* () {
+        const { transport, workflows, actWorkflow, dispose } = registeredWorkflows();
+        const scope = yield* Scope.make();
+        const runs = yield* makeWorkflowRuns(workflows).pipe(Scope.provide(scope));
+        yield* runs.mutate(() => [workflow({ agents: [agent()], lastLog: "line 1" })]);
+        const shown = byId(hostItems(transport));
+        const row = shown.get("workflow:wf-a-1")!;
+        const placeholder = shown.get("agent-r1-1")!;
+        // The log line changes the workflow's row, but its publish is still held back.
+        yield* runs.recordEvent("wf-a-1", { type: "log", message: "line 2" });
+        expect(byId(hostItems(transport)).get(row.id)?.revision).toBe(row.revision);
+        const signal = new AbortController().signal;
+        const capability = transport.capability()!;
+        const detail = yield* step(() => capability.getDetail!(row.id, row.revision, signal));
+        expect(detail).toContain("Review the diff by dimension");
+        yield* step(() => capability.invoke!(placeholder.id, "skip", placeholder.revision, signal));
+        yield* step(() => capability.invoke!(row.id, "stop", row.revision, signal));
+        expect(actWorkflow.mock.calls).toEqual([
+          ["skip", "agent-r1-1", signal],
+          ["stop", "wf-a-1", signal],
+        ]);
+        yield* Scope.close(scope, Exit.void);
+        dispose();
+      },
+    );
+
+    effectTest("refuses a revision from before the last publish", function* () {
+      const { transport, workflows, actWorkflow, dispose } = registeredWorkflows();
+      workflows.publish([workflow({ lastLog: "line 1" })]);
+      const stale = byId(hostItems(transport)).get("workflow:wf-a-1")!;
+      workflows.publish([workflow({ lastLog: "line 2" })]);
+      expect(byId(hostItems(transport)).get(stale.id)?.revision).not.toBe(stale.revision);
+      const signal = new AbortController().signal;
+      const capability = transport.capability()!;
+      yield* step(() =>
+        expect(capability.invoke!(stale.id, "stop", stale.revision, signal)).rejects.toThrow(),
+      );
+      yield* step(() =>
+        expect(capability.getDetail!(stale.id, stale.revision, signal)).rejects.toThrow(),
+      );
+      expect(actWorkflow).not.toHaveBeenCalled();
+      dispose();
+    });
+  });
+
+  it("opens an agent's detail with why its call failed and what it found, technical facts last", () => {
+    const member = view({
+      ...owned("agent-r1-3", "Verify"),
+      name: "verifier",
+      state: "completed",
+      endedAt: 61_000,
+      profile: "reviewer",
+      task: "Verify the finding in src/auth.ts",
+      finalText: "The finding holds: tokens are reused.",
+      sessionEvents: [
+        { type: "tool", toolCallId: "t1", toolName: "read", state: "completed", startedAt: 2 },
+      ],
+      usage: { input: 9_000, output: 3_000, cacheRead: 0, cacheWrite: 0, totalTokens: 12_000 },
+      toolUses: 4,
+    });
+    const workflows = snapshot(
+      workflow({
+        agents: [
+          agent({
+            runId: "agent-r1-3",
+            label: "verifier",
+            phase: "Verify",
+            state: "failed",
+            reason: "The structured result wasn't valid JSON.",
+            startedAt: 1,
+            endedAt: 61_000,
+          }),
+        ],
+      }),
+    );
+    const detail =
+      subagentActivityDetail({ revision: 1, runs: [member] }, "agent-r1-3", workflows, 90_000) ??
+      "";
+    // Activity shows its state, profile, workflow, phase and summary beside the detail.
+    for (const fact of [
+      "The finding holds",
+      "Verify the finding in src/auth.ts",
+      formatTokens(12_000),
+      "agent-r1-3",
+      "/project",
+    ])
+      expect(detail).toContain(fact);
+    // The row draws the failed state itself, so its summary is the reason alone.
+    const row = byId(subagentActivityItems({ revision: 1, runs: [member] }, undefined, workflows));
+    expect(row.get("agent-r1-3")).toMatchObject({
+      status: "failed",
+      summary: "The structured result wasn't valid JSON.",
+    });
+    // What the agent found comes before the technical facts.
+    expect(detail.indexOf("The finding holds")).toBeLessThan(detail.indexOf("agent-r1-3"));
+    expect(detail.indexOf("The finding holds")).toBeLessThan(detail.indexOf("/project"));
+  });
+
+  it("lists a workflow's failed agents first in its detail, beside its script and journal", () => {
+    const run = workflow({
+      scriptPath: "/runs/wf-a-1/script.js",
+      journalPath: "/runs/wf-a-1/journal.jsonl",
+      agents: [
+        agent({ label: "finder", state: "completed", startedAt: 2, endedAt: 9 }),
+        agent({
+          callId: 2,
+          runId: "agent-r1-2",
+          label: "checker",
+          phase: "Verify",
+          state: "failed",
+          reason: "couldn't start: no eligible route",
+          endedAt: 10,
+        }),
+      ],
+    });
+    const detail = subagentActivityDetail(
+      { revision: 1, runs: [] },
+      "workflow:wf-a-1",
+      snapshot(run),
+    );
+    expect(detail).toContain("/runs/wf-a-1/script.js");
+    expect(detail).toContain("/runs/wf-a-1/journal.jsonl");
+    expect(detail).toContain("no eligible route");
+    const agents = detail?.slice(detail.indexOf("checker")) ?? "";
+    expect(agents).toContain("finder");
   });
 });

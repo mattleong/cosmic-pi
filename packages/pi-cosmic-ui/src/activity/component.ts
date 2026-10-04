@@ -4,8 +4,14 @@ import type {
   FullScreenKeymapOptions,
   FullScreenSelectionKeybindingId,
 } from "../manager/keymap.ts";
-import { listDetailMotionFromAction } from "../manager/list-detail.ts";
+import { listDetailMotionFromAction, type DetailWindowPosition } from "../manager/list-detail.ts";
 import { ListDetailShell } from "../manager/list-detail-shell.ts";
+import { ACTIVITY_LIMITS } from "./limits.ts";
+import {
+  ACTIVITY_ACTION_PAGE_SIZE,
+  activityActionForKey,
+  activityActionPages,
+} from "./action-keys.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
 import { needsYou, type ActivityTreeOptions } from "./tree.ts";
@@ -69,14 +75,6 @@ const sameAction = (left: ActivityAction, right: ActivityAction) =>
   left.label === right.label &&
   left.confirmation === right.confirmation &&
   handsOff(left) === handsOff(right);
-const ACTION_ALIASES = new Map([
-  ["x", ["stop", "skip"]],
-  ["i", ["interrupt"]],
-  ["u", ["resume"]],
-  ["m", ["reply", "message"]],
-  ["e", ["rename"]],
-  ["c", ["clear", "clear-finished"]],
-]);
 
 /** Shared state is presentation only; source actions and fetching stay at the host boundary. */
 export class ActivityComponent {
@@ -88,6 +86,12 @@ export class ActivityComponent {
   private cancellationPending = false;
   private closed = false;
   private preserveDetailPosition = false;
+  /**
+   * A newly selected item's detail opens at its first lines, which producers write most
+   * important first, once its loaded text has rendered there; the slice then stays anchored.
+   */
+  private openAtTop = false;
+  private anchored = false;
   private follow = false;
   private technical = false;
   private initialized = false;
@@ -95,8 +99,16 @@ export class ActivityComponent {
   private requested: ActivityDetailRequest | undefined;
   private displayed: { readonly row: ActivityRow; readonly actionPage: number } | undefined;
   private loaded: { readonly request: ActivityDetailRequest; readonly text: string } | undefined;
+  /**
+   * An action waiting for confirmation, and the direct key that asked for it, which confirms it
+   * too; a number key doesn't, so a double press can't confirm by accident.
+   */
   private confirmation:
-    | { readonly request: ActivityActionRequest; readonly action: ActivityAction }
+    | {
+        readonly request: ActivityActionRequest;
+        readonly action: ActivityAction;
+        readonly key: string | undefined;
+      }
     | undefined;
   private fullTree: TreeCache | undefined;
   private visibleTree: VisibleCache | undefined;
@@ -195,6 +207,8 @@ export class ActivityComponent {
       this.follow = false;
       this.actionPage = 0;
       this.preserveDetailPosition = false;
+      this.openAtTop = true;
+      this.anchored = false;
       this.cancellationPending ||= this.requested !== undefined;
       this.requested = undefined;
       this.detailRequestSequence++;
@@ -260,8 +274,10 @@ export class ActivityComponent {
         current.generation !== request.generation
       )
         return;
-      this.loaded = { request, text: text.slice(0, 16384) };
+      this.loaded = { request, text: text.slice(0, ACTIVITY_LIMITS.detail) };
       this.preserveDetailPosition = preservePosition;
+      // A refresh keeps the reader's place instead of returning to the top.
+      if (preservePosition) this.openAtTop = false;
       this.options.requestRender();
     });
   }
@@ -288,8 +304,14 @@ export class ActivityComponent {
       const result = this.shell.keymap.resolve(data, {
         mode: "confirmation",
         matchesKeybinding: this.options.matchesKeybinding,
+        reservedKeys: activityShortcuts,
       });
-      if (result?._tag === "Action" && result.action === "confirm") {
+      if (
+        (result?._tag === "Action" && result.action === "confirm") ||
+        (result?._tag === "Shortcut" &&
+          this.confirmation.key !== undefined &&
+          result.key === this.confirmation.key)
+      ) {
         const { request, action } = this.confirmation;
         this.confirmation = undefined;
         this.dispatch(request, action);
@@ -343,8 +365,7 @@ export class ActivityComponent {
           waiting[(waiting.findIndex((item) => item.key === row?.key) + 1) % waiting.length];
         if (urgent) this.reveal(urgent.key);
       } else if (result.key === "a")
-        this.actionPage =
-          (this.actionPage + 1) % Math.max(1, Math.ceil((row?.actions?.length ?? 0) / 9));
+        this.actionPage = (this.actionPage + 1) % activityActionPages(row?.actions);
       else if (result.key === "r" && row) this.loadDetails(row, !this.follow);
       else if (result.key === "t" && row) this.technical = !this.technical;
       else if (result.key === "f" && row && !row.retained) {
@@ -358,10 +379,10 @@ export class ActivityComponent {
         const action =
           shown?.row.key === row.key && shown.row.generation === row.generation
             ? /^[1-9]$/.test(result.key)
-              ? shown.row.actions?.[shown.actionPage * 9 + Number(result.key) - 1]
-              : ACTION_ALIASES.get(result.key)?.flatMap(
-                  (id) => shown.row.actions?.filter((action) => action.id === id) ?? [],
-                )[0]
+              ? shown.row.actions?.[
+                  shown.actionPage * ACTIVITY_ACTION_PAGE_SIZE + Number(result.key) - 1
+                ]
+              : activityActionForKey(shown.row.actions ?? [], result.key)
             : undefined;
         if (action && shown) {
           const request = {
@@ -371,7 +392,12 @@ export class ActivityComponent {
             actionId: action.id,
           };
           if (handsOff(action) || !this.options.invoke) this.cancelDetails();
-          if (action.confirmation !== undefined) this.confirmation = { request, action };
+          if (action.confirmation !== undefined)
+            this.confirmation = {
+              request,
+              action,
+              key: /^[1-9]$/.test(result.key) ? undefined : result.key,
+            };
           else this.dispatch(request, action);
         }
       }
@@ -394,6 +420,7 @@ export class ActivityComponent {
               changed.state.selected,
               entries.map((entry) => entry.id),
             );
+          if (changed.scrolledDetail) this.keepDetailPlace();
           if (changed.scrolledDetail && this.shell.state.detailScroll > 0 && this.follow) {
             this.follow = false;
             this.cancelDetails();
@@ -406,15 +433,24 @@ export class ActivityComponent {
     this.flushCancellation();
     this.options.requestRender();
   }
+  /** The reader moved the detail, so it stays where they put it. */
+  private keepDetailPlace(): void {
+    this.openAtTop = false;
+    this.anchored = true;
+  }
+  /** Where the detail window places its slice this frame. */
+  private detailPosition(): DetailWindowPosition {
+    if (this.follow) return true;
+    if (this.openAtTop) return "top";
+    return this.preserveDetailPosition || this.anchored ? false : undefined;
+  }
   invalidate(): void {}
   render(width: number): string[] {
     if (width <= 0) return [];
     const { entries, selected } = this.selected();
     const row = source(selected);
-    this.actionPage = Math.min(
-      this.actionPage,
-      Math.max(0, Math.ceil((row?.actions?.length ?? 0) / 9) - 1),
-    );
+    const detailPosition = this.detailPosition();
+    this.actionPage = Math.min(this.actionPage, activityActionPages(row?.actions) - 1);
     this.displayed = row && !row.retained ? { row, actionPage: this.actionPage } : undefined;
     const lines = renderGroupedActivity(
       this.options,
@@ -425,14 +461,26 @@ export class ActivityComponent {
         alternateHelp: this.alternateHelp,
         actionPage: this.actionPage,
         loaded: this.loaded,
-        confirmation: this.confirmation?.action.confirmation,
+        confirmation: this.confirmation && {
+          text: this.confirmation.action.confirmation ?? "",
+          label: this.confirmation.action.label,
+          key: this.confirmation.key,
+        },
         follow: this.follow,
         technical: this.technical,
-        preserveDetailPosition: this.preserveDetailPosition,
+        detailPosition,
       },
       width,
     );
     if (this.options.height() > 3) this.preserveDetailPosition = false;
+    // The selected item's loaded text has now opened at its top.
+    if (
+      detailPosition === "top" &&
+      row &&
+      this.loaded?.request.key === row.key &&
+      this.loaded.request.generation === row.generation
+    )
+      this.keepDetailPlace();
     return lines;
   }
 }

@@ -6,42 +6,50 @@ import {
   type ListDetailField,
 } from "../manager/list-detail-shell.ts";
 import { managerTone } from "../manager/style.ts";
+import { ACTIVITY_ACTION_PAGE_SIZE, activityActionPages } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
-import { groupSummaryLabels, type GroupedActivityRow, type GroupSummary } from "./grouped-tree.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
-import { activityElapsed, activityOwnerLabel, activityType } from "./widget.ts";
+import type { GroupedActivityRow, GroupSummary, PhaseCounts } from "./grouped-tree.ts";
+import {
+  phaseCountLabels,
+  plannedLabels,
+  workflowMemberSpan,
+  workStateLabels,
+} from "./group-summary.ts";
+import type { ActivityRow } from "./model.ts";
+import { activityElapsed, activityType } from "./row-line.ts";
+import { activityOwnerLabel } from "./widget.ts";
 
-/** Wall span across started members, not summed effort; queued members have not started. */
-export function workflowMemberSpan(
-  members: readonly ActivityRow[],
-  now: number | undefined,
-): number | undefined {
-  let start = Infinity;
-  let end = 0;
-  for (const row of members) {
-    if (row.startedAt === undefined) continue;
-    const until = isFinished(row) ? row.endedAt : now;
-    if (until === undefined) return undefined;
-    start = Math.min(start, row.startedAt);
-    end = Math.max(end, until);
-  }
-  return start === Infinity ? undefined : Math.max(0, end - start);
-}
-
+/** Optional fields only appear with a value. */
+const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
+  values.length ? [{ label, value: values.join(" · ") }] : [];
+/** Agents in each state, then the declarations and waits that are not work states. */
 const memberFields = (summary: GroupSummary): ListDetailField[] => [
   {
-    label: "Members",
-    value: `${countLabel(summary.items, "member")} · ${summary.terminal} finished`,
+    label: "Agents",
+    value: [countLabel(summary.items, "agent"), ...workStateLabels(summary)].join(" · "),
   },
-  { label: "Progress", value: groupSummaryLabels(summary).join(" · ") || "None" },
+  ...optionalField("Progress", [
+    ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
+    ...plannedLabels(summary),
+  ]),
 ];
+/** Only a done phase is finished, matching the workflow's finished-phase count. */
 const PHASE_STATES = {
   pending: "Not started",
   running: "Running",
   done: "Finished",
+  failed: "Failed",
   stopped: "Stopped",
   skipped: "Skipped",
 } as const;
+/**
+ * Done phases out of all phases, then failed, stopped and skipped ones. Rows leave failed phases
+ * to their agents' failure notices; here the "Phases" label keeps the two counts apart.
+ */
+const phaseDetailLabels = (counts: PhaseCounts, total: number): string[] => {
+  const [finished = "", ...settled] = phaseCountLabels(counts, total, "finished");
+  return [finished, ...(counts.failed ? [`${counts.failed} failed`] : []), ...settled];
+};
 
 interface GroupedDetailOptions {
   readonly selected: GroupedActivityRow | undefined;
@@ -69,9 +77,10 @@ export function groupedDetail(options: GroupedDetailOptions): string {
       selected.context,
       breadcrumb,
       [
-        ...(phases.length
-          ? [{ label: "Phases", value: `${selected.finishedPhases}/${phases.length} finished` }]
-          : []),
+        ...optionalField(
+          "Phases",
+          phases.length ? phaseDetailLabels(selected.phaseCounts, phases.length) : [],
+        ),
         ...(selected.row.phase ? [{ label: "Current phase", value: selected.row.phase }] : []),
         ...memberFields(selected.summary),
         ...(narrator ? [{ label: "Latest", value: narrator }] : []),
@@ -86,33 +95,27 @@ export function groupedDetail(options: GroupedDetailOptions): string {
       heading,
       breadcrumb,
       ...detailFieldRows(theme, [
-        { label: "Sources", value: `${summary.items} items · ${summary.terminal} finished` },
-        { label: "Progress", value: groupSummaryLabels(summary).join(" · ") || "None" },
+        {
+          label: "Sources",
+          value: [countLabel(summary.items, "item"), ...workStateLabels(summary)].join(" · "),
+        },
+        ...optionalField("Progress", [
+          ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
+          ...plannedLabels(summary),
+        ]),
       ]),
       "Select a source to inspect its details and available actions.",
     ].join("\n");
-  const members = options.rows.filter((row) => {
-    const phase = row.phase;
-    return (
-      phase === selected.phase.title &&
-      row.parent?.providerId === selected.workflow.providerId &&
-      row.parent.itemId === selected.workflow.id
-    );
-  });
-  const span = workflowMemberSpan(members, options.now);
-  // Producer counts include members and planned work that are no longer, or never, shown; the
-  // summary already carries the planned count.
-  const work = selected.phase.work;
+  const span = workflowMemberSpan(selected.members, options.now);
+  // The summary already carries the producer's counts, which include members and planned work
+  // that are no longer, or never, shown.
   return [
     heading,
     breadcrumb,
     ...detailFieldRows(theme, [
       { label: "State", value: PHASE_STATES[selected.state] },
-      ...memberFields({
-        ...summary,
-        ...(work && { items: work.items, terminal: work.finished }),
-      }),
-      ...(span === undefined ? [] : [{ label: "Member span", value: formatElapsed(span) }]),
+      ...memberFields(summary),
+      ...optionalField("Elapsed", span === undefined ? [] : [formatElapsed(span)]),
     ]),
     selected.phase.detail ?? "",
   ]
@@ -161,9 +164,18 @@ function sourceDetail(
       : []),
     options.loaded ?? row.detail ?? "",
     row.omittedChildren ? `${row.omittedChildren}+ earlier finished items hidden` : "",
-    ...(row.retained ? [] : (row.actions ?? []))
-      .slice(options.actionPage * 9, (options.actionPage + 1) * 9)
-      .map((action, index) => `${index + 1} ${action.label}`),
-    (row.actions?.length ?? 0) > 9 ? `a: more actions · page ${options.actionPage + 1}` : "",
+    ...actionLines(row, options.actionPage),
   ].join("\n");
+}
+
+/** The current page of a row's actions under their number keys, then how to turn the page. */
+function actionLines(row: ActivityRow, page: number): string[] {
+  const actions = row.retained ? [] : (row.actions ?? []);
+  const pages = activityActionPages(actions);
+  return [
+    ...actions
+      .slice(page * ACTIVITY_ACTION_PAGE_SIZE, (page + 1) * ACTIVITY_ACTION_PAGE_SIZE)
+      .map((action, index) => `${index + 1} ${action.label}`),
+    ...(pages > 1 ? [`a More actions · page ${page + 1} of ${pages}`] : []),
+  ];
 }

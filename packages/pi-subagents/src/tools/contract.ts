@@ -20,7 +20,7 @@ import {
 import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.ts";
 import { MAX_NAME_CHARS, sanitizeName } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { runAttention } from "./attention.ts";
+import { runAttention } from "../run/attention.ts";
 import {
   MAX_CONTRACT_ERROR_CHARS,
   MAX_CONTRACT_MESSAGE_CHARS,

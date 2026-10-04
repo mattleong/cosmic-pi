@@ -6,6 +6,7 @@ import {
   type ManagerStatusColor,
 } from "pi-cosmic-ui/manager";
 import type { SubagentRunState } from "../run/model.ts";
+import type { WorkflowRunState } from "../workflow/model.ts";
 
 /** Each run state in the shared activity vocabulary every extension draws from. */
 const RUN_STATE_KINDS = {
@@ -36,3 +37,15 @@ export const runStateLabel = (state: SubagentRunState): string =>
 
 export const runStateColor = (state: SubagentRunState): ManagerStatusColor =>
   managerActivityColor(RUN_STATE_KINDS[state]);
+
+const WORKFLOW_STATE_KINDS = {
+  running: "running",
+  stopping: "stopping",
+  completed: "done",
+  failed: "failed",
+  stopped: "stopped",
+} as const satisfies Readonly<Record<WorkflowRunState, ManagerActivityKind>>;
+
+/** A workflow run's state in the shared words, for people; a teardown interrupts a run. */
+export const workflowStateLabel = (state: WorkflowRunState | "interrupted"): string =>
+  state === "interrupted" ? "interrupted" : managerActivityLabel(WORKFLOW_STATE_KINDS[state]);

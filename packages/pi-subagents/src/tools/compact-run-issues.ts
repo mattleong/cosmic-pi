@@ -1,5 +1,5 @@
 import { type CompactIssue } from "pi-code-previews";
-import { runAttention } from "./attention.ts";
+import { runAttention } from "../run/attention.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";

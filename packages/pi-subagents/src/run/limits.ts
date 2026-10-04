@@ -11,3 +11,5 @@ export const MAX_UNRESOLVED_REPORTS_BEFORE_RETAINED_ASSIGNMENT =
 export const MAX_COMPLETION_DELIVERY_BATCH = 12;
 export const COMPLETION_RETRY_INITIAL_MILLIS = 100;
 export const COMPLETION_RETRY_MAX_MILLIS = 30_000;
+/** Direct-child slots workflow agents leave free for the main agent's own starts. */
+export const WORKFLOW_ROOT_RESERVE = 2;

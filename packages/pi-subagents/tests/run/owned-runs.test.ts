@@ -19,13 +19,15 @@ import {
 } from "../../src/run/model.ts";
 import type { OwnedRunHandle } from "../../src/run/owned-runs.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
-import { WorkspaceService, type WorkspaceServiceContract } from "../../src/workspace/service.ts";
+import { WorkspaceService } from "../../src/workspace/service.ts";
+import { createOnlyWorkspaceEngine } from "../fixtures/workspace-engine.ts";
 import {
   fakeNativeReportBackendLayer,
   nativeReportRequest,
   nativeReportServiceFixture,
   profileLayerFor,
   withService,
+  awaitRuns,
 } from "./fixtures/service-harness.ts";
 
 const OWNER = "wf-test-1";
@@ -56,35 +58,6 @@ const questions = (notifications: ReadonlyArray<SubagentNotification>) =>
     (notification): notification is Extract<SubagentNotification, { type: "question" }> =>
       notification.type === "question",
   );
-
-/** A workspace engine that only creates isolated checkouts. */
-const creatingWorkspaceEngine = (): WorkspaceServiceContract => {
-  let ordinal = 0;
-  const unused = () => Effect.die(new Error("Unexpected workspace operation."));
-  return {
-    create: ({ sourceCwd, ownerId }) =>
-      Effect.sync(() => {
-        const workspaceId = `workspace-${++ordinal}`;
-        return {
-          workspaceId,
-          ownerId,
-          sourceCwd,
-          sourceRoot: sourceCwd,
-          cwd: `/private/${workspaceId}`,
-        };
-      }),
-    freeze: unused,
-    prepare: unused,
-    integrate: unused,
-    revise: unused,
-    fork: unused,
-    discard: unused,
-    recoverDiscard: unused,
-    inspect: unused,
-    list: unused,
-    listAll: unused,
-  };
-};
 
 /** Lets every delivery worker run past its retry delay. */
 const drainDelivery = TestClock.adjust("5 seconds");
@@ -144,6 +117,39 @@ describe("owned subagent runs", () => {
       expect(errorCode(again)).toBe("owned_run_released");
       yield* drainDelivery;
       expect(rootOutcomes(notifications)).toEqual([]);
+    });
+  });
+
+  it.effect("carries the tool calls and usage an owned run spent into its outcome", () => {
+    const { backend, projections, layer } = nativeReportServiceFixture();
+    return withService(layer, function* (service) {
+      yield* service.openOwner(OWNER);
+      const handle = yield* service.startOwned(ownedRequest(), owner);
+      const control = backend.controls[0]!;
+      // Handing back a structured result isn't counted as a tool use.
+      for (const [toolCallId, toolName] of [
+        ["result-1", "subagent_result"],
+        ["read-1", "read"],
+        ["read-2", "read"],
+        ["read-3", "read"],
+      ])
+        control.offer({
+          type: "tool_started",
+          assignmentEpoch: control.assignmentEpochs.at(-1) ?? 1,
+          toolCallId: toolCallId!,
+          toolName: toolName!,
+          args: { path: "src/a.ts" },
+        });
+      control.offer({ type: "usage", usage: { ...emptyUsage(), output: 9, totalTokens: 90 } });
+      yield* yieldUntil(
+        () => projections.at(-1)?.runs.find((run) => run.id === handle.runId)?.toolUses === 3,
+      );
+      control.report(handle.runId, 1, "done", "Found three issues.");
+      expect(yield* service.awaitOwned(handle)).toMatchObject({
+        kind: "completed",
+        toolUses: 3,
+        usage: { output: 9, totalTokens: 90 },
+      });
     });
   });
 
@@ -245,10 +251,45 @@ describe("owned subagent runs", () => {
     });
   });
 
+  it.effect("leaves two root slots for the main agent while a workflow agent runs", () => {
+    const nestingPolicy = { maxDirectChildren: 4, maxDepth: 3 };
+    const { layer } = nativeReportServiceFixture();
+    return withService(layer, function* (service) {
+      yield* service.openOwner(OWNER);
+      yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
+      yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
+      const reserved = yield* service
+        .startOwned(ownedRequest({ nestingPolicy }), owner)
+        .pipe(Effect.flip);
+      expect(errorCode(reserved)).toBe("direct_child_capacity");
+      // The main agent's own starts may take the slots workflow agents leave.
+      yield* service.start(nativeReportRequest({ name: "main-1", nestingPolicy }));
+      yield* service.start(nativeReportRequest({ name: "main-2", nestingPolicy }));
+      const full = yield* service
+        .start(nativeReportRequest({ name: "main-3", nestingPolicy }))
+        .pipe(Effect.flip);
+      expect(errorCode(full)).toBe("direct_child_capacity");
+    });
+  });
+
+  it.effect("lets a lone workflow agent take any free root slot", () => {
+    const nestingPolicy = { maxDirectChildren: 2, maxDepth: 3 };
+    const { layer } = nativeReportServiceFixture();
+    return withService(layer, function* (service) {
+      yield* service.openOwner(OWNER);
+      yield* service.start(nativeReportRequest({ name: "main", nestingPolicy }));
+      yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
+      const full = yield* service
+        .startOwned(ownedRequest({ nestingPolicy }), owner)
+        .pipe(Effect.flip);
+      expect(errorCode(full)).toBe("direct_child_capacity");
+    });
+  });
+
   it.effect("isolates an owned writer in a worktree when its owner asks for one", () => {
     const fixture = nativeReportServiceFixture();
     const layer = fixture.layer.pipe(
-      Layer.provide(Layer.succeed(WorkspaceService, creatingWorkspaceEngine())),
+      Layer.provide(Layer.succeed(WorkspaceService, createOnlyWorkspaceEngine())),
     );
     return withService(layer, function* (service) {
       yield* service.openOwner(OWNER);
@@ -273,9 +314,7 @@ describe("owned subagent runs", () => {
       const reported = yield* service.startOwned(ownedRequest(), owner);
       const failed = yield* service.startOwned(ownedRequest({ name: "will-fail" }), owner);
 
-      const awaited = yield* service
-        .awaitTerminal([reported.runId], "all_finished")
-        .pipe(Effect.flip);
+      const awaited = yield* awaitRuns(service, [reported.runId], "all_finished").pipe(Effect.flip);
       expect(errorCode(awaited)).toBe("workflow_owned_run");
 
       backend.controls[0]!.report(reported.runId, 1, "done", "Reported.");
@@ -291,7 +330,7 @@ describe("owned subagent runs", () => {
       expect(errorCode(retried)).toBe("workflow_owned_run");
 
       yield* service.closeOwner(OWNER);
-      const runs = yield* service.awaitTerminal([reported.runId, failed.runId], "all_finished");
+      const runs = yield* awaitRuns(service, [reported.runId, failed.runId], "all_finished");
       expect(runs.map((run) => run.state)).toEqual(["completed", "failed"]);
     });
   });
@@ -324,25 +363,6 @@ describe("owned subagent runs", () => {
         .pipe(Effect.flip);
       expect(errorCode(late)).toBe("workflow_owner_closed");
       expect((yield* service.list).map((run) => run.name)).not.toContain("late");
-    });
-  });
-
-  it.effect("hands a report back to the root or consumes a stopped run on release", () => {
-    const { backend, projections, notifications, layer } = nativeReportServiceFixture();
-    return withService(layer, function* (service) {
-      yield* service.openOwner(OWNER);
-      const reported = yield* service.startOwned(ownedRequest({ name: "reported" }), owner);
-      const running = yield* service.startOwned(ownedRequest({ name: "running" }), owner);
-      backend.controls[0]!.report(reported.runId, 1, "reported", "Handed back.");
-      yield* yieldUntil(() => stateOf(projections, reported.runId) === "completed");
-
-      yield* service.releaseOwned(reported, "hand-back");
-      yield* service.releaseOwned(running, "consume");
-      expect(stateOf(projections, running.runId)).toBe("stopped");
-      yield* drainDelivery;
-      expect(rootOutcomes(notifications)).toEqual([reported.runId]);
-      // A handed-back run belongs to the root again.
-      expect(yield* service.awaitTerminal([reported.runId], "all_finished")).toHaveLength(1);
     });
   });
 

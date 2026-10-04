@@ -92,6 +92,30 @@ describe("subagent tool", () => {
     },
   );
 
+  effectTest("names the workflow that owns a run in list rows and status", function* () {
+    const owned = view({
+      id: "agent-42",
+      workflow: { workflowId: "wf-k3c9-7", name: "review-changes", phase: "Verify" },
+    });
+    const tools = captureSubagentTools(
+      subagentServiceDouble({
+        list: Effect.succeed([owned, view({ id: "agent-43" })]),
+        status: () => Effect.succeed(owned),
+      }),
+    );
+    const listed = resultText(yield* step(() => executeTool(tools.get("subagent_list")!, {})));
+    const ownedRow = listed.split("\n").find((line) => line.includes("agent-42"));
+    const otherRow = listed.split("\n").find((line) => line.includes("agent-43"));
+    expect(ownedRow).toContain("wf-k3c9-7");
+    expect(ownedRow).toContain("review-changes");
+    expect(otherRow).not.toContain("wf-");
+    const status = resultText(
+      yield* step(() => executeTool(tools.get("subagent_status")!, { runIds: ["agent-42"] })),
+    );
+    expect(status).toContain("wf-k3c9-7");
+    expect(status).toContain("review-changes");
+  });
+
   effectTest(
     "returns formatted status metadata and one final report without activity duplication",
     function* () {

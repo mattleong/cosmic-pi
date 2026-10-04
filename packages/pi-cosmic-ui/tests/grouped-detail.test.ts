@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { groupedDetail, workflowMemberSpan } from "../src/activity/grouped-detail.ts";
+import { groupedDetail } from "../src/activity/grouped-detail.ts";
+import { workflowMemberSpan } from "../src/activity/group-summary.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "../src/activity/grouped-tree.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { activityRow, memberRow, workflowRow } from "./support/activity.ts";

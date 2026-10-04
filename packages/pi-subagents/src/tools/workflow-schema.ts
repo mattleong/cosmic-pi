@@ -3,8 +3,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
-import type { WorkflowSourceRequest, WorkflowStartRequest } from "../workflow/service.ts";
 import { WORKFLOW_SCRIPT_MAX_CHARS } from "../workflow/script.ts";
+import type { WorkflowStartRequest } from "../workflow/service.ts";
+import type { WorkflowSourceRequest } from "../workflow/source.ts";
 
 /** Root-only and model-only; never part of the child proxy catalog. */
 export const WORKFLOW_TOOL_NAME = "subagent_workflow";
@@ -13,6 +14,7 @@ export type WorkflowToolAction = (typeof WORKFLOW_TOOL_ACTIONS)[number];
 
 const RUN_ID_MAX_CHARS = 128;
 const PATH_MAX_CHARS = 4_096;
+const BUDGET_MAX = Number.MAX_SAFE_INTEGER;
 
 // Pi drops arguments for tools whose root is a union, so actions share one object and
 // per-action rules are checked at runtime.
@@ -50,6 +52,14 @@ export const WorkflowToolParameters = Type.Object(
         maxLength: RUN_ID_MAX_CHARS,
       }),
     ),
+    budget: Type.Optional(
+      Type.Integer({
+        description:
+          'start: a hard ceiling on the output tokens the run\'s agents produce, such as 500000 for "cap this at 500k". Pass it whenever the user states a token limit for the work.',
+        minimum: 1,
+        maximum: BUDGET_MAX,
+      }),
+    ),
     runId: Type.Optional(
       Type.String({
         description: "status and stop: the workflow run id.",
@@ -71,6 +81,9 @@ const StartInputSchema = Schema.Struct({
   scriptPath: Schema.optional(Text(PATH_MAX_CHARS)),
   args: Schema.optional(Schema.Json),
   resumeFromRunId: Schema.optional(Text(RUN_ID_MAX_CHARS)),
+  budget: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(BUDGET_MAX)),
+  ),
 });
 const RunInputSchema = Schema.Struct({
   action: Schema.Literals(["status", "stop"]),
@@ -124,6 +137,7 @@ export const decodeWorkflowToolRequest = <Input>(
               ...(start.value.resumeFromRunId !== undefined && {
                 resumeFromRunId: start.value.resumeFromRunId,
               }),
+              ...(start.value.budget !== undefined && { budget: start.value.budget }),
             },
           });
     }
@@ -132,7 +146,7 @@ export const decodeWorkflowToolRequest = <Input>(
     if (Option.isSome(decodeList(input))) return Effect.succeed({ action: "list" as const });
     return Effect.fail(
       inputError(
-        'Invalid subagent_workflow arguments: "start" takes script, name, or scriptPath with optional args and resumeFromRunId; "status" and "stop" take only runId; "list" takes nothing else.',
+        'Invalid subagent_workflow arguments: "start" takes script, name, or scriptPath with optional args, resumeFromRunId and budget (a positive whole number of output tokens); "status" and "stop" take only runId; "list" takes nothing else.',
       ),
     );
   });
@@ -142,22 +156,27 @@ const Count = Schema.Int.check(
   Schema.isLessThanOrEqualTo(100_000),
 );
 const Label = Schema.String.check(Schema.isMaxLength(512));
+const Tokens = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 const WorkflowRunSummarySchema = Schema.Struct({
   id: Label,
   name: Label,
-  state: Schema.Literals(["running", "stopping", "completed", "failed", "stopped"]),
+  state: Schema.Literals(["running", "stopping", "completed", "failed", "stopped", "interrupted"]),
   phases: Count,
   currentPhase: Schema.optional(Label),
   agents: Count,
   queued: Count,
   running: Count,
   failed: Count,
+  // Results from before stopped agents were counted apart from skipped ones carry none.
+  stopped: Schema.optional(Count),
   skipped: Count,
   reused: Count,
   startedAt: Schema.Finite,
   endedAt: Schema.optional(Schema.Finite),
   failure: Schema.optional(Label),
+  /** Set when an uncaught budget error failed the run: the output tokens it spent of its budget. */
+  budgetFailure: Schema.optional(Schema.Struct({ spent: Tokens, total: Tokens })),
 });
 export type WorkflowRunSummary = typeof WorkflowRunSummarySchema.Type;
 

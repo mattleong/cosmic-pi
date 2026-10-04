@@ -7,6 +7,8 @@ import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 import type * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
+import { makeWorkflowRecovery } from "../../src/workflow/recovery.ts";
+import { startedWorkflowRunRecord, workflowRunRecordText } from "../../src/workflow/run-record.ts";
 import { WorkflowStore } from "../../src/workflow/store.ts";
 
 const script = (name: string) =>
@@ -57,12 +59,13 @@ const fixture: Effect.Effect<
 const withStore = <A, E>(
   setup: Fixture,
   use: (store: WorkflowStore["Service"]) => Effect.Effect<A, E>,
+  agentDirectory = setup.agentDirectory,
 ) =>
   WorkflowStore.use(use).pipe(
     Effect.provide(
       WorkflowStore.layer({
         cwd: setup.cwd,
-        agentDirectory: setup.agentDirectory,
+        agentDirectory,
         isProjectTrusted: () => setup.trust.value,
       }).pipe(
         Layer.provide(
@@ -108,6 +111,26 @@ describe("saved workflows", () => {
     }).pipe(Effect.provide(nodeFilePlatformLayer)),
   );
 
+  it.effect("names the session's own directories and each saved workflow's path", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const path = setup.join(setup.userWorkflows, "review.js");
+      yield* setup.write(path, script("review"));
+      const listed = yield* withStore(setup, (store) => store.list);
+      expect(listed.workflows.map((workflow) => workflow.path)).toEqual([path]);
+      expect(listed.locations).toEqual({
+        project: setup.projectWorkflows,
+        projectTrusted: true,
+        user: setup.userWorkflows,
+      });
+      const missing = yield* failureMessage(withStore(setup, (store) => store.load("missing")));
+      expect(missing).toContain(setup.join(setup.projectWorkflows, "missing.js"));
+      expect(missing).toContain(setup.join(setup.userWorkflows, "missing.js"));
+      setup.trust.value = false;
+      expect((yield* withStore(setup, (store) => store.locations)).projectTrusted).toBe(false);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
   it.effect("does not follow symlinked workflow files", () =>
     Effect.gen(function* () {
       const setup = yield* fixture;
@@ -120,6 +143,30 @@ describe("saved workflows", () => {
       expect(yield* failureMessage(withStore(setup, (store) => store.load("linked")))).toMatch(
         /Couldn't read/,
       );
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("loads a script file through a symlinked directory, but not a symlinked file", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const real = setup.join(setup.root, "real");
+      yield* fs.makeDirectory(real);
+      yield* setup.write(setup.join(real, "draft.js"), script("drafted"));
+      yield* setup.write(setup.join(setup.root, "outside.js"), script("outside"));
+      yield* fs.symlink(setup.join(setup.root, "outside.js"), setup.join(real, "leaf.js"));
+      // Like macOS's /tmp, a directory on the way to the script is a symlink.
+      const linked = setup.join(setup.root, "linked");
+      yield* fs.symlink(real, linked);
+      const loaded = yield* withStore(setup, (store) =>
+        store.loadPath(setup.join(linked, "draft.js")),
+      );
+      expect(loaded.name).toBe("drafted");
+      expect(
+        yield* failureMessage(
+          withStore(setup, (store) => store.loadPath(setup.join(linked, "leaf.js"))),
+        ),
+      ).toMatch(/Couldn't read/);
     }).pipe(Effect.provide(nodeFilePlatformLayer)),
   );
 
@@ -199,6 +246,153 @@ describe("workflow run files", () => {
       );
       expect(yield* fs.readFileString(lines.journal)).toBe('{"callId":1}\n{"callId":2}\n');
       expect(yield* permissions(lines.journal)).toBe(0o600);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("replaces a run's record atomically and privately, and reads it back", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const read = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-r-1", source, new Set());
+          yield* store.writeRunRecord(files, '{"state":"running"}');
+          yield* store.writeRunRecord(files, '{"state":"completed"}');
+          return yield* store.readRunRecord("wf-r-1");
+        }),
+      );
+      expect(read?.text.trim()).toBe('{"state":"completed"}');
+      expect(read?.files.record).toBe(setup.join(runsOf(setup), "wf-r-1", "run.json"));
+      expect(yield* permissions(read?.files.record ?? "")).toBe(0o600);
+      // No temporary file is left beside the record.
+      expect((yield* fs.readDirectory(read?.files.directory ?? "")).toSorted()).toEqual([
+        "run.json",
+        "script.js",
+      ]);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("reads saved workflows and run files through a symlinked agent directory", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      yield* setup.write(setup.join(setup.userWorkflows, "review.js"), script("review"));
+      // A dotfile manager links the agent directory from elsewhere.
+      const linked = setup.join(setup.root, "linked-agent");
+      yield* fs.symlink(setup.agentDirectory, linked);
+      const sessionKey = "session-linked";
+      const found = yield* withStore(
+        setup,
+        (store) =>
+          Effect.gen(function* () {
+            const files = yield* store.createRunFiles("wf-s-1", source, new Set());
+            const record = startedWorkflowRunRecord(
+              { id: "wf-s-1", name: "iterate", source: { kind: "inline" }, startedAt: 1 },
+              sessionKey,
+              { pid: 1, bootedAt: 0 },
+            );
+            yield* store.writeRunRecord(
+              files,
+              workflowRunRecordText({ ...record, state: "interrupted" }),
+            );
+            yield* store.appendRunJournal(
+              files,
+              '{"state":"completed","key":"k1","outputTokens":3,"result":"done"}',
+            );
+            const recovery = makeWorkflowRecovery({ store, sessionKey });
+            return {
+              saved: yield* store.load("review"),
+              copy: yield* store.loadPath(files.script),
+              replay: yield* recovery.replay("wf-s-1"),
+              owed: yield* recovery.interrupted(() => Effect.succeed(false)),
+            };
+          }),
+        linked,
+      );
+      expect(found.saved.script.meta.name).toBe("review");
+      expect(found.copy.script.meta.name).toBe("iterate");
+      expect(found.replay.take("k1")?.result).toBe("done");
+      expect(found.owed).toEqual([expect.objectContaining({ runId: "wf-s-1", finished: 1 })]);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("finds no record for an unknown, pruned or malformed run id", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const found = yield* withStore(setup, (store) =>
+        Effect.all([
+          store.readRunRecord("wf-r-9"),
+          store.readRunRecord("../../etc"),
+          store
+            .createRunFiles("wf-r-2", source, new Set())
+            .pipe(Effect.andThen(store.readRunRecord("wf-r-2"))),
+        ]),
+      );
+      expect(found).toEqual([undefined, undefined, undefined]);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("saves full results privately and reads them back only within a bound", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const { name, files, whole, bounded, outside } = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-r-3", source, new Set());
+          const name = yield* store.writeRunResult(files, 1, '"full value"');
+          return {
+            name,
+            files,
+            whole: yield* store.readRunResult(files, name, 1_024),
+            bounded: yield* store.readRunResult(files, name, 4),
+            outside: yield* store.readRunResult(files, "../wf-r-3/script.js", 1_024),
+          };
+        }),
+      );
+      expect(name).toBe("results/1.json");
+      expect(whole).toBe('"full value"');
+      expect(bounded).toBeUndefined();
+      expect(outside).toBeUndefined();
+      expect(yield* permissions(setup.join(files.directory, "results", "1.json"))).toBe(0o600);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("reads only the complete journal lines within its bound", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const reads = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-r-4", source, new Set());
+          const none = yield* store.readRunJournal(files, 1_024);
+          yield* store.appendRunJournal(files, '{"callId":1}');
+          yield* store.appendRunJournal(files, '{"callId":2}');
+          // A line still being written has no newline yet.
+          yield* fs.writeFileString(files.journal, '{"call', { flag: "a" });
+          return [
+            none,
+            yield* store.readRunJournal(files, 1_024),
+            yield* store.readRunJournal(files, 20),
+          ];
+        }),
+      );
+      expect(reads).toEqual([[], ['{"callId":1}', '{"callId":2}'], ['{"callId":1}']]);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.effect("refuses a results journal that links to a file elsewhere", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const outside = setup.join(setup.root, "outside.jsonl");
+      yield* setup.write(outside, '{"callId":1}\n');
+      const refused = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          const files = yield* store.createRunFiles("wf-r-6", source, new Set());
+          yield* fs.symlink(outside, files.journal);
+          return yield* Effect.flip(store.readRunJournal(files, 1_024));
+        }),
+      );
+      expect(refused._tag).toBe("WorkflowRunFileError");
     }).pipe(Effect.provide(nodeFilePlatformLayer)),
   );
 
@@ -288,6 +482,31 @@ describe("workflow run files", () => {
       );
       const left = new Set(yield* fs.readDirectory(runsOf(setup)));
       expect(left.has("wf-d-1")).toBe(true);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  );
+
+  it.live("lists the records it keeps from the most recently written run directories first", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture;
+      const fs = yield* FileSystem.FileSystem;
+      const listed = yield* withStore(setup, (store) =>
+        Effect.gen(function* () {
+          for (const [ordinal, writtenAt] of [OLD + 3, OLD + 1, OLD + 2].entries()) {
+            const files = yield* store.createRunFiles(`wf-l-${ordinal + 1}`, source, new Set());
+            yield* store.writeRunRecord(files, `{"ordinal":${ordinal + 1}}`);
+            yield* fs.utimes(files.directory, writtenAt, writtenAt);
+          }
+          // A directory without a record is skipped.
+          yield* store.createRunFiles("wf-l-4", source, new Set());
+          return {
+            all: yield* store.listRunRecords(3, () => true),
+            // The limit counts only the records kept, however many newer ones are left out.
+            kept: yield* store.listRunRecords(1, (file) => file.runId !== "wf-l-1"),
+          };
+        }),
+      );
+      expect(listed.all.map((file) => file.runId)).toEqual(["wf-l-1", "wf-l-3", "wf-l-2"]);
+      expect(listed.kept.map((file) => file.runId)).toEqual(["wf-l-3"]);
     }).pipe(Effect.provide(nodeFilePlatformLayer)),
   );
 });

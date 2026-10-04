@@ -43,6 +43,10 @@ The Claude picker asks the installed CLI for its catalog without inference. Befo
 
 The probe preserves aliases and context suffixes such as `[1m]`. Its selector is part of the session cache key, so changing the user preference updates discovery on the next picker access without reload. When a preference is set, discovery combines the default and preferred-selector catalogs. Both probes must succeed. Exact duplicate selectors use the preferred probe's metadata; distinct aliases and context selectors remain separate choices. Each probe has its own 10-second deadline and confirmed process cleanup. Discovery keeps settings sources disabled, explicitly disables hooks, and uses strict empty MCP configuration. It does not change subagent launch policy.
 
+`native-model-catalog.ts` rereads the preference before each cache lookup and keys Claude discovery by cwd and exact probe selector.
+Each alias target the CLI does not list under its own ID gains an explicit row after the first alias naming it, so the catalog stays CLI-driven with no workspace model list.
+Claude and Codex have no built-in model either: switching a candidate to either runtime opens that runtime's live-catalog picker, which offers only advertised models and commits runtime and model together on selection.
+
 ## Saved-set library
 
 The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, ordered candidate models and effort, including inherited, disabled, and invalid routes. Wide screens show the preview beside the list; stacked screens show it below when height permits. Narrow screens keep the library visible and Enter opens the editor. Long routes are abbreviated in the preview and remain available in the editor.
@@ -73,9 +77,20 @@ Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, ne
 
 ## Module responsibilities
 
-- `src/settings/controller.ts` registers commands, deep links, and nesting, workspace, and workflow settings. `feature-settings.ts` owns the workflow switch's rows, status lines, and trust-rechecked Global/Project writes. Application services retain session snapshots across allowed replacement paths.
-- `profile-dashboard.ts` owns checked route writes, scoped dialog waits, catalog cancellation, and activation-bound UI cleanup. `profile-write-context.ts` shares trust and conflict-token capture. `profile-dashboard-component.ts` owns the single custom host lifetime, tabs, cached fixed-target editors, and internal forms. Refreshes advance editable drafts with their write guards; owned rename transfers all profile/candidate navigation memory before reconciliation. `profile-set-actions.ts` handles library mutations, confirmed replacement, and confirmed deletion; `profile-dashboard-dialogs.ts` owns the internal confirmation, name, and save-destination dialogs.
+- `src/settings/controller.ts` registers the one `/subagents` command through core's `registerExtensionCommand`.
+  Bare `/subagents` opens the shared Activity view focused on Subagents; `profiles` and `settings` are subcommands.
+  It also registers deep links and the nesting, workspace, and workflow settings.
+  The `/subagents` fleet, the nested proxy fleet (whose refresh ticker stops as the surface closes), and the profile dashboard open on Cosmic UI's shared `screen` surface, so closing never pops an overlay stacked above them.
+- `src/config/store.ts` is the only persistence door.
+  It owns optimistic exact-document set, default, route, and nesting mutations, exact declaration restoration, committed document receipts, and atomic seven-profile snapshot creation.
+- `feature-settings.ts` owns the workflow switch's rows, status lines, and trust-rechecked Global/Project writes. Application services retain session snapshots across allowed replacement paths.
+- `profile-dashboard.ts` owns checked route writes, scoped dialog waits, catalog cancellation, and activation-bound UI cleanup; its runtime finalizer closes the surface through its external close, even before mount. `profile-write-context.ts` shares trust and conflict-token capture. `profile-dashboard-component.ts` owns the single custom host lifetime, tabs, cached fixed-target editors, and internal forms. Refreshes advance editable drafts with their write guards; owned rename transfers all profile/candidate navigation memory before reconciliation. `profile-set-actions.ts` handles library mutations, confirmed replacement, and confirmed deletion; `profile-dashboard-dialogs.ts` owns the internal confirmation, name, and save-destination dialogs.
 - `profile-edit-visit.ts` owns pure visit checkpoints and receipt-based Undo ownership. `config/store.ts` owns exact declaration restoration and committed document receipts, with optimistic document and trust checks.
 - `profile-workspace.ts` composes fixed-target editing. Its state, save, and picker modules separate navigation, serialized writes, and cancellable selection work. `profile-set-picker.ts` owns library selection and hosts the More menu.
 - `profile-route-editor.ts` owns fixed-target route drafts and canonical validation messages. `profile-model-catalog.ts` owns atomic Pi catalog refresh and runtime-specific picker loading. Picker rows are shared `pi-cosmic-ui` `ModelPickerModel` options that also carry the efforts and fast-mode availability a selection applies; Pi rows use the shared picker's default text.
 - `src/settings/ui/` contains pure row models, selectors, projections, responsive geometry, and rendering.
+- The dashboard owns one continuous outer frame around its tabs, status, and active child.
+  Framed children share its border and footer; plain dialogs render inside it, with separate height budgets for each form of composition.
+- Editor rows declare candidate or profile scope.
+  Cursor bookkeeping stays pure, and render and action boundaries resolve Undo availability.
+- Profile styling delegates to `pi-cosmic-ui/manager/style` and the shared frame helpers; saved-set previews never acquire focus, and profile detail fields reuse shared alignment and styling.

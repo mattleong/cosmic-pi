@@ -230,6 +230,29 @@ export const captureSnapshot = (
     return { entries, tree, commit, excludedPaths } satisfies WorkspaceSnapshot;
   });
 
+/**
+ * Whether a settled worker at `root` holds nothing beyond its baseline: its snapshot has the
+ * baseline's tree and leaves no file out, and its tree has no file the index doesn't track,
+ * ignored ones included. The worker was checked out from the baseline snapshot, which holds none
+ * of those, so a writer made each one. Empty directories hold no work: no revision carries them.
+ */
+export const workerMatchesBaseline = (
+  root: string,
+  snapshot: WorkspaceSnapshot,
+  baselineTree: string,
+) =>
+  Effect.gen(function* () {
+    if (snapshot.tree !== baselineTree || snapshot.excludedPaths.length > 0) return false;
+    const untracked = yield* git(root, [
+      "ls-files",
+      "--others",
+      "--directory",
+      "--no-empty-directory",
+      "-z",
+    ]);
+    return untracked.length === 0;
+  });
+
 export const sourceIdentity = (root: string) =>
   Effect.gen(function* () {
     const head = yield* git(root, ["rev-parse", "--verify", "HEAD"]).pipe(Effect.flatMap(oid));

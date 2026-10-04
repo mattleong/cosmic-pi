@@ -9,6 +9,7 @@ import {
   listDetailMotion,
   listWindowStart,
   padListDetailRow,
+  type DetailWindowPosition,
   type ListDetailMotion,
   type ListDetailPane,
   type ListDetailMotionState,
@@ -105,7 +106,7 @@ export class ListDetailShell {
     return result;
   }
 
-  detailWindow(lines: ReadonlyArray<string>, height: number, follow?: boolean | undefined) {
+  detailWindow(lines: ReadonlyArray<string>, height: number, follow?: DetailWindowPosition) {
     const window = computeDetailWindow({
       lines,
       height,

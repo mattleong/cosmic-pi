@@ -9,6 +9,7 @@ import {
   captureRegistrations,
   createToolPresentationHarness,
   issueMessageStyleProblems,
+  renderContextFixture,
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { beforeEach } from "vitest";
@@ -17,12 +18,18 @@ import {
   workflowToolDescription,
   type WorkflowToolRuntime,
 } from "../../src/tools/workflow.ts";
-import type { WorkflowToolArgs } from "../../src/tools/workflow-presentation.ts";
+import { workflowListText, workflowRunSummary } from "../../src/tools/workflow-format.ts";
+import {
+  workflowCompactSummary,
+  type WorkflowToolArgs,
+} from "../../src/tools/workflow-presentation.ts";
+import { WORKFLOW_BUDGET_ERROR } from "../../src/workflow/prelude.ts";
+import { workflowRunView } from "../fixtures/run-view.ts";
 import {
   decodeWorkflowToolDetails,
   type WorkflowToolDetails,
 } from "../../src/tools/workflow-schema.ts";
-import { script, workflowFixture } from "../workflow/fixtures/workflow-harness.ts";
+import { memoryLocations, script, workflowFixture } from "../workflow/fixtures/workflow-harness.ts";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -30,6 +37,7 @@ beforeEach(() =>
 
 const renderOnly: WorkflowToolRuntime = {
   environment: { cwd: "/project", projectTrusted: false },
+  savedWorkflowLocations: memoryLocations,
   run: () => Promise.reject(new Error("render-only fixture")),
 };
 
@@ -39,11 +47,12 @@ const registeredTool = (runtime: WorkflowToolRuntime = renderOnly) => {
 };
 
 /** The registered tool over the real workflow and subagent services. */
-const liveTool = () => {
-  const fixture = workflowFixture();
+const liveTool = (scripts: Readonly<Record<string, string>> = {}) => {
+  const fixture = workflowFixture({ scripts });
   const runtime = ManagedRuntime.make(Layer.merge(fixture.layer, fixture.backend.layer));
   const tool = registeredTool({
     environment: { cwd: "/project", projectTrusted: false },
+    savedWorkflowLocations: memoryLocations,
     run: (effect, signal) => runtime.runPromise(effect, { signal }),
   });
   const ctx = extensionContextFixture({ cwd: "/project", hasUI: false });
@@ -104,26 +113,85 @@ describe("subagent_workflow tool", () => {
 
   it.live("returns plain-sentence issues for calls that can't run", () =>
     Effect.gen(function* () {
-      const { execute, dispose } = liveTool();
+      // The edit loop restarts an inline script's copy, inside its run's directory.
+      const copy = (runId: string) => `/agent/subagents/workflow-runs/${runId}/script.js`;
+      const { execute, dispose } = liveTool({
+        [copy("wf-mgb3k2x-1")]: script("const x = ;\nreturn x;"),
+        [copy("wf-mgb3k2x-2")]: 'export const meta = { name: 5, description: "d" };\nreturn 1;',
+      });
       const rejected = [
         yield* execute({ action: "start", script: script("return 1;"), name: "saved" }),
         yield* execute({ action: "start", script: script("return (;") }),
         yield* execute({ action: "start", script: "return 1;" }),
         yield* execute({ action: "start", name: "missing" }),
+        yield* execute({ action: "start", scriptPath: copy("wf-mgb3k2x-1") }),
+        yield* execute({ action: "start", scriptPath: copy("wf-mgb3k2x-2") }),
+        yield* execute({ action: "start", scriptPath: copy("wf-mgb3k2x-3") }),
         yield* execute({ action: "status", runId: "wf-unknown-1" }),
         yield* execute({ action: "start", script: script("return 1;"), resumeFromRunId: "wf-x-9" }),
         yield* execute({ action: "status" }),
       ];
+      const forbidden = ["wf-unknown-1", "wf-x-9", "wf-mgb3k2x", "/agent/", "Save it as"];
       for (const result of rejected) {
         expect(result.isError).toBe(true);
         const issue = detailsOf(result).issue!;
-        expect(
-          issueMessageStyleProblems(issue.message, { forbidden: ["wf-unknown-1", "wf-x-9"] }),
-          issue.message,
-        ).toEqual([]);
+        expect(issueMessageStyleProblems(issue.message, { forbidden }), issue.message).toEqual([]);
+        // A syntax error names its line once, as people read it, not the parser's position.
+        expect(issue.message, issue.message).not.toMatch(/\(\d+:\d+\)/u);
         // The agent keeps the full explanation.
         expect(textOf(result).length).toBeGreaterThan(issue.message.length);
       }
+      yield* dispose;
+    }),
+  );
+});
+
+describe("subagent_workflow args schemas", () => {
+  const targeted =
+    'export const meta = { name: "targeted", description: "d", args: { type: "object", properties: { target: { type: "string" } }, required: ["target"] } };\nreturn args;';
+
+  it.live("refuses args that don't match meta.args, naming the path and the args to pass", () =>
+    Effect.gen(function* () {
+      const { execute, dispose } = liveTool();
+      for (const args of [{ target: 3 }, undefined]) {
+        const result = yield* execute({
+          action: "start",
+          script: targeted,
+          ...(args !== undefined && { args }),
+        });
+        expect(result.isError).toBe(true);
+        const issue = detailsOf(result).issue!;
+        expect(issueMessageStyleProblems(issue.message), issue.message).toEqual([]);
+        expect(issue.message).toContain(args === undefined ? "args" : "args.target");
+        // The agent gets every problem and the args the workflow expects.
+        expect(issue.detail).toContain("target: string");
+        expect(textOf(result)).toContain("target: string");
+      }
+      const started = yield* execute({ action: "start", script: targeted, args: { target: "x" } });
+      expect(started.isError).toBeUndefined();
+      yield* dispose;
+    }),
+  );
+
+  it.live("keeps the refusal row in style for long paths, long problems and many problems", () =>
+    Effect.gen(function* () {
+      const { execute, dispose } = liveTool();
+      const options = ["first", "second", "third"].map((word) => `"a-long-option-name-${word}"`);
+      const item = `{ type: "object", properties: { someVeryLongPropertyNameForEachFileEntry: { enum: [${options.join(", ")}] } } }`;
+      const schema = `{ type: "object", properties: { files: { type: "array", items: ${item} } } }`;
+      const result = yield* execute({
+        action: "start",
+        script: `export const meta = { name: "wide", description: "d", args: ${schema} };\nreturn args;`,
+        args: {
+          files: Array.from({ length: 12 }, () => ({
+            someVeryLongPropertyNameForEachFileEntry: 1,
+          })),
+        },
+      });
+      expect(result.isError).toBe(true);
+      const issue = detailsOf(result).issue!;
+      expect(issueMessageStyleProblems(issue.message), issue.message).toEqual([]);
+      expect(issue.message).toContain("args.files[");
       yield* dispose;
     }),
   );
@@ -201,6 +269,41 @@ describe("subagent_workflow presentation", () => {
     }
   });
 
+  it("names a spent budget for people and keeps the budget error's agent-facing text for expansion", () => {
+    const failure =
+      "The workflow's token budget is spent: 512340 of 500000 output tokens. agent() can't start more agents; check budget.remaining() before calling it.";
+    const run = workflowRunSummary(
+      workflowRunView({
+        state: "failed",
+        endedAt: 2,
+        budget: { total: 500_000, spent: 512_340, refused: 1 },
+        failure: { name: WORKFLOW_BUDGET_ERROR, message: failure },
+      }),
+    );
+    const args = { action: "status", runId: run.id } as const;
+    const result: AgentToolResult<WorkflowToolDetails> = {
+      content: [{ type: "text", text: `Workflow failed: ${failure}` }],
+      details: { version: 1, action: "status", run },
+    };
+    const issues =
+      workflowCompactSummary({
+        phase: "settled",
+        args,
+        result,
+        context: renderContextFixture(),
+      })?.issues ?? [];
+    expect(issues).toHaveLength(1);
+    for (const issue of issues) {
+      expect(issueMessageStyleProblems(issue.message, { forbidden: ["agent()"] })).toEqual([]);
+      expect(issue.detail).toBe(failure);
+    }
+    for (const { expanded, text } of createToolPresentationHarness(registeredTool()).cycle(
+      args,
+      result,
+    ))
+      expect(text.includes("budget.remaining()")).toBe(expanded);
+  });
+
   it("never passes terminal control sequences from the script to the screen", () => {
     applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false });
     const hostile = script(
@@ -236,20 +339,48 @@ describe("saved workflow discovery", () => {
   });
 
   it("lists saved workflows the model can start by name, bounded", () => {
-    const plain = workflowToolDescription([]);
-    const listed = workflowToolDescription([
-      saved("review", "after large diffs"),
-      saved("migrate"),
-    ]);
+    const plain = workflowToolDescription([], memoryLocations);
+    const listed = workflowToolDescription(
+      [saved("review", "after large diffs"), saved("migrate")],
+      memoryLocations,
+    );
     expect(listed.startsWith(plain)).toBe(true);
     expect(listed).toContain("review");
     expect(listed).toContain("after large diffs");
     expect(listed).toContain("migrate");
     const many = workflowToolDescription(
       Array.from({ length: 30 }, (_, index) => saved(`flow-${index}`)),
+      memoryLocations,
     );
     expect(many).toContain("flow-19");
     expect(many).not.toContain("flow-20 ");
     expect(many).toContain("10 more");
+  });
+
+  it("advertises each saved workflow's args from its meta.args schema", () => {
+    const args = {
+      type: "object",
+      properties: { target: { type: "string" }, depth: { type: "integer" } },
+      required: ["target"],
+    };
+    const workflow = { ...saved("review"), meta: { ...saved("review").meta, args } };
+    const description = workflowToolDescription([workflow, saved("plain")], memoryLocations);
+    expect(description).toContain("target: string");
+    expect(description).toContain("depth?: integer");
+    const listed = workflowListText(
+      { workflows: [workflow], diagnostics: [], truncated: false, locations: memoryLocations },
+      [],
+    );
+    expect(listed).toContain("target: string");
+    expect(listed).toContain("depth?: integer");
+  });
+
+  it("names the session's own saved-workflow directories, the project's only when trusted", () => {
+    const untrusted = workflowToolDescription([], memoryLocations);
+    expect(untrusted).toContain("/agent/workflows/<name>.js");
+    expect(untrusted).not.toContain("/project/.pi/workflows/<name>.js");
+    const trusted = workflowToolDescription([], { ...memoryLocations, projectTrusted: true });
+    expect(trusted).toContain("/project/.pi/workflows/<name>.js");
+    expect(trusted).toContain("/agent/workflows/<name>.js");
   });
 });

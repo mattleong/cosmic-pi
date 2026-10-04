@@ -2,7 +2,12 @@ import * as Effect from "effect/Effect";
 import type { WriterLease } from "../boundary/writer-lease.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
-import { mapWorkspaceError, type WorkspaceControlContext } from "./workspace-binding.ts";
+import {
+  mapWorkspaceError,
+  runHoldsCwd,
+  runsWithin,
+  type WorkspaceControlContext,
+} from "./workspace-binding.ts";
 
 /** What a committed integration left for the parent to resolve. */
 export interface WorkspaceIntegrationOutcome {
@@ -15,9 +20,6 @@ export interface WorkspaceIntegrationOutcome {
   /** The source lease release is unconfirmed, so writer admission stays quarantined. */
   readonly leaseReleaseUnconfirmed: boolean;
 }
-
-const isWithin = (cwd: string, root: string) =>
-  cwd === root || cwd.startsWith(`${root.replace(/\/$/, "")}/`);
 
 /** Integration of an exact reviewed and tested revision under the source writer leases. */
 export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
@@ -79,13 +81,7 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
             artifact.preparation.cwd,
             ...(binding.record ? [binding.record.view.cwd] : []),
           ];
-          const retainTrees = [...records.values()].some(
-            (record) =>
-              (isActiveRunState(record.view.state) ||
-                record.process !== undefined ||
-                record.cleanupPending) &&
-              proposalTrees.some((tree) => isWithin(record.view.cwd, tree)),
-          );
+          const retainTrees = [...runsWithin(records, proposalTrees).keys()].some(runHoldsCwd);
           // The engine lists every existing touched-file ancestor, so subdirectory-scoped cooperative writers conflict too.
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {

@@ -17,7 +17,12 @@ import {
   workspaceIO,
   workspaceIOIfPresent,
 } from "./git-worktree-process.ts";
-import { captureSnapshot, inspectSource, sourceIdentity } from "./git-worktree-snapshot.ts";
+import {
+  captureSnapshot,
+  inspectSource,
+  sourceIdentity,
+  workerMatchesBaseline,
+} from "./git-worktree-snapshot.ts";
 import {
   initializeWorkspaceStore,
   newWorkspaceId,
@@ -503,6 +508,27 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         owned.delete(target.workspaceId);
       });
     const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target, false));
+    /**
+     * Checks and discards under one lock, so nothing can land in the worker between the two.
+     * `confirm` gets the discard of a worker found unchanged, still under that lock, and runs it
+     * or declines it with false.
+     */
+    const discardUnchanged = <E, R>(
+      target: WorkspaceSettledTarget,
+      confirm: (discard: ReturnType<typeof discardInternal>) => Effect.Effect<boolean, E, R>,
+    ) =>
+      locked(
+        Effect.gen(function* () {
+          yield* settled(target);
+          const record = yield* checked(target);
+          // A frozen, prepared or integrated record was reviewed; it is never discarded here.
+          if (record.status !== "active") return false;
+          const snapshot = yield* capture(record, worker(record), "verify-worker");
+          const baseline = yield* treeOf(repository(record), record.baseline);
+          if (!(yield* workerMatchesBaseline(worker(record), snapshot, baseline))) return false;
+          return yield* confirm(discardInternal(target, false));
+        }),
+      );
     const recoverDiscard = (
       target: WorkspaceSettledTarget & { readonly recoveryRiskAccepted: true },
     ) =>
@@ -532,6 +558,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       revise,
       fork,
       discard,
+      discardUnchanged,
       recoverDiscard,
       inspect,
       list,

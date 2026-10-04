@@ -3,19 +3,24 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { detachActivityItem } from "./detach.ts";
+import { ACTIVITY_LIMITS } from "./limits.ts";
+export { ACTIVITY_LIMITS, type ActivityLimits } from "./limits.ts";
 
 export const ACTIVITY_VERSION = 1 as const;
 export const ACTIVITY_EVENT = "cosmic-ui:activity:v1";
 export const ACTIVITY_DISCOVER = "cosmic-ui:activity:discover:v1";
 export const ACTIVITY_HOST = "cosmic-ui:activity:host:v1";
 
-const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
-const Text = Schema.String.check(Schema.isMaxLength(4096));
+const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(ACTIVITY_LIMITS.id));
+const Text = Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.text));
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
-const PhaseTitle = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160));
+const PhaseTitle = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(ACTIVITY_LIMITS.phaseTitle),
+);
 const Count = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(1_000_000),
+  Schema.isLessThanOrEqualTo(ACTIVITY_LIMITS.count),
 );
 export const ActivityPhaseSchema = Schema.Struct({
   title: PhaseTitle,
@@ -23,8 +28,18 @@ export const ActivityPhaseSchema = Schema.Struct({
   /**
    * The producer's own count of the phase's work, including members it no longer publishes or
    * the host no longer retains. When present, the phase state comes from it, not visible members.
+   * `stopped` and the optional `failed` and `skipped` are disjoint parts of `finished`; a phase
+   * with failures is never shown as done.
    */
-  work: Schema.optional(Schema.Struct({ items: Count, finished: Count, stopped: Count })),
+  work: Schema.optional(
+    Schema.Struct({
+      items: Count,
+      finished: Count,
+      stopped: Count,
+      failed: Schema.optional(Count),
+      skipped: Schema.optional(Count),
+    }),
+  ),
   /**
    * The producer's own count of planned members in this phase that never started, including
    * planned rows it does not publish. When present, phase rows show it instead of visible rows.
@@ -34,14 +49,14 @@ export const ActivityPhaseSchema = Schema.Struct({
 export type ActivityPhase = typeof ActivityPhaseSchema.Type;
 export const ActivityStartingSchema = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(16384),
+  Schema.isLessThanOrEqualTo(ACTIVITY_LIMITS.starting),
 );
 const ActivityFields = {
   id: Id,
   kind: Schema.Literals(["agent", "command", "question", "workflow"]),
-  title: Schema.String.check(Schema.isMaxLength(512)),
-  profile: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
-  route: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+  title: Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.title)),
+  profile: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.profile))),
+  route: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.route))),
   awaited: Schema.optional(Schema.Boolean),
   revision: Id,
   startedAt: Schema.optional(Timestamp),
@@ -49,23 +64,32 @@ const ActivityFields = {
   updatedAt: Schema.optional(Timestamp),
   parent: Schema.optional(Schema.Struct({ providerId: Id, itemId: Id })),
   summary: Schema.optional(Text),
-  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(16384))),
-  /** Workflow items only: ordered display phases, at most 32. */
-  phases: Schema.optional(Schema.Array(ActivityPhaseSchema).check(Schema.isMaxLength(32))),
+  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.detail))),
+  /** Workflow items only: ordered display phases, at most `ACTIVITY_LIMITS.phases`. */
+  phases: Schema.optional(
+    Schema.Array(ActivityPhaseSchema).check(Schema.isMaxLength(ACTIVITY_LIMITS.phases)),
+  ),
   /** A workflow's current phase, or the phase a direct workflow member belongs to. */
   phase: Schema.optional(PhaseTitle),
   /**
    * Workflow items only: the producer's own count of planned members outside its published
-   * `phases`, such as those in phases past the 32 shown, including rows it does not publish. When
+   * `phases`, such as those in phases past the ones shown, including rows it does not publish. When
    * present, it replaces the count of visible planned rows directly under the workflow.
    */
   unphasedPlanned: Schema.optional(Count),
   /**
-   * Display-only: work its producer declared but has not started, such as a workflow agent its
-   * script has not called yet. Planned items are never workflows and offer no actions; they are
-   * `pending` while their owner may still start them and `cancelled` once it never will.
+   * Work its producer declared but has not started, such as a workflow agent its script has not
+   * called yet. Planned items are never workflows. They are `pending` while their owner may still
+   * start them, when they may offer actions such as skipping them, and `cancelled`, with no
+   * actions, once it never will.
    */
   planned: Schema.optional(Schema.Boolean),
+  /**
+   * Cancelled work that was skipped before it started, such as a queued workflow agent the user
+   * skipped or a budget refused, as opposed to work someone stopped. Never planned, a workflow or
+   * a question.
+   */
+  skipped: Schema.optional(Schema.Boolean),
   actions: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -78,7 +102,7 @@ const ActivityFields = {
          */
         handoff: Schema.optional(Schema.Boolean),
       }),
-    ).check(Schema.isMaxLength(16)),
+    ).check(Schema.isMaxLength(ACTIVITY_LIMITS.actions)),
   ),
 };
 export const ActivityItemSchema = Schema.Union([
@@ -105,7 +129,7 @@ export const ActivityItemSchema = Schema.Union([
 ]);
 export type ActivityItem = typeof ActivityItemSchema.Type;
 export const ActivitySnapshotSchema = Schema.Array(ActivityItemSchema).check(
-  Schema.isMaxLength(512),
+  Schema.isMaxLength(ACTIVITY_LIMITS.items),
 );
 export const activityKey = (providerId: string, itemId: string): string =>
   JSON.stringify([providerId, itemId]);
@@ -159,13 +183,19 @@ const safeSummary = (text: string, limit: number) =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(text.slice(0, limit)), { maximumLength: limit });
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] | undefined => {
   if (
-    items.length > 512 ||
-    items.some((item) => (item.actions?.length ?? 0) > 16 || (item.phases?.length ?? 0) > 32)
+    items.length > ACTIVITY_LIMITS.items ||
+    items.some(
+      (item) =>
+        (item.actions?.length ?? 0) > ACTIVITY_LIMITS.actions ||
+        (item.phases?.length ?? 0) > ACTIVITY_LIMITS.phases,
+    )
   )
     return undefined;
   return items.map((item) =>
     detachActivityItem(item, safeSummary, (detail) =>
-      sanitizeDiagnosticContent(detail.slice(0, 16384), { maximumLength: 16384 }),
+      sanitizeDiagnosticContent(detail.slice(0, ACTIVITY_LIMITS.detail), {
+        maximumLength: ACTIVITY_LIMITS.detail,
+      }),
     ),
   );
 };

@@ -43,12 +43,16 @@ export interface SubagentWorkflowNotification {
   readonly name: string;
   readonly outcome: "completed" | "failed" | "stopped" | "interrupted";
   readonly durationMs: number;
-  /** Output tokens the run's live and reused agents spent; unknown for an interrupted run. */
-  readonly outputTokens?: number | undefined;
+  /**
+   * Tokens the run's live agents used, and their cost when every one reported it; reused results
+   * cost nothing. Unknown for an interrupted run.
+   */
+  readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
   readonly content: string;
   readonly agents: {
     readonly total: number;
     readonly failed: number;
+    readonly stopped: number;
     readonly skipped: number;
     readonly reused: number;
   };
@@ -229,11 +233,15 @@ const sendWorkflow = (
           name: displayName(notification.name),
           outcome: notification.outcome,
           durationMs: Math.max(0, Math.round(notification.durationMs)),
-          ...(notification.outputTokens !== undefined && {
-            outputTokens: Math.max(0, Math.round(notification.outputTokens)),
+          ...(notification.usage !== undefined && {
+            totalTokens: Math.max(0, Math.round(notification.usage.totalTokens)),
+          }),
+          ...(notification.usage?.cost !== undefined && {
+            cost: Math.max(0, notification.usage.cost),
           }),
           agents: notification.agents.total,
           failed: notification.agents.failed,
+          stopped: notification.agents.stopped,
           skipped: notification.agents.skipped,
           reused: notification.agents.reused,
         },

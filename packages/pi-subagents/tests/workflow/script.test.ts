@@ -100,6 +100,43 @@ describe("workflow script parsing", () => {
   });
 });
 
+describe("args schema in meta", () => {
+  const withArgs = (args: string) =>
+    `export const meta = { name: 'a', description: 'b', args: ${args} };\nreturn args;`;
+
+  it("compiles a literal args schema of any root when the script is parsed", () => {
+    for (const args of [
+      "{ type: 'object', properties: { target: { type: 'string' } }, required: ['target'] }",
+      "{ type: 'array', items: { type: 'string' } }",
+      "{ type: 'string', minLength: 1 }",
+    ]) {
+      const result = parse(withArgs(args));
+      if (result._tag === "Failure") throw new Error(result.failure.message);
+      expect(result.success.args?.summary, args).toBeTruthy();
+    }
+    const plain = parse("export const meta = { name: 'a', description: 'b' };\nreturn args;");
+    if (plain._tag === "Failure") throw new Error(plain.failure.message);
+    expect(plain.success.args).toBeUndefined();
+  });
+
+  it("rejects an unusable args schema as a script error naming meta.args", () => {
+    for (const args of [
+      "{ $ref: '#/$defs/x' }",
+      "'string'",
+      "{ type: 'string', pattern: '[' }",
+      `{ type: 'string', description: '${"x".repeat(20_000)}' }`,
+    ]) {
+      const result = parse(withArgs(args));
+      expect(result._tag, args.slice(0, 60)).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("WorkflowScriptError");
+        expect(result.failure.message).toContain("meta.args");
+      }
+    }
+    expect(failure(withArgs("{ type: kind }"))).toContain("pure literal");
+  });
+});
+
 describe("planned agents in meta", () => {
   const withAgents = (agents: string) =>
     `export const meta = { name: 'a', description: 'b', phases: [{ title: 'Find', agents: ${agents} }, { title: 'Verify' }] };`;

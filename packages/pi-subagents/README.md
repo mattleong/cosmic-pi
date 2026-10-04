@@ -8,12 +8,13 @@ Compact discovery counts statically eligible, disabled, and unavailable routes a
 
 ## Architecture documentation
 
-- [Architecture and source map](ARCHITECTURE.md)
+- [Architecture: ownership, boundaries, and lifecycle](ARCHITECTURE.md)
 - [Routing, candidate planning, and launch](docs/routing.md)
 - [Local backends and writer ownership](docs/local-backends.md)
 - [Completion, projection, and delivery](docs/completion-delivery.md)
 - [Settings workspace](docs/settings-workspace.md)
 - [Dynamic workflows and codemode scripting](docs/workflows.md)
+- [Workflow internals](docs/workflow-internals.md)
 
 ## Implemented behavior
 

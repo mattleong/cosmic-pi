@@ -41,6 +41,16 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
+  /**
+   * Discards a settled workspace only when its worker holds no work, checked under the same lock:
+   * its snapshot matches the baseline and no other file is in its tree. `confirm` gets the
+   * discard, still under that lock, and runs it or declines it with false. True once discarded;
+   * false for a worker that holds work, a record already frozen for review, or a declined discard.
+   */
+  readonly discardUnchanged: <E>(
+    target: WorkspaceSettledTarget,
+    confirm: (discard: Effect.Effect<void, WorkspaceError>) => Effect.Effect<boolean, E>,
+  ) => Effect.Effect<boolean, WorkspaceError | E>;
   readonly recoverDiscard: (
     target: WorkspaceSettledTarget & { readonly recoveryRiskAccepted: true },
   ) => Effect.Effect<void, WorkspaceError>;
@@ -63,7 +73,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
         const engine = yield* makeGitWorkspaceEngine(options.agentDirectory);
         const lock = yield* Semaphore.make(1);
         const safe = yield* SafeFile;
-        const run = <A>(effect: Effect.Effect<A, WorkspaceError, SafeFile>) =>
+        const run = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
           lock.withPermits(1)(effect.pipe(Effect.provideService(SafeFile, safe)));
         return WorkspaceService.of({
           create: (input) => run(engine.create(input)),
@@ -73,6 +83,12 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           revise: (input) => run(engine.revise(input)),
           fork: (input) => run(engine.fork(input)),
           discard: (input) => run(engine.discard(input)),
+          discardUnchanged: (input, confirm) =>
+            run(
+              engine.discardUnchanged(input, (discard) =>
+                confirm(discard.pipe(Effect.provideService(SafeFile, safe))),
+              ),
+            ),
           recoverDiscard: (input) => run(engine.recoverDiscard(input)),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),

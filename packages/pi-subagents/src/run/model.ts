@@ -199,6 +199,8 @@ export interface SubagentRunView {
   readonly reportStatus?: "available" | "claimed" | "delivered" | "missing" | undefined;
   readonly error?: string | undefined;
   readonly usage: SubagentUsage;
+  /** Tool calls the run started across its assignments; only grows. Absent before the first. */
+  readonly toolUses?: number | undefined;
 }
 
 export const SUBAGENT_ROOT_RUN_ID = "root";

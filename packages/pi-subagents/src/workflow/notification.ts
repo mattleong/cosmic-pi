@@ -1,31 +1,44 @@
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
-import { clipText, formatDuration, safeTextPrefix } from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core";
 import {
   sanitizeNotificationContent,
   type SubagentWorkflowNotification,
 } from "../boundary/host-notifier.ts";
 import type { WorkflowInterruptedRun } from "./journal.ts";
 import {
-  countWorkflowAgents,
+  countWorkflowRunAgents,
   WORKFLOW_NOTIFICATION_MAX_CHARS,
   WORKFLOW_RESULT_MAX_CHARS,
+  workflowAgentTotal,
   workflowWorkspaces,
   type WorkflowLogEntry,
   type WorkflowResult,
   type WorkflowRunView,
-  type WorkflowSource,
-  type WorkflowWorkspace,
 } from "./model.ts";
+import {
+  clipWorkflowText,
+  WORKFLOW_LOG_LINE_MAX_CHARS,
+  WORKFLOW_WORKSPACE_LINES,
+  WORKFLOW_WORKSPACES_TITLE,
+  workflowBudgetLine,
+  workflowExtendLine,
+  workflowFailureSection,
+  workflowFinishedAgentsLine,
+  workflowJournalLine,
+  workflowLogLine,
+  workflowOutcomeHeadline,
+  workflowRestart,
+  workflowResultSection,
+  workflowRunSubject,
+  workflowUsageLine,
+  workflowWarningsSection,
+  workflowWorkspaceLines,
+  workflowWorkspacesSection,
+} from "./run-text.ts";
 
 /** Log lines a notification repeats: every level for failed or stopped runs, warnings otherwise. */
 const NOTIFICATION_LOG_LINES = 12;
-/** Each repeated log line is shortened so the lines never crowd out the result. */
-const NOTIFICATION_LOG_LINE_MAX_CHARS = 400;
-/** Worktree proposals listed by id; the rest are counted. */
-const NOTIFICATION_WORKSPACES = 40;
-const STACK_MAX_CHARS = 8 * 1024;
-const FAILURE_MESSAGE_MAX_CHARS = 4 * 1024;
 /** Room kept for the saved file's path in a clipped result's header. */
 const RESULT_PATH_RESERVE = 1024;
 /** Fitting stops once the largest clip window that fits is known to within this many characters. */
@@ -35,177 +48,48 @@ const RESULT_FIT_PRECISION = 64;
 export const workflowValueText = (value: Schema.Json): string =>
   Predicate.isString(value) ? value : JSON.stringify(value, null, 2);
 
-const textSuffix = (text: string, length: number): string => {
-  const suffix = text.slice(Math.max(0, text.length - length));
-  // Never start the tail on the second half of a surrogate pair.
-  return /^[\uDC00-\uDFFF]/u.test(suffix) ? suffix.slice(1) : suffix;
-};
-
-/** Keeps the head and tail of long text, which usually hold a value's summary and conclusion. */
-export const clipWorkflowText = (text: string, maximum = WORKFLOW_RESULT_MAX_CHARS): string => {
-  if (text.length <= maximum) return text;
-  const marker = `\n… ${text.length - maximum} characters clipped …\n`;
-  const budget = Math.max(0, maximum - marker.length);
-  const head = Math.ceil(budget / 2);
-  return `${safeTextPrefix(text, head)}${marker}${textSuffix(text, budget - head)}`;
-};
-
-const duration = (run: WorkflowRunView): string =>
-  formatDuration(Math.max(0, (run.endedAt ?? run.startedAt) - run.startedAt));
-
-const headline = (run: WorkflowRunView): string => {
-  const subject = `Workflow "${run.name}" (${run.id})`;
-  if (run.state === "completed") return `${subject} completed in ${duration(run)}.`;
-  if (run.state === "failed") return `${subject} failed after ${duration(run)}.`;
-  const stopped = run.stoppedBy === "user" ? "was stopped by the user" : "was stopped";
-  return `${subject} ${stopped} after ${duration(run)}.`;
-};
-
-const agentsLine = (run: WorkflowRunView): string => {
-  const counts = countWorkflowAgents(run.agents);
-  return `Agents: ${[
-    `${run.agents.length} started`,
-    counts.failed > 0 ? `${counts.failed} failed` : "",
-    counts.skipped > 0 ? `${counts.skipped} skipped or stopped` : "",
-    run.reused > 0 ? `${run.reused} reused from ${run.resumedFrom ?? "the resumed run"}` : "",
-    run.planned.length > 0 ? `${run.planned.length} planned in meta but never called` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ")}. Output tokens: ${run.outputTokens}.`;
-};
-
-/** Where the main agent reads every finished agent's actual return value. */
-export const workflowJournalLine = (path: string): string =>
-  `Results journal: ${path} has one JSON line per finished agent() call (label, phase, state, reason, result); Read it to check what each agent actually returned.`;
-
-/** The file a fix edits and the start argument that runs it again. */
-export interface WorkflowRestart {
-  readonly file: string;
-  readonly argument: string;
-}
-
-/**
- * Where a run's script is fixed and started again: a saved workflow's or script file's own path,
- * so the fix outlives the run, and only an inline script's private copy. Undefined for an inline
- * script whose copy couldn't be saved.
- */
-export const workflowRestart = (
-  source: WorkflowSource,
-  scriptPath: string | undefined,
-): WorkflowRestart | undefined => {
-  switch (source.kind) {
-    case "saved":
-      return { file: source.path, argument: `name: ${JSON.stringify(source.name)}` };
-    case "file":
-      return { file: source.path, argument: `scriptPath: ${JSON.stringify(source.path)}` };
-    case "inline":
-      return scriptPath === undefined
-        ? undefined
-        : { file: scriptPath, argument: `scriptPath: ${JSON.stringify(scriptPath)}` };
-  }
-};
-
-/** How the main agent fixes a run's script and starts it again, reusing finished agents. */
-export const workflowRetryLine = (run: WorkflowRunView): string => {
-  const restart = workflowRestart(run.source, run.scriptPath);
-  return restart === undefined
-    ? `Fix the script, then start it again with resumeFromRunId: "${run.id}" to reuse the results of agents that already finished.`
-    : `Fix the script: edit ${restart.file} with your file tools, then start it again with ${restart.argument} and resumeFromRunId: "${run.id}" to reuse the results of agents that already finished.`;
-};
-
-const workspaceLines = <Workspace>(
-  workspaces: ReadonlyArray<Workspace>,
-  line: (workspace: Workspace) => string,
-): ReadonlyArray<string> => {
-  const hidden = workspaces.length - NOTIFICATION_WORKSPACES;
-  return [
-    ...workspaces.slice(0, NOTIFICATION_WORKSPACES).map(line),
-    ...(hidden > 0 ? [`- ${hidden} more; list them with subagent_workspace.`] : []),
-  ];
-};
-
-const workspacesSection = (run: WorkflowRunView): string | undefined => {
-  const writers = workflowWorkspaces(run);
-  if (writers.length === 0) return undefined;
-  return [
-    "Worktree proposals (review and integrate each with subagent_workspace):",
-    ...workspaceLines(
-      writers,
-      (workspace: WorkflowWorkspace) =>
-        `- ${workspace.workspaceId} · ${workspace.label} · ${workspace.state}`,
-    ),
-  ].join("\n");
-};
-
-const resultSection = (run: WorkflowRunView): string => {
-  const result = run.result;
-  if (!result) return "Result: null";
-  if (!result.clipped) return `Result:\n${result.text}`;
-  // The location comes first so clipping can never drop it.
-  const saved =
-    result.path !== undefined
-      ? `the full value is in ${result.path}; read it with offset and limit`
-      : "the full value couldn't be saved";
-  return `Result (clipped; ${saved}):\n${result.text}`;
-};
-
 /** Redacted before it is bounded, so redaction can't lengthen a section past its bound. */
 const boundedText = (text: string, maximum: number): string =>
   clipWorkflowText(sanitizeNotificationContent(text), maximum);
 
 const logLine = (entry: WorkflowLogEntry): string =>
-  `${entry.level === "warning" ? "warning: " : ""}${clipText(sanitizeNotificationContent(entry.message), NOTIFICATION_LOG_LINE_MAX_CHARS)}`;
+  workflowLogLine(entry, (message) =>
+    clipText(sanitizeNotificationContent(message), WORKFLOW_LOG_LINE_MAX_CHARS),
+  );
 
 const logSection = (title: string, entries: ReadonlyArray<WorkflowLogEntry>): string | undefined =>
   entries.length === 0
     ? undefined
     : [title, ...entries.slice(-NOTIFICATION_LOG_LINES).map(logLine)].join("\n");
 
-/** The newest warnings, kept apart from the log, and how many earlier ones aren't shown. */
-const warningsSection = (run: WorkflowRunView): string | undefined => {
-  const warnings = (run.warnings ?? run.logs.filter((entry) => entry.level === "warning")).slice(
-    -NOTIFICATION_LOG_LINES,
-  );
-  const hidden = (run.warningCount ?? warnings.length) - warnings.length;
-  if (warnings.length === 0) return undefined;
-  return [
-    "Warnings:",
-    ...(hidden > 0 ? [`(${hidden} earlier warnings aren't shown.)`] : []),
-    ...warnings.map(logLine),
-  ].join("\n");
-};
-
-const failureSection = (run: WorkflowRunView): string => {
-  const failure = run.failure;
-  const message = failure
-    ? `${failure.name ? `${failure.name}: ` : ""}${failure.message}`
-    : "The script failed.";
-  return [
-    `Error: ${boundedText(message, FAILURE_MESSAGE_MAX_CHARS)}`,
-    failure?.stack && boundedText(failure.stack, STACK_MAX_CHARS),
-    workflowRetryLine(run),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-};
-
 /** Sections in order; a completed run's result comes last, sized to the room left for it. */
 const sections = (run: WorkflowRunView): ReadonlyArray<string | undefined> => {
   const frame = [
-    headline(run),
-    agentsLine(run),
+    workflowOutcomeHeadline(run),
+    [
+      workflowFinishedAgentsLine(run),
+      workflowUsageLine(run, run.endedAt ?? run.startedAt),
+      workflowBudgetLine(run),
+    ]
+      .filter((line) => line !== undefined)
+      .join("\n"),
     run.journalPath === undefined ? undefined : workflowJournalLine(run.journalPath),
-    workspacesSection(run),
+    workflowWorkspacesSection(run, WORKFLOW_WORKSPACES_TITLE, WORKFLOW_WORKSPACE_LINES),
   ];
   if (run.state === "completed")
     return [
       ...frame,
-      // Warnings explain null results, such as agent() calls that were invalid or failed.
-      warningsSection(run),
-      resultSection(run),
+      // Warnings explain null results, such as agents that failed or items that threw.
+      workflowWarningsSection(run, NOTIFICATION_LOG_LINES, logLine),
+      workflowExtendLine(run),
+      run.result ? workflowResultSection(run.result) : "Result: null",
     ];
   if (run.state === "failed")
-    return [...frame, failureSection(run), logSection("Recent log:", run.logs)];
+    return [
+      ...frame,
+      workflowFailureSection(run, boundedText).join("\n\n"),
+      logSection("Recent log:", run.logs),
+    ];
   // Someone chose to stop it; nothing suggests running it again.
   return [...frame, logSection("Recent log:", run.logs)];
 };
@@ -269,18 +153,23 @@ export const workflowNotification = (
   const outcome = run.state;
   if (outcome !== "completed" && outcome !== "failed" && outcome !== "stopped") return undefined;
   if (run.stoppedBy === "tool") return undefined;
-  const counts = countWorkflowAgents(run.agents);
+  const counts = countWorkflowRunAgents(run);
   return {
     type: "workflow",
     runId: run.id,
     name: run.name,
     outcome,
     durationMs: Math.max(0, (run.endedAt ?? run.startedAt) - run.startedAt),
-    outputTokens: run.outputTokens,
+    usage: {
+      totalTokens: run.usage.totalTokens,
+      // A cost some agents didn't report is a lower bound, which the compact row leaves out.
+      ...(run.usage.cost !== undefined && run.usage.unpriced === 0 && { cost: run.usage.cost }),
+    },
     content: content(run),
     agents: {
-      total: run.agents.length + run.reused,
+      total: workflowAgentTotal(run),
       failed: counts.failed,
+      stopped: counts.stopped,
       skipped: counts.skipped,
       reused: run.reused,
     },
@@ -288,28 +177,46 @@ export const workflowNotification = (
   };
 };
 
-const interruptedOpening = (run: WorkflowInterruptedRun): ReadonlyArray<string> => {
-  const subject = `Workflow "${run.name}" (${run.runId})`;
-  // Someone chose to stop it, so nothing suggests running it again.
-  if (run.stopped)
-    return [
-      `${subject} was being stopped when the session was reloaded, navigated or replaced, so its final report will not arrive.`,
-    ];
+/** What ended the run: a teardown this process remembers, or anything before Pi restarted. */
+const interruptedCause = (run: WorkflowInterruptedRun): string =>
+  run.restarted ? "before Pi restarted" : "when the session was reloaded, navigated or replaced";
+
+/** What came before Pi accepted an ended run's report. */
+const undeliveredCause = (run: WorkflowInterruptedRun): string =>
+  run.restarted ? "before Pi restarted" : "before the session was reloaded, navigated or replaced";
+
+/** How to start the run again with its finished agents reused. */
+const resumeLine = (run: WorkflowInterruptedRun): string => {
+  const restart = workflowRestart(run.origin.source, run.origin.scriptPath);
+  const script = restart === undefined ? "" : `, ${restart.argument}`;
   const rerun =
     run.workspaces.length === 0
       ? ""
       : " Writers that worked in worktrees run again, since this session can't manage those worktrees.";
-  const restart = run.origin && workflowRestart(run.origin.source, run.origin.scriptPath);
-  const script = restart === undefined ? "" : `${restart.argument} and `;
+  return `${run.finished} of its agents had finished. Start it again with the same args${script} and resumeFromRunId: "${run.runId}" to reuse their results.${rerun}`;
+};
+
+const interruptedOpening = (run: WorkflowInterruptedRun): ReadonlyArray<string> => {
+  const subject = workflowRunSubject(run.name, run.runId);
+  // Nothing suggests running again a run someone chose to stop.
+  if (run.ended !== undefined) {
+    const opening = `${subject} ${run.ended}, but its report didn't arrive ${undeliveredCause(run)}.`;
+    return run.stopped ? [opening] : [opening, resumeLine(run)];
+  }
+  if (run.stopped)
+    return [
+      `${subject} was being stopped ${interruptedCause(run)}, so its final report will not arrive.`,
+    ];
   return [
-    `${subject} was interrupted when the session was reloaded, navigated or replaced, so its result will not arrive.`,
-    `${run.finished} of its agents had finished. Start it again with ${script}resumeFromRunId: "${run.runId}" to reuse their results.${rerun}`,
+    `${subject} was interrupted ${interruptedCause(run)}, so its result will not arrive.`,
+    resumeLine(run),
   ];
 };
 
 /**
- * The notice for a run an earlier activation of the session left running at teardown. Its
- * worktrees belong to that activation, so the notice offers manual recovery, not review.
+ * The notice for a run an earlier activation of the session, or an earlier Pi process, left
+ * unfinished. Its worktrees belong to that activation, so the notice offers manual recovery, not
+ * review.
  */
 export const interruptedWorkflowNotification = (
   run: WorkflowInterruptedRun,
@@ -319,8 +226,12 @@ export const interruptedWorkflowNotification = (
     run.workspaces.length === 0
       ? undefined
       : [
-          "Its writers created these worktrees before the reload, navigation or replacement, so subagent_workspace can't review, integrate or discard them in this session. Recover any changes you need by hand from each worktree's path, which subagent_workspace list shows:",
-          ...workspaceLines(run.workspaces, (workspaceId) => `- ${workspaceId}`),
+          `Its writers created these worktrees ${run.restarted ? "before Pi restarted" : "before the reload, navigation or replacement"}, so subagent_workspace can't review, integrate or discard them in this session. Recover any changes you need by hand from each worktree's path, which subagent_workspace list shows:`,
+          ...workflowWorkspaceLines(
+            run.workspaces,
+            (workspaceId) => `- ${workspaceId}`,
+            WORKFLOW_WORKSPACE_LINES,
+          ),
         ].join("\n"),
   ]
     .filter((section): section is string => section !== undefined)
@@ -332,7 +243,7 @@ export const interruptedWorkflowNotification = (
     outcome: "interrupted",
     durationMs: 0,
     content: sanitizeNotificationContent(text),
-    agents: { total: run.finished, failed: 0, skipped: 0, reused: 0 },
+    agents: { total: run.finished, failed: 0, stopped: 0, skipped: 0, reused: 0 },
     workspaces: run.workspaces,
   };
 };

@@ -27,9 +27,9 @@ const rejection = (spec: WorkflowAgentSpec) =>
 describe("workflow host", () => {
   it.effect("rejects agent() calls no route could admit", () =>
     Effect.gen(function* () {
-      expect(yield* rejection({ task: "t", name: "a", profile: "nonexistent" })).toContain(
-        "nonexistent",
-      );
+      const unknown = yield* rejection({ task: "t", name: "a", profile: "nonexistent" });
+      expect(unknown).toContain("nonexistent");
+      expect(unknown).toContain("scout");
       expect(
         yield* rejection({ task: "t", name: "a", profile: "scout", writes: ["a.ts"] }),
       ).toContain("writer");
@@ -40,16 +40,22 @@ describe("workflow host", () => {
     }),
   );
 
-  it.effect("accepts writer options on a writer profile", () =>
+  it.effect("accepts writer options on a writer profile and reports each profile's access", () =>
     Effect.gen(function* () {
       const workflowHost = yield* host();
-      yield* workflowHost.checkAgent({
-        task: "t",
-        name: "a",
-        profile: "worker",
-        writes: ["src/a.ts"],
-        isolation: "worktree",
-      });
+      expect(
+        yield* workflowHost.checkAgent({
+          task: "t",
+          name: "a",
+          profile: "worker",
+          writes: ["src/a.ts"],
+          isolation: "worktree",
+        }),
+      ).toBe("writer");
+      expect(yield* workflowHost.checkAgent({ task: "t", name: "a", profile: "worker" })).toBe(
+        "writer",
+      );
+      expect(yield* workflowHost.checkAgent({ task: "t", name: "a" })).toBe("read-only");
     }),
   );
 

@@ -28,6 +28,7 @@ import {
   useProbe,
   waitForCompleted,
   withService,
+  awaitRuns,
 } from "./fixtures/service-harness.ts";
 
 type CompletionPolicy = (
@@ -178,16 +179,16 @@ describe("SubagentService", () => {
       expect(competing.finalText).toBeUndefined();
       expect(updates.at(-1)?.[0]?.reportStatus).toBe("available");
 
-      const conflict = yield* service.awaitTerminal([run.id], "all_finished").pipe(Effect.flip);
+      const conflict = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "InvalidSubagentRequestError",
         code: "completion_claim_conflict",
       });
 
       yield* Fiber.interrupt(first);
-      const replacement = yield* service
-        .awaitTerminal([run.id], "all_finished")
-        .pipe(Effect.forkScoped);
+      const replacement = yield* awaitRuns(service, [run.id], "all_finished").pipe(
+        Effect.forkScoped,
+      );
       expect(yield* Fiber.join(replacement)).toMatchObject([
         { state: "completed", finalText: "Exclusively delivered.", reportStatus: "available" },
       ]);
@@ -206,7 +207,7 @@ describe("SubagentService", () => {
       return withService(layer, function* (service) {
         const run = yield* service.start(request({ name: "revision-race" }));
         let triggered = false;
-        const [completed] = yield* service.awaitTerminal([run.id], "all_finished", () => {
+        const [completed] = yield* awaitRuns(service, [run.id], "all_finished", () => {
           if (triggered) return;
           triggered = true;
           fake.controls[0]?.settle("Completed during subscription setup.");
@@ -231,7 +232,8 @@ describe("SubagentService", () => {
       );
       let updateProjection: SubagentProjection["runs"] | undefined;
       let settled = false;
-      const completed = yield* service.awaitTerminal(
+      const completed = yield* awaitRuns(
+        service,
         [parent.id],
         "all_finished",
         (_runs, projection) => {
@@ -259,12 +261,18 @@ describe("SubagentService", () => {
         const second = yield* service.start(request({ name: "revision-second" }));
         let firstUpdates = 0;
         let secondUpdates = 0;
-        const firstAwait = yield* service
-          .awaitTerminal([first.id], "all_finished", () => firstUpdates++)
-          .pipe(Effect.forkScoped);
-        const secondAwait = yield* service
-          .awaitTerminal([second.id], "all_finished", () => secondUpdates++)
-          .pipe(Effect.forkScoped);
+        const firstAwait = yield* awaitRuns(
+          service,
+          [first.id],
+          "all_finished",
+          () => firstUpdates++,
+        ).pipe(Effect.forkScoped);
+        const secondAwait = yield* awaitRuns(
+          service,
+          [second.id],
+          "all_finished",
+          () => secondUpdates++,
+        ).pipe(Effect.forkScoped);
         yield* yieldUntil(() => firstUpdates > 0 && secondUpdates > 0);
 
         yield* service.rename(first.id, "revision-first-renamed");
@@ -293,9 +301,10 @@ describe("SubagentService", () => {
       const service = Context.get(context, SubagentService);
       const run = yield* service.start(request({ name: "revision-shutdown" }));
       let updates = 0;
-      const waiting = yield* service
-        .awaitTerminal([run.id], "all_finished", () => updates++)
-        .pipe(Effect.result, Effect.forkScoped);
+      const waiting = yield* awaitRuns(service, [run.id], "all_finished", () => updates++).pipe(
+        Effect.result,
+        Effect.forkScoped,
+      );
       yield* yieldUntil(() => updates > 0);
 
       yield* Scope.close(serviceScope, Exit.void);
@@ -359,7 +368,7 @@ describe("SubagentService", () => {
         fake.controls[0]?.settle("Delivered report text.");
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
         if (deliveredBy === "await") {
-          const [awaited] = yield* service.awaitTerminal([run.id], "all_finished");
+          const [awaited] = yield* awaitRuns(service, [run.id], "all_finished");
           expect(awaited?.finalText).toBe("Delivered report text.");
         } else {
           yield* TestClock.adjust("100 millis");
@@ -385,7 +394,7 @@ describe("SubagentService", () => {
         }
 
         // Await keeps redacting an outcome it can no longer own.
-        const [awaitedAgain] = yield* service.awaitTerminal([run.id], "all_finished");
+        const [awaitedAgain] = yield* awaitRuns(service, [run.id], "all_finished");
         expect(awaitedAgain?.reportStatus).toBe("delivered");
         expect(awaitedAgain).not.toHaveProperty("finalText");
         yield* TestClock.adjust("30 seconds");
@@ -503,9 +512,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "awaiting-question" }));
-      const awaiting = yield* service
-        .awaitTerminal([run.id], "all_finished")
-        .pipe(Effect.forkScoped);
+      const awaiting = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.forkScoped);
 
       fake.controls[0]?.offerIpc(
         contactParentFrame("question-during-await", "question", "Should I update the fixture?"),
@@ -525,9 +532,7 @@ describe("SubagentService", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "awaiting-pause" }));
-      const awaiting = yield* service
-        .awaitTerminal([run.id], "all_finished")
-        .pipe(Effect.forkScoped);
+      const awaiting = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.forkScoped);
 
       yield* service.interrupt(run.id);
       expect(yield* Fiber.join(awaiting)).toMatchObject([{ id: run.id, state: "paused" }]);
@@ -545,12 +550,12 @@ describe("SubagentService", () => {
       );
       const interruptGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextSend("abort", interruptGate);
-      const offenderAwait = yield* service
-        .awaitTerminal([offender.id], "all_finished")
-        .pipe(Effect.forkScoped);
-      const peerAwait = yield* service
-        .awaitTerminal([peer.id], "all_finished")
-        .pipe(Effect.forkScoped);
+      const offenderAwait = yield* awaitRuns(service, [offender.id], "all_finished").pipe(
+        Effect.forkScoped,
+      );
+      const peerAwait = yield* awaitRuns(service, [peer.id], "all_finished").pipe(
+        Effect.forkScoped,
+      );
 
       fake.controls[0]?.offer({
         type: "tool_execution_start",
@@ -585,7 +590,7 @@ describe("SubagentService", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const failure = yield* Effect.flip(
-        service.awaitTerminal(["agent-missing-1", "agent-missing-2"], "all_finished"),
+        awaitRuns(service, ["agent-missing-1", "agent-missing-2"], "all_finished"),
       );
       expect(failure).toMatchObject({
         _tag: "InvalidSubagentRequestError",
@@ -601,9 +606,7 @@ describe("SubagentService", () => {
 
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "awaited-failure" }));
-      const awaiting = yield* service
-        .awaitTerminal([run.id], "all_finished")
-        .pipe(Effect.forkScoped);
+      const awaiting = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       fake.controls[0]?.exit(1);
       const [failed] = yield* Fiber.join(awaiting);
@@ -620,9 +623,9 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const first = yield* service.start(request({ name: "await-one" }));
       const second = yield* service.start(request({ name: "await-two" }));
-      const waiting = yield* service
-        .awaitTerminal([first.id, second.id], "all_finished", (runs) => updates.push(runs))
-        .pipe(Effect.forkScoped);
+      const waiting = yield* awaitRuns(service, [first.id, second.id], "all_finished", (runs) =>
+        updates.push(runs),
+      ).pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
 
       fake.controls[0]?.settle();
@@ -642,7 +645,7 @@ describe("SubagentService", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
       for (const until of ["all_finished", "any_finished"] as const) {
-        const error = yield* Effect.flip(service.awaitTerminal([], until));
+        const error = yield* Effect.flip(awaitRuns(service, [], until));
         expect(error._tag).toBe("InvalidSubagentRequestError");
       }
     });
@@ -654,9 +657,9 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const first = yield* service.start(request({ name: "any-one" }));
       const second = yield* service.start(request({ name: "any-two" }));
-      const waiting = yield* service
-        .awaitTerminal([first.id, second.id], "any_finished", (runs) => updates.push(runs))
-        .pipe(Effect.forkScoped);
+      const waiting = yield* awaitRuns(service, [first.id, second.id], "any_finished", (runs) =>
+        updates.push(runs),
+      ).pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       fake.controls[1]?.settle();
       const runs = yield* Fiber.join(waiting);
@@ -669,9 +672,9 @@ describe("SubagentService", () => {
     const updates: SubagentProjection["runs"][] = [];
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "cancelled-await" }));
-      const waiting = yield* service
-        .awaitTerminal([run.id], "all_finished", (runs) => updates.push(runs))
-        .pipe(Effect.forkScoped);
+      const waiting = yield* awaitRuns(service, [run.id], "all_finished", (runs) =>
+        updates.push(runs),
+      ).pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       yield* Fiber.interrupt(waiting);
       fake.controls[0]?.settle();
@@ -857,7 +860,7 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const run = yield* firstAttempt(service);
       // The await claim is serialized against delivery and removes the queued retry.
-      const runs = yield* service.awaitTerminal([run.id], "all_finished");
+      const runs = yield* awaitRuns(service, [run.id], "all_finished");
       expect(runs[0]?.state).toBe("completed");
       yield* TestClock.adjust("60 seconds");
       expect(attempts()).toBe(1);

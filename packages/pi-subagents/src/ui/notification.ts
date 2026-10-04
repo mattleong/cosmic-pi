@@ -3,10 +3,17 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { countLabel, formatDuration, formatTokens, stripTerminalControls } from "pi-cosmic-core";
+import {
+  countLabel,
+  formatCost,
+  formatDuration,
+  formatTokens,
+  stripTerminalControls,
+} from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
+import { workflowStateLabel } from "./run-state.ts";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120));
@@ -16,9 +23,12 @@ const WorkflowDetails = Schema.Struct({
   name: Name,
   outcome: Schema.Literals(["completed", "failed", "stopped", "interrupted"]),
   durationMs: Schema.Natural,
-  outputTokens: Schema.optional(Schema.Natural),
+  totalTokens: Schema.optional(Schema.Natural),
+  cost: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
   agents: Count,
   failed: Count,
+  // Notifications from before stopped agents were counted apart from skipped ones carry none.
+  stopped: Schema.optional(Count),
   skipped: Count,
   reused: Count,
 });
@@ -78,16 +88,17 @@ const completedRow = (
 };
 
 const WORKFLOW_OUTCOMES = {
-  completed: { verb: "completed in", outcome: "success" },
-  failed: { verb: "failed after", outcome: "error" },
-  stopped: { verb: "stopped after", outcome: "cancelled" },
-  interrupted: { verb: "interrupted", outcome: "cancelled" },
+  completed: { verb: `${workflowStateLabel("completed")} in`, outcome: "success" },
+  failed: { verb: `${workflowStateLabel("failed")} after`, outcome: "error" },
+  stopped: { verb: `${workflowStateLabel("stopped")} after`, outcome: "cancelled" },
+  interrupted: { verb: workflowStateLabel("interrupted"), outcome: "cancelled" },
 } as const;
 
 const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
   const { verb, outcome } = WORKFLOW_OUTCOMES[details.outcome];
   const problems = [
     details.failed ? `${details.failed} failed` : "",
+    details.stopped ? `${details.stopped} stopped` : "",
     details.skipped ? `${details.skipped} skipped` : "",
   ].filter(Boolean);
   // A torn-down run's duration isn't known, only that it was cut short.
@@ -97,11 +108,13 @@ const workflowRow = (details: typeof WorkflowDetails.Type): NotificationRow => {
     details.outcome === "interrupted"
       ? `${countLabel(details.agents, "agent")} finished`
       : countLabel(details.agents, "agent");
-  const tokens = details.outputTokens ? [`${formatTokens(details.outputTokens)} tokens`] : [];
+  const tokens = details.totalTokens ? [`${formatTokens(details.totalTokens)} tokens`] : [];
+  const cost = details.cost === undefined ? [] : [`~${formatCost(details.cost)}`];
   return {
     summary: {
       subject: details.name,
       counters: [
+        [ended, agents, ...problems, ...tokens, ...cost].join(" · "),
         [ended, agents, ...problems, ...tokens].join(" · "),
         [ended, agents, ...problems].join(" · "),
         `${ended} · ${agents}`,

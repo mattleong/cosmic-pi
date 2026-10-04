@@ -6,11 +6,8 @@ import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import type { SubagentRunView } from "../src/run/model.ts";
-import {
-  registerSubagentActivity,
-  subagentActivityItems,
-  subagentActivityDetail,
-} from "../src/boundary/host-activity.ts";
+import { registerSubagentActivity } from "../src/boundary/host-activity.ts";
+import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { view } from "./tools/fixtures/tool-harness.ts";
 
@@ -409,7 +406,7 @@ describe("subagent activity provider", () => {
       const signal = yield* Effect.abortSignal;
       expect(invoke).toBeDefined();
       yield* Effect.promise(() =>
-        expect(getDetail?.("run", revision, signal)).resolves.toContain("running"),
+        expect(getDetail?.("run", revision, signal)).resolves.toContain("Review auth"),
       );
       const cancelled = new AbortController();
       const pending = invoke!("run", "stop", revision, cancelled.signal);

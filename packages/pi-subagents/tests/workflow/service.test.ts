@@ -5,13 +5,14 @@ import * as FileSystem from "effect/FileSystem";
 import { WorkflowService } from "../../src/workflow/service.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import {
-  resultValue,
   controlForTask,
   eventually,
   fakeNativeReportBackendLayer,
   finished,
+  inline,
   profileLayerFor,
   reportTask,
+  resultValue,
   runningTask,
   runWhere,
   script,
@@ -20,8 +21,6 @@ import {
   withWorkflows,
   workflowFixture,
 } from "./fixtures/workflow-harness.ts";
-
-const inline = (body: string) => ({ kind: "inline" as const, script: script(body) });
 
 describe("workflow runs", () => {
   it.live("returns the script value once its agents report and notifies the root once", () => {
@@ -382,6 +381,76 @@ describe("workflow resume", () => {
       }),
     );
   });
+
+  it.live("runs the check again when only the shared-checkout writer before it changed", () => {
+    const fixture = workflowFixture();
+    const implementThenCheck = (task: string) =>
+      inline(
+        `const fixed = await agent(${JSON.stringify(task)}, { profile: "worker" }); return [fixed, await agent("run the tests")];`,
+      );
+    return withWorkflows(fixture, (workflows) =>
+      Effect.gen(function* () {
+        const first = yield* workflows.start(
+          { source: implementThenCheck("implement the fix"), args: null },
+          testHost(),
+        );
+        yield* reportTask(fixture, "implement the fix", "Implemented.");
+        yield* reportTask(fixture, "run the tests", "Tests fail.");
+        expect((yield* finished(workflows, first.id)).state).toBe("completed");
+
+        const resumed = yield* workflows.start(
+          {
+            source: implementThenCheck("implement the fix properly"),
+            args: null,
+            resumeFromRunId: first.id,
+          },
+          testHost(),
+        );
+        yield* reportTask(fixture, "implement the fix properly", "Implemented properly.");
+        yield* reportTask(fixture, "run the tests", "Tests pass.");
+        const run = yield* finished(workflows, resumed.id);
+        expect(resultValue(run)).toEqual(["Implemented properly.", "Tests pass."]);
+        expect(run.reused).toBe(0);
+      }),
+    );
+  });
+
+  it.live(
+    "fails a run on an invalid call inside parallel() and reuses its agents on resume",
+    () => {
+      const fixture = workflowFixture();
+      const source = (options: string) =>
+        inline(
+          `const map = await agent("map the code"); return [map, ...(await parallel([() => agent("review the map", ${options})]))];`,
+        );
+      return withWorkflows(fixture, (workflows) =>
+        Effect.gen(function* () {
+          const failed = yield* workflows.start(
+            { source: source('{ agentType: "Explore" }'), args: null },
+            testHost(),
+          );
+          yield* reportTask(fixture, "map the code", "Mapped.");
+          const run = yield* finished(workflows, failed.id);
+          expect(run.state).toBe("failed");
+          expect(run.failure?.message).toContain('profile: "scout"');
+          expect(stateOfTask(fixture, "review the map")).toBeUndefined();
+          const notification = yield* eventually(() => fixture.delivered[0], "the notification");
+          expect(notification.outcome).toBe("failed");
+          expect(notification.content).toContain(run.scriptPath ?? "the script copy");
+          expect(notification.content).toContain(`resumeFromRunId: "${failed.id}"`);
+
+          const resumed = yield* workflows.start(
+            { source: source('{ profile: "scout" }'), args: null, resumeFromRunId: failed.id },
+            testHost(),
+          );
+          yield* reportTask(fixture, "review the map", "Reviewed.");
+          const done = yield* finished(workflows, resumed.id);
+          expect(resultValue(done)).toEqual(["Mapped.", "Reviewed."]);
+          expect(done.reused).toBe(1);
+        }),
+      );
+    },
+  );
 
   it.live("rejects resuming a run that is still running", () => {
     const fixture = workflowFixture();

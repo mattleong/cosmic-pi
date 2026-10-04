@@ -7,6 +7,7 @@ import {
   type InvalidSubagentRequestError,
   type SubagentError,
   type SubagentRuntimeClosedError,
+  type SubagentWriterConflictError,
 } from "./errors.ts";
 import type { RunContext, RunOwnership, RunRecord } from "./internal.ts";
 import {
@@ -16,7 +17,6 @@ import {
   type SubagentUsage,
 } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
-import type { QueuedStartRefusal } from "./admission-signal.ts";
 import type { WorkspaceBindingStatus } from "./workspace-binding.ts";
 
 /** Exclusive capability for one owned run's first completion generation. */
@@ -27,21 +27,24 @@ export interface OwnedRunHandle {
   readonly claimToken: string;
 }
 
-export type OwnedRunOutcome =
-  | {
-      readonly kind: "completed";
-      readonly text: string;
-      readonly warning?: string | undefined;
-      readonly usage: SubagentUsage;
-    }
-  | {
-      readonly kind: "failed" | "stopped";
-      readonly reason: string;
-      readonly usage: SubagentUsage;
-    };
+/** What an owned run used by the time it settled: its usage and the tool calls it started. */
+interface OwnedRunSpend {
+  readonly usage: SubagentUsage;
+  readonly toolUses: number;
+}
 
-/** `consume` drops the report; `hand-back` releases it to ordinary root delivery. */
-export type OwnedRunRelease = "consume" | "hand-back";
+export type OwnedRunOutcome = OwnedRunSpend &
+  (
+    | {
+        readonly kind: "completed";
+        readonly text: string;
+        readonly warning?: string | undefined;
+      }
+    | {
+        readonly kind: "failed" | "stopped";
+        readonly reason: string;
+      }
+  );
 
 export interface OwnedRunStart {
   readonly ownerId: string;
@@ -74,8 +77,6 @@ export interface OwnedRunCoordinatorContract {
   readonly awaitOwned: (
     handle: OwnedRunHandle,
   ) => Effect.Effect<OwnedRunOutcome, InvalidSubagentRequestError | SubagentRuntimeClosedError>;
-  /** `consume` stops a live run first; `hand-back` lets a live run report to the root. */
-  readonly releaseOwned: (handle: OwnedRunHandle, release: OwnedRunRelease) => Effect.Effect<void>;
   /**
    * Revokes admission, stops the owner's live runs, and releases their reports: an unread
    * completed writer report goes to the root, everything else is consumed.
@@ -93,16 +94,26 @@ export interface OwnedRunCoordinatorContract {
     after: number,
   ) => Effect.Effect<void, SubagentRuntimeClosedError>;
   /**
-   * Whether the refusal that queued `request` still stands, checked under the run lock without
-   * validation, backend resolution or preflight: the parent's direct children, with the slots
-   * that worktree launches hold while they acquire workspaces, still fill its limit, or for a
-   * writer conflict, a writer still conflicts in a way that clears by itself. False means only
-   * that a start may now be admitted. Read the admission revision before checking.
+   * How many of these queued workflow starts, from the front, the root could admit now, checked
+   * under the run lock without validation, backend resolution or preflight. It counts the slots
+   * worktree launches hold while they acquire workspaces and the root slots workflow agents
+   * leave free for the main agent. `letThrough` names the run ids of owned starts already let
+   * through; each one that holds no slot of its own yet counts as a workflow agent. A count only
+   * means those starts may now be admitted. Read the admission revision before checking.
    */
-  readonly queuedStartRefused: (
+  readonly queuedStartsAdmissible: (
+    requests: ReadonlyArray<StartSubagentRequest>,
+    letThrough: ReadonlyArray<string>,
+  ) => Effect.Effect<number>;
+  /**
+   * The writer a queued shared-checkout writer still conflicts with in a way that clears by
+   * itself, checked the same way; undefined when none does.
+   */
+  readonly queuedWriterConflict: (
     request: StartSubagentRequest,
-    refusal: QueuedStartRefusal,
-  ) => Effect.Effect<boolean>;
+  ) => Effect.Effect<SubagentWriterConflictError | undefined>;
+  /** The direct-child limit the session's current nesting policy sets for the root. */
+  readonly rootChildLimit: Effect.Effect<number>;
   /** What this session's coordinator knows of a writer workspace, read under the run lock. */
   readonly workspaceBindingStatus: (workspaceId: string) => Effect.Effect<WorkspaceBindingStatus>;
 }
@@ -220,15 +231,16 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
   const isLive = (record: RunRecord): boolean =>
     !record.stoppedByParent && !isTerminalRunState(record.view.state);
 
-  /** Caller holds the lock. A live run is always handed back, never silently dropped. */
-  const releaseLocked = (handle: OwnedRunHandle, completedWriter: OwnedRunRelease): void => {
+  /**
+   * Caller holds the lock. A live run, or a completed writer's unread report, goes back to the
+   * root, never silently dropped; anything else is consumed.
+   */
+  const releaseLocked = (handle: OwnedRunHandle): void => {
     const record = ownedRecordLocked(handle);
     if (!record) return;
     const payload = record.completionGenerations.get(handle.generation);
     const unreadWriterReport =
-      completedWriter === "hand-back" &&
-      payload?.outcome === "completed" &&
-      record.view.writeIntent === "writer";
+      payload?.outcome === "completed" && record.view.writeIntent === "writer";
     if (isLive(record) || unreadWriterReport) handBackLocked(record, handle);
     else consumeLocked(record, handle);
   };
@@ -256,9 +268,7 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
 
   /** Stops a live run, then releases its report; an unread writer report goes to the root. */
   const retire = (handle: OwnedRunHandle) =>
-    stopLive(handle).pipe(
-      Effect.andThen(withLock(Effect.sync(() => releaseLocked(handle, "hand-back")))),
-    );
+    stopLive(handle).pipe(Effect.andThen(withLock(Effect.sync(() => releaseLocked(handle)))));
 
   const openOwner: OwnedRunCoordinatorContract["openOwner"] = (ownerId) =>
     withLock(
@@ -319,7 +329,10 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
             `Subagent ${handle.runId} is no longer owned by ${handle.ownerId}.`,
           ),
         );
-      const usage = record.view.usage;
+      const spend: OwnedRunSpend = {
+        usage: record.view.usage,
+        toolUses: record.view.toolUses ?? 0,
+      };
       const payload = record.completionGenerations.get(handle.generation);
       if (payload) {
         consumeLocked(record, handle);
@@ -330,9 +343,9 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
                   kind: "completed",
                   text: payload.finalText ?? "",
                   ...(payload.warning && { warning: payload.warning }),
-                  usage,
+                  ...spend,
                 }
-              : { kind: "failed", reason: payload.error ?? "Run failed.", usage },
+              : { kind: "failed", reason: payload.error ?? "Run failed.", ...spend },
         });
       }
       if (!isTerminalRunState(record.view.state))
@@ -341,8 +354,12 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
       return Effect.succeed({
         outcome:
           record.view.state === "stopped"
-            ? { kind: "stopped", reason: STOPPED_REASON, usage }
-            : { kind: "failed", reason: record.view.error ?? "Run ended without a report.", usage },
+            ? { kind: "stopped", reason: STOPPED_REASON, ...spend }
+            : {
+                kind: "failed",
+                reason: record.view.error ?? "Run ended without a report.",
+                ...spend,
+              },
       });
     });
 
@@ -362,20 +379,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
         );
       return loop().pipe(Effect.onInterrupt(() => retire(handle)));
     });
-
-  const releaseOwned: OwnedRunCoordinatorContract["releaseOwned"] = (handle, release) =>
-    Effect.uninterruptible(
-      release === "hand-back"
-        ? withLock(
-            Effect.sync(() => {
-              const record = ownedRecordLocked(handle);
-              if (record) handBackLocked(record, handle);
-            }),
-          )
-        : stopLive(handle).pipe(
-            Effect.andThen(withLock(Effect.sync(() => releaseLocked(handle, "consume")))),
-          ),
-    );
 
   const closeOwner: OwnedRunCoordinatorContract["closeOwner"] = (ownerId) =>
     Effect.uninterruptible(
@@ -407,5 +410,5 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
       }),
     );
 
-  return { openOwner, startOwned, awaitOwned, releaseOwned, closeOwner };
+  return { openOwner, startOwned, awaitOwned, closeOwner };
 }

@@ -1,11 +1,17 @@
-/** Source-only, test-runner-independent activity host fake for producer tests. */
+/** Source-only, test-runner-independent Activity fakes and gallery frames for producer tests. */
+import { stripTerminalControls } from "pi-cosmic-core";
+import { ActivityComponent, makeActivityPresentation } from "./component.ts";
+import type { ActivityRow } from "./model.ts";
 import {
   ACTIVITY_DISCOVER,
   ACTIVITY_EVENT,
   ACTIVITY_HOST,
+  activityKey,
   type ActivityEnvelope,
   type ActivityEvents,
+  type ActivityItem,
 } from "./protocol.ts";
+import { renderActivityWidget } from "./widget.ts";
 
 /**
  * An in-memory event bus whose host answers discovery for `sessionId`, records the latest
@@ -41,4 +47,87 @@ export function fakeActivityHost(sessionId = "session") {
     }
   });
   return { events, hostToken, get: () => envelope, capability: () => capability };
+}
+
+/** Producer items as the host holds them: rows of `providerId`, in their first generation. */
+export const activityRowsOf = (
+  providerId: string,
+  items: readonly ActivityItem[],
+): readonly ActivityRow[] =>
+  Object.freeze(
+    items.map((item) => ({
+      ...item,
+      key: activityKey(providerId, item.id),
+      providerId,
+      generation: 1,
+    })),
+  );
+
+export interface ActivityGalleryOptions {
+  readonly title: string;
+  readonly providerId: string;
+  readonly items: readonly ActivityItem[];
+  /** The producer's detail for an item, as its `getDetail` would return it. */
+  readonly detail?: (itemId: string) => string | undefined;
+  /** Items whose detail a manager frame opens, one frame each. */
+  readonly open?: readonly string[];
+  /** Widget widths, each rendered at every row bound. */
+  readonly widths?: readonly number[];
+  readonly maxRows?: readonly number[];
+  readonly managerWidth?: number;
+  readonly managerHeight?: number;
+  readonly now?: number;
+}
+
+const plainPaint = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+
+/**
+ * Plain-text frames of producer items through the real Activity renderers, for galleries: the
+ * persistent widget at each width and row bound, then the manager with each `open` item selected
+ * and its detail loaded. Frames assert nothing.
+ */
+export function activityGalleryFrames(options: ActivityGalleryOptions): string[] {
+  const rows = activityRowsOf(options.providerId, options.items);
+  const now = options.now ?? 0;
+  const lines: string[] = [];
+  const plain = (frame: readonly string[]) => frame.map((line) => stripTerminalControls(line));
+  for (const maxRows of options.maxRows ?? [8])
+    for (const width of options.widths ?? [60, 80, 100])
+      lines.push(
+        `── activity widget · ${options.title} · ${width} cols · ${maxRows} rows`,
+        ...plain(renderActivityWidget(rows, width, maxRows, { now, theme: plainPaint })),
+        "",
+      );
+  const width = options.managerWidth ?? 140;
+  for (const itemId of options.open ?? []) {
+    const presentation = makeActivityPresentation();
+    // Finished branches start collapsed as history; open them so any item can be selected.
+    for (const row of rows) presentation.expandedHistory.add(row.key);
+    const component = new ActivityComponent({
+      snapshot: () => rows,
+      presentation,
+      theme: plainPaint,
+      height: () => options.managerHeight ?? 32,
+      now: () => now,
+      close: () => undefined,
+      requestRender: () => undefined,
+      loadDetail: (request, deliver) => {
+        const id = rows.find((row) => row.key === request.key)?.id;
+        const text = id === undefined ? undefined : options.detail?.(id);
+        if (text !== undefined) deliver(text);
+      },
+    });
+    const key = activityKey(options.providerId, itemId);
+    component.render(width);
+    for (let step = 0; step <= rows.length * 4 && component.shell.state.selectedId !== key; step++)
+      component.handleInput("j");
+    const found = component.shell.state.selectedId === key;
+    if (found) component.handleInput("\r");
+    lines.push(
+      `── activity manager · ${options.title} · ${itemId}${found ? "" : " (not reachable)"}`,
+      ...plain(component.render(width)),
+      "",
+    );
+  }
+  return lines;
 }

@@ -19,6 +19,7 @@ import {
 } from "./protocol.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
 import { detachActivityItem } from "./detach.ts";
+import { ACTIVITY_LIMITS } from "./limits.ts";
 import { SPINNER_FRAME_MS } from "../manager/chrome.ts";
 
 export class ActivityError extends Schema.TaggedError<ActivityError>()("ActivityError", {
@@ -68,15 +69,19 @@ export interface ActivityServiceOptions {
 const failed = () => new ActivityError({ reason: "failed" });
 const callback = (run: () => void) => Effect.try({ try: run, catch: failed });
 const cleanText = (text: string) =>
-  sanitizeDiagnosticContent(sanitizeTerminalLine(text), { maximumLength: 4096 });
+  sanitizeDiagnosticContent(sanitizeTerminalLine(text), { maximumLength: ACTIVITY_LIMITS.text });
 const cleanDetail = (text: string) =>
-  sanitizeDiagnosticContent(text.slice(0, 16384).split("\n").map(sanitizeTerminalLine).join("\n"), {
-    maximumLength: 16384,
-  });
+  sanitizeDiagnosticContent(
+    text.slice(0, ACTIVITY_LIMITS.detail).split("\n").map(sanitizeTerminalLine).join("\n"),
+    { maximumLength: ACTIVITY_LIMITS.detail },
+  );
 type Acknowledgement = readonly [Provider, boolean];
 const uniqueIds = (ids: readonly string[]) => new Set(ids).size === ids.length;
+/** Stopped, failed and skipped work are disjoint parts of the finished work. */
 const consistentWork = ({ work }: ActivityPhase) =>
-  !work || (work.finished <= work.items && work.stopped <= work.finished);
+  !work ||
+  (work.finished <= work.items &&
+    work.stopped + (work.failed ?? 0) + (work.skipped ?? 0) <= work.finished);
 /** Workflow phases describe the workflow row; attention rolls up from its members only. */
 const consistentWorkflow = (item: ActivityItem) => {
   if (item.kind !== "workflow")
@@ -90,12 +95,21 @@ const consistentWorkflow = (item: ActivityItem) => {
     item.status !== "blocked"
   );
 };
-/** Planned work is display-only: never a workflow, never actionable, and never under way. */
+/**
+ * Planned work is never a workflow and never under way. Only planned work its owner may still
+ * start offers actions, such as skipping it; once it never will, it offers none.
+ */
 const consistentPlan = (item: ActivityItem) =>
   item.planned !== true ||
   (item.kind !== "workflow" &&
-    !item.actions?.length &&
-    (item.status === "pending" || item.status === "cancelled"));
+    (item.status === "pending" || (item.status === "cancelled" && !item.actions?.length)));
+/** Only cancelled work, never planned, a workflow or a question, is skipped. */
+const consistentSkip = (item: ActivityItem) =>
+  item.skipped !== true ||
+  (item.status === "cancelled" &&
+    item.planned !== true &&
+    item.kind !== "workflow" &&
+    item.kind !== "question");
 /** Runs on cleaned items so titles that collide after sanitizing are rejected too. */
 const consistentSnapshot = (items: readonly ActivityItem[]) =>
   uniqueIds(items.map((item) => item.id)) &&
@@ -103,7 +117,8 @@ const consistentSnapshot = (items: readonly ActivityItem[]) =>
     (item) =>
       uniqueIds(item.actions?.map((action) => action.id) ?? []) &&
       consistentWorkflow(item) &&
-      consistentPlan(item),
+      consistentPlan(item) &&
+      consistentSkip(item),
   );
 /** Work waiting to start; planned items are declarations, not launches. */
 const startingWork = (item: ActivityItem) =>

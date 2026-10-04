@@ -168,6 +168,8 @@ export interface RunRecord {
         readonly parentRunId?: string | undefined;
         readonly writerCwdDigest?: string | undefined;
         readonly writeClaims?: ReadonlyArray<string> | undefined;
+        /** The run id the claiming owned start reserved. */
+        readonly runId?: string | undefined;
       }
     | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
@@ -258,7 +260,7 @@ export const workflowOwnedRunError = (
     : owner.ownerId;
   return invalidRequest(
     "workflow_owned_run",
-    `Subagent ${record.view.id} belongs to workflow ${workflow}, which receives its result, so it cannot ${operation}. Check or stop the workflow with subagent_workflow; stopping this subagent skips it.`,
+    `Subagent ${record.view.id} belongs to workflow ${workflow}, which receives its result, so it cannot ${operation}. Check or stop the workflow with subagent_workflow; stopping this subagent resolves its agent() call to null as stopped.`,
   );
 };
 

@@ -1,7 +1,11 @@
 import { countLabel } from "pi-cosmic-core";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { focusedField } from "../manager/style.ts";
-import { renderResponsiveManagerFooter, clipToWidth } from "../manager/chrome.ts";
+import {
+  renderResponsiveManagerFooter,
+  clipToWidth,
+  type ManagerFooterGroup,
+} from "../manager/chrome.ts";
 import { filterReservedKeyLabel } from "../manager/key-labels.ts";
 import type { FullScreenSelectionKeybindingId } from "../manager/keymap.ts";
 import {
@@ -9,6 +13,7 @@ import {
   padListDetailRow,
   stackedListHeight,
   wideListDetailGeometry,
+  type DetailWindowPosition,
 } from "../manager/list-detail.ts";
 import {
   framedFill,
@@ -19,14 +24,12 @@ import {
   listDetailHeading,
   type ListDetailShell,
 } from "../manager/list-detail-shell.ts";
+import { activityActionHints, type ActivityActionHints } from "./action-keys.ts";
 import { activityAttentionLabels, activityAttentionTotals } from "./attention.ts";
 import { needsYou } from "./tree.ts";
-import {
-  activityStartupGlyph,
-  activityOwnerLabel,
-  groupedMemberLine,
-  workflowRowLine,
-} from "./widget.ts";
+import { activityStartupGlyph, activityOwnerLabel } from "./widget.ts";
+import { groupedMemberLine } from "./row-line.ts";
+import { workflowRowLine } from "./workflow-row.ts";
 import {
   groupedActivitySource,
   groupSummaryLabels,
@@ -88,6 +91,55 @@ function rowLine(
   );
 }
 
+/** The pending action named, with the keys that confirm it, then a plain confirm. */
+function confirmationFooterVariants(
+  confirmation: { readonly label: string; readonly key: string | undefined },
+  confirm: string,
+  cancel: string,
+): ReadonlyArray<ReadonlyArray<ManagerFooterGroup>> {
+  const keys = confirmation.key ? `${confirmation.key}/${confirm}` : confirm;
+  return [
+    [`${keys} ${confirmation.label}`, `${cancel} Cancel`],
+    [`${keys} Confirm`, `${cancel} Cancel`],
+  ];
+}
+
+/**
+ * The full help, widest first. Action keys outrank zoom and follow once space runs out, and the
+ * narrowest variants fall back to bare keys.
+ */
+function helpFooterVariants(
+  actions: ActivityActionHints,
+  follow: string | undefined,
+  back: string,
+  cancel: string,
+): ReadonlyArray<ReadonlyArray<ManagerFooterGroup>> {
+  const bare = (keys: ReadonlyArray<string>) => keys.join(" · ");
+  const views = follow ? ["f", "t"] : [];
+  const keyed = actions.all
+    ? [
+        [actions.all, follow, back],
+        [actions.all, back],
+        [bare(["z", "w", ...actions.keys, "r", ...views]), back],
+        [bare(actions.keys), back],
+      ]
+    : [
+        ["z Zoom · w Needs you", follow, back],
+        [bare(["z", "w", "r", ...views]), back],
+      ];
+  return [
+    [
+      "C-u/d Half-page · PgUp/PgDn Page · gg/G Ends",
+      "z Zoom · w Next needing you",
+      actions.all,
+      follow,
+      `r Refresh · ? Back · ${cancel}/q Close`,
+    ],
+    ["z Zoom · w Needs you", actions.all, follow, back],
+    ...keyed,
+  ];
+}
+
 /** Synchronous presentation only. The component owns all fetching and input transitions. */
 export function renderGroupedActivity(
   options: ActivityComponentOptions,
@@ -98,10 +150,14 @@ export function renderGroupedActivity(
     readonly alternateHelp: boolean;
     readonly actionPage: number;
     readonly loaded: { readonly request: ActivityDetailRequest; readonly text: string } | undefined;
-    readonly confirmation: string | undefined;
+    /** A pending action's question, its label and the direct key that also confirms it. */
+    readonly confirmation:
+      | { readonly text: string; readonly label: string; readonly key: string | undefined }
+      | undefined;
     readonly follow: boolean;
     readonly technical: boolean;
-    readonly preserveDetailPosition: boolean;
+    /** Where the detail window places its slice this frame. */
+    readonly detailPosition: DetailWindowPosition;
   },
   width: number,
 ): string[] {
@@ -130,53 +186,26 @@ export function renderGroupedActivity(
   const navigation = listFocused
     ? `${movement}/j/k Move · h/l Collapse/expand · ${confirm} Inspect`
     : `j/k Scroll · h/${cancel} Back`;
-  const actionKeys = new Map([
-    ["stop", "x"],
-    ["skip", "x"],
-    ["interrupt", "i"],
-    ["resume", "u"],
-    ["reply", "m"],
-    ["message", "m"],
-    ["rename", "e"],
-    ["clear", "c"],
-    ["clear-finished", "c"],
-  ]);
-  const directActions = row?.retained
-    ? ""
-    : row?.actions
-        ?.flatMap((action) =>
-          actionKeys.has(action.id) ? [`${actionKeys.get(action.id)} ${action.label}`] : [],
-        )
-        .join(" · ");
-  const actions =
-    row?.actions?.length && !row.retained ? "1-9 Actions · a More actions" : undefined;
+  const shortNavigation = listFocused ? `j/k · ${confirm} Inspect` : "j/k · h Back";
+  const actions = activityActionHints(row, state.actionPage);
   const follow = row ? `f ${state.follow ? "Unfollow" : "Follow"} · t Technical` : undefined;
   const bottom = renderResponsiveManagerFooter(
     inner,
     state.confirmation
-      ? [[`${confirm} Confirm`, `${cancel} Cancel`]]
+      ? confirmationFooterVariants(state.confirmation, confirm, cancel)
       : state.alternateHelp
-        ? [
-            [
-              "C-u/d Half-page · PgUp/PgDn Page · gg/G Ends",
-              "z Zoom · w Next needing you",
-              directActions,
-              actions,
-              follow,
-              `r Refresh · ? Back · ${cancel}/q Close`,
-            ],
-            ["z Zoom · w Needs you", follow, `? Back · ${cancel}/q`],
-            ["z · w · a · r · f · t", `? Back · ${cancel}/q`],
-          ]
+        ? helpFooterVariants(actions, follow, `? Back · ${cancel}/q`, cancel)
         : [
             [
               navigation,
-              actions,
+              actions.primary,
               follow,
               `z Zoom · w Next needing you · r Refresh · ? More · ${cancel}/q Close`,
             ],
-            [navigation, actions, `? More · ${cancel}/q`],
-            [listFocused ? `j/k · ${confirm} Inspect` : "j/k · h Back", `? More · ${cancel}/q`],
+            [navigation, actions.primary, `? More · ${cancel}/q`],
+            [shortNavigation, actions.primary, `? More · ${cancel}/q`],
+            [`j/k · ${confirm}`, actions.primary, `? · ${cancel}/q`],
+            [shortNavigation, `? More · ${cancel}/q`],
           ],
   );
   return framedScreen(frame, {
@@ -195,7 +224,7 @@ export function renderGroupedActivity(
       if (state.confirmation)
         return framedFill(
           frame,
-          wrapTextWithAnsi(state.confirmation, Math.max(1, inner)),
+          wrapTextWithAnsi(state.confirmation.text, Math.max(1, inner)),
           bodyHeight,
           inner,
         );
@@ -213,9 +242,10 @@ export function renderGroupedActivity(
         entries.length,
         listHeight - Number(showHeading) - Number(showNeedsYou),
       );
+      // History rows recede through their identity tone, so every row keeps one guide column.
       const list = entries.slice(window.start, window.end).map((entry) => {
         const isSelected = entry.id === selected?.id;
-        const prefix = `${isSelected ? "> " : "  "}${entry.history ? "H " : ""}`;
+        const prefix = isSelected ? "> " : "  ";
         return padListDetailRow(
           `${prefix}${rowLine(entry, Math.max(0, listWidth - prefix.length), options, isSelected && listFocused)}`,
           listWidth,
@@ -263,7 +293,7 @@ export function renderGroupedActivity(
       const details = shell.detailWindow(
         detailText.split("\n").flatMap((line) => wrapTextWithAnsi(line, detailWidth)),
         detailHeight - Number(showFreshness),
-        state.follow ? true : state.preserveDetailPosition ? false : undefined,
+        state.detailPosition,
       );
       const detailRows = showFreshness
         ? [

@@ -1,3 +1,4 @@
+import type * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
@@ -61,6 +62,18 @@ export interface WorkspaceCoordinatorContract {
     workspaceId: string,
     callerRunId?: string,
   ) => Effect.Effect<void, SubagentError>;
+  /**
+   * Discards a settled writer's workspace only when it holds no work: no change against its
+   * baseline, no other file in its tree, and no other run working inside it. Waits a while for
+   * the writer's process cleanup first. True once discarded; false, keeping the workspace, when
+   * it holds work or once `abandon` completes or the caller is interrupted before the check
+   * starts. A discard failing after the check fails with `workspace_discard_incomplete`.
+   */
+  readonly workspaceDiscardUnchanged: (
+    workspaceId: string,
+    abandon: Deferred.Deferred<void>,
+    callerRunId?: string,
+  ) => Effect.Effect<boolean, SubagentError>;
   readonly workspaceRevise: (
     workspaceId: string,
     message: string,
@@ -223,7 +236,8 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
       );
     });
   const launch = makeWorkspaceLaunch(context);
-  const { workspaceReview, workspacePrepare, workspaceDiscard } = makeWorkspaceReview(context);
+  const { workspaceReview, workspacePrepare, workspaceDiscard, workspaceDiscardUnchanged } =
+    makeWorkspaceReview(context);
   const workspaceIntegrate: WorkspaceCoordinatorContract["workspaceIntegrate"] =
     makeWorkspaceIntegrate(context);
   return {
@@ -233,6 +247,7 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
     workspacePrepare,
     workspaceIntegrate,
     workspaceDiscard,
+    workspaceDiscardUnchanged,
     inspectWriterWorkspace,
     setWriterWorkspaceMode,
     workspaceBindingStatus: (workspaceId: string) =>

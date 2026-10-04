@@ -22,6 +22,7 @@ import {
   request,
   serviceLayer,
   withService,
+  awaitRuns,
 } from "./fixtures/service-harness.ts";
 
 const cycles = 4;
@@ -198,9 +199,12 @@ describe("SubagentService lifecycle stress", () => {
             leafControl.gateRelease(release);
 
             let cancelledUpdates = 0;
-            const observing = yield* service
-              .awaitTerminal([leaf.id], "all_finished", () => cancelledUpdates++)
-              .pipe(Effect.forkScoped);
+            const observing = yield* awaitRuns(
+              service,
+              [leaf.id],
+              "all_finished",
+              () => cancelledUpdates++,
+            ).pipe(Effect.forkScoped);
             yield* yieldUntil(() => cancelledUpdates > 0);
             const stoppingParent = yield* service.stop(parent.id).pipe(Effect.forkScoped);
             yield* yieldUntil(
@@ -292,9 +296,12 @@ describe("SubagentService lifecycle stress", () => {
             );
             yield* Fiber.interrupt(stopping);
             let updates = 0;
-            const waiting = yield* service
-              .awaitTerminal([sibling.id], "all_finished", () => updates++)
-              .pipe(Effect.result, Effect.forkScoped);
+            const waiting = yield* awaitRuns(
+              service,
+              [sibling.id],
+              "all_finished",
+              () => updates++,
+            ).pipe(Effect.result, Effect.forkScoped);
             yield* yieldUntil(() => updates > 0);
 
             const shutdown = yield* Scope.close(owner, Exit.void).pipe(

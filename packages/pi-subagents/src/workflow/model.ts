@@ -1,5 +1,9 @@
 import type * as Schema from "effect/Schema";
+import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { safeTextPrefix } from "pi-cosmic-core";
+import { WORKFLOW_ROOT_RESERVE } from "../run/limits.ts";
+import { emptyUsage, type SubagentUsage } from "../run/model.ts";
+import { addUsage } from "../run/state.ts";
 import type { WorkflowPhase } from "./script.ts";
 
 /** Claude-Code-compatible backstop on agent() calls in one run. */
@@ -13,7 +17,7 @@ export const WORKFLOW_RETAINED_RUNS = 32;
 /** Verbatim args stay small enough to show and to journal. */
 export const WORKFLOW_ARGS_MAX_CHARS = 64 * 1024;
 /** Phase titles as Activity shows them; a nested workflow's prefix is clipped to fit. */
-export const WORKFLOW_PHASE_TITLE_MAX_CHARS = 160;
+export const WORKFLOW_PHASE_TITLE_MAX_CHARS = ACTIVITY_LIMITS.phaseTitle;
 /** agent() labels as Activity and notifications show them. */
 export const WORKFLOW_AGENT_LABEL_MAX_CHARS = 80;
 /** meta.phases plus phases added at runtime. */
@@ -31,11 +35,20 @@ export const WORKFLOW_RESULT_MAX_CHARS = 28 * 1024;
 export const WORKFLOW_NOTIFICATION_MAX_CHARS = 30 * 1024;
 const WORKFLOW_CONCURRENCY_LIMIT = 16;
 
-/** Agents one run executes at once: leaves two cores for Pi and its tools. */
+/** Agents one run executes at once by CPU count: leaves two cores for Pi and its tools. */
 export const workflowConcurrency = (availableParallelism: number): number =>
   Math.min(WORKFLOW_CONCURRENCY_LIMIT, Math.max(1, Math.floor(availableParallelism) - 2));
 
-export type WorkflowRunState = "running" | "stopping" | "completed" | "failed" | "stopped";
+/**
+ * Agents one run executes at once: at most `limit`, and no more than the root slots workflow
+ * agents may hold beside the ones they leave for the main agent, but always at least one.
+ */
+export const workflowRunConcurrency = (limit: number, maxDirectChildren: number): number =>
+  Math.min(limit, Math.max(1, maxDirectChildren - WORKFLOW_ROOT_RESERVE));
+
+/** How a run ends by itself or when stopped, as opposed to a teardown interrupting it. */
+export type WorkflowEndedState = "completed" | "failed" | "stopped";
+export type WorkflowRunState = "running" | "stopping" | WorkflowEndedState;
 /** Who asked a run to stop: the main agent's tool call or the user, for example in Activity. */
 export type WorkflowStopOrigin = "tool" | "user";
 export type WorkflowAgentState =
@@ -46,7 +59,10 @@ export type WorkflowAgentState =
   | "stopped"
   | "skipped";
 
-export const isWorkflowRunFinished = (state: WorkflowRunState): boolean =>
+/** Whether a run's state, or its record's, is its end; `interrupted` is a teardown's. */
+export const isWorkflowRunFinished = (
+  state: WorkflowRunState | "interrupted",
+): state is WorkflowEndedState =>
   state === "completed" || state === "failed" || state === "stopped";
 
 export const isWorkflowAgentFinished = (state: WorkflowAgentState): boolean =>
@@ -62,6 +78,33 @@ export type WorkflowSource =
     }
   | { readonly kind: "file"; readonly path: string };
 
+/**
+ * Why a queued agent waits: for one of its run's slots, for root capacity, including the slots
+ * workflow agents leave for the main agent, or behind a writer it conflicts with. A writer the
+ * user paused never clears by itself.
+ */
+export type WorkflowAgentWaiting =
+  | { readonly kind: "slot" }
+  | { readonly kind: "capacity" }
+  | {
+      readonly kind: "writer";
+      /** The writer's subagent run id, which a paused writer is inspected and resumed by. */
+      readonly runId: string;
+      readonly name: string;
+      readonly paused: boolean;
+    };
+
+export const sameWorkflowWaiting = (
+  left: WorkflowAgentWaiting | undefined,
+  right: WorkflowAgentWaiting | undefined,
+): boolean =>
+  left?.kind === right?.kind &&
+  (left?.kind !== "writer" ||
+    (right?.kind === "writer" &&
+      left.runId === right.runId &&
+      left.name === right.name &&
+      left.paused === right.paused));
+
 export interface WorkflowAgentView {
   /** 1-based position among this run's live agent() calls. */
   readonly callId: number;
@@ -76,9 +119,74 @@ export interface WorkflowAgentView {
   readonly endedAt?: number | undefined;
   /** Isolated writer worktree whose proposal the main agent reviews. */
   readonly workspaceId?: string | undefined;
-  /** Why the agent resolved null. */
+  /**
+   * The writer's worktree held no changes once it settled, so it was discarded: no proposal
+   * awaits review, and a resume reuses the writer's result like a reader's.
+   */
+  readonly unchanged?: true | undefined;
+  /**
+   * Why the agent ended without a result: its agent() call resolved null, or threw a budget error
+   * when the budget refused it while queued.
+   */
   readonly reason?: string | undefined;
+  /** Why a queued agent waits, once a start had to; cleared when it starts or settles. */
+  readonly waiting?: WorkflowAgentWaiting | undefined;
 }
+
+/** What one settled live agent used in its workflow run: its usage and the tool calls it started. */
+export interface WorkflowAgentSpend {
+  readonly usage: SubagentUsage;
+  readonly toolUses: number;
+}
+
+/** What several agents used together, such as an agent and the subagents it started itself. */
+export const sumWorkflowSpends = (spends: ReadonlyArray<WorkflowAgentSpend>): WorkflowAgentSpend =>
+  spends.reduce(
+    (total, spend) => ({
+      usage: addUsage(total.usage, spend.usage),
+      toolUses: Math.min(Number.MAX_SAFE_INTEGER, total.toolUses + spend.toolUses),
+    }),
+    { usage: emptyUsage(), toolUses: 0 },
+  );
+
+/** What a run's settled live agents used; results reused from a resumed run cost nothing here. */
+export interface WorkflowUsage extends SubagentUsage {
+  readonly toolUses: number;
+  /** Agents that used tokens without a known cost, which makes a known cost a lower bound. */
+  readonly unpriced: number;
+}
+
+export const emptyWorkflowUsage = (): WorkflowUsage => ({
+  ...emptyUsage(),
+  toolUses: 0,
+  unpriced: 0,
+});
+
+/** Adds one settled agent's spend to its run's usage. */
+export const addWorkflowUsage = (
+  usage: WorkflowUsage,
+  spend: WorkflowAgentSpend,
+): WorkflowUsage => ({
+  ...addUsage(usage, spend.usage),
+  toolUses: Math.min(Number.MAX_SAFE_INTEGER, usage.toolUses + spend.toolUses),
+  unpriced: usage.unpriced + Number(spend.usage.cost === undefined && spend.usage.totalTokens > 0),
+});
+
+/** A run's token budget: a hard ceiling on the output tokens its live agents produce. */
+export interface WorkflowBudgetView {
+  readonly total: number;
+  /**
+   * Output tokens counted so far: settled agents' and running agents' live usage, the subagents
+   * they start themselves included, refreshed when an agent settles, when live usage grows by a
+   * twentieth of the total, and when the ceiling is reached. Reused results cost nothing here.
+   */
+  readonly spent: number;
+  /** agent() calls the exhausted budget refused, each failing with a budget error. */
+  readonly refused: number;
+}
+
+/** Why the call that claims a planned agent the user skipped resolves null. */
+export const WORKFLOW_SKIPPED_BEFORE_START = "skipped by the user before it started";
 
 /**
  * An agent a phase of the script's meta declares. It never starts anything: the first matching
@@ -91,7 +199,21 @@ export interface WorkflowPlannedAgent {
   readonly phase: string;
   readonly label: string;
   readonly profile?: string | undefined;
+  /**
+   * The nested workflow() whose meta declares it, by name; absent for the run's own script. Only
+   * calls made in that workflow claim it outside a phase.
+   */
+  readonly workflow?: string | undefined;
+  /**
+   * When the user skipped it, before any call claimed it. The call that claims it resolves null at
+   * once without starting anything; one no call claims stays skipped instead of never run.
+   */
+  readonly skippedAt?: number | undefined;
 }
+
+/** Whether the user skipped a planned agent before any call claimed it. */
+export const isWorkflowPlannedSkipped = (agent: WorkflowPlannedAgent): boolean =>
+  agent.skippedAt !== undefined;
 
 /** A worktree an earlier run's writer left for review, carried by the run that reused it. */
 export interface WorkflowReusedWorkspace {
@@ -147,8 +269,8 @@ export interface WorkflowRunView {
   /** Live agent() calls; results reused from a resumed run are only counted. */
   readonly agents: ReadonlyArray<WorkflowAgentView>;
   /**
-   * Declared agents no call has claimed yet, in declaration order. A finished run keeps the
-   * entries that never ran.
+   * Declared agents no call has claimed yet, in declaration order, including those the user
+   * skipped. A finished run keeps the entries no call claimed.
    */
   readonly planned: ReadonlyArray<WorkflowPlannedAgent>;
   readonly reused: number;
@@ -165,7 +287,10 @@ export interface WorkflowRunView {
   readonly warnings?: ReadonlyArray<WorkflowLogEntry> | undefined;
   /** Every warning the run logged, including those no longer kept. */
   readonly warningCount?: number | undefined;
-  readonly outputTokens: number;
+  /** What its settled live agents used; reused results are only counted in `reused`. */
+  readonly usage: WorkflowUsage;
+  /** The token budget its start passed, if any. */
+  readonly budget?: WorkflowBudgetView | undefined;
   /**
    * The run's private copy of its script. The main agent edits and starts it again only for an
    * inline script; a saved workflow or script file is fixed in its own file.
@@ -179,34 +304,67 @@ export interface WorkflowRunView {
   readonly failure?: WorkflowFailure | undefined;
 }
 
+/** Agents in each state; stopped and skipped agents are counted apart. */
 export interface WorkflowAgentCounts {
   readonly queued: number;
   readonly running: number;
   readonly completed: number;
   readonly failed: number;
-  /** Stopped and skipped agents: both resolve null by request. */
+  readonly stopped: number;
   readonly skipped: number;
 }
 
 export const countWorkflowAgents = (
   agents: ReadonlyArray<WorkflowAgentView>,
-): WorkflowAgentCounts => ({
-  queued: agents.filter((agent) => agent.state === "queued").length,
-  running: agents.filter((agent) => agent.state === "running").length,
-  completed: agents.filter((agent) => agent.state === "completed").length,
-  failed: agents.filter((agent) => agent.state === "failed").length,
-  skipped: agents.filter((agent) => agent.state === "stopped" || agent.state === "skipped").length,
-});
+): WorkflowAgentCounts => {
+  const counts = {
+    queued: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    stopped: 0,
+    skipped: 0,
+  } satisfies Record<WorkflowAgentState, number>;
+  for (const agent of agents) counts[agent.state] += 1;
+  return counts;
+};
 
-/** Worktrees this run's writers left for review: reused ones first, then live ones in call order. */
+/** Planned agents the user skipped that no call has claimed. */
+export const workflowSkippedPlanned = (run: Pick<WorkflowRunView, "planned">): number =>
+  run.planned.filter(isWorkflowPlannedSkipped).length;
+
+/**
+ * A run's agents in each state, where planned agents the user skipped before any call claimed
+ * them count as skipped.
+ */
+export const countWorkflowRunAgents = (run: WorkflowRunView): WorkflowAgentCounts => {
+  const counts = countWorkflowAgents(run.agents);
+  return { ...counts, skipped: counts.skipped + workflowSkippedPlanned(run) };
+};
+
+/**
+ * Every agent a run counts: its live calls, its reused results and the planned agents the user
+ * skipped before any call claimed them.
+ */
+export const workflowAgentTotal = (run: WorkflowRunView): number =>
+  run.agents.length + run.reused + workflowSkippedPlanned(run);
+
+/**
+ * Worktrees this run's writers left for review: reused ones first, then live ones in call order.
+ * A writer whose worktree held no changes was discarded and is only counted.
+ */
 export const workflowWorkspaces = (run: WorkflowRunView): ReadonlyArray<WorkflowWorkspace> => [
   ...(run.reusedWorkspaces ?? []).map((workspace) => ({ ...workspace, state: "reused" as const })),
   ...run.agents.flatMap((agent) =>
-    agent.workspaceId === undefined
+    agent.workspaceId === undefined || agent.unchanged
       ? []
       : [{ workspaceId: agent.workspaceId, label: agent.label, state: agent.state }],
   ),
 ];
+
+/** Worktree writers whose worktrees held no changes and were discarded. */
+export const workflowUnchangedWorkspaces = (run: WorkflowRunView): number =>
+  run.agents.filter((agent) => agent.unchanged).length;
 
 /**
  * Reused results per raw phase title, as `run.phases` and agent views spell it. A phase whose
@@ -259,12 +417,19 @@ const displayText = (text: string, maximum: number): string => {
 export const workflowNarratorLine = (message: string): string | undefined =>
   displayText(message.replace(/\s+/gu, " "), WORKFLOW_NARRATOR_MAX_CHARS) || undefined;
 
-/** Planned agents per raw phase title. */
-export const workflowPlannedByPhase = (run: WorkflowRunView): ReadonlyMap<string, number> =>
-  run.planned.reduce(
+const countByPhase = (agents: ReadonlyArray<WorkflowPlannedAgent>): ReadonlyMap<string, number> =>
+  agents.reduce(
     (counts, agent) => counts.set(agent.phase, (counts.get(agent.phase) ?? 0) + 1),
     new Map<string, number>(),
   );
+
+/** Planned agents a call can still claim and run, per raw phase title; skipped ones aren't. */
+export const workflowPlannedByPhase = (run: WorkflowRunView): ReadonlyMap<string, number> =>
+  countByPhase(run.planned.filter((agent) => !isWorkflowPlannedSkipped(agent)));
+
+/** Planned agents the user skipped before any call claimed them, per raw phase title. */
+export const workflowSkippedByPhase = (run: WorkflowRunView): ReadonlyMap<string, number> =>
+  countByPhase(run.planned.filter(isWorkflowPlannedSkipped));
 
 /** A phase title bounded for display; nested prefixes can push a valid title past the limit. */
 export const workflowPhaseTitle = (title: string): string =>

@@ -2,7 +2,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
-import { processCapacityError } from "./admission.ts";
+import { type HeldLaunchSlots, processCapacityError, workflowCapacityError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
@@ -24,6 +24,13 @@ type WorkspaceStart = (
 interface LaunchSelection {
   readonly mode: WriterWorkspaceMode;
   readonly slotWait?: Deferred.Deferred<void>;
+}
+
+/** A launch as a revision successor reusing a workspace, or as an owned start. */
+interface LaunchOptions {
+  readonly reuse?: WorkspaceHandle | undefined;
+  /** The run id an owned start reserved. */
+  readonly runId?: string | undefined;
 }
 
 /** A revision successor's launch: the binding it reuses, and the revision whose hold it took. */
@@ -103,25 +110,33 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
    * Under the run lock: direct-child slots that worktree launches still acquiring workspaces hold
    * for `caller`, other than the slot of the launch admitting `request` itself.
    */
-  const heldLaunchSlots = (caller: string, request?: StartSubagentRequest): number => {
+  const heldLaunchSlots = (caller: string, request?: StartSubagentRequest): HeldLaunchSlots => {
     const own = request?.workspace
       ? state.bindings.get(request.workspace.workspaceId)?.slot
       : undefined;
-    return [...state.launchSlots].filter((slot) => slot.caller === caller && slot !== own).length;
+    const held = [...state.launchSlots].filter((slot) => slot.caller === caller && slot !== own);
+    return { total: held.length, workflow: held.filter((slot) => slot.workflow).length };
   };
+  /** Under the run lock: whether the owned start that reserved `runId` holds a launch slot. */
+  const launchSlotHeldBy = (runId: string): boolean =>
+    [...state.launchSlots].some((slot) => slot.runId === runId);
   /** Under the run lock: the direct-child check for a worktree launch, before any acquisition. */
   const worktreeCapacityLocked = (request: StartSubagentRequest, caller: string) =>
     Effect.gen(function* () {
       const limit = (request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY).maxDirectChildren;
+      // A workflow agent also leaves root slots free for the main agent, as admission checks,
+      // and another workflow launch still acquiring its workspace counts as a workflow agent.
+      const capacity = (held: HeldLaunchSlots) =>
+        request.workflow
+          ? workflowCapacityError(records, caller, limit, undefined, held)
+          : processCapacityError(records, caller, limit, undefined, held.total);
+      const acquiring = heldLaunchSlots(caller);
       // Admission would reject this start anyway; fail before acquiring a workspace.
-      const capacityFailure = processCapacityError(records, caller, limit);
+      const capacityFailure = capacity({ total: 0, workflow: acquiring.workflow });
       if (capacityFailure) return yield* capacityFailure;
       // Launches still acquiring workspaces take slots at admission. Wait for one to resolve
       // rather than acquire a workspace that admission would then refuse.
-      const acquiring = [...state.launchSlots].filter((slot) => slot.caller === caller).length;
-      return processCapacityError(records, caller, limit - acquiring)
-        ? state.slotReleased
-        : undefined;
+      return capacity(acquiring) ? state.slotReleased : undefined;
     });
   /** Under the run lock: the writer mode a launch would use, after the cheap admission checks. */
   const checkLaunchLocked = (
@@ -189,15 +204,24 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
       ),
     );
   };
-  /** A writer launch into a worktree, or into the binding a revision successor reuses. */
+  /**
+   * A writer launch into a worktree, or into the binding a revision successor reuses. `runId`
+   * is the id an owned start reserved.
+   */
   const launchWriter = (
     request: StartSubagentRequest,
     start: WorkspaceStart,
     succession?: Succession,
+    runId?: string,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) => {
       const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      const slot: LaunchSlot = { caller, id: nextLaunchSlotId++ };
+      const slot: LaunchSlot = {
+        caller,
+        id: nextLaunchSlotId++,
+        runId,
+        workflow: request.workflow !== undefined,
+      };
       // Only the wait for another launch's slot is interruptible; nothing is reserved during it.
       const select: Effect.Effect<WriterWorkspaceMode, SubagentError> = withLock(
         selectLaunchModeLocked(request, slot),
@@ -337,11 +361,13 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
   const withLaunch = (
     request: StartSubagentRequest,
     start: WorkspaceStart,
-    reuse?: WorkspaceHandle,
+    options: LaunchOptions = {},
   ): Effect.Effect<SubagentRunView, SubagentError> => {
     if (request.writeIntent !== "writer")
       return start({ ...request, workspace: undefined, writerWorkspaceMode: undefined });
-    return reuse ? launchSuccessor(request, start, reuse) : launchWriter(request, start);
+    return options.reuse
+      ? launchSuccessor(request, start, options.reuse)
+      : launchWriter(request, start, undefined, options.runId);
   };
   /**
    * Called under the run lock with every other resume check, at the claim. Refuses a writer that
@@ -415,5 +441,13 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
           ),
         );
       });
-  return { bind, heldLaunchSlots, launchSlotHoldings, withLaunch, invalidateForResume, revise };
+  return {
+    bind,
+    heldLaunchSlots,
+    launchSlotHeldBy,
+    launchSlotHoldings,
+    withLaunch,
+    invalidateForResume,
+    revise,
+  };
 }

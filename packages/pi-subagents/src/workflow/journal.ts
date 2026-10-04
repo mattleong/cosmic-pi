@@ -2,11 +2,14 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Schema from "effect/Schema";
-import { WORKFLOW_RETAINED_RUNS, type WorkflowSource } from "./model.ts";
+import { WORKFLOW_RETAINED_RUNS, type WorkflowEndedState, type WorkflowSource } from "./model.ts";
 
 /** Sessions whose journals one Pi process keeps. */
 export const WORKFLOW_JOURNAL_SESSIONS = 16;
-/** Total result text one session's journals may hold before the oldest runs are dropped. */
+/**
+ * Total result text one session's journals may hold before the oldest runs are dropped, and what
+ * a resume reads from one run's files.
+ */
 export const WORKFLOW_JOURNAL_MAX_CHARS = 16 * 1024 * 1024;
 
 export interface WorkflowJournalEntry {
@@ -32,7 +35,10 @@ export interface WorkflowRunOrigin {
   readonly scriptPath?: string | undefined;
 }
 
-/** A run an earlier activation left running when the session was torn down. */
+/**
+ * A run an earlier activation left running when the session was torn down, or that ended
+ * without Pi accepting its report.
+ */
 export interface WorkflowInterruptedRun {
   readonly runId: string;
   readonly name: string;
@@ -42,8 +48,15 @@ export interface WorkflowInterruptedRun {
   readonly workspaces: ReadonlyArray<string>;
   /** Someone asked the run to stop before the teardown, so it isn't offered for a restart. */
   readonly stopped?: boolean | undefined;
+  /** The run ended this way, but Pi never accepted its report. */
+  readonly ended?: WorkflowEndedState | undefined;
   /** Where a restart starts the run again from. */
-  readonly origin?: WorkflowRunOrigin | undefined;
+  readonly origin: WorkflowRunOrigin;
+  /**
+   * A later Pi process found the run in its files after a restart, rather than this process
+   * remembering its teardown.
+   */
+  readonly restarted?: boolean | undefined;
 }
 
 export interface WorkflowJournalContract {
@@ -51,12 +64,16 @@ export interface WorkflowJournalContract {
    * Registers a running run so it can be resumed even before it records a result, with where a
    * restart starts it again from.
    */
-  readonly open: (runId: string, name: string, origin?: WorkflowRunOrigin) => Effect.Effect<void>;
+  readonly open: (runId: string, name: string, origin: WorkflowRunOrigin) => Effect.Effect<void>;
   readonly record: (runId: string, entry: WorkflowJournalEntry) => Effect.Effect<void>;
   /** Notes a worktree one of the run's writers works in. */
   readonly noteWorkspace: (runId: string, workspaceId: string) => Effect.Effect<void>;
+  /** Forgets a noted worktree that was discarded because it held no changes. */
+  readonly dropWorkspace: (runId: string, workspaceId: string) => Effect.Effect<void>;
   /** Notes that someone asked the run to stop; a teardown before its report keeps that fact. */
   readonly noteStop: (runId: string) => Effect.Effect<void>;
+  /** Notes how the run ended, which a teardown before its report was accepted keeps. */
+  readonly noteEnded: (runId: string, state: WorkflowEndedState) => Effect.Effect<void>;
   /**
    * Closes a run once its report was accepted, or when it needs none. A run still open at
    * teardown is reported by the next activation of the session.
@@ -64,6 +81,8 @@ export interface WorkflowJournalContract {
   readonly finish: (runId: string) => Effect.Effect<void>;
   /** A replay of the run's results, or undefined when the run is unknown to this session. */
   readonly replay: (runId: string) => Effect.Effect<WorkflowReplay | undefined>;
+  /** Whether the session's memory holds the run, open or closed. */
+  readonly has: (runId: string) => Effect.Effect<boolean>;
   /**
    * Runs an earlier activation of this session left open. Each stays open until `finish` records
    * that its notice was accepted, so a notice lost to another teardown is posted again. Read it
@@ -74,12 +93,13 @@ export interface WorkflowJournalContract {
 
 interface RunJournal {
   readonly name: string;
-  readonly origin?: WorkflowRunOrigin | undefined;
+  readonly origin: WorkflowRunOrigin;
   readonly entries: WorkflowJournalEntry[];
   readonly workspaces: Set<string>;
   /** Open until its outcome, or a later activation's notice about the teardown, is accepted. */
   open: boolean;
   stopped: boolean;
+  ended?: WorkflowEndedState | undefined;
   /** Order in which runs closed; the newest closed run is never trimmed. Zero while open. */
   closedOrder: number;
 }
@@ -175,7 +195,10 @@ const localJournals = (): (() => SessionJournals) => {
   return () => journals;
 };
 
-/** Session-scoped memory of agent() results, keyed by the Pi session that ran them. */
+/**
+ * Session-scoped memory of agent() results, keyed by the Pi session that ran them. It outlives
+ * reloads but not the Pi process; a run's files cover a restart.
+ */
 export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJournalContract>()(
   "pi-subagents/workflow/journal/WorkflowJournal",
 ) {
@@ -195,7 +218,7 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
             if (!runs.has(runId))
               runs.set(runId, {
                 name,
-                ...(origin !== undefined && { origin }),
+                origin,
                 entries: [],
                 workspaces: new Set(),
                 open: true,
@@ -215,9 +238,15 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
           }),
         noteWorkspace: (runId, workspaceId) =>
           withRun(runId, (run) => void run.workspaces.add(workspaceId)),
+        dropWorkspace: (runId, workspaceId) =>
+          withRun(runId, (run) => void run.workspaces.delete(workspaceId)),
         noteStop: (runId) =>
           withRun(runId, (run) => {
             run.stopped = true;
+          }),
+        noteEnded: (runId, state) =>
+          withRun(runId, (run) => {
+            run.ended = state;
           }),
         finish: (runId) =>
           Effect.sync(() => {
@@ -231,6 +260,7 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
             const run = journals().get(runId);
             return run ? makeWorkflowReplay(run.entries) : undefined;
           }),
+        has: (runId) => Effect.sync(() => journals().has(runId)),
         interruptedRuns: Effect.sync(() =>
           [...journals()].flatMap(([runId, run]): WorkflowInterruptedRun[] =>
             run.open
@@ -241,7 +271,8 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
                     finished: run.entries.length,
                     workspaces: [...run.workspaces],
                     ...(run.stopped && { stopped: true }),
-                    ...(run.origin !== undefined && { origin: run.origin }),
+                    ...(run.ended !== undefined && { ended: run.ended }),
+                    origin: run.origin,
                   },
                 ]
               : [],

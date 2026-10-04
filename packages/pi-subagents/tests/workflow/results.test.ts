@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import {
+  readWorkflowResultLines,
   WORKFLOW_RESULT_LINE_MAX_CHARS,
   workflowResultJsonLine,
   type WorkflowResultLine,
@@ -64,6 +65,56 @@ describe("results journal lines", () => {
     const head = Schema.decodeUnknownSync(Schema.String)(decoded["result"]);
     expect(text.startsWith(head)).toBe(true);
     expect(JSON.stringify(head).length).toBeLessThanOrEqual(WORKFLOW_RESULT_LINE_MAX_CHARS);
+  });
+
+  it("records a live call's usage, tool uses and duration, with the cost only when known", () => {
+    const usage = { input: 900, output: 40, cacheRead: 60, cacheWrite: 0, totalTokens: 1_000 };
+    expect(
+      decode(
+        workflowResultJsonLine(
+          line({ usage: { ...usage, cost: 0.2 }, toolUses: 7, durationMs: 1_500 }),
+        ),
+      ),
+    ).toMatchObject({
+      usage: { input: 900, output: 40, total: 1_000, cost: 0.2 },
+      toolUses: 7,
+      durationMs: 1_500,
+    });
+    expect(decode(workflowResultJsonLine(line({ usage })))["usage"]).toEqual({
+      input: 900,
+      output: 40,
+      total: 1_000,
+    });
+  });
+
+  it("replays completed lines with and without usage alike", () => {
+    const withUsage = workflowResultJsonLine(
+      line({
+        key: "k-1",
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3 },
+        toolUses: 4,
+        durationMs: 5,
+      }),
+    );
+    const without = workflowResultJsonLine(line({ key: "k-2", runId: "agent-2" }));
+    const reading = readWorkflowResultLines([withUsage, without]);
+    expect(reading.finished).toBe(2);
+    expect(reading.replayable).toEqual([
+      expect.objectContaining({ key: "k-1", runId: "agent-1", outputTokens: 12 }),
+      expect.objectContaining({ key: "k-2", runId: "agent-2", outputTokens: 12 }),
+    ]);
+  });
+
+  it("leaves worktrees discarded as unchanged out of the ones left for recovery", () => {
+    const reading = readWorkflowResultLines([
+      workflowResultJsonLine(line({ key: "k-1", workspaceId: "workspace-1", unchanged: true })),
+      workflowResultJsonLine(line({ key: "k-2", runId: "agent-2", workspaceId: "workspace-2" })),
+    ]);
+    expect(reading.workspaces).toEqual(["workspace-2"]);
+    // Nothing of the writer's awaits review, so a resume reuses its result like a reader's.
+    expect(reading.replayable[0]).toMatchObject({ key: "k-1" });
+    expect(reading.replayable[0]?.workspaceId).toBeUndefined();
+    expect(reading.replayable[1]).toMatchObject({ key: "k-2", workspaceId: "workspace-2" });
   });
 
   it("bounds a large value to the head of its JSON", () => {

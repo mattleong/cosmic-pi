@@ -1,19 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { activityKey } from "../src/activity/protocol.ts";
 import { retainActivity, type ActivityRow } from "../src/activity/model.ts";
-import { activityPath, activityTree, needsYou } from "../src/activity/tree.ts";
+import {
+  activitySectionId,
+  groupedActivityTree,
+  type GroupedActivityRow,
+} from "../src/activity/grouped-tree.ts";
+import { activityPath, needsYou } from "../src/activity/tree.ts";
 import { activityRow as row } from "./support/activity.ts";
+
+/** The source rows the grouped tree shows, without its section rows. */
+const members = (tree: readonly GroupedActivityRow[]) =>
+  tree.flatMap((entry) => (entry.type === "member" ? [entry] : []));
+const ids = (tree: readonly GroupedActivityRow[]) => members(tree).map((entry) => entry.row.id);
+const entryFor = (tree: readonly GroupedActivityRow[], source: ActivityRow) =>
+  members(tree).find((entry) => entry.row.key === source.key);
+
 describe("activity ownership", () => {
   it("keeps an explicitly awaited finished run visible only while its lease remains live", () => {
     const awaited = { ...row("finished", "done"), awaited: true };
-    expect(activityTree([awaited])[0]?.history).toBe(false);
+    expect(entryFor(groupedActivityTree([awaited]), awaited)?.history).toBe(false);
     const released = { ...awaited, awaited: false };
-    expect(activityTree([released])[0]?.history).toBe(true);
+    expect(entryFor(groupedActivityTree([released]), released)?.history).toBe(true);
     const retained = retainActivity([awaited], []);
     expect(retained[0]?.awaited).toBe(false);
-    expect(activityTree(retained)[0]?.history).toBe(true);
+    expect(entryFor(groupedActivityTree(retained), awaited)?.history).toBe(true);
   });
-  it("summarizes hidden descendant problems without counting the parent twice", () => {
+  it("summarizes a collapsed branch's problems, counting each row once", () => {
     const values = [
       row("root", "needs-input"),
       row("branch", "running", "root"),
@@ -22,16 +35,21 @@ describe("activity ownership", () => {
       row("failed", "failed", "root"),
       row("unrelated", "failed"),
     ];
-    const tree = activityTree(values, { collapsed: new Set([values[0]!.key]) });
-    expect(tree.find((entry) => entry.row.id === "root")?.attention).toEqual({
-      user: 1,
+    const tree = groupedActivityTree(values, { collapsed: new Set([values[0]!.key]) });
+    expect(entryFor(tree, values[0]!)?.summary.attention).toEqual({
+      user: 2,
       parent: 0,
       blocked: 1,
       failed: 1,
     });
-    expect(tree.some((entry) => entry.row.id === "question")).toBe(false);
-    const focused = activityTree(values, { focus: values[1]!.key });
-    expect(focused[0]?.attention).toEqual({ user: 1, parent: 0, blocked: 1, failed: 0 });
+    expect(entryFor(tree, values[2]!)).toBeUndefined();
+    const focused = groupedActivityTree(values, { focus: values[1]!.key });
+    expect(members(focused)[0]?.summary.attention).toEqual({
+      user: 1,
+      parent: 0,
+      blocked: 1,
+      failed: 0,
+    });
   });
   it("counts human input separately from parent waits and blocked descendants", () => {
     const owner = row("owner");
@@ -40,12 +58,12 @@ describe("activity ownership", () => {
     const blocked = row("blocked", "blocked", owner.id);
     const values = [owner, parent, blocked, human];
     expect(needsYou(values)).toEqual([human]);
-    const collapsed = activityTree(values, { collapsed: new Set([owner.key]) });
+    const collapsed = members(groupedActivityTree(values, { collapsed: new Set([owner.key]) }));
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]?.attention).toEqual({ user: 1, parent: 1, blocked: 1, failed: 0 });
-    expect(activityTree(values, { focus: owner.key })[0]?.attention).toEqual(
-      collapsed[0]?.attention,
-    );
+    expect(collapsed[0]?.summary.attention).toEqual({ user: 1, parent: 1, blocked: 1, failed: 0 });
+    expect(
+      members(groupedActivityTree(values, { focus: owner.key }))[0]?.summary.attention,
+    ).toEqual(collapsed[0]?.summary.attention);
   });
   it("preserves sibling ancestry across collapse, history ordering, and branch focus", () => {
     const values = [
@@ -55,23 +73,25 @@ describe("activity ownership", () => {
       row("grandchild", "running", "first"),
       row("last", "running", "root"),
     ];
-    const tree = activityTree(values);
-    expect(tree.map((entry) => [entry.row.id, entry.continuations])).toEqual([
-      ["root", []],
-      ["first", [true]],
-      ["grandchild", [true, false]],
-      ["last", [false]],
-      ["finished", []],
+    // The Subagents section is the first level; live work lists before history.
+    expect(
+      members(groupedActivityTree(values)).map((entry) => [entry.row.id, entry.continuations]),
+    ).toEqual([
+      ["root", [true]],
+      ["first", [true, true]],
+      ["grandchild", [true, true, false]],
+      ["last", [true, false]],
+      ["finished", [false]],
     ]);
-    const collapsed = activityTree(values, { collapsed: new Set([values[2]!.key]) });
-    expect(collapsed.find((entry) => entry.row.id === "first")).toMatchObject({
+    const collapsed = groupedActivityTree(values, { collapsed: new Set([values[2]!.key]) });
+    expect(entryFor(collapsed, values[2]!)).toMatchObject({
       expanded: false,
       children: 1,
-      continuations: [true],
+      continuations: [true, true],
     });
-    expect(collapsed.some((entry) => entry.row.id === "grandchild")).toBe(false);
-    const focused = activityTree(values, { focus: values[2]!.key });
-    expect(focused.map((entry) => entry.continuations)).toEqual([[], [false]]);
+    expect(entryFor(collapsed, values[3]!)).toBeUndefined();
+    const focused = groupedActivityTree(values, { focus: values[2]!.key });
+    expect(members(focused).map((entry) => entry.continuations)).toEqual([[], [false]]);
     expect(activityPath(values, values[3]!.key).map((entry) => entry.id)).toEqual([
       "root",
       "first",
@@ -97,8 +117,10 @@ describe("activity ownership", () => {
       row("b", "running", "a"),
       row("child", "running", "a"),
     ];
-    for (const entry of activityTree(cyclic)) {
-      expect(entry.depth).toBe(0);
+    const tree = members(groupedActivityTree(cyclic));
+    expect(tree).toHaveLength(cyclic.length);
+    for (const entry of tree) {
+      expect(entry.parentId).toBe(activitySectionId("subagents"));
       expect(activityPath(cyclic, entry.row.key)).toEqual([entry.row]);
     }
   });
@@ -111,15 +133,13 @@ describe("activity ownership", () => {
       row("a", "running", "b"),
       row("b", "running", "a"),
     ];
-    const tree = activityTree(values);
-    expect(tree.find((entry) => entry.row.id === "child")?.depth).toBe(1);
-    expect(tree.filter((entry) => entry.depth === 0).map((entry) => entry.row.id)).toEqual([
-      "standalone",
-      "root",
-      "orphan",
-      "a",
-      "b",
-    ]);
+    const tree = members(groupedActivityTree(values));
+    expect(tree.find((entry) => entry.row.id === "child")?.parentId).toBe(values[2]!.key);
+    expect(
+      tree
+        .filter((entry) => entry.parentId === activitySectionId("subagents"))
+        .map((entry) => entry.row.id),
+    ).toEqual(["standalone", "root", "orphan", "a", "b"]);
     expect(new Set(tree.map((entry) => entry.row.key)).size).toBe(values.length);
   });
   it("retains completed descendants under an active owner without retaining their actions", () => {
@@ -136,40 +156,28 @@ describe("activity ownership", () => {
       row("live", "running", "root"),
       row("history", "done"),
     ];
-    expect(activityTree(values, { hideHistory: true }).map((entry) => entry.row.id)).toEqual([
-      "root",
-      "live",
-    ]);
-    expect(activityTree(values).map((entry) => entry.row.id)).toEqual([
-      "root",
-      "finished",
-      "live",
-      "history",
-    ]);
+    expect(ids(groupedActivityTree(values, { hideHistory: true }))).toEqual(["root", "live"]);
+    expect(ids(groupedActivityTree(values))).toEqual(["root", "live", "finished", "history"]);
     expect(
-      activityTree(values, { hideHistory: true, collapsed: new Set([values[0]!.key]) }).map(
-        (entry) => entry.row.id,
-      ),
+      ids(groupedActivityTree(values, { hideHistory: true, collapsed: new Set([values[0]!.key]) })),
     ).toEqual(["root"]);
   });
   it("collapses finished branches into history but expands and focuses them explicitly", () => {
     const values = [row("root", "done"), row("child", "done", "root"), row("live")];
-    expect(activityTree(values).map((entry) => [entry.row.id, entry.history])).toEqual([
+    expect(
+      members(groupedActivityTree(values)).map((entry) => [entry.row.id, entry.history]),
+    ).toEqual([
       ["live", false],
       ["root", true],
     ]);
     expect(
-      activityTree(values, { expandedHistory: new Set([values[0]!.key]) }).map(
-        (entry) => entry.row.id,
-      ),
+      ids(groupedActivityTree(values, { expandedHistory: new Set([values[0]!.key]) })),
     ).toEqual(["live", "root", "child"]);
-    expect(activityTree(values, { focus: values[2]!.key }).map((entry) => entry.row.id)).toEqual([
-      "live",
-    ]);
+    expect(ids(groupedActivityTree(values, { focus: values[2]!.key }))).toEqual(["live"]);
   });
   it("does not archive an owner with a child needing input, including collapsed branches", () => {
     const values = [row("root", "done"), row("question", "needs-input", "root")];
-    const tree = activityTree(values, { collapsed: new Set([values[0]!.key]) });
+    const tree = members(groupedActivityTree(values, { collapsed: new Set([values[0]!.key]) }));
     expect(tree).toHaveLength(1);
     expect(tree[0]?.history).toBe(false);
     expect(needsYou(values).map((entry) => entry.id)).toEqual(["question"]);

@@ -2,21 +2,20 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
-import { PROFILE_IDS } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import {
   WorkflowAgentCallError,
+  type WorkflowAgentAccess,
   type WorkflowAgentSpec,
   type WorkflowHost,
 } from "../workflow/agent.ts";
+import { AVAILABLE_PROFILES, workflowAgentProfile } from "../workflow/options.ts";
 import { resolveProfileStart, type SubagentSessionEnvironment } from "./host-profile-resolution.ts";
-
-const DEFAULT_PROFILE = "generalist";
 
 /**
  * Captures the starting tool call's Pi host and one profile snapshot for the whole run, like a
  * subagent_start batch. An agent resolves its route, and a fork-context profile forks from the
- * root's leaf, when the call first gets a concurrency slot; a queued call keeps that request.
+ * root's leaf, when the call first gets one of the run's slots; a queued call keeps that request.
  */
 export const makeWorkflowHost = (
   pi: ExtensionAPI,
@@ -28,14 +27,16 @@ export const makeWorkflowHost = (
     const registry = yield* SubagentBackendRegistry;
     const snapshot = yield* profiles.capture;
 
-    const checkAgent = (spec: WorkflowAgentSpec) =>
+    const checkAgent = (
+      spec: WorkflowAgentSpec,
+    ): Effect.Effect<WorkflowAgentAccess, WorkflowAgentCallError> =>
       Effect.suspend(() => {
-        const requested = spec.profile?.trim() || DEFAULT_PROFILE;
+        const requested = workflowAgentProfile(spec.profile);
         const definition = profiles.definition(requested);
         if (!definition)
           return Effect.fail(
             new WorkflowAgentCallError({
-              message: `Unknown agent() profile "${requested}". Configured profiles: ${PROFILE_IDS.join(", ")}.`,
+              message: `Unknown agent() profile "${requested}". ${AVAILABLE_PROFILES}`,
             }),
           );
         const claims = normalizeWriteClaims(spec.writes);
@@ -48,13 +49,14 @@ export const makeWorkflowHost = (
         const writes = snapshot.effectiveConfig.profiles[definition.id].candidates.some(
           (candidate) => candidate.writeIntent === "writer",
         );
-        return writerOption && !writes
-          ? Effect.fail(
-              new WorkflowAgentCallError({
-                message: `agent() option \`${writerOption}\` needs a writer profile such as worker; profile "${definition.id}" is read-only.`,
-              }),
-            )
-          : Effect.void;
+        if (writerOption && !writes)
+          return Effect.fail(
+            new WorkflowAgentCallError({
+              message: `agent() option \`${writerOption}\` needs a writer profile such as worker; profile "${definition.id}" is read-only.`,
+            }),
+          );
+        const access: WorkflowAgentAccess = writes ? "writer" : "read-only";
+        return Effect.succeed(access);
       });
 
     const resolveAgent = (spec: WorkflowAgentSpec) =>

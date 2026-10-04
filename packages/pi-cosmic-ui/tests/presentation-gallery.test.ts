@@ -116,6 +116,7 @@ const failingRows: readonly ActivityRow[] = [
   memberRow("unit", failing, "Test", "failed", {
     title: "Unit tests",
     profile: "worker",
+    summary: "3 assertions failed in session.test.ts",
     startedAt: 52_000,
     endedAt: 80_000,
   }),
@@ -123,6 +124,133 @@ const failingRows: readonly ActivityRow[] = [
     title: "End-to-end tests",
     profile: "worker",
     startedAt: 52_000,
+  }),
+];
+/** The user stopped the run during its second phase; producer counts cover evicted members. */
+const halted = workflowRow("halted", [], "cancelled", "Implement", {
+  title: "Migrate settings store",
+  startedAt: 0,
+  endedAt: 70_000,
+  phases: [
+    { title: "Plan", work: { items: 2, finished: 2, stopped: 0 } },
+    { title: "Implement", work: { items: 3, finished: 3, stopped: 3 } },
+    { title: "Verify" },
+  ],
+});
+const haltedRows: readonly ActivityRow[] = [
+  halted,
+  memberRow("halted-plan", halted, "Plan", "done", {
+    title: "Draft migration plan",
+    profile: "planner",
+    startedAt: 0,
+    endedAt: 20_000,
+  }),
+  memberRow("halted-rewrite", halted, "Implement", "cancelled", {
+    title: "Rewrite store",
+    profile: "worker",
+    startedAt: 25_000,
+    endedAt: 70_000,
+  }),
+];
+const flaky = workflowRow("flaky", ["Build", "Test", "Report"], "running", "Test", {
+  title: "Nightly regression sweep",
+  summary: "Retrying failed suites once before reporting",
+  startedAt: 0,
+  actions: [stop],
+});
+const flakyRows: readonly ActivityRow[] = [
+  flaky,
+  memberRow("flaky-build", flaky, "Build", "done", {
+    title: "Build packages",
+    profile: "worker",
+    startedAt: 0,
+    endedAt: 20_000,
+  }),
+  ...["auth", "billing", "search", "mail"].map((suite, index) =>
+    memberRow(`flaky-${suite}`, flaky, "Test", "failed", {
+      title: `${suite} suite`,
+      profile: "worker",
+      summary: `${index + 2} tests failed; first: ${suite} handles expired sessions`,
+      startedAt: 22_000,
+      endedAt: 40_000 + index * 5_000,
+    }),
+  ),
+  memberRow("flaky-media", flaky, "Test", "running", {
+    title: "media suite",
+    profile: "worker",
+    startedAt: 22_000,
+  }),
+];
+/** Failures past the cap in two phases, one of which has none of the latest failures. */
+const spread = workflowRow("spread", ["Lint", "Build", "Test"], "running", "Test", {
+  title: "Monorepo health check",
+  startedAt: 0,
+  actions: [stop],
+});
+const spreadFailure = (phase: string, name: string, endedAt: number): ActivityRow =>
+  memberRow(`spread-${name}`, spread, phase, "failed", {
+    title: `${name} check`,
+    profile: "worker",
+    summary: `${name} reported errors`,
+    startedAt: 1_000,
+    endedAt,
+  });
+const spreadRows: readonly ActivityRow[] = [
+  spread,
+  spreadFailure("Lint", "eslint", 8_000),
+  spreadFailure("Lint", "oxlint", 6_000),
+  spreadFailure("Build", "types", 30_000),
+  spreadFailure("Test", "unit", 70_000),
+  spreadFailure("Test", "e2e", 60_000),
+  spreadFailure("Test", "smoke", 50_000),
+  memberRow("spread-integration", spread, "Test", "running", {
+    title: "integration check",
+    profile: "worker",
+    startedAt: 40_000,
+  }),
+];
+/** The producer counts a failure whose member row it no longer publishes. */
+const counted = workflowRow("counted", [], "running", "Verify", {
+  title: "Release candidate",
+  startedAt: 0,
+  actions: [stop],
+  phases: [
+    { title: "Build", work: { items: 4, finished: 4, stopped: 0, failed: 1 } },
+    { title: "Verify", work: { items: 1, finished: 0, stopped: 0 } },
+  ],
+});
+const countedRows: readonly ActivityRow[] = [
+  counted,
+  memberRow("counted-verify", counted, "Verify", "running", {
+    title: "Smoke test the release",
+    profile: "worker",
+    startedAt: 60_000,
+  }),
+];
+const lengthy = workflowRow("lengthy", ["Inventory", "Migrate", "Verify"], "running", "Migrate", {
+  title: "Migrate every billing service to the consolidated settings schema",
+  startedAt: 0,
+  actions: [stop],
+});
+const lengthyRows: readonly ActivityRow[] = [
+  lengthy,
+  memberRow("lengthy-inventory", lengthy, "Inventory", "done", {
+    title: "Inventory billing services",
+    profile: "scout",
+    startedAt: 0,
+    endedAt: 30_000,
+  }),
+  memberRow("lengthy-invoices", lengthy, "Migrate", "failed", {
+    title: "Migrate invoices",
+    profile: "worker",
+    summary: "Schema check rejected the legacy currency field",
+    startedAt: 32_000,
+    endedAt: 60_000,
+  }),
+  memberRow("lengthy-refunds", lengthy, "Migrate", "running", {
+    title: "Migrate refunds",
+    profile: "worker",
+    startedAt: 32_000,
   }),
 ];
 const loose = workflowRow("loose", [], "running", undefined, {
@@ -286,39 +414,56 @@ const passedRows: readonly ActivityRow[] = [
     startedAt: 45_000,
   }),
 ];
-const scenarios: ReadonlyArray<{ readonly title: string; readonly rows: readonly ActivityRow[] }> =
-  [
-    { title: "Later phases show the agents a workflow plans to call", rows: planRows },
-    { title: "Partly claimed plan with a narrator line", rows: claimedRows },
-    { title: "Finished workflow with planned agents it never ran", rows: unrunRows },
-    { title: "Planned agents that don't fit are counted on their phase", rows: crowdedRows },
-    {
-      title: "A passed phase with planned agents, and planned agents in phases not shown",
-      rows: passedRows,
-    },
-    { title: "Running workflow with queued placeholders that can be skipped", rows: running },
-    {
-      title: "Running workflow beside standalone agents and tasks",
-      rows: [...running, ...standalone],
-    },
-    { title: "Stopped workflow", rows: stoppedRows },
-    { title: "Skipped phases after an early return", rows: earlyRows },
-    { title: "Failed member in a live phase", rows: failingRows },
-    { title: "Workflow members without phases and an owned question", rows: looseRows },
-    {
-      title: "Clipped workflows retain attention and hidden evidence",
-      rows: [...running, ...failingRows, ...looseRows, ...stoppedRows, ...standalone],
-    },
-    {
-      title: "Standalone queued and urgent questions",
-      rows: [
-        activityRow("queued", "pending", undefined, { kind: "question" }),
-        activityRow("urgent", "needs-input", undefined, { kind: "question" }),
-      ],
-    },
-  ];
+const scenarios: ReadonlyArray<{
+  readonly title: string;
+  readonly rows: readonly ActivityRow[];
+  /** Also render the stacked manager tier and the compact widget used beside an input dock. */
+  readonly tiers?: boolean;
+}> = [
+  { title: "Later phases show the agents a workflow plans to call", rows: planRows },
+  { title: "Partly claimed plan with a narrator line", rows: claimedRows },
+  { title: "Finished workflow with planned agents it never ran", rows: unrunRows },
+  { title: "Planned agents that don't fit are counted on their phase", rows: crowdedRows },
+  {
+    title: "A passed phase with planned agents, and planned agents in phases not shown",
+    rows: passedRows,
+  },
+  { title: "Running workflow with queued placeholders that can be skipped", rows: running },
+  {
+    title: "Running workflow beside standalone agents and tasks",
+    rows: [...running, ...standalone],
+  },
+  { title: "Stopped workflow", rows: stoppedRows },
+  {
+    title: "A workflow stopped in its second phase counts only the first as done",
+    rows: haltedRows,
+    tiers: true,
+  },
+  { title: "Skipped phases after an early return", rows: earlyRows },
+  { title: "Failed member in a live phase", rows: failingRows },
+  { title: "Failures past the cap in a live workflow", rows: flakyRows, tiers: true },
+  { title: "Failures past the cap counted within each phase", rows: spreadRows, tiers: true },
+  { title: "A phase whose producer counts a failure it no longer shows", rows: countedRows },
+  {
+    title: "A long workflow name beside attention and phase counts",
+    rows: lengthyRows,
+    tiers: true,
+  },
+  { title: "Workflow members without phases and an owned question", rows: looseRows },
+  {
+    title: "Clipped workflows retain attention and hidden evidence",
+    rows: [...running, ...failingRows, ...looseRows, ...stoppedRows, ...standalone],
+  },
+  {
+    title: "Standalone queued and urgent questions",
+    rows: [
+      activityRow("queued", "pending", undefined, { kind: "question" }),
+      activityRow("urgent", "needs-input", undefined, { kind: "question" }),
+    ],
+  },
+];
 
-const managerFrames = (rows: readonly ActivityRow[]) => {
+const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
   const component = new ActivityComponent({
     snapshot: () => rows,
     theme: plainTheme,
@@ -331,6 +476,7 @@ const managerFrames = (rows: readonly ActivityRow[]) => {
   const frames: Array<readonly [string, readonly string[]]> = [
     ["manager · 140 cols", component.render(140)],
   ];
+  if (tiers) frames.push(["stacked manager · 80 cols", component.render(80)]);
   if (!rows.some((row) => row.kind === "workflow")) return frames;
   component.handleInput("\r");
   frames.push(["inspect workflow", component.render(140)]);
@@ -368,7 +514,66 @@ const managerFrames = (rows: readonly ActivityRow[]) => {
   component.handleInput("j");
   component.handleInput("h");
   frames.push(["collapsed manager · 100 cols", component.render(100)]);
+  if (tiers) frames.push(["collapsed stacked manager · 80 cols", component.render(80)]);
   return frames;
+};
+
+const steered = activityRow("steered", "running", undefined, {
+  title: "Refactor billing client",
+  profile: "worker",
+  startedAt: 0,
+  actions: [
+    { id: "stop", label: "Stop" },
+    { id: "interrupt", label: "Interrupt" },
+    { id: "message", label: "Message" },
+    { id: "rename", label: "Rename" },
+  ],
+});
+const crowdedActions = activityRow("crowded-actions", "running", undefined, {
+  title: "Custom producer",
+  startedAt: 0,
+  actions: Array.from({ length: 11 }, (_, index) => ({
+    id: `custom-${index + 1}`,
+    label: `Custom ${index + 1}`,
+  })),
+});
+/** Footers only, at each width tier, with the default keys and then the full help. */
+const footerScenarios: ReadonlyArray<readonly [string, readonly ActivityRow[], string]> = [
+  ["One stop action", running, review.key],
+  ["One skip action", running, queued[0]!.key],
+  ["Several direct actions", [steered], steered.key],
+  ["More actions than one page", [crowdedActions], crowdedActions.key],
+  ["No actions", stoppedRows, stopped.key],
+];
+const footerFrames = (rows: readonly ActivityRow[], key: string) => {
+  const component = new ActivityComponent({
+    snapshot: () => rows,
+    theme: plainTheme,
+    height: () => 12,
+    now: () => 90_000,
+    close: () => undefined,
+    invoke: () => undefined,
+    requestRender: () => undefined,
+  });
+  component.render(140);
+  for (let step = 0; step < 16 && component.shell.state.selectedId !== key; step++)
+    component.handleInput("j");
+  const footers = (help: string) =>
+    [140, 100, 80, 50].map((width) => `${help}${width} cols ${component.render(width).at(-1)}`);
+  const lines = footers("");
+  component.handleInput("?");
+  const help = footers("? ");
+  component.handleInput("?");
+  // A destructive action asks first: its question fills the body and the footer names it.
+  const confirmable = rows.find((row) => row.key === key)?.actions?.[0]?.confirmation;
+  if (!confirmable) return [...lines, ...help];
+  component.handleInput("x");
+  return [
+    ...lines,
+    ...help,
+    ...component.render(80).map((line) => `confirm 80 cols ${line}`),
+    `confirm 50 cols ${component.render(50).at(-1)}`,
+  ];
 };
 
 describe.skipIf(!directory)("presentation gallery", () => {
@@ -376,18 +581,26 @@ describe.skipIf(!directory)("presentation gallery", () => {
     Effect.gen(function* () {
       const lines: string[] = [];
       for (const scenario of scenarios) {
-        for (const width of [60, 80, 100])
+        const widgets: ReadonlyArray<readonly [string, number, number]> = [
+          ...[60, 80, 100].map(
+            (width) => [`${width} cols`, width, activityWidgetHeight(scenario.rows, 24)] as const,
+          ),
+          ...(scenario.tiers ? [["compact beside an input dock · 80 cols", 80, 3] as const] : []),
+        ];
+        for (const [label, width, height] of widgets)
           lines.push(
-            `── ${scenario.title} · widget · ${width} cols`,
-            ...renderActivityWidget(scenario.rows, width, activityWidgetHeight(scenario.rows, 24), {
+            `── ${scenario.title} · widget · ${label}`,
+            ...renderActivityWidget(scenario.rows, width, height, {
               now: 90_000,
               theme: plainTheme,
             }),
             "",
           );
-        for (const [label, frame] of managerFrames(scenario.rows))
+        for (const [label, frame] of managerFrames(scenario.rows, scenario.tiers === true))
           lines.push(`── ${scenario.title} · ${label}`, ...frame, "");
       }
+      for (const [title, rows, key] of footerScenarios)
+        lines.push(`── Footer · ${title}`, ...footerFrames(rows, key), "");
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       yield* fs.writeFileString(

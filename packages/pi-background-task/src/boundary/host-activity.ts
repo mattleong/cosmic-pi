@@ -1,4 +1,5 @@
 import {
+  ACTIVITY_LIMITS,
   registerRevisionedActivityProvider,
   type ActivityEvents,
   type ActivityItem,
@@ -13,7 +14,9 @@ export function backgroundTaskActivityItems(
 ): readonly ActivityItem[] {
   return Object.freeze(
     projection.tasks.map((task) => {
-      const title = sanitizeDiagnosticContent(task.name ?? task.command, { maximumLength: 512 });
+      const title = sanitizeDiagnosticContent(task.name ?? task.command, {
+        maximumLength: ACTIVITY_LIMITS.title,
+      });
       const item: ActivityItem = {
         id: task.id,
         kind: "command" as const,
@@ -90,7 +93,7 @@ export function backgroundTaskActivityDetail(
     { maximumLength: 4_000 },
   );
   return sanitizeDiagnosticContent(`${header}\n\n${chunks.reverse().join("")}`, {
-    maximumLength: 16_384,
+    maximumLength: ACTIVITY_LIMITS.detail,
   });
 }
 

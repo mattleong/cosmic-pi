@@ -365,19 +365,9 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       }),
     );
 
-  const awaitTerminal: SubagentServiceContract["awaitTerminal"] = (ids, until, onUpdate) =>
-    withAwaitTerminalObservations(ids, until, onUpdate, (observations) =>
-      consumeCompletions(
-        observations.flatMap((observation) =>
-          observation.completionReceipt ? [observation.completionReceipt] : [],
-        ),
-      ).pipe(Effect.as(observations.map((observation) => observation.run))),
-    );
-
   return {
     redactCompletionReport,
     consumeCompletions,
-    awaitTerminal,
     withAwaitTerminalObservations,
     withStatusObservations,
   };

@@ -33,8 +33,6 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     base.blockRetryClaim ?? (() => unexpected("blockRetryClaim"));
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] =
     base.startRetrySessionOwned ?? (() => unexpected("startRetrySessionOwned"));
-  const awaitTerminal: SubagentServiceContract["awaitTerminal"] =
-    base.awaitTerminal ?? (() => unexpected("awaitTerminal"));
   const status: SubagentServiceContract["status"] = base.status ?? (() => unexpected("status"));
   const observeStatus =
     base.observeStatus ??
@@ -64,12 +62,6 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
           }),
         ),
       ));
-  const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
-    base.withAwaitTerminalObservations ??
-    ((ids, until, onUpdate, use) =>
-      awaitTerminal(ids, until, onUpdate).pipe(
-        Effect.flatMap((runs) => use(runs.map((run): SubagentRunObservation => ({ run })))),
-      ));
 
   return {
     start,
@@ -83,8 +75,8 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     exhaustRetryClaim,
     blockRetryClaim,
     startRetrySessionOwned,
-    awaitTerminal,
-    withAwaitTerminalObservations,
+    withAwaitTerminalObservations:
+      base.withAwaitTerminalObservations ?? (() => unexpected("withAwaitTerminalObservations")),
     list,
     status,
     withStatusObservations,
@@ -106,6 +98,8 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     workspacePrepare: base.workspacePrepare ?? (() => unexpected("workspacePrepare")),
     workspaceIntegrate: base.workspaceIntegrate ?? (() => unexpected("workspaceIntegrate")),
     workspaceDiscard: base.workspaceDiscard ?? (() => unexpected("workspaceDiscard")),
+    workspaceDiscardUnchanged:
+      base.workspaceDiscardUnchanged ?? (() => unexpected("workspaceDiscardUnchanged")),
     workspaceRevise: base.workspaceRevise ?? (() => unexpected("workspaceRevise")),
     inspectWriterWorkspace: base.inspectWriterWorkspace ?? unexpected("inspectWriterWorkspace"),
     setWriterWorkspaceMode:
@@ -115,13 +109,15 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     openOwner: base.openOwner ?? (() => unexpected("openOwner")),
     startOwned: base.startOwned ?? (() => unexpected("startOwned")),
     awaitOwned: base.awaitOwned ?? (() => unexpected("awaitOwned")),
-    releaseOwned: base.releaseOwned ?? (() => unexpected("releaseOwned")),
     closeOwner: base.closeOwner ?? (() => unexpected("closeOwner")),
     waitForRevision: base.waitForRevision ?? (() => unexpected("waitForRevision")),
     admissionRevision: base.admissionRevision ?? unexpected("admissionRevision"),
     waitForAdmissionChange:
       base.waitForAdmissionChange ?? (() => unexpected("waitForAdmissionChange")),
-    queuedStartRefused: base.queuedStartRefused ?? (() => unexpected("queuedStartRefused")),
+    queuedStartsAdmissible:
+      base.queuedStartsAdmissible ?? (() => unexpected("queuedStartsAdmissible")),
+    queuedWriterConflict: base.queuedWriterConflict ?? (() => unexpected("queuedWriterConflict")),
+    rootChildLimit: base.rootChildLimit ?? unexpected("rootChildLimit"),
     workspaceBindingStatus:
       base.workspaceBindingStatus ?? (() => unexpected("workspaceBindingStatus")),
   };

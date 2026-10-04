@@ -60,15 +60,168 @@ The root and nested `/subagents` fleets reuse this classification. A root send r
 
 Finished observations classify `reportStatus` before redacting text: `available`, `claimed`, `delivered`, or `missing`. This metadata does not acquire, release, or consume a completion claim. Version-2 cards retain it through bounded projections. Historical cards without the field have unknown availability, not proof of a missing report.
 
+## Run cancellation and cleanup
+
+- `session-owned.ts` owns the one claim-then-owner-scoped-commit mask shared by session-owned launch, retry, reply, interrupt, stop, and resume, so cancelling a waiter never abandons ownership while owner-scope closure still interrupts the commit.
+- Subtree stops join descendant cleanup, including already-stopping and terminal descendants, before closing ancestors.
+  Terminal outcomes remain unchanged.
+- `writer-preparation.ts` owns lease preparation and masks its shared ownership claim through settlement-finalizer installation.
+  Pre-ownership lease checks and joiners remain interruptible, while the lease's synchronous core-lock commits are not.
+- Process lifecycle installs its settlement handler before backend-spawn admission, keeping registry permit waiting and driver work interruptible.
+  A same-callback ownership flag makes unclaimed cancellation a no-op; claimed cleanup identity-clears the attempt and settles its latch, including cancellation before the driver runs.
+- `record-cleanup.ts` masks owned scope closure through backend and writer-lease release and cleanup-outcome publication, because closing a scope cannot be retried after interruption.
+  Joiners and pre-close spawn waits remain interruptible.
+  An interrupted pre-close owner relinquishes its claim without settling cleanup disposition; awakened joiners or late launch compensation reclaim it.
+  A stalled owned release keeps shutdown waiting rather than falsely confirming cleanup.
+- Shutdown disables projection publication without blocking late cleanup state commits or private run-state reclamation.
+
+## Tool registration and compact presentation
+
+### Activation
+
+- `src/extension.ts` checks the child marker before importing the root application.
+  Root factories await that import and registration; private child entrypoints remain separate.
+- Runtime startup runs preview settings as an interruptible best-effort bootstrap, then returns the initial projection, tool runtime, and preview scheduler as prepared activation data.
+  The shared session-runtime slot owns latest-start replacement and cancellation, and only its current token may register tools or publish activation state.
+- Pi drops its pending tool-restore list whenever a tool is deactivated, so subagent tools stay active through `/tree` and the outgoing instance's `/reload` shutdown.
+  They are deactivated only when an activation is lost or on another shutdown, and a later registration deactivates only tools it activated that the session had not kept active.
+- `makeRuntime` captures the tree and reload profile handoffs after the slot has disposed the prior runtime.
+- Each registering runtime composes `CodePreviewSchedulerService.layer` and passes its startup scheduler through a current-token callback, so isolated extension loaders need no shared scheduler singleton.
+  Replacement and shutdown dispose animation fibers and revoke stale scheduling.
+  Registration also stops the original progress ticker when compact rendering takes over or execution settles; hidden renderers need not run just to release animation.
+
+### Tool modules
+
+- `subagent.ts` is the registration door; it derives each self-contained Pi output declaration with pi-cosmic-core's shared `toPiToolOutputSchema`.
+  `schema.ts` holds the one tool catalog, `SUBAGENT_TOOL_SCHEMAS`: each tool name's parameter schema plus any cross-field validator.
+  Registration walks the catalog in `SUBAGENT_TOOL_NAMES` order.
+- Root execution, the fleet proxy, and the nested-Pi wire all carry the same tool-keyed `{ tool, args }` input, whose args are exactly the wire JSON; `proxy-protocol.ts` decodes only own catalog names with TypeBox `Check` plus the entry's validator.
+- `model.ts` contains plain tool outcome and profile DTOs.
+  `execute-models.ts` owns the whole `models` action (static profile-route discovery, its formatted text, and compact details).
+  `execute-start.ts` owns the whole public start-batch orchestration: request validation, the one profile snapshot per batch, the `generalist` default for omitted profiles, route resolution, partial outcome publication with hostile update containment, and request-ordered receipts.
+  `execute-await.ts` owns call-local progress and cancellation evidence, and `execute.ts` keeps action dispatch, authorization, and post-finalizer Promise cancellation translation.
+- `execute-result.ts` separates text, persisted display details, and version-1 script results.
+  `contract-schema.ts` defines the authoritative Effect output schemas, and `contract.ts` projects domain facts.
+- `execute-workspace.ts` dispatches strict workspace operations through the coordinator, pages complete immutable diffs, and keeps patches out of persisted detail metadata.
+- `workflow.ts` registers root-only, model-only `subagent_workflow`, with its schema, text, and compact presentation in `workflow-schema.ts`, `workflow-format.ts`, and `workflow-presentation.ts`; `result-presentation.ts` renders the child-only `subagent_result`.
+- With `scriptedWorkflows` on, root scripts may launch read-only assignments, await, inspect status, and stop; off, registration marks those four contract tools model-only as well, leaving native codemode and model calls unchanged.
+  All other coordinator tools and every nested-Pi coordinator definition remain model-only.
+- `boundary/host-tool-result.ts` owns bounded activation, call, and detail-identity receipts that set Pi's tool error flag without discarding returned evidence, including decoded child-proxy results.
+  It also tracks native host-derived call identity from execution-start and admission events, never argument fields or ID spelling.
+  Model origin requires matching top-level evidence from both events; empty-parent script evidence is sticky, and missing or capacity-lost start evidence fails closed.
+  Unknown call provenance fails closed, and native execution-end events release blocked or aborted call tracking.
+- Cancelled awaits conservatively mark any attempted delivery unknown, preserving late-abort read-back rather than asserting an unconsumed report.
+  Actual target-operation failures, including mixed batches, mark the call; successful observations of failed workers do not.
+
+### Shell coverage
+
+- All 11 root coordinator registrations and their local-child proxies, root-only `subagent_workflow`, and child-only `subagent_result` use the shared presentation shell, and `tools/compact-summary.ts` opts all 11 coordinator tools into the shared compact setting using decoded domain details.
+  Root and local-child proxy registration share this provider.
+- The shell owns semantic headings and attention in both compact states.
+  Content callbacks retain tasks, reports, hierarchy, usage, routes, and audits without adding a competing status banner.
+  A live panel may hide partial hierarchy, but never owns the tool heading, omissions, questions, writer admission, or cleanup recovery.
+- `contact_parent` uses content-only callbacks and preview bodies (`tools/render-parent.ts`); arbitrary replies remain verbatim, and child transport returns them with the one `PARENT_REPLY_PREFIX`.
+  `tools/compact-parent-summary.ts` supplies pure bounded input summaries for child-only `contact_parent` and supervisor tools through the same token-checked scheduler.
+  Live child subjects use bounded sanitized message or report excerpts, and warning calls retain their full warning as the issue detail.
+  Exact owned acknowledgements supply semantic summaries; settled questions, arbitrary replies, and errors use the generic compact row and retain their original rendering on expansion.
+- The four native supervisor tools are served over private MCP, not registered as Pi tool rows; that transport carries results only and has no Pi TUI renderer.
+- Workspace producers record optional UTF-16 display spans while composing output, so expansion can show list records and immutable diff pages without parsing text for deduplication.
+  Original content bytes remain unchanged; historical or invalid spans retain labeled raw output.
+
+### Compact issues
+
+- Compact attention policy stays in the typed tool projections, which emit one `CompactIssue` per problem or recovery step in producer order.
+  Codes carry run, launch-slot, profile, or workspace identity.
+- Issue producers author their human-facing messages where each issue is built.
+  Messages are one sentence that starts with a subagent, launch, or profile name, never a run or workspace ID.
+  `tools/compact-action-failures.ts` maps failed-target codes and rejected calls to such messages and keeps the service text as detail.
+- Headings (`tools/compact-heading.ts`) name runs by display name and use words, not raw operation tokens.
+  Running await headers show only the observed finished/target counter; other running headers use current arguments, except start's observed started/total counter.
+  Ordinary headers show one combined domain count without routine IDs, route, writer, or report-history metadata, and requested IDs resolve names only from exact matching cards.
+- Worker and system warnings, questions, and errors are quoted by their first line (common service failures by name) unless the text opens with agent guidance.
+  Run IDs, full text, and agent procedures stay in the expanded-only `detail`.
+  Retry guidance travels in the failure's own detail, and a failed launch's cleanup and retry state share one line.
+- Routine facts are `info` issues: a stop the status already shows, a pause or stop the call itself requested, a retry moving past its failed option, a list's omitted report text, and an isolated writer's report awaiting review (also a `changes ready for review` heading label).
+  Recovery steps with no human-facing fact are `info` issues, shown only on expansion.
+- Any error issue makes the outcome an error, and a warning issue turns success into warning; uncertain and cancelled classifications stay.
+- Static discovery counts eligible options and disabled or unavailable profiles without claiming launch readiness.
+  Valid-source empty routes mean disabled; invalid sources and configured routes without eligible candidates warn.
+- Clean settled completed cards keep routine static skip history as one expanded-only info issue.
+  Await, status, and list retain child, system, and selection warnings; matching prose never hides an independent warning.
+  The latest warning stays unchanged for other tools and expansion, and a separate system warning survives later child warnings until the next assignment.
+- Decoded run, claims, await, and workspace outcomes use compact summaries with explicit outcomes and ordered issues; original reports, paths, audits, and diff pages remain on expansion.
+  Unknown details use the shared generic compact row while collapsed and the original fallback on expansion.
+- `compact-run-issues.ts` never derives grant paths or cleanup or retry authority from bounded cards.
+  `compact-start-summary.ts` owns launch-slot issues and the start outcome.
+  `compact-workspace-summary.ts` retains pagination and exact review, test, and integration gates using receipt-only display metadata.
+  Workspace rows show operation receipts or bounded counts; pagination, orphan recovery, and review, test, and integration gates are info issues, and only an explicit empty list drops generic orphan-recovery guidance.
+- Report-only omissions use the strict optional `reportsOnlyOmitted: true` producer flag; generic, error, and uncertain omissions retain warnings and full-status guidance.
+  Await summaries count requested targets, not descendant context, and omitted projections point to full status.
+- Compact expansion uses content-only callbacks.
+  In preview style the shell draws the same issue lines from the summary, so the original renderers draw bodies only: routine counters as muted text, run rows that show IDs only when expanded or when names collide, and agent recovery steps and failed-target evidence only when expanded, under a label.
+  Safety issues remain live.
+- Parent warnings use the owned warning issue with the full warning as its detail; settled questions and arbitrary replies still decline compaction.
+  Expansion retains the original evidence.
+- List cards render parent-before-child; hierarchy run rows use one stable width-bounded line per run, with tree identity and state glyph first, route metadata next, and lower-priority details truncated at narrow widths.
+
+### Notification rows
+
+- `application/messages.ts` registers root and child message renderers.
+  Pure `ui/notification.ts` shows one human row in both collapsed styles (typed counts and the lone run's display name, or a neutral mark for untyped forwarded and peer notices) and the full content only once expanded.
+- `host-notifier.ts` attaches display-only counts and a lone run's name without altering message content, delivery keys, or acknowledgement behavior.
+- Workflow results use the same notifier with their own `pi-subagents-workflow` message: completed and failed runs join or start a turn, while a user's stop and an interrupted-run notice wait for the next one.
+
+## Activity provider and fleet
+
+- `boundary/host-activity.ts` registers the root session's Cosmic UI Activity provider through Cosmic UI's `registerRevisionedActivityProvider`, prompts for action input and dispatches actions.
+  Pure `ui/run-activity.ts` projects frozen fleet projections into items, details and the action policy: the complete authorized root tree, including terminal history and completed ancestors, and workflows from `ui/workflow-activity.ts` (see [Workflow internals](workflow-internals.md#activity-projection)).
+  A row's summary never repeats the state Activity draws beside it: it is why a member's call or a run failed, or what the run is doing.
+- Launch leases are published as provider count metadata and await leases as exact-target row metadata, without synthetic selectable rows or moving run ownership.
+  Launch counts describe requested work in unsettled start calls, including the interval before run rows exist.
+- `ui/run-activity-detail.ts` writes a run's detail pane beneath the state, profile, elapsed time and breadcrumb Activity already shows, technical facts last, and `ui/activity-revision.ts` stamps item revisions.
+  Each item's revision hashes its published fields, plus assignment and question identity for runs, so unrelated progress never makes an action stale.
+- Credentials are redacted before summaries or selected details leave the producer, and selected-item details use the same checked capability and stay bounded.
+- Actions recheck cancellation, the session token, item revision, and current capabilities before entering the authoritative service runner with the host's abort signal.
+  Destructive actions declare their confirmation scope, including descendant shutdown for stop.
+  Replacement and shutdown revoke registration and callbacks.
+- Parent-contact questions explicitly target the parent, never the user.
+  Claim admission pauses override questions: peers wait for file access, active offenders show containment, and paused or terminal offenders require parent file-access review.
+  The producer uses the authoritative parent-action predicate without treating an older question as claim recovery.
+  Ordinary pauses and missing-question waits require parent review.
+  These remain blocked rows, preserving unresolved recovery visibility and existing action safeguards.
+- Message, reply, rename, and resume declare handoff and use the owned abort-aware Pi input boundary after the shared manager closes; stop, interrupt, and workflow actions run in place.
+  Post-input checks compare the captured assignment and question identity and current capabilities, claim, and steering policy, not the item revision, which the run's own progress changes while the user types.
+  Pending native guidance remains a warning, never claimed delivery.
+- `host-ui.ts` removes the legacy widget only after Cosmic UI acknowledges installed provider UI, restores it when that acknowledgement is lost, and keeps presentation leases and footer fallback intact.
+  `boundary/host-activity-widget.ts` owns that widget's installation, projection and render caching, presentation leases, footer suppression, stale-context guards, and disposal.
+- `/subagents` uses the unified manager; only absent or pre-admission-unavailable UI falls back to the standalone fleet.
+  Rejection, cancellation, and a replaced activation never open another overlay.
+- `ui/run-presentation.ts` shares bounded age, short ID, and sanitized route and model projection without choosing panel or tool width policy.
+- `ui/run-tree-rows.ts` owns the single parent-before-child walker and box-drawing branch renderer behind both the tool card hierarchy and the fleet and activity hierarchy.
+  Tool cards dedupe IDs, promote missing, self, and unknown-parent orphans, and surface cycles as roots.
+  The fleet scopes to the visibility root, never renders it, supports collapse, and drops out-of-scope orphans.
+- `boundary/host-refresh-ticker.ts` owns adaptive stop-before-start host ticker replacement shared by the persistent widget and full-screen fleet.
+- The full-screen fleet projects the authenticated subtree into one parent-before-child hierarchy, expands all branches initially, uses Left/Right to collapse or expand a selected subtree, and uses Enter to inspect the selected run.
+  A nested caller cannot render or select nodes above or beside its visibility root.
+  Pane-focus borders and headings come from `pi-cosmic-ui`; `session-output.ts` renders the fleet detail pane's heading and subtitle, taking only the detail-pane focus flag from the fleet.
+- `src/settings/proxy-controller.ts` registers the packaged nested-Pi subtree manager without owning remote state.
+
 ## Module responsibilities
 
+- `src/run/` owns immutable ancestry, per-parent direct-child admission, depth checks, subtree authorization, immutable launch-time routing, cooperative exact-file claims, root writer pools, process and control transitions, native-agent summaries, supported resume and respawn assignments, completion claims and ancestor-first delivery, bounded terminal-history reclamation, and the synchronous tree projection.
+- Run modules receive service-owned primitives as one `RunContext` from `internal.ts`, name cross-module operations by their producer's type, and only launch mutates the run registry.
+  The service wires producer operations by explicit name, so consumers receive the questionnaire-draining `closeRecordScope`, never the raw cleanup result.
+- `src/run/model.ts` holds the one pure predicate for runs that need parent action, `isParentActionRequiredRun`, covering real questions, pauses, and paused writer admission, so service awaits and tool results agree.
+- `src/run/attention.ts` resolves the one attention state a run is in (containment, a paused writer peer, paused, a question, or a missing question) by a single precedence, which recovery steps, compact issue lines, the preview renderer, and workflow status all use.
+- `src/run/tree.ts` owns pure ancestry, visibility, count, and leaf-first ordering rules.
 - `src/run/assignment.ts`, `settlement.ts`, and `resume.ts` own assignment epochs, prompt confirmation, report commit, terminal settlement, and supported resume/respawn generation rollover.
 - `src/run/coordination.ts` formats ownership notices and sends bounded best-effort updates. Each send snapshots eligible recipients, then renders recipient text from the live run registry without holding the service lock during process I/O.
 - `src/run/process-lifecycle.ts` owns locked backend-control admission, outside-lock joins, process acquisition, event acknowledgment, scoped event and exit fibers, and cleanup handoff.
 - `src/run/service.ts` owns the run registry, locks, subtree stop, write-violation containment, runtime cleanup, and direct factory composition. It acquires the proxy FiberMap before registering leaf-first shutdown and provides authenticated service dispatch and questionnaire lifetime callbacks to `proxy-execution.ts`.
-- `src/run/proxy-execution.ts` owns proxy admission, the per-run concurrency bound, keyed cancellation, strict questionnaire decoding, and bounded response encoding. It uses the service-owned FiberMap without a separate registry or runtime.
+- `src/run/proxy-execution.ts` owns authenticated proxy admission, the per-run concurrency bound, keyed execution and cancellation, strict questionnaire decoding, and bounded response encoding. It uses the service-owned FiberMap without a separate registry or runtime.
 - `src/run/completion.ts`, `completion-observations.ts`, and `notification-delivery.ts` own outcome records, exclusive claims, receipt consumption, and the retrying delivery outbox.
 - `src/run/write-claim-control.ts`, `writer-pool.ts`, `claims-observation.ts`, and `admission.ts` own exact claim changes, shared lease membership, bounded tool observation, and overlap policy. `projection.ts`, `state.ts`, `session-events.ts`, and `warnings.ts` own bounded immutable views and diagnostic/session-history projection.
+- `src/run/tool-policy.ts` owns the root Pi active-tool snapshot, the competing-orchestrator denylist, and canonical authenticated proxy names.
 - `src/tools/execute-await.ts` owns call-local await progress/cancellation snapshots and interruption evidence; `execute.ts` translates that evidence at the Promise boundary after finalization.
 - `src/tools/details.ts` is the sole public details door. Its private `details-schema.ts` room owns the strict version-2 Effect Schema model, focused decoders, canonical bound, and freezing; `format.ts` and `render*.ts` own bounded model-visible output.
 - `src/ui/` and pure `src/settings/ui/` modules consume immutable projections and never own Effect resources.

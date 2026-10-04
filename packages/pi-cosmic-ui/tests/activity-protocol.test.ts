@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
   ACTIVITY_HOST,
+  ACTIVITY_LIMITS,
   registerActivityProvider,
   registerRevisionedActivityProvider,
   type ActivityItem,
@@ -20,7 +21,7 @@ const workflow = (phases: number): ActivityItem => ({
 
 describe("activity producer protocol", () => {
   it("withholds snapshots beyond the phase limit and cleans phase text before sending", () => {
-    let items: readonly ActivityItem[] = [workflow(32)];
+    let items: readonly ActivityItem[] = [workflow(ACTIVITY_LIMITS.phases)];
     const host = fakeActivityHost();
     const registration = registerActivityProvider(host.events, {
       sessionId: "session",
@@ -30,7 +31,7 @@ describe("activity producer protocol", () => {
     });
     registration.publish();
     expect(host.get()?.items).toHaveLength(1);
-    items = [workflow(33)];
+    items = [workflow(ACTIVITY_LIMITS.phases + 1)];
     registration.publish();
     expect(host.get()?.items).toBeUndefined();
     items = [

@@ -13,6 +13,7 @@ import {
 } from "pi-cosmic-core/testing";
 import {
   ACTIVITY_EVENT,
+  ACTIVITY_LIMITS,
   ActivitySnapshotSchema,
   activityKey,
   registerActivityProvider,
@@ -326,7 +327,9 @@ describe("activity host lifecycle", () => {
       Effect.gen(function* () {
         const fixture = harness("deferred");
         const service = yield* fixture.service();
-        let items = Array.from({ length: 513 }, (_, index) => item(String(index)));
+        let items = Array.from({ length: ACTIVITY_LIMITS.items + 1 }, (_, index) =>
+          item(String(index)),
+        );
         const provider = fixture.register({ snapshot: () => items });
         fixture.host.activate(fixture.ctx, service);
         expect(provider.isAvailable()).toBe(false);

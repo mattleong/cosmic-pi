@@ -207,6 +207,7 @@ function fixture(
               }),
         ),
       ),
+    discardUnchanged: () => Effect.succeed(false),
     recoverDiscard: () => Effect.void,
   };
   const acquired: string[] = [];

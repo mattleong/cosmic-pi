@@ -1,102 +1,89 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
-import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
-import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
-import {
-  runWorkflowSandbox,
-  type WorkflowSandboxHost,
-  type WorkflowSandboxOutcome,
-} from "../boundary/codemode-sandbox.ts";
-import type {
-  SubagentNotificationDelivery,
-  SubagentWorkflowNotification,
-} from "../boundary/host-notifier.ts";
+import { synchronousRandomHex } from "pi-cosmic-core";
+import { runWorkflowSandbox, type WorkflowSandboxOutcome } from "../boundary/codemode-sandbox.ts";
 import { nodeAvailableParallelism } from "../boundary/node-builtins.ts";
 import { saveWorkflowResult } from "../boundary/workflow-result-file.ts";
 import type { WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import { SubagentService } from "../run/service.ts";
-import { makeWorkflowAgentCall, type WorkflowHost } from "./agent.ts";
-import { WorkflowJournal, type WorkflowReplay } from "./journal.ts";
+import type { WorkflowHost } from "./agent.ts";
 import {
+  makeWorkflowCapacity,
+  makeWorkflowSlots,
+  makeWorkflowWaitOrder,
+} from "./admission-queue.ts";
+import { requireStartArgs } from "./args.ts";
+import { workflowViewStatus, type WorkflowViewStatus } from "./attention.ts";
+import { makeWorkflowBudget } from "./budget.ts";
+import { makeWorkflowDelivery, type WorkflowNotify } from "./delivery.ts";
+import type { WorkflowNotFoundError, WorkflowRequestError } from "./errors.ts";
+import { WorkflowJournal, type WorkflowInterruptedRun } from "./journal.ts";
+import {
+  emptyWorkflowUsage,
   isWorkflowRunFinished,
-  WORKFLOW_AGENT_LIMIT,
-  WORKFLOW_ARGS_MAX_CHARS,
-  WORKFLOW_RUN_PLANNED_LIMIT,
   workflowConcurrency,
-  type WorkflowAgentView,
-  type WorkflowPlannedAgent,
+  workflowRunConcurrency,
+  type WorkflowFailure,
   type WorkflowResult,
   type WorkflowRunView,
-  type WorkflowSource,
   type WorkflowStopOrigin,
 } from "./model.ts";
+import { makeWorkflowMembers, type WorkflowRunSetup } from "./members.ts";
 import {
   fitWorkflowResult,
   interruptedWorkflowNotification,
   workflowNotification,
   workflowValueText,
 } from "./notification.ts";
-import { workflowResultJsonLine, type WorkflowResultLine } from "./results.ts";
+import { makeWorkflowRecovery } from "./recovery.ts";
+import { WORKFLOW_RUN_FILES_REFRESH_MS, type WorkflowRecordedRun } from "./run-record.ts";
+import { makeWorkflowRunRecordWriter } from "./run-record-writer.ts";
 import {
-  parseWorkflowScript,
-  workflowPlannedAgents,
-  type WorkflowPlannedAgentSpec,
-  type WorkflowScript,
-  type WorkflowScriptError,
-} from "./script.ts";
+  makeWorkflowRuns,
+  workflowNotFound,
+  type WorkflowActivitySink,
+  type WorkflowRunControl,
+} from "./runs.ts";
+import { workflowPlannedAgents, type WorkflowScriptError } from "./script.ts";
+import { makeWorkflowSkip } from "./skip.ts";
+import { makeWorkflowSources, type WorkflowSourceRequest } from "./source.ts";
 import {
-  claimWorkflowPlanned,
   concludeWorkflow,
-  decodeWorkflowEvent,
   finishWorkflowRun,
-  nestedWorkflowPlanned,
   retainWorkflowRuns,
-  reuseWorkflowResult,
-  withAgent,
-  withAgentChange,
-  withNestedPhases,
   withWorkflowEvent,
-  workflowAgentFromDraft,
-  type WorkflowAgentDraft,
-  type WorkflowEvent,
+  workflowServiceLog,
 } from "./state.ts";
 import { WorkflowStore, type WorkflowSourceError } from "./store.ts";
-
-export class WorkflowNotFoundError extends Schema.TaggedError<WorkflowNotFoundError>()(
-  "WorkflowNotFoundError",
-  { message: Schema.String },
-) {}
-
-export class WorkflowRequestError extends Schema.TaggedError<WorkflowRequestError>()(
-  "WorkflowRequestError",
-  { code: Schema.String, message: Schema.String },
-) {}
-
-export type WorkflowSourceRequest =
-  | { readonly kind: "inline"; readonly script: string }
-  | { readonly kind: "saved"; readonly name: string }
-  | { readonly kind: "file"; readonly path: string };
 
 export interface WorkflowStartRequest {
   readonly source: WorkflowSourceRequest;
   readonly args: Schema.Json;
   readonly resumeFromRunId?: string | undefined;
+  /** A hard ceiling on the output tokens the run's live agents produce. */
+  readonly budget?: number | undefined;
 }
 
 export type WorkflowStartError = WorkflowScriptError | WorkflowSourceError | WorkflowRequestError;
+
+/**
+ * What status knows about a run: its view while this activation holds it, or else a read-only
+ * summary from the run's files, such as for a run of an earlier Pi process of this session.
+ */
+export type WorkflowStatus =
+  | WorkflowViewStatus
+  | { readonly kind: "recorded"; readonly run: WorkflowRecordedRun };
 
 export interface WorkflowServiceContract {
   /** Validates the source and starts the run in the background; returns its first view. */
@@ -113,59 +100,29 @@ export interface WorkflowServiceContract {
     runId: string,
     origin?: WorkflowStopOrigin,
   ) => Effect.Effect<WorkflowRunView, WorkflowNotFoundError>;
-  readonly status: (runId: string) => Effect.Effect<WorkflowRunView, WorkflowNotFoundError>;
+  readonly status: (runId: string) => Effect.Effect<WorkflowStatus, WorkflowNotFoundError>;
   readonly list: Effect.Effect<ReadonlyArray<WorkflowRunView>>;
-  /** Resolves a queued or running workflow agent to null, by its subagent run id. */
+  /**
+   * Resolves a queued or running workflow agent to null, by its subagent run id, or skips a planned
+   * one no call has claimed, whose claiming call then resolves null without starting anything.
+   */
   readonly skip: (agentRunId: string) => Effect.Effect<void, WorkflowNotFoundError>;
-  readonly changes: Stream.Stream<ReadonlyArray<WorkflowRunView>>;
 }
 
 export interface WorkflowServiceOptions {
-  /** Synchronous host bridge for Activity; receives every change. */
-  readonly publish?: ((runs: ReadonlyArray<WorkflowRunView>) => void) | undefined;
-  readonly notify?:
-    | ((notification: SubagentWorkflowNotification) => SubagentNotificationDelivery | undefined)
-    | undefined;
-  /** Agents one run executes at once; defaults from the CPU count. */
+  /** Synchronous host bridge for Activity; stages every change and gets coalesced publishes. */
+  readonly activity?: WorkflowActivitySink | undefined;
+  readonly notify?: WorkflowNotify | undefined;
+  /**
+   * Agents one run executes at once; defaults from the CPU count. Each run also stays within
+   * the root slots workflow agents may hold.
+   */
   readonly concurrency?: number | undefined;
-  /** How often a live run marks its directory recent; defaults to hourly. */
-  readonly runFilesRefresh?: Duration.Input | undefined;
-}
-
-/** Well inside the run-directory pruning grace, so a live run's files never age out. */
-const RUN_FILES_REFRESH = "1 hour";
-const DELIVERY_RETRY_INITIAL_MS = 100;
-const DELIVERY_RETRY_MAX_MS = 30_000;
-
-const NestedReferenceSchema = Schema.Union([
-  Schema.String,
-  Schema.Struct({ scriptPath: Schema.String }),
-]);
-const decodeNestedReference = Schema.decodeUnknownOption(NestedReferenceSchema);
-const encodeJson = Schema.encodeOption(Schema.fromJsonString(Schema.Json));
-
-/** Per-run control state the service alone mutates. */
-interface RunControl {
-  calls: number;
-  readonly skips: Map<string, Deferred.Deferred<void>>;
-  /** Completes when the run is asked to stop; the script aborts and keeps its output. */
-  readonly stop: Deferred.Deferred<void>;
-  /** Serializes results journal appends, so concurrent agents never interleave lines. */
-  readonly journalLock: Semaphore.Semaphore;
-  /** Whether a journal line was written, which shows the file, and whether a failure was logged. */
-  journal: { written: boolean; warned: boolean };
-}
-
-interface RunSetup {
-  readonly id: string;
-  readonly script: WorkflowScript;
-  readonly args: Schema.Json;
-  readonly host: WorkflowHost;
-  readonly replay: WorkflowReplay | undefined;
-  readonly permits: Semaphore.Semaphore;
-  readonly control: RunControl;
-  /** The run's private files; undefined when they couldn't be created. */
-  readonly files: WorkflowRunFiles | undefined;
+  /**
+   * The Pi session id run records are written under and must name to be resumed, announced or
+   * described after a restart; without one, runs keep no record.
+   */
+  readonly sessionKey?: string | undefined;
 }
 
 /** A starting run's private files, or the warning it logs instead. */
@@ -173,8 +130,6 @@ interface SavedRunFiles {
   readonly files?: WorkflowRunFiles | undefined;
   readonly warning?: string | undefined;
 }
-
-const requestError = (code: string, message: string) => new WorkflowRequestError({ code, message });
 
 const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions) {
   const subagents = yield* SubagentService;
@@ -185,258 +140,22 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     1,
     options.concurrency ?? workflowConcurrency(nodeAvailableParallelism()),
   );
-  // Finalizers run in reverse: the closed flag first, then deliveries, then run fibers, whose
-  // own finalizers stop their agents while the subagent service is still open.
+  // Finalizers run in reverse: Activity publishes and the closed flag first, then deliveries,
+  // then run fibers, whose own finalizers stop their agents while the subagent service is still
+  // open, and last the capacity queue's watcher. Keep this order.
+  const capacity = yield* makeWorkflowCapacity(subagents);
   const fibers = yield* FiberMap.make<string>();
-  const deliveries = yield* FiberSet.make();
-  let closed = false;
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      closed = true;
-    }),
-  );
-  const state = yield* SubscriptionRef.make<ReadonlyArray<WorkflowRunView>>([]);
-  const controls = new Map<string, RunControl>();
-  // Clock-derived, so run ids stay unique across reloads that share a session's journals.
-  const namespace = (yield* Clock.currentTimeMillis).toString(36);
+  const delivery = yield* makeWorkflowDelivery(options.notify);
+  const runs = yield* makeWorkflowRuns(options.activity);
+  const records = makeWorkflowRunRecordWriter({ store, runs, sessionKey: options.sessionKey });
+  const recovery = makeWorkflowRecovery({ store, sessionKey: options.sessionKey });
+  const sources = makeWorkflowSources({ store, journal, recovery, subagents, runs });
+  const members = makeWorkflowMembers({ runs, subagents, journal, store, sources, capacity });
+  // Clock-derived, so run ids stay unique across reloads that share a session's journals, and
+  // random, so Pi processes that start in the same millisecond don't share run directories.
+  const activatedAt = (yield* Clock.currentTimeMillis).toString(36);
+  const namespace = `${activatedAt}${yield* Effect.sync(() => synchronousRandomHex(3))}`;
   let nextRunOrdinal = 1;
-
-  const publishLatest = Effect.suspend(() => {
-    const publish = options.publish;
-    if (closed || !publish) return Effect.void;
-    const runs = SubscriptionRef.getUnsafe(state);
-    return Effect.try(() => publish(runs)).pipe(Effect.ignore);
-  });
-
-  const mutate = (
-    change: (runs: ReadonlyArray<WorkflowRunView>) => ReadonlyArray<WorkflowRunView>,
-  ) => SubscriptionRef.update(state, change).pipe(Effect.andThen(publishLatest));
-
-  /**
-   * Atomically applies an effectful `change` to one run, under the state's lock, which also
-   * returns a value derived from the run as it was; undefined once the run is evicted.
-   */
-  const modifyRunEffect = <A>(
-    id: string,
-    change: (run: WorkflowRunView) => Effect.Effect<readonly [A, WorkflowRunView]>,
-  ): Effect.Effect<A | undefined> =>
-    SubscriptionRef.modifyEffect(
-      state,
-      (runs): Effect.Effect<readonly [A | undefined, ReadonlyArray<WorkflowRunView>]> => {
-        const index = runs.findIndex((run) => run.id === id);
-        const current = runs[index];
-        if (!current) return Effect.succeed([undefined, runs]);
-        return change(current).pipe(
-          Effect.map(([value, updated]) => [value, runs.with(index, updated)] as const),
-        );
-      },
-    ).pipe(Effect.tap(() => publishLatest));
-
-  /** {@link modifyRunEffect} with a pure change. */
-  const modifyRun = <A>(
-    id: string,
-    change: (run: WorkflowRunView) => readonly [A, WorkflowRunView],
-  ): Effect.Effect<A | undefined> => modifyRunEffect(id, (run) => Effect.sync(() => change(run)));
-
-  /** Applies `change` to one run and returns the result, or undefined once evicted. */
-  const updateRun = (id: string, change: (run: WorkflowRunView) => WorkflowRunView) =>
-    modifyRun(id, (run) => {
-      const updated = change(run);
-      return [updated, updated] as const;
-    });
-
-  const requireRun = (id: string) =>
-    SubscriptionRef.get(state).pipe(
-      Effect.flatMap((runs) => {
-        const run = runs.find((candidate) => candidate.id === id);
-        return run
-          ? Effect.succeed(run)
-          : Effect.fail(
-              new WorkflowNotFoundError({
-                message: `No workflow run ${id} in this session. Runs started before a reload or another session aren't listed.`,
-              }),
-            );
-      }),
-    );
-
-  const recordEvent = (id: string, event: WorkflowEvent) =>
-    Clock.currentTimeMillis.pipe(
-      Effect.flatMap((at) => updateRun(id, (run) => withWorkflowEvent(run, event, at))),
-      Effect.asVoid,
-    );
-
-  const loadSource = (
-    source: WorkflowSourceRequest,
-  ): Effect.Effect<
-    { readonly script: WorkflowScript; readonly source: WorkflowSource },
-    WorkflowScriptError | WorkflowSourceError
-  > => {
-    switch (source.kind) {
-      case "inline":
-        return parseWorkflowScript(source.script).pipe(
-          Effect.map((script) => ({ script, source: { kind: "inline" } as const })),
-        );
-      case "saved":
-        return store.load(source.name).pipe(
-          Effect.map((loaded) => ({
-            script: loaded.script,
-            source: {
-              kind: "saved" as const,
-              name: loaded.name,
-              scope: loaded.scope ?? "user",
-              path: loaded.path,
-            },
-          })),
-        );
-      case "file":
-        return store.loadPath(source.path).pipe(
-          Effect.map((loaded) => ({
-            script: loaded.script,
-            source: { kind: "file" as const, path: loaded.path },
-          })),
-        );
-    }
-  };
-
-  const resumeReplay = (runId: string) =>
-    Effect.gen(function* () {
-      const earlier = (yield* SubscriptionRef.get(state)).find((run) => run.id === runId);
-      if (earlier && !isWorkflowRunFinished(earlier.state))
-        return yield* requestError(
-          "resume_running",
-          `Workflow ${runId} is still running. Stop it or wait for its result before resuming it.`,
-        );
-      const replay = yield* journal.replay(runId);
-      if (!replay)
-        return yield* requestError(
-          "resume_unknown",
-          `No workflow run ${runId} is known to this Pi session. Resume works for the session's recent runs (up to 32, while their results fit in memory) until Pi restarts.`,
-        );
-      return replay;
-    });
-
-  /** Planned agents with the subagent run ids their claiming calls will start under. */
-  const reservePlanned = (specs: ReadonlyArray<WorkflowPlannedAgentSpec>) =>
-    Effect.forEach(
-      specs.slice(0, WORKFLOW_RUN_PLANNED_LIMIT),
-      (spec): Effect.Effect<WorkflowPlannedAgent> =>
-        subagents.reserveRunId.pipe(Effect.map((runId) => ({ runId, ...spec }))),
-    );
-
-  const loadNested = (id: string, reference: Schema.Json) =>
-    Effect.gen(function* () {
-      const decoded = decodeNestedReference(reference);
-      if (Option.isNone(decoded))
-        return yield* Effect.fail({
-          message: "workflow() expects a saved workflow name or { scriptPath }.",
-        });
-      const loaded = yield* Predicate.isString(decoded.value)
-        ? store.load(decoded.value)
-        : store.loadPath(decoded.value.scriptPath);
-      yield* modifyRunEffect(id, (run) =>
-        reservePlanned(nestedWorkflowPlanned(run, loaded.script, loaded.name)).pipe(
-          Effect.map(
-            (planned) =>
-              [undefined, withNestedPhases(run, loaded.script, loaded.name, planned)] as const,
-          ),
-        ),
-      );
-      return { name: loaded.name, body: loaded.script.body };
-    });
-
-  /**
-   * Queues a call atomically: it claims a planned entry, or reserves its own run id, and its skip
-   * is registered before Activity can offer it.
-   */
-  const queueAgent = (
-    setup: RunSetup,
-    draft: WorkflowAgentDraft,
-    skip: Deferred.Deferred<void>,
-  ) => {
-    const register = (runId: string, claimed?: WorkflowPlannedAgent) =>
-      Effect.sync(() => {
-        setup.control.skips.set(runId, skip);
-        return workflowAgentFromDraft(draft, runId, claimed);
-      });
-    return modifyRunEffect(setup.id, (run) => {
-      const [claimed, rest] = claimWorkflowPlanned(run, draft.phase, draft.label);
-      return (claimed ? Effect.succeed(claimed.runId) : subagents.reserveRunId).pipe(
-        Effect.flatMap((runId) => register(runId, claimed)),
-        Effect.map((agent) => [agent, withAgent(rest, agent)] as const),
-      );
-    }).pipe(
-      // A live run is never evicted, but a call must still get a view of its own.
-      Effect.filterOrElse(
-        (agent): agent is WorkflowAgentView => agent !== undefined,
-        () => subagents.reserveRunId.pipe(Effect.flatMap((runId) => register(runId))),
-      ),
-    );
-  };
-
-  /**
-   * Appends a finished call to the run's results journal. The file shows in the view once its
-   * first line is written; the first failure is logged, and later lines are still tried.
-   */
-  const writeResult = (setup: RunSetup, line: WorkflowResultLine): Effect.Effect<void> => {
-    const files = setup.files;
-    if (!files) return Effect.void;
-    const journal = setup.control.journal;
-    return store.appendRunJournal(files, workflowResultJsonLine(line)).pipe(
-      setup.control.journalLock.withPermits(1),
-      Effect.matchEffect({
-        onSuccess: () => {
-          if (journal.written) return Effect.void;
-          journal.written = true;
-          return updateRun(setup.id, (run) => ({ ...run, journalPath: files.journal }));
-        },
-        onFailure: (error) => {
-          if (journal.warned) return Effect.void;
-          journal.warned = true;
-          return recordEvent(setup.id, {
-            type: "log",
-            level: "warning",
-            message: `The results journal may be incomplete: ${error.message}`,
-          });
-        },
-      }),
-      Effect.asVoid,
-    );
-  };
-
-  const members = (setup: RunSetup): WorkflowSandboxHost<never> => ({
-    agent: makeWorkflowAgentCall(
-      {
-        workflowId: setup.id,
-        workflowName: setup.script.meta.name,
-        host: setup.host,
-        replay: setup.replay,
-        permits: setup.permits,
-        nextCall: Effect.sync(() =>
-          setup.control.calls >= WORKFLOW_AGENT_LIMIT ? undefined : ++setup.control.calls,
-        ),
-        queue: (draft, skip) => queueAgent(setup, draft, skip),
-        update: (runId, change) =>
-          updateRun(setup.id, (run) => withAgentChange(run, runId, change)).pipe(Effect.asVoid),
-        forget: (runId) => Effect.sync(() => void setup.control.skips.delete(runId)),
-        log: (level, message) => recordEvent(setup.id, { type: "log", level, message }),
-        count: (outputTokens) =>
-          updateRun(setup.id, (run) => ({
-            ...run,
-            outputTokens: run.outputTokens + outputTokens,
-          })).pipe(Effect.asVoid),
-        reuse: (entry, phase, label) =>
-          modifyRun(setup.id, (run) => reuseWorkflowResult(run, entry, phase, label)),
-        writeResult: (line) => writeResult(setup, line),
-      },
-      { subagents, journal },
-    ),
-    event: (event) =>
-      Option.match(decodeWorkflowEvent(event), {
-        onNone: () => Effect.void,
-        onSome: (decoded) => recordEvent(setup.id, decoded),
-      }),
-    load: (reference) => loadNested(setup.id, reference),
-  });
 
   /**
    * The result as the finished run's notification carries it; a value that doesn't fit is
@@ -455,55 +174,22 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       return { ...fitted, ...(path !== undefined && { path }) } satisfies WorkflowResult;
     });
 
-  /**
-   * Retries with backoff until the host accepts the notification, and reports whether it did.
-   * Without a host nothing can accept it, so it counts as delivered; a closed session drops it.
-   */
-  const deliver = (notification: SubagentWorkflowNotification) => {
-    const attempt = (delay: number): Effect.Effect<boolean> =>
-      Effect.suspend(() => {
-        const notify = options.notify;
-        if (closed) return Effect.succeed(false);
-        if (!notify) return Effect.succeed(true);
-        return Effect.try(() => notify(notification)?.actionAccepted === true).pipe(
-          Effect.orElseSucceed(() => false),
-          Effect.flatMap((accepted) =>
-            accepted
-              ? Effect.succeed(true)
-              : Effect.sleep(delay).pipe(
-                  Effect.andThen(attempt(Math.min(delay * 2, DELIVERY_RETRY_MAX_MS))),
-                ),
-          ),
-        );
-      });
-    return attempt(DELIVERY_RETRY_INITIAL_MS);
-  };
-
-  /**
-   * Delivers a run's report in the background and closes its journal once the host accepts it,
-   * so a report a teardown drops is still announced by the next activation.
-   */
-  const report = (runId: string, notification: SubagentWorkflowNotification | undefined) =>
-    notification
-      ? FiberSet.run(
-          deliveries,
-          deliver(notification).pipe(
-            Effect.flatMap((accepted) => (accepted ? journal.finish(runId) : Effect.void)),
-          ),
-        ).pipe(Effect.asVoid)
-      : journal.finish(runId);
+  /** Closes a run once Pi accepted its report or notice, or when it needs none. */
+  const closeRun = (id: string) => journal.finish(id).pipe(Effect.andThen(records.notified(id)));
 
   /** Runs once the script's scope has closed, so every agent call has already settled. */
   const finish = (id: string, exit: Exit.Exit<WorkflowSandboxOutcome>) =>
     Effect.gen(function* () {
+      // Ordered: the owner closes before the outcome is recorded, and the run record and
+      // notification come last, once the view holds the final state.
       yield* subagents.closeOwner(id);
-      controls.delete(id);
-      // Teardown interrupts runs and leaves their journals open, so the next activation of this
-      // session reports them; a torn-down session gets no notification.
-      const tornDown = closed;
+      runs.controls.remove(id);
+      // Teardown interrupts runs and leaves them open, in memory and in their records, so the
+      // next activation of this session reports them; a torn-down session gets no notification.
+      const tornDown = yield* delivery.closed;
       const conclusion = concludeWorkflow(exit);
       const at = yield* Clock.currentTimeMillis;
-      const current = (yield* SubscriptionRef.get(state)).find((run) => run.id === id);
+      const current = yield* runs.find(id);
       // The result gets the room the notification's other sections leave.
       const result =
         conclusion.value === undefined || !current
@@ -513,37 +199,70 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
               finishWorkflowRun(current, conclusion, undefined, at),
               !tornDown,
             );
-      const finished = yield* updateRun(id, (run) =>
+      const finished = yield* runs.update(id, (run) =>
         finishWorkflowRun(run, conclusion, result, at),
       );
-      yield* mutate(retainWorkflowRuns);
-      if (!tornDown) yield* report(id, finished && workflowNotification(finished));
+      yield* runs.mutate(retainWorkflowRuns);
+      if (finished) yield* records.end(finished, tornDown);
+      if (tornDown) return;
+      // A teardown before Pi accepts the report then says how the run ended.
+      if (finished && isWorkflowRunFinished(finished.state))
+        yield* journal.noteEnded(id, finished.state);
+      yield* delivery.report(finished && workflowNotification(finished), closeRun(id));
     });
 
-  /** Keeps a live run's directory recent for other Pi processes' pruning, hourly. */
-  const keepRunFilesRecent = (setup: RunSetup) =>
+  /**
+   * Keeps a live run's directory recent, every minute, for other Pi processes' pruning and as the
+   * heartbeat that tells them the run's process still runs it. Timers don't advance while the
+   * machine sleeps, so a short period marks the directory again soon after it wakes.
+   */
+  const keepRunFilesRecent = (setup: WorkflowRunSetup) =>
     setup.files === undefined
       ? Effect.void
       : store
           .touchRunFiles(setup.files)
           .pipe(
-            Effect.delay(options.runFilesRefresh ?? RUN_FILES_REFRESH),
+            Effect.delay(WORKFLOW_RUN_FILES_REFRESH_MS),
             Effect.forever,
             Effect.forkScoped,
             Effect.asVoid,
           );
 
-  const runFiber = (setup: RunSetup) =>
+  /**
+   * The script's outcome, unless the host failed the run, such as for a call past its agent
+   * limit, and nobody asked it to stop: then the run fails with the host's failure whatever the
+   * aborted script returned, so a script that catches every error still ends there.
+   */
+  const hostOutcome = (
+    control: WorkflowRunControl,
+    outcome: WorkflowSandboxOutcome,
+  ): Effect.Effect<WorkflowSandboxOutcome> =>
+    Effect.gen(function* () {
+      if ((yield* Deferred.isDone(control.stop)) || !(yield* Deferred.isDone(control.failed)))
+        return outcome;
+      const failure = yield* Deferred.await(control.failed);
+      return { _tag: "Failed", kind: "script", failure, output: outcome.output };
+    });
+
+  /** The run's record is written before its script starts, so a crash after that is announced. */
+  const runFiber = (setup: WorkflowRunSetup, created: WorkflowRunView) =>
     Effect.scoped(
-      keepRunFilesRecent(setup).pipe(
+      records.create(created, setup.files).pipe(
+        Effect.andThen(keepRunFilesRecent(setup)),
+        Effect.andThen(Effect.forkScoped(setup.budget.watch)),
         Effect.andThen(
           runWorkflowSandbox(
             setup.script.body,
             setup.args,
             members(setup),
-            Deferred.await(setup.control.stop),
+            Effect.raceFirst(
+              Deferred.await(setup.control.stop),
+              Deferred.await(setup.control.failed).pipe(Effect.asVoid),
+            ),
+            setup.budget.total,
           ),
         ),
+        Effect.flatMap((outcome) => hostOutcome(setup.control, outcome)),
       ),
     ).pipe(Effect.onExit((exit) => finish(setup.id, exit)));
 
@@ -552,10 +271,10 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
    * log instead of failing the start.
    */
   const saveRunFiles = (id: string, source: string) =>
-    SubscriptionRef.get(state).pipe(
+    runs.list.pipe(
       Effect.map(
-        (runs) =>
-          new Set(runs.filter((run) => !isWorkflowRunFinished(run.state)).map((run) => run.id)),
+        (views) =>
+          new Set(views.filter((run) => !isWorkflowRunFinished(run.state)).map((run) => run.id)),
       ),
       Effect.flatMap((live) => store.createRunFiles(id, source, live)),
       Effect.match({
@@ -568,21 +287,25 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
 
   const start: WorkflowServiceContract["start"] = (request, host) =>
     Effect.gen(function* () {
-      const { script, source } = yield* loadSource(request.source);
-      const argsText = Option.getOrElse(encodeJson(request.args), () => "");
-      if (argsText.length > WORKFLOW_ARGS_MAX_CHARS)
-        return yield* requestError(
-          "args_too_large",
-          `Workflow args are limited to ${WORKFLOW_ARGS_MAX_CHARS} characters of JSON; pass file paths for larger inputs.`,
-        );
+      const { script, source } = yield* sources.load(request.source);
+      yield* requireStartArgs(script.args, script.meta.name, request.args);
       const replay =
         request.resumeFromRunId === undefined
           ? undefined
-          : yield* resumeReplay(request.resumeFromRunId);
-      const permits = yield* Semaphore.make(concurrency);
+          : yield* sources.resumeReplay(request.resumeFromRunId);
+      const slots = makeWorkflowSlots(
+        workflowRunConcurrency(concurrency, yield* subagents.rootChildLimit),
+      );
       const startedAt = yield* Clock.currentTimeMillis;
-      const id = `wf-${namespace}-${nextRunOrdinal++}`;
-      const planned = yield* reservePlanned(
+      const ordinal = nextRunOrdinal++;
+      const id = `wf-${namespace}-${ordinal}`;
+      const budget = makeWorkflowBudget(request.budget, {
+        subagents,
+        warn: (message) => runs.recordEvent(id, workflowServiceLog("warning", message)),
+        show: (current) =>
+          runs.update(id, (run) => ({ ...run, budget: current() })).pipe(Effect.asVoid),
+      });
+      const planned = yield* sources.reservePlanned(
         (script.meta.phases ?? []).flatMap((phase) => workflowPlannedAgents(phase)),
       );
       const saved = yield* saveRunFiles(id, script.source);
@@ -604,41 +327,46 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
             planned,
             reused: 0,
             logs: [],
-            outputTokens: 0,
+            usage: emptyWorkflowUsage(),
             args: request.args,
             ...(saved.files && { scriptPath: saved.files.script }),
             ...(request.resumeFromRunId !== undefined && { resumedFrom: request.resumeFromRunId }),
+            ...(request.budget !== undefined && {
+              budget: { total: request.budget, spent: 0, refused: 0 },
+            }),
           };
           const view =
             saved.warning === undefined
               ? created
-              : withWorkflowEvent(
-                  created,
-                  { type: "log", level: "warning", message: saved.warning },
-                  startedAt,
-                );
-          yield* mutate((runs) => retainWorkflowRuns([...runs, view]));
-          const control: RunControl = {
+              : withWorkflowEvent(created, workflowServiceLog("warning", saved.warning), startedAt);
+          yield* runs.mutate((views) => retainWorkflowRuns([...views, view]));
+          const control: WorkflowRunControl = {
             calls: 0,
             skips: new Map(),
             stop: Deferred.makeUnsafe<void>(),
+            failed: Deferred.makeUnsafe<WorkflowFailure>(),
             journalLock: Semaphore.makeUnsafe(1),
-            journal: { written: false, warned: false },
+            journal: { written: false, warned: false, results: 0 },
           };
-          controls.set(id, control);
+          runs.controls.add(id, control);
           yield* FiberMap.run(
             fibers,
             id,
-            runFiber({
-              id,
-              script,
-              args: request.args,
-              host,
-              replay,
-              permits,
-              control,
-              files: saved.files,
-            }),
+            runFiber(
+              {
+                id,
+                script,
+                args: request.args,
+                host,
+                replay,
+                slots,
+                order: makeWorkflowWaitOrder(ordinal),
+                budget,
+                control,
+                files: saved.files,
+              },
+              view,
+            ),
           );
           return view;
         }),
@@ -651,7 +379,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       const fiber = yield* FiberMap.get(fibers, id);
       // The aborted script's scope closes, and so every agent stops, before the fiber ends.
       if (Option.isSome(fiber)) yield* Fiber.await(fiber.value);
-      return yield* requireRun(id);
+      return yield* runs.require(id);
     });
 
   /**
@@ -660,62 +388,76 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
    */
   const releaseToolStop = (id: string) =>
     Effect.gen(function* () {
-      const released = yield* modifyRun(id, (run) =>
+      const released = yield* runs.modify(id, (run) =>
         run.stoppedBy === "tool"
           ? ([run, { ...run, stoppedBy: undefined }] as const)
           : ([undefined, run] as const),
       );
-      if (!released || !isWorkflowRunFinished(released.state) || closed) return;
+      if (!released || !isWorkflowRunFinished(released.state) || (yield* delivery.closed)) return;
       // The run settled first, and its finish sent nothing for the tool's stop.
       const notification = workflowNotification({ ...released, stoppedBy: undefined });
-      if (notification) yield* FiberSet.run(deliveries, deliver(notification));
+      if (notification) yield* delivery.send(notification);
     });
 
   const stop: WorkflowServiceContract["stop"] = (id, origin = "user") =>
     // Marking the run and signalling its script happen together; only the wait is interruptible.
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const current = yield* requireRun(id);
+        const current = yield* runs.require(id);
         if (isWorkflowRunFinished(current.state)) return current;
         // A teardown before the run settles then reports it without a restart hint.
         yield* journal.noteStop(id);
-        yield* updateRun(id, (run) =>
+        yield* runs.update(id, (run) =>
           run.state === "running" ? { ...run, state: "stopping", stoppedBy: origin } : run,
         );
-        const control = controls.get(id);
+        const control = runs.controls.get(id);
         if (control) yield* Deferred.succeed(control.stop, undefined);
-        return yield* restore(awaitStopped(id)).pipe(
-          Effect.onInterrupt(() => (origin === "tool" ? releaseToolStop(id) : Effect.void)),
-        );
+        return yield* restore(
+          records.noteStop(id, origin).pipe(Effect.andThen(awaitStopped(id))),
+        ).pipe(Effect.onInterrupt(() => (origin === "tool" ? releaseToolStop(id) : Effect.void)));
       }),
     );
 
-  const skip: WorkflowServiceContract["skip"] = (agentRunId) =>
-    Effect.suspend(() => {
-      for (const control of controls.values()) {
-        const skipped = control.skips.get(agentRunId);
-        if (skipped) return Deferred.succeed(skipped, undefined).pipe(Effect.asVoid);
-      }
-      return Effect.fail(
-        new WorkflowNotFoundError({
-          message: `No queued or running workflow agent ${agentRunId}.`,
-        }),
-      );
+  const status: WorkflowServiceContract["status"] = (id) =>
+    Effect.gen(function* () {
+      const view = yield* runs.find(id);
+      if (view) return yield* workflowViewStatus(subagents, view);
+      const recorded = yield* recovery.recorded(id);
+      if (recorded) return { kind: "recorded", run: recorded } satisfies WorkflowStatus;
+      return yield* workflowNotFound(id);
     });
 
+  const announce = (interrupted: WorkflowInterruptedRun) =>
+    delivery.report(interruptedWorkflowNotification(interrupted), closeRun(interrupted.runId));
+
+  /** A run memory holds is closed instead when another Pi process of the session announced it. */
+  const announceRemembered = (interrupted: WorkflowInterruptedRun) =>
+    recovery
+      .noticeAccepted(interrupted.runId)
+      .pipe(
+        Effect.flatMap((accepted) =>
+          accepted ? closeRun(interrupted.runId) : announce(interrupted),
+        ),
+      );
+
   // Runs this session's earlier activation left running were torn down without a word; tell
-  // the main agent once, so it doesn't keep waiting for their results. Each stays open in the
-  // journal until its notice is accepted.
-  for (const interrupted of yield* journal.interruptedRuns)
-    yield* report(interrupted.runId, interruptedWorkflowNotification(interrupted));
+  // the main agent once, so it doesn't keep waiting for their results. Each stays open until its
+  // notice is accepted. They are read before this activation opens runs of its own.
+  const remembered = yield* journal.interruptedRuns;
+  // Then runs an earlier Pi process of this session left unfinished are found in their files.
+  // Memory reports the runs it holds, and the files are read off the start path.
+  yield* Effect.forEach(remembered, announceRemembered, { discard: true }).pipe(
+    Effect.andThen(recovery.interrupted(journal.has)),
+    Effect.flatMap((owed) => Effect.forEach(owed, announce, { discard: true })),
+    Effect.forkScoped,
+  );
 
   return WorkflowService.of({
     start,
     stop,
-    status: requireRun,
-    list: SubscriptionRef.get(state),
-    skip,
-    changes: SubscriptionRef.changes(state),
+    status,
+    list: runs.list,
+    skip: makeWorkflowSkip(runs),
   });
 });
 

@@ -32,6 +32,7 @@ import {
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "./state.ts";
+import { SUBAGENT_RESULT_TOOL_NAME } from "./tool-policy.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
@@ -214,6 +215,11 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             ? recordRunWarning(record, sessionEvents, "system", violationMessage, now)
             : { sessionEvents }),
           currentTool: [...record.activeTools.values()].at(-1),
+          // Handing back a structured result is how the agent ends, not work it did.
+          toolUses:
+            event.toolName === SUBAGENT_RESULT_TOOL_NAME
+              ? current.toolUses
+              : Math.min(Number.MAX_SAFE_INTEGER, (current.toolUses ?? 0) + 1),
           lastActivityAt: now,
         };
       }).pipe(

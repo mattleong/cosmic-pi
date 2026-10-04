@@ -17,19 +17,17 @@ import {
   controlForTask,
   eventually,
   finished,
+  inline,
   reportTask,
   resultValue,
   runningTask,
   runWhere,
-  script,
   stateOfTask,
   testHost,
   withWorkflows,
   workflowFixture,
   workflowSessionKey,
 } from "./fixtures/workflow-harness.ts";
-
-const inline = (body: string) => ({ kind: "inline" as const, script: script(body) });
 
 const NOTIFICATION_MAX_CHARS = 32 * 1024;
 
@@ -233,7 +231,7 @@ describe("workflow results", () => {
         const started = yield* workflows.start(
           {
             source: inline(`
-              const results = await parallel([() => agent("task", { colour: "red" })]);
+              const results = await parallel([() => { throw new RangeError("no colour for this item"); }]);
               return results;`),
             args: null,
           },
@@ -242,7 +240,7 @@ describe("workflow results", () => {
         yield* finished(workflows, started.id);
         const notification = yield* eventually(() => fixture.delivered[0], "the notification");
         expect(notification.outcome).toBe("completed");
-        expect(notification.content).toContain("colour");
+        expect(notification.content).toContain("no colour for this item");
       }),
     );
   });
@@ -254,7 +252,7 @@ describe("workflow results", () => {
         const started = yield* workflows.start(
           {
             source: inline(`
-              const results = await parallel([() => agent("task", { colour: "red" })]);
+              const results = await parallel([() => { throw new RangeError("no colour for this item"); }]);
               for (let index = 0; index < ${WORKFLOW_LOG_LIMIT + 10}; index++) log("progress " + index);
               return results;`),
             args: null,
@@ -264,7 +262,7 @@ describe("workflow results", () => {
         const run = yield* finished(workflows, started.id);
         expect(run.logs.some((entry) => entry.level === "warning")).toBe(false);
         const notification = yield* eventually(() => fixture.delivered[0], "the notification");
-        expect(notification.content).toContain("colour");
+        expect(notification.content).toContain("no colour for this item");
       }),
     );
   });

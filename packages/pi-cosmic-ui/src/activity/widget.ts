@@ -1,31 +1,16 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { formatElapsed } from "pi-cosmic-core";
-import { managerTone } from "../manager/style.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import {
-  managerActivityColor,
-  managerActivityGlyph,
-  managerNoticeGlyph,
-  clipToWidth,
-  spinnerFrameAt,
-  type ManagerStatusColor,
-} from "../manager/chrome.ts";
-import {
-  activityAttention,
-  activityAttentionLabels,
-  activityAttentionCounts,
-  activityPlanned,
-  activityQueued,
-  activityStatus,
-  type ActivityAttentionCounts,
-} from "./attention.ts";
+import { countLabel } from "pi-cosmic-core";
+import { managerActivityGlyph, clipToWidth, spinnerFrameAt } from "../manager/chrome.ts";
+import { activityPlanned, compactNotices } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
-import { activityPath, needsYou, type ActivityTreeRow } from "./tree.ts";
-import type { GroupedActivityRow, PhaseState } from "./grouped-tree.ts";
+import { activityPath, needsYou } from "./tree.ts";
+import type { GroupedActivityRow } from "./grouped-tree.ts";
 import {
+  activeWorkLabels,
   addGroupSummaries,
   emptyGroupSummary,
-  plannedLabels,
+  endedWorkLabels,
   type GroupSummary,
 } from "./group-summary.ts";
 import {
@@ -36,25 +21,9 @@ import {
   type WidgetOptions,
 } from "./widget-projection.ts";
 export { activityWidgetSections } from "./widget-projection.ts";
-import { renderActivityRow } from "./row-render.ts";
+import { groupedMemberLine } from "./row-line.ts";
+import { workflowRowLine } from "./workflow-row.ts";
 
-/** Planned work has a static glyph; once its owner ends, it reads like a skipped phase. */
-const PLANNED_GLYPH = "◦";
-const NOT_RUN_GLYPH = "–";
-
-export const activityGlyph = (row: ActivityRow, now = 0): string =>
-  activityPlanned(row)
-    ? isFinished(row)
-      ? NOT_RUN_GLYPH
-      : PLANNED_GLYPH
-    : row.status === "needs-input" || row.status === "blocked"
-      ? managerNoticeGlyph("warning")
-      : activityQueued(row)
-        ? "○"
-        : managerActivityGlyph(
-            row.status === "cancelled" ? "stopped" : row.status,
-            spinnerFrameAt(now),
-          );
 export const activityStartupGlyph = (
   rows: readonly ActivityRow[],
   starting: number,
@@ -63,23 +32,6 @@ export const activityStartupGlyph = (
   starting > 0 && !rows.some((row) => !isFinished(row) && !activityPlanned(row))
     ? managerActivityGlyph("pending", spinnerFrameAt(now))
     : "";
-/** Whole-second elapsed time; narrow rows keep only the largest unit ("2m"). */
-export const activityElapsed = (row: ActivityRow, now?: number, compact = false): string => {
-  if (row.startedAt === undefined) return "";
-  const elapsed = Math.max(
-    0,
-    (row.endedAt ?? now ?? row.updatedAt ?? row.startedAt) - row.startedAt,
-  );
-  const text = formatElapsed(elapsed);
-  return compact ? (text.split(" ")[0] ?? text) : text;
-};
-const activityTypes = {
-  agent: "SUBAGENT",
-  command: "TASK",
-  question: "QUESTION",
-  workflow: "WORKFLOW",
-} as const;
-export const activityType = (row: ActivityRow): string => activityTypes[row.kind];
 export function activityOwnerLabel(
   rows: readonly ActivityRow[],
   row: ActivityRow,
@@ -96,242 +48,6 @@ export function activityOwnerLabel(
   return clipToWidth(parts[0] ?? "", Math.max(0, width), "…");
 }
 
-// Use theme palette tokens for blue, violet, and amber rather than fixed RGB colors.
-const widgetTypeColors = {
-  command: "syntaxKeyword",
-  agent: "thinkingHigh",
-  question: "warning",
-  workflow: managerTone.identity,
-} as const;
-const managerTypeColors = {
-  command: "muted",
-  agent: managerTone.identity,
-  question: "warning",
-  workflow: managerTone.identity,
-} as const;
-
-const activityColor = (row: ActivityRow, interactive: boolean): ManagerStatusColor =>
-  activityPlanned(row)
-    ? "dim"
-    : row.status === "needs-input" || row.status === "blocked"
-      ? "warning"
-      : activityQueued(row)
-        ? "muted"
-        : !interactive && row.status === "running"
-          ? "accent"
-          : managerActivityColor(row.status === "cancelled" ? "stopped" : row.status);
-
-export function activityRowLine(
-  entry: ActivityTreeRow,
-  width: number,
-  now?: number,
-  theme?: Pick<Theme, "fg">,
-  presentation: "manager" | "widget" = "manager",
-  focusedStyle?: (text: string) => string,
-): string {
-  const row = entry.row;
-  const interactive = presentation === "manager";
-  const warnings = entry.expanded ? "" : activityAttentionLabels(entry.attention).join(" · ");
-  const planned = activityPlanned(row);
-  const attention =
-    planned ||
-    activityAttention(row) !== undefined ||
-    row.status === "failed" ||
-    activityQueued(row)
-      ? activityStatus(row)
-      : "";
-  const status = warnings || `${attention} ${activityElapsed(row, now, width < 60)}`.trim();
-  const color = activityColor(row, interactive);
-  return renderActivityRow(
-    {
-      kind: activityType(row),
-      title: row.title,
-      continuations: entry.continuations,
-      children: entry.children,
-      expanded: entry.expanded,
-      glyph: activityGlyph(row, now),
-      color,
-      typeColor: (interactive ? managerTypeColors : widgetTypeColors)[row.kind],
-      status,
-      statusColor: warnings ? "warning" : !interactive && !attention ? "muted" : color,
-      compactStatus: warnings.length > 0,
-      ...(planned && { dim: true }),
-      ...(row.kind === "agent" && row.profile && { profile: row.profile }),
-      ...(row.route && { route: row.route }),
-      ...(row.awaited && { awaited: true }),
-      ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
-    },
-    width,
-    theme,
-    presentation,
-    focusedStyle,
-  );
-}
-
-/** Branch attention below a row, excluding the row's own state. */
-const descendantAttention = (summary: GroupSummary, row: ActivityRow): ActivityAttentionCounts => {
-  const own = activityAttentionCounts(row);
-  return {
-    user: summary.attention.user - own.user,
-    parent: summary.attention.parent - own.parent,
-    blocked: summary.attention.blocked - own.blocked,
-    failed: summary.attention.failed - own.failed,
-  };
-};
-interface RowPaint {
-  readonly now?: number | undefined;
-  readonly theme?: Pick<Theme, "fg">;
-}
-
-export function groupedMemberLine(
-  entry: Extract<GroupedActivityRow, { readonly type: "member" }>,
-  width: number,
-  options: RowPaint,
-  presentation: "manager" | "widget",
-  focusedStyle?: (text: string) => string,
-): string {
-  return activityRowLine(
-    {
-      row: entry.row,
-      depth: entry.depth,
-      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
-      children: entry.children,
-      history: entry.history,
-      expanded: entry.expanded,
-      attention: descendantAttention(entry.summary, entry.row),
-    },
-    width,
-    options.now,
-    options.theme,
-    presentation,
-    focusedStyle,
-  );
-}
-
-const compactNotices = (attention: ActivityAttentionCounts): string[] => [
-  ...(attention.user ? [`${attention.user} you`] : []),
-  ...(attention.parent ? [`${attention.parent} parent`] : []),
-  ...(attention.blocked ? [`${attention.blocked} blocked`] : []),
-  ...(attention.failed ? [`${attention.failed} failed`] : []),
-];
-const progressLabels = (summary: GroupSummary): string[] => [
-  ...(summary.running ? [`${summary.running} running`] : []),
-  ...(summary.pending > summary.queued ? [`${summary.pending - summary.queued} starting`] : []),
-  ...(summary.queued ? [`${summary.queued} queued`] : []),
-  ...(summary.stopping ? [`${summary.stopping} stopping`] : []),
-];
-const phaseLabels = {
-  pending: "not started",
-  running: "running",
-  done: "finished",
-  stopped: "stopped",
-  skipped: "skipped",
-} satisfies Readonly<Record<PhaseState, string>>;
-const phaseColors = {
-  pending: "muted",
-  running: "accent",
-  done: "success",
-  stopped: "muted",
-  skipped: "muted",
-} satisfies Readonly<Record<PhaseState, ManagerStatusColor>>;
-const phaseGlyph = (state: PhaseState, now: number): string =>
-  state === "pending"
-    ? "○"
-    : state === "skipped"
-      ? "–"
-      : managerActivityGlyph(state, spinnerFrameAt(now));
-
-function phaseRowLine(
-  entry: Extract<GroupedActivityRow, { readonly type: "phase" }>,
-  width: number,
-  options: RowPaint,
-  presentation: "manager" | "widget",
-  focusedStyle?: (text: string) => string,
-): string {
-  const summary = entry.summary;
-  const notices = compactNotices(summary.attention);
-  const finished = summary.terminal - summary.attention.failed - summary.stopped;
-  const progress = [...progressLabels(summary), ...(finished > 0 ? [`${finished} finished`] : [])];
-  // The summary counts planned work even when its rows don't fit or were dropped.
-  const planned = plannedLabels(summary);
-  const color = notices.length ? "warning" : phaseColors[entry.state];
-  return renderActivityRow(
-    {
-      kind: "PHASE",
-      title: entry.title,
-      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
-      children: entry.children,
-      expanded: entry.expanded,
-      glyph: notices.length
-        ? managerNoticeGlyph("warning")
-        : phaseGlyph(entry.state, options.now ?? 0),
-      color,
-      typeColor: managerTone.value,
-      status: [
-        ...notices,
-        ...(entry.state === "running" && progress.length ? progress : [phaseLabels[entry.state]]),
-        ...planned,
-      ].join(" · "),
-      statusColor: notices.length ? "warning" : "muted",
-      compactStatus: notices.length > 0,
-    },
-    width,
-    options.theme,
-    presentation,
-    focusedStyle,
-  );
-}
-
-/** Workflow and phase rows; a workflow row also carries its own provider state and actions. */
-export function workflowRowLine(
-  entry: Extract<GroupedActivityRow, { readonly type: "workflow" | "phase" }>,
-  width: number,
-  options: RowPaint,
-  presentation: "manager" | "widget" = "widget",
-  focusedStyle?: (text: string) => string,
-): string {
-  if (entry.type === "phase")
-    return phaseRowLine(entry, width, options, presentation, focusedStyle);
-  const row = entry.row;
-  const interactive = presentation === "manager";
-  const notices = compactNotices(entry.summary.attention);
-  const phases = row.phases?.length ?? 0;
-  // The workflow's own failure keeps its glyph; member attention overlays a live or ended run.
-  const overlay = notices.length > 0 && row.status !== "failed";
-  const ended = row.status === "failed" || row.status === "cancelled" || row.status === "stopping";
-  return renderActivityRow(
-    {
-      kind: activityType(row),
-      title: row.title,
-      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
-      children: entry.children,
-      expanded: entry.expanded,
-      glyph: overlay ? managerNoticeGlyph("warning") : activityGlyph(row, options.now),
-      color: overlay ? "warning" : activityColor(row, interactive),
-      typeColor: (interactive ? managerTypeColors : widgetTypeColors).workflow,
-      status: [
-        ...notices,
-        // Phase rows count their own planned work; the workflow counts what no phase shows.
-        ...(phases
-          ? [`${entry.finishedPhases}/${phases} phases`, ...plannedLabels(entry.unphased)]
-          : [...progressLabels(entry.summary), ...plannedLabels(entry.summary)]),
-        ...(ended ? [activityStatus(row)] : []),
-        activityElapsed(row, options.now, width < 60),
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      statusColor: notices.length ? "warning" : "muted",
-      compactStatus: notices.length > 0,
-      ...(row.awaited && { awaited: true }),
-      ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
-    },
-    width,
-    options.theme,
-    presentation,
-    focusedStyle,
-  );
-}
-
 /** Reserve space for attention and omitted evidence before routine progress or long names. */
 const widgetGroupLine = (
   title: string,
@@ -344,8 +60,8 @@ const widgetGroupLine = (
   const full = [
     title,
     ...notices,
-    ...(summary.stopped ? [`${summary.stopped} stopped`] : []),
-    ...progressLabels(summary),
+    ...endedWorkLabels(summary),
+    ...activeWorkLabels(summary),
     ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
   ].join(" · ");
   if (visibleWidth(full) <= width) return full;
@@ -374,9 +90,9 @@ type Omissions = Pick<
   "hiddenSources" | "hiddenPhases" | "hiddenWorkflows" | "hiddenPlanned"
 >;
 const omissionLabels = (hidden: Omissions): string[] => [
-  ...(hidden.hiddenSources ? [`+${hidden.hiddenSources} items`] : []),
-  ...(hidden.hiddenPhases ? [`+${hidden.hiddenPhases} phases`] : []),
-  ...(hidden.hiddenWorkflows ? [`+${hidden.hiddenWorkflows} workflows`] : []),
+  ...(hidden.hiddenSources ? [`+${countLabel(hidden.hiddenSources, "item")}`] : []),
+  ...(hidden.hiddenPhases ? [`+${countLabel(hidden.hiddenPhases, "phase")}`] : []),
+  ...(hidden.hiddenWorkflows ? [`+${countLabel(hidden.hiddenWorkflows, "workflow")}`] : []),
   ...(hidden.hiddenPlanned ? [`+${hidden.hiddenPlanned} planned`] : []),
 ];
 
@@ -389,6 +105,27 @@ const narratorLine = (
 ): string => {
   const line = clipToWidth(`${continues ? "│  " : "   "}${text}`, width, "…");
   return theme?.fg("dim", line) ?? line;
+};
+
+/**
+ * A branch's failed members past the per-workflow cap, at the depth of its members: beneath its
+ * last failure shown, continuing that row's guides, or beneath the branch row itself, continuing
+ * the guide to its children when `continues`.
+ */
+const hiddenFailuresLine = (
+  entry: GroupedActivityRow,
+  count: number,
+  width: number,
+  continues: boolean,
+  theme: Pick<Theme, "fg"> | undefined,
+): string => {
+  const guides = entry.continuations
+    .slice(1)
+    .map((continuing) => (continuing ? "│  " : "   "))
+    .join("");
+  const branch = entry.type === "member" ? "" : continues ? "│  " : "   ";
+  const line = clipToWidth(`${guides}${branch}+${count} failed`, width, "…");
+  return theme?.fg("warning", line) ?? line;
 };
 
 /** A bounded read-only overview. All execution capabilities stay in the manager. */
@@ -422,6 +159,10 @@ export function renderActivityWidget(
     const sum = (count: (section: ActivityWidgetSection) => number) =>
       sections.reduce((total, section) => total + count(section), 0);
     const shownPlanned = sum((section) => section.entries.filter(isPlannedEntry).length);
+    // Capped failures that would have had a count line are hidden here too.
+    const countedFailures = sum((section) =>
+      [...section.failureOverflow.values()].reduce((total, count) => total + count, 0),
+    );
     return [
       style(
         widgetGroupLine(
@@ -430,7 +171,10 @@ export function renderActivityWidget(
           width,
           omissionLabels({
             hiddenSources:
-              sum((section) => section.hiddenSources) + hidden("member") - shownPlanned,
+              sum((section) => section.hiddenSources) +
+              hidden("member") -
+              shownPlanned +
+              countedFailures,
             hiddenPhases: sum((section) => section.hiddenPhases) + hidden("phase"),
             hiddenWorkflows: sum((section) => section.hiddenWorkflows) + hidden("workflow"),
             hiddenPlanned: sum((section) => section.hiddenPlanned) + shownPlanned,
@@ -444,16 +188,13 @@ export function renderActivityWidget(
       if (entry.type === "member") lines.push(groupedMemberLine(entry, width, options, "widget"));
       else if (entry.type === "workflow" || entry.type === "phase")
         lines.push(workflowRowLine(entry, width, options));
+      const continues = section.entries[index + 1]?.parentId === entry.id;
       const narrator = section.narrators.has(entry.id) ? workflowNarrator(entry) : undefined;
       if (narrator !== undefined)
-        lines.push(
-          narratorLine(
-            narrator,
-            width,
-            section.entries[index + 1]?.parentId === entry.id,
-            options.theme,
-          ),
-        );
+        lines.push(narratorLine(narrator, width, continues, options.theme));
+      const failures = section.failureOverflow.get(entry.id);
+      if (failures)
+        lines.push(hiddenFailuresLine(entry, failures, width, continues, options.theme));
     }
     if (section.omittedRows)
       lines.push(

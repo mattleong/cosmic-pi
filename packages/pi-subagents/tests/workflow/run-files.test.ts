@@ -1,5 +1,6 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -8,19 +9,20 @@ import type { WorkflowRunView } from "../../src/workflow/model.ts";
 import {
   eventually,
   finished,
+  hurriedClock,
+  inline,
   journalLines,
   memoryRunFiles,
   reportTask,
   runningTask,
   runWhere,
   script,
+  stoppedWallClock,
   testHost,
   withWorkflows,
   workflowFixture,
   workflowSessionKey,
 } from "./fixtures/workflow-harness.ts";
-
-const inline = (body: string) => ({ kind: "inline" as const, script: script(body) });
 
 /** Where the memory store keeps a run's results journal, set before the view names it. */
 const journalOf = (run: WorkflowRunView) =>
@@ -44,25 +46,45 @@ describe("a run's saved script", () => {
     );
   });
 
-  it.live("is marked recent periodically while its run is live, and not after", () => {
-    const fixture = workflowFixture({ runFilesRefresh: "20 millis" });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          { source: inline('return await agent("hold");'), args: null },
-          testHost(),
+  it.live("gets its own directory when Pi processes start runs in the same millisecond", () =>
+    Effect.gen(function* () {
+      const runFiles = memoryRunFiles();
+      // Each fixture is a Pi process sharing the agent directory, with the same wall clock.
+      const startOne = () =>
+        withWorkflows(workflowFixture({ runFiles }), (workflows) =>
+          workflows
+            .start({ source: inline("return 1;"), args: null }, testHost())
+            .pipe(Effect.map((run) => run.id)),
         );
-        yield* runningTask(fixture, "hold");
-        const directory = `/agent/subagents/workflow-runs/${started.id}`;
-        const touches = () =>
-          fixture.runFiles.touches.filter((touched) => touched === directory).length;
-        yield* eventually(() => (touches() >= 2 ? true : undefined), "two directory refreshes");
-        yield* workflows.stop(started.id);
-        const afterStop = touches();
-        yield* Effect.sleep("100 millis");
-        expect(touches()).toBe(afterStop);
-      }),
-    );
+      const ids = yield* Effect.all([startOne(), startOne()]).pipe(
+        Effect.provideService(Clock.Clock, yield* stoppedWallClock),
+      );
+      expect(new Set(ids).size).toBe(2);
+    }),
+  );
+
+  it.live("is marked recent periodically while its run is live, and not after", () => {
+    const fixture = workflowFixture();
+    return Effect.gen(function* () {
+      const clock = yield* hurriedClock("20 millis");
+      return yield* withWorkflows(fixture, (workflows) =>
+        Effect.gen(function* () {
+          const started = yield* workflows.start(
+            { source: inline('return await agent("hold");'), args: null },
+            testHost(),
+          );
+          yield* runningTask(fixture, "hold");
+          const directory = `/agent/subagents/workflow-runs/${started.id}`;
+          const touches = () =>
+            fixture.runFiles.touches.filter((touched) => touched === directory).length;
+          yield* eventually(() => (touches() >= 2 ? true : undefined), "two directory refreshes");
+          yield* workflows.stop(started.id);
+          const afterStop = touches();
+          yield* Effect.sleep("100 millis");
+          expect(touches()).toBe(afterStop);
+        }),
+      ).pipe(Effect.provideService(Clock.Clock, clock));
+    });
   });
 
   it.live("is never pruned while its run is live", () => {

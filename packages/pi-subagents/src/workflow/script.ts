@@ -15,6 +15,8 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { sha256Text } from "pi-cosmic-core";
+import { compileWorkflowArgs, type WorkflowArgsContract } from "./args.ts";
+import { WORKFLOW_PHASE_TITLE_MAX_CHARS } from "./model.ts";
 
 /** Workflow scripts are model-authored programs, never bulk data. */
 export const WORKFLOW_SCRIPT_MAX_CHARS = 256 * 1024;
@@ -24,15 +26,25 @@ export const WORKFLOW_PHASE_AGENT_LIMIT = 64;
 /** Planned agents one script may declare across its phases. */
 export const WORKFLOW_SCRIPT_AGENT_LIMIT = 256;
 
+/** Where a script stopped parsing: the parser's message without its position, and its line. */
+const WorkflowSyntaxProblem = Schema.Struct({
+  reason: Schema.String,
+  line: Schema.optional(Schema.Finite),
+});
+
+/** A script that doesn't parse, carrying `syntax`, or that isn't a valid workflow. */
 export class WorkflowScriptError extends Schema.TaggedError<WorkflowScriptError>()(
   "WorkflowScriptError",
-  { message: Schema.String },
+  { message: Schema.String, syntax: Schema.optional(WorkflowSyntaxProblem) },
 ) {}
 
 const Text = (maximum: number) =>
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 
-/** A display-only agent a phase plans to run: a label, or a label with its profile. */
+/**
+ * An agent a phase plans to run: a label, or a label with its profile. It starts nothing and sets
+ * no options, but the user can skip it before it starts.
+ */
 const WorkflowPlannedAgentSchema = Schema.Union([
   Text(80),
   Schema.Struct({ label: Text(80), profile: Schema.optional(Text(80)) }),
@@ -44,7 +56,7 @@ const WorkflowPlannedAgentSchema = Schema.Union([
  */
 const PhaseTitle = Schema.String.pipe(Schema.decode(SchemaTransformation.trim())).check(
   Schema.isMinLength(1),
-  Schema.isMaxLength(160),
+  Schema.isMaxLength(WORKFLOW_PHASE_TITLE_MAX_CHARS),
 );
 
 const WorkflowPhaseSchema = Schema.Struct({
@@ -62,6 +74,8 @@ export const WorkflowMetaSchema = Schema.Struct({
   phases: Schema.optional(
     Schema.Array(WorkflowPhaseSchema).check(Schema.isMaxLength(WORKFLOW_PHASE_LIMIT)),
   ),
+  /** A JSON Schema for the script's `args`; compiled, and so bounded, when the script is parsed. */
+  args: Schema.optional(Schema.Json),
 });
 
 export type WorkflowMeta = typeof WorkflowMetaSchema.Type;
@@ -72,6 +86,8 @@ export interface WorkflowPlannedAgentSpec {
   readonly phase: string;
   readonly label: string;
   readonly profile?: string | undefined;
+  /** The nested workflow() whose meta declares it, by name; absent for the run's own script. */
+  readonly workflow?: string | undefined;
 }
 
 /** A phase's planned agents in declaration order, labels and profiles trimmed. */
@@ -103,6 +119,8 @@ const plannedAgentsProblem = (meta: WorkflowMeta): string | undefined => {
 
 export interface WorkflowScript {
   readonly meta: WorkflowMeta;
+  /** The compiled `meta.args`; absent when the script accepts any args. */
+  readonly args?: WorkflowArgsContract | undefined;
   /** The script exactly as given, which each run saves for the main agent to edit. */
   readonly source: string;
   /** The script with `export` removed from its meta declaration; line and column positions are unchanged. */
@@ -204,6 +222,11 @@ const isModuleDeclaration = (node: Node): boolean =>
   node.type === "ExportDefaultDeclaration" ||
   node.type === "ExportAllDeclaration";
 
+/** The position acorn's syntax error carries beside its message. */
+const decodeSyntaxPosition = Schema.decodeUnknownOption(
+  Schema.Struct({ loc: Schema.Struct({ line: Schema.Finite }) }),
+);
+
 function parseProgram(source: string): Program {
   try {
     return parse(source, {
@@ -214,8 +237,15 @@ function parseProgram(source: string): Program {
       locations: true,
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const line = Option.getOrUndefined(decodeSyntaxPosition(error))?.loc.line;
     throw new WorkflowScriptError({
-      message: `SyntaxError: ${error instanceof Error ? error.message : String(error)}. Scripts are plain JavaScript, not TypeScript.`,
+      message: `SyntaxError: ${message}. Scripts are plain JavaScript, not TypeScript.`,
+      syntax: {
+        // Acorn ends its message with the position, which `line` carries instead.
+        reason: message.replace(/\s*\(\d+:\d+\)$/u, ""),
+        ...(line !== undefined && { line }),
+      },
     });
   }
 }
@@ -272,7 +302,16 @@ export const parseWorkflowScript = (
     );
     const problem = plannedAgentsProblem(meta);
     if (problem !== undefined) return yield* new WorkflowScriptError({ message: problem });
+    const args =
+      meta.args === undefined
+        ? undefined
+        : yield* compileWorkflowArgs(meta.args).pipe(
+            Effect.mapError(
+              (error) =>
+                new WorkflowScriptError({ message: `Invalid meta.args: ${error.message}` }),
+            ),
+          );
     // Keep `const meta` so the script can read it; blanking `export` keeps every position intact.
     const body = `${source.slice(0, first.start)}${" ".repeat("export".length)}${source.slice(first.start + "export".length)}`;
-    return { meta, source, body, sha256: sha256Text(source) };
+    return { meta, source, body, sha256: sha256Text(source), ...(args && { args }) };
   });

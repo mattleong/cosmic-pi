@@ -92,7 +92,8 @@ const MANAGER_ACTIVITY_LABELS = {
 
 /**
  * The one word every extension uses for a state. Requests and questionnaires that end early are
- * "cancelled"; running work that someone ends is "stopped".
+ * "cancelled"; running work that someone ends is "stopped", and Activity calls work cancelled
+ * before it started "skipped" when its producer says so.
  */
 export const managerActivityLabel = (kind: ManagerActivityKind): string =>
   MANAGER_ACTIVITY_LABELS[kind];

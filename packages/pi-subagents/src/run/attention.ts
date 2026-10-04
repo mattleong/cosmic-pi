@@ -1,8 +1,8 @@
 /**
  * What a run needs from its parent before it can continue. One precedence feeds every view:
- * the agent's recovery steps, compact issue lines, and the preview renderer.
+ * the agent's recovery steps, compact issue lines, the preview renderer, and workflow status.
  */
-import type { SubagentRunView } from "../run/model.ts";
+import type { SubagentRunView } from "./model.ts";
 
 /** The fields attention depends on, shared by run views and projected cards. */
 export interface AttentionRun {

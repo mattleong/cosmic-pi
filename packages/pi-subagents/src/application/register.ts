@@ -54,7 +54,11 @@ import type { FleetMessageDelivery } from "../ui/fleet.ts";
 import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerWorkflowTool } from "../tools/workflow.ts";
-import { WorkflowStore, type SavedWorkflowSummary } from "../workflow/store.ts";
+import {
+  WorkflowStore,
+  type SavedWorkflowSummary,
+  type WorkflowLocations,
+} from "../workflow/store.ts";
 import { WORKFLOW_TOOL_NAME } from "../tools/workflow-schema.ts";
 import { WorkflowService } from "../workflow/service.ts";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
@@ -100,6 +104,7 @@ interface PreparedActivation {
   readonly scheduler: CodePreviewSchedulerServiceContract;
   readonly projection: SubagentProjection;
   readonly savedWorkflows: ReadonlyArray<SavedWorkflowSummary>;
+  readonly savedWorkflowLocations: WorkflowLocations;
   readonly toolRuntime: SubagentToolRuntime;
 }
 
@@ -220,7 +225,7 @@ export function registerSubagentApplication(
             sessionKey: activation.sessionKey,
           }),
           isProjectTrusted: () => isProjectTrusted(activation.ctx),
-          publishWorkflows: workflowViews.publish,
+          workflowActivity: workflowViews,
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
@@ -287,10 +292,12 @@ export function registerSubagentApplication(
           const savedWorkflows = profiles.effectiveConfig.scriptedWorkflows
             ? (yield* WorkflowStore.use((store) => store.list)).workflows
             : [];
+          const savedWorkflowLocations = yield* WorkflowStore.use((store) => store.locations);
           return {
             scheduler,
             projection,
             savedWorkflows,
+            savedWorkflowLocations,
             toolRuntime: {
               environment: {
                 cwd: activation.cwd,
@@ -318,6 +325,7 @@ export function registerSubagentApplication(
             registerWorkflowTool(pi, {
               environment: prepared.toolRuntime.environment,
               savedWorkflows: prepared.savedWorkflows,
+              savedWorkflowLocations: prepared.savedWorkflowLocations,
               scheduleAnimation,
               run: (effect, signal) => run(effect, signal),
             });
