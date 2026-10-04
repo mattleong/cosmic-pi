@@ -30,6 +30,7 @@ import { WorkflowJournal } from "../../../src/workflow/journal.ts";
 import type { WorkflowRunView } from "../../../src/workflow/model.ts";
 import type { WorkflowActivitySink } from "../../../src/workflow/runs.ts";
 import { parseWorkflowScript } from "../../../src/workflow/script.ts";
+import type { WorkflowRunObserver } from "../../../src/workflow/run-observer.ts";
 import { WorkflowService, type WorkflowServiceContract } from "../../../src/workflow/service.ts";
 import {
   WorkflowSourceError,
@@ -58,9 +59,20 @@ export const inline = (body: string, name?: string) => ({
   script: script(body, name),
 });
 
-/** Starts root children of the main agent, which hold root slots until they report. */
-export const mainChildren = (subagents: SubagentServiceContract, names: ReadonlyArray<string>) =>
-  Effect.forEach(names, (name) => subagents.start(nativeReportRequest({ name, task: name })));
+/**
+ * Starts root children of the main agent, which hold root slots until they report, under the
+ * given nesting policy or the default one.
+ */
+export const mainChildren = (
+  subagents: SubagentServiceContract,
+  names: ReadonlyArray<string>,
+  nestingPolicy?: StartSubagentRequest["nestingPolicy"],
+) =>
+  Effect.forEach(names, (name) =>
+    subagents.start(
+      nativeReportRequest({ name, task: name, ...(nestingPolicy && { nestingPolicy }) }),
+    ),
+  );
 
 const writes = (spec: WorkflowAgentSpec): boolean =>
   spec.profile === "worker" || spec.writes !== undefined;
@@ -479,24 +491,6 @@ const creatingWorkspaceEngine = (
   };
 };
 
-/** An admission revision whose waiters wake on each release, as the subagent service's do. */
-export const fakeAdmissionSignal = () => {
-  let revision = 0;
-  let changed = Deferred.makeUnsafe<void>();
-  return {
-    admissionRevision: Effect.sync(() => revision),
-    waitForAdmissionChange: (after: number) =>
-      Effect.suspend(() => (after < revision ? Effect.void : Deferred.await(changed))),
-    /** Advances the revision synchronously, as a release under the run lock does. */
-    releaseUnsafe: () => {
-      revision += 1;
-      const settled = changed;
-      changed = Deferred.makeUnsafe();
-      Deferred.doneUnsafe(settled, Effect.void);
-    },
-  };
-};
-
 let nextSession = 1;
 
 /** A journal session no other fixture shares. */
@@ -527,6 +521,8 @@ export interface WorkflowFixtureOptions {
   readonly runFiles?: MemoryRunFiles;
   /** The host's Activity bridge, which sees coalesced publishes. */
   readonly activity?: WorkflowActivitySink;
+  /** Follows which runs still need the main agent, as the ultracode window does. */
+  readonly observer?: WorkflowRunObserver;
 }
 
 /** The real subagent service over a native-report backend, plus the workflow service. */
@@ -563,6 +559,7 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
     concurrency: options.concurrency ?? 4,
     sessionKey,
     ...(options.activity !== undefined && { activity: options.activity }),
+    ...(options.observer !== undefined && { observer: options.observer }),
     notify: (notification) => {
       workflowNotifications.push(notification);
       if (options.notify) return options.notify(notification);

@@ -127,8 +127,6 @@ export const workflowWaitingText = (waiting: WorkflowAgentWaiting | undefined): 
       return "queued";
     case "slot":
       return "waiting for a run slot";
-    case "capacity":
-      return "waiting for root capacity";
     case "writer":
       return `waiting for ${waiting.paused ? "paused " : ""}writer ${waiting.name}`;
   }

@@ -12,15 +12,11 @@ import type { WriterPoolEntry } from "./writer-pool.ts";
 /**
  * One worktree launch's hold on a direct-child slot, from its capacity check until admission
  * holds that slot itself, through the admitted writer or an eviction claim, or the launch fails.
+ * A workflow agent's launch holds none, since workflow agents have their own concurrency. Each
+ * hold is its own object, identified by reference.
  */
 export interface LaunchSlot {
   readonly caller: string;
-  /** Identity of the hold in admission-signal snapshots. */
-  readonly id: number;
-  /** The run id an owned start reserved, so queued-start checks don't count it twice. */
-  readonly runId?: string | undefined;
-  /** A workflow agent's launch, which counts as a workflow agent holding a slot. */
-  readonly workflow: boolean;
 }
 
 /** A revision holding its binding from its reservation until its successor's launch settles. */

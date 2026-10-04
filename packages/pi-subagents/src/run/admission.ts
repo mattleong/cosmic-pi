@@ -3,7 +3,6 @@ import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer
 import { firstWriteClaimConflict } from "../domain/write-claims.ts";
 import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import { WORKFLOW_ROOT_RESERVE } from "./limits.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { writerPoolUnavailable } from "./writer-pool.ts";
@@ -28,6 +27,31 @@ const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
 
+/**
+ * Whether a workflow still owns a run it started: the run kept the workflow placement its start
+ * request named, as launch admission keys the exemption on, and the workflow hasn't relinquished
+ * it. Such a run has its workflow's own concurrency instead of a direct-child slot.
+ */
+export const workflowOwned = (record: RunRecord): boolean =>
+  record.view.workflow !== undefined && record.owner?.live === true;
+
+/**
+ * Whether a record holds one of `parentRunId`'s direct-child slots: an active, starting or
+ * cleaning-up child of that parent, or a history record whose eviction claim reserves the slot of
+ * a start under it. A run its workflow still owns holds none, and neither does a workflow
+ * start's eviction claim.
+ */
+const holdsChildSlot = (record: RunRecord, parentRunId: string): boolean => {
+  const claim = record.evictionClaim;
+  if (claim) return claim.parentRunId === parentRunId;
+  return (
+    (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId &&
+    !workflowOwned(record) &&
+    ownsProcessSlot(record)
+  );
+};
+
+/** The refusal for a start or respawn under `parentRunId` once its direct-child slots are full. */
 export const processCapacityError = (
   records: ReadonlyMap<string, RunRecord>,
   parentRunId: string,
@@ -36,77 +60,14 @@ export const processCapacityError = (
   /** Slots that launches still acquiring workspaces hold for this parent. */
   held = 0,
 ): SubagentCapacityError | undefined => {
-  const candidates = [...records.values()].filter((record) => record !== excluded);
-  const occupiedChildren = candidates.filter(
-    (record) =>
-      (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId && ownsProcessSlot(record),
+  const occupied = [...records.values()].filter(
+    (record) => record !== excluded && holdsChildSlot(record, parentRunId),
   ).length;
-  const externalReservations = candidates.filter(
-    (record) =>
-      (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId &&
-      record.evictionClaim?.parentRunId === parentRunId,
-  ).length;
-  if (occupiedChildren + externalReservations + held < limit) return undefined;
+  if (occupied + held < limit) return undefined;
   return new SubagentCapacityError({
     limit,
     code: "direct_child_capacity",
     message: `Direct-child capacity reached for ${parentRunId} (${limit}). Stop an active run among this parent's direct children first.`,
-  });
-};
-
-/** Direct-child slots that worktree launches still acquiring their workspaces hold for a parent. */
-export interface HeldLaunchSlots {
-  readonly total: number;
-  /** Those held by workflow agents' launches, which count as workflow agents holding a slot. */
-  readonly workflow: number;
-}
-
-export const NO_HELD_LAUNCH_SLOTS: HeldLaunchSlots = { total: 0, workflow: 0 };
-
-/** Whether a workflow agent's record holds one of the parent's process slots. */
-const workflowAgentHoldsSlot = (
-  records: ReadonlyMap<string, RunRecord>,
-  parentRunId: string,
-  excluded: RunRecord | undefined,
-): boolean =>
-  [...records.values()].some(
-    (record) =>
-      record !== excluded &&
-      record.owner?.live === true &&
-      (record.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === parentRunId &&
-      ownsProcessSlot(record),
-  );
-
-/**
- * The capacity refusal for a workflow agent's start. While another workflow agent holds one of
- * the parent's slots, a workflow start also leaves {@link WORKFLOW_ROOT_RESERVE} slots free for
- * the main agent; with none running, it may take any free slot, so a small limit still lets a
- * workflow progress. A workflow agent holds a slot through its admitted run, through the launch
- * slot of a worktree it is still acquiring, or as a start already let through that holds no slot
- * yet, which `pending` counts.
- */
-export const workflowCapacityError = (
-  records: ReadonlyMap<string, RunRecord>,
-  parentRunId: string,
-  limit: number,
-  excluded?: RunRecord,
-  held: HeldLaunchSlots = NO_HELD_LAUNCH_SLOTS,
-  pending = 0,
-): SubagentCapacityError | undefined => {
-  const occupied = held.total + pending;
-  const plain = processCapacityError(records, parentRunId, limit, excluded, occupied);
-  if (plain) return plain;
-  const workflowRunning =
-    pending > 0 || held.workflow > 0 || workflowAgentHoldsSlot(records, parentRunId, excluded);
-  if (!workflowRunning) return undefined;
-  if (
-    !processCapacityError(records, parentRunId, limit - WORKFLOW_ROOT_RESERVE, excluded, occupied)
-  )
-    return undefined;
-  return new SubagentCapacityError({
-    limit,
-    code: "direct_child_capacity",
-    message: `Workflow agents leave ${WORKFLOW_ROOT_RESERVE} of ${parentRunId}'s ${limit} direct-child slots free for the main agent.`,
   });
 };
 
@@ -217,19 +178,19 @@ const claimHoldings = (record: RunRecord): ReadonlyArray<string> =>
     : [];
 
 /**
- * Everything that can refuse a start: process and writer slots, the files a writer claims,
+ * Everything a writer conflict can wait on: writer slots, the files a writer or retry claims,
  * cleanup still under way, retry and eviction reservations, and unavailable writer pools. A
- * start refused for any of them can only succeed after one of these holdings disappears, so
- * narrowing a writer's claims counts as a release while widening them does not.
+ * start refused for a conflict that clears by itself can only succeed after one of these
+ * holdings disappears, so narrowing a writer's claims counts as a release while widening them
+ * does not.
  */
-export const admissionHoldings = (
+export const writerConflictHoldings = (
   records: ReadonlyMap<string, RunRecord>,
   pools: ReadonlyMap<string, WriterPoolEntry>,
 ): ReadonlySet<string> => {
   const holdings = new Set<string>();
   for (const record of records.values()) {
     const id = record.view.id;
-    if (ownsProcessSlot(record)) holdings.add(`process:${id}`);
     if (ownsWriterSlot(record)) holdings.add(`writer:${id}`);
     for (const claim of claimHoldings(record)) holdings.add(claim);
     // Quarantine ends this holding too, so waiters learn the conflict will not clear.

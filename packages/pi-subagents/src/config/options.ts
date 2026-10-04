@@ -15,6 +15,7 @@ import {
   DEFAULT_WRITER_WORKSPACE_MODE,
   type WriterWorkspaceMode,
   type DecodedSubagentConfig,
+  type SubagentFeatureSource,
   type SubagentFeatureToggle,
   type SubagentFeatureToggles,
   type SubagentNestingPolicy,
@@ -31,6 +32,8 @@ export type ResolvedProfileSetSelection =
 
 /** Every feature switch resolved to a required boolean; `/reload` picks up saved changes. */
 export interface ResolvedSubagentConfig extends SubagentFeatureToggles {
+  /** Which scope set each switch's value; a session override reports `session`. */
+  readonly featureSources: Readonly<Record<SubagentFeatureToggle, SubagentFeatureSource>>;
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
   readonly fallbackProfile: ProfileId;
@@ -179,15 +182,22 @@ const declaredSelection = (
   };
 };
 
-/** A trusted Project declaration wins over Global; with neither, every feature is enabled. */
+/** A trusted Project declaration wins over Global; with neither, a switch keeps its default. */
 const resolveSubagentFeatureToggles = (
   global: DecodedSubagentConfig,
   project?: DecodedSubagentConfig,
-): SubagentFeatureToggles => {
+): Pick<ResolvedSubagentConfig, SubagentFeatureToggle | "featureSources"> => {
+  const source = (toggle: SubagentFeatureToggle): SubagentFeatureSource =>
+    project?.file[toggle] !== undefined
+      ? "project"
+      : global.file[toggle] !== undefined
+        ? "global"
+        : "default";
   const resolve = (toggle: SubagentFeatureToggle): boolean =>
     project?.file[toggle] ?? global.file[toggle] ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES[toggle];
   return {
-    scriptedWorkflows: resolve("scriptedWorkflows"),
+    ultracode: resolve("ultracode"),
+    featureSources: { ultracode: source("ultracode") },
   };
 };
 

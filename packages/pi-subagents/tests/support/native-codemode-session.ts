@@ -54,8 +54,6 @@ const CLASSIFIER_FIXTURE_PROVIDER = "workflow-classifier-test";
 interface NativeCodemodeSessionOptions {
   readonly classifier?: "reviewer" | "throws";
   readonly proxy?: boolean;
-  /** Omitted values keep scripted workflows enabled. */
-  readonly scriptedWorkflows?: boolean;
 }
 
 export const nativeCodemodeSession = (
@@ -164,9 +162,6 @@ export const nativeCodemodeSession = (
               pi,
               {
                 environment: { cwd: directory, projectTrusted: false },
-                ...(options.scriptedWorkflows !== undefined && {
-                  scriptedWorkflows: options.scriptedWorkflows,
-                }),
                 ...(options.proxy && {
                   proxyCall: () =>
                     Promise.reject(new Error("Proxy calls are model-only in this fixture.")),

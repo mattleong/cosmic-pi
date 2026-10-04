@@ -923,10 +923,7 @@ describe("writer workspace orchestration", () => {
       expect(
         yield* service.start(request({ cwd: "/repo", nestingPolicy: policy })).pipe(Effect.flip),
       ).toMatchObject({ code: "direct_child_capacity" });
-      const before = yield* service.admissionRevision;
       yield* Fiber.interrupt(writer);
-      // Giving the slot back counts as an admission change, so queued starts retry.
-      expect(yield* service.admissionRevision).toBeGreaterThan(before);
       expect((yield* service.start(request({ cwd: "/repo", nestingPolicy: policy }))).state).toBe(
         "running",
       );

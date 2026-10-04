@@ -4,19 +4,14 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { emptyUsage } from "../../src/run/model.ts";
-import { SubagentCapacityError, SubagentWriterConflictError } from "../../src/run/errors.ts";
+import { SubagentWriterConflictError } from "../../src/run/errors.ts";
 import type { OwnedRunHandle, OwnedRunOutcome, OwnedRunStart } from "../../src/run/owned-runs.ts";
 import {
   makeWorkflowAgentCall,
   type WorkflowAgentRun,
   type WorkflowAgentServices,
 } from "../../src/workflow/agent.ts";
-import {
-  makeWorkflowAdmissionQueue,
-  makeWorkflowCapacity,
-  makeWorkflowSlots,
-  makeWorkflowWaitOrder,
-} from "../../src/workflow/admission-queue.ts";
+import { makeWorkflowSlots, makeWorkflowWaitOrder } from "../../src/workflow/admission-queue.ts";
 import { makeWorkflowBudget } from "../../src/workflow/budget.ts";
 import { makeWorkflowReplay, type WorkflowJournalEntry } from "../../src/workflow/journal.ts";
 import type { WorkflowAgentSpend, WorkflowAgentView } from "../../src/workflow/model.ts";
@@ -24,7 +19,7 @@ import { workflowAgentJournalKey, type WorkflowAgentOptions } from "../../src/wo
 import type { WorkflowResultLine } from "../../src/workflow/results.ts";
 import { workflowAgentFromDraft } from "../../src/workflow/state.ts";
 import { view } from "../fixtures/run-view.ts";
-import { fakeAdmissionSignal, testHost } from "./fixtures/workflow-harness.ts";
+import { testHost } from "./fixtures/workflow-harness.ts";
 
 const unexpected = Effect.die(new Error("Unexpected subagent service call."));
 
@@ -43,14 +38,10 @@ const admitted = (owner: OwnedRunStart): OwnedRunHandle => ({
   claimToken: "claim",
 });
 
-/** A capacity queue that grants every waiter, as a root with room does. */
-const roomyCapacity = () => makeWorkflowAdmissionQueue((waiting) => Effect.succeed(waiting.length));
-
 const harness = (
   run: Partial<WorkflowAgentRun>,
   outcome?: OwnedRunOutcome,
   subagents: Partial<WorkflowAgentServices["subagents"]> = {},
-  capacity: WorkflowAgentServices["capacity"] = roomyCapacity(),
 ) => {
   const recorded: Recorded = { journal: [], counted: [], updates: [], logs: [], results: [] };
   const services: WorkflowAgentServices = {
@@ -72,7 +63,6 @@ const harness = (
       noteWorkspace: () => Effect.void,
       dropWorkspace: () => Effect.void,
     },
-    capacity,
   };
   const call = makeWorkflowAgentCall(
     {
@@ -81,7 +71,7 @@ const harness = (
       host: testHost(),
       replay: undefined,
       slots: makeWorkflowSlots(1),
-      order: makeWorkflowWaitOrder(1),
+      order: makeWorkflowWaitOrder(),
       budget: makeWorkflowBudget(undefined, {
         subagents: services.subagents,
         warn: (message) => Effect.sync(() => void recorded.logs.push(message)),
@@ -537,42 +527,6 @@ describe("workflow agent call", () => {
     );
   });
 
-  it.effect("waits in the capacity queue without a start attempt until the root has room", () =>
-    Effect.gen(function* () {
-      let room = 0;
-      let attempts = 0;
-      let atStart: Partial<WorkflowAgentView> | undefined;
-      const admission = fakeAdmissionSignal();
-      const capacity = yield* makeWorkflowCapacity({
-        ...admission,
-        queuedStartsAdmissible: (requests) => Effect.sync(() => Math.min(room, requests.length)),
-      });
-      const { call, recorded } = harness(
-        {},
-        completed("Done."),
-        {
-          startOwned: (_request, owner) =>
-            Effect.sync(() => {
-              attempts += 1;
-              atStart = recorded.updates.at(-1);
-              return admitted(owner);
-            }),
-        },
-        capacity,
-      );
-      const fiber = yield* call(["review", {}]).pipe(Effect.forkChild);
-      yield* yieldUntil(() => recorded.updates.some((update) => update.waiting !== undefined));
-      expect(recorded.updates.at(-1)).toEqual({ waiting: { kind: "capacity" } });
-      expect(attempts).toBe(0);
-      room = 1;
-      admission.releaseUnsafe();
-      expect(yield* Fiber.join(fiber)).toEqual({ result: "Done.", outputTokens: 11 });
-      expect(attempts).toBe(1);
-      // The grant clears the reason before the start.
-      expect(atStart).toEqual({ waiting: undefined });
-    }),
-  );
-
   it.effect("clears a call's waiting reason once it gets its run slot, before its start", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>();
@@ -609,48 +563,6 @@ describe("workflow agent call", () => {
       yield* Fiber.join(first);
       yield* Fiber.join(second);
       expect(atStart.get("agent-r1-2")).toEqual({ waiting: undefined });
-    }),
-  );
-
-  it.effect("queues again when another start takes the slot its grant counted on", () =>
-    Effect.gen(function* () {
-      let room = 1;
-      let attempts = 0;
-      const admission = fakeAdmissionSignal();
-      const capacity = yield* makeWorkflowCapacity({
-        ...admission,
-        queuedStartsAdmissible: (requests) => Effect.sync(() => Math.min(room, requests.length)),
-      });
-      const { call } = harness(
-        {},
-        completed("Done."),
-        {
-          startOwned: (_request, owner) =>
-            Effect.suspend(() => {
-              attempts += 1;
-              if (attempts > 1) return Effect.succeed(admitted(owner));
-              // The main agent took the last slot between the grant and the start.
-              room = 0;
-              return Effect.fail(
-                new SubagentCapacityError({
-                  limit: 1,
-                  code: "direct_child_capacity",
-                  message: "Direct-child capacity reached.",
-                }),
-              );
-            }),
-        },
-        capacity,
-      );
-      const fiber = yield* call(["review", {}]).pipe(Effect.forkChild);
-      yield* yieldUntil(() => attempts === 1);
-      yield* Effect.yieldNow;
-      expect(fiber.pollUnsafe()).toBeUndefined();
-      expect(attempts).toBe(1);
-      room = 1;
-      admission.releaseUnsafe();
-      expect(yield* Fiber.join(fiber)).toEqual({ result: "Done.", outputTokens: 11 });
-      expect(attempts).toBe(2);
     }),
   );
 

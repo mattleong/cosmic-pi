@@ -12,6 +12,7 @@ import { clipText, failureMessage } from "pi-cosmic-core";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import { makeWorkflowHost } from "../boundary/host-workflow.ts";
+import { workflowAuthoringGuidePath } from "../boundary/workflow-authoring-guide.ts";
 import type { SubagentProfileService } from "../profiles/service.ts";
 import { workflowArgsSummary } from "../workflow/args.ts";
 import type {
@@ -20,7 +21,7 @@ import type {
   WorkflowRequestError,
 } from "../workflow/errors.ts";
 import type { WorkflowScriptError } from "../workflow/script.ts";
-import { WorkflowService } from "../workflow/service.ts";
+import { WorkflowService, type WorkflowToolStatus } from "../workflow/service.ts";
 import {
   savedWorkflowFiles,
   WorkflowStore,
@@ -29,12 +30,15 @@ import {
   type WorkflowSourceError,
 } from "../workflow/store.ts";
 import {
+  WORKFLOW_STOP_GUIDANCE,
   workflowListText,
   workflowRecordedRunSummary,
   workflowRecordedStatusText,
   workflowRunSummary,
   workflowStartText,
   workflowStatusText,
+  workflowStopText,
+  workflowUnchangedStatusText,
 } from "./workflow-format.ts";
 import {
   renderWorkflowCall,
@@ -51,41 +55,55 @@ import {
   type WorkflowToolAction,
   type WorkflowToolDetails,
   type WorkflowToolInputError,
+  workflowToolAction,
 } from "./workflow-schema.ts";
 
-/** The model's only documentation for workflow scripts; `locations` resolves saved workflows. */
+/**
+ * The description's example script: find by dimension, then three refuters per finding with a
+ * majority vote. Exported so tests can run it; the authoring guide holds the longer patterns.
+ */
+export const workflowToolExample = `export const meta = { name: "review", description: "Find bugs by dimension, merge reports of one location, then verify each with three refuters", phases: [{ title: "Find", agents: ["correctness", "security", "error handling"] }, { title: "Verify" }] };
+const BUGS = { type: "object", properties: { bugs: { type: "array", items: { type: "object", properties: { file: { type: "string" }, line: { type: "integer" }, claim: { type: "string" } }, required: ["file", "line", "claim"], additionalProperties: false } } }, required: ["bugs"], additionalProperties: false };
+const VERDICT = { type: "object", properties: { refuted: { type: "boolean" }, reason: { type: "string" } }, required: ["refuted", "reason"], additionalProperties: false };
+const found = await parallel(["correctness", "security", "error handling"].map((area) => () =>
+  agent(\`Review the uncommitted diff in this repository for \${area} bugs. Report only real defects, each with file, line and claim.\`, { label: area, phase: "Find", profile: "reviewer", schema: BUGS })));
+// A deliberate barrier: merge the finders' reports of one location before paying to verify it.
+const byLocation = new Map();
+for (const bug of found.flatMap((review) => review?.bugs ?? [])) {
+  const location = \`\${bug.file}:\${bug.line}\`;
+  byLocation.set(location, [...(byLocation.get(location) ?? []), bug.claim]);
+}
+const verified = await parallel([...byLocation].map(([location, claims]) => () =>
+  parallel([1, 2, 3].map((n) => () =>
+    agent(\`Try to refute these reported bugs at \${location} against the code. Answer refuted: true unless you can confirm one is real.\\n\${claims.join("\\n")}\`, { label: \`refute \${location} #\${n}\`, phase: "Verify", profile: "reviewer", schema: VERDICT })))
+    .then((votes) => (votes.filter((vote) => vote && !vote.refuted).length >= 2 ? { location, claims } : null))));
+return verified.filter(Boolean);`;
+
+/** The model's documentation for workflow scripts; `locations` resolves saved workflows. */
 const description = (
   locations: WorkflowLocations,
-): string => `Run a JavaScript workflow that orchestrates subagents in the background. Use it for planned multi-step or fan-out work: reviews by dimension, per-file or per-item processing, find-then-verify, implement-then-check, especially when it needs more than a few agents or several stages. Use subagent_start instead for one to three agents you steer yourself.
+): string => `Run a JavaScript workflow that orchestrates subagents in the background. Use it for planned fan-out or multi-stage work: reviews by dimension, per-file or per-item processing, find-then-verify, implement-then-check. Use subagent_start instead for one to three agents you steer yourself, and work solo on small, specific tasks. Size the workflow to the request: a few agents for a focused check, dozens with adversarial verification for a thorough audit or a large implementation. Read the workflow authoring guide (${workflowAuthoringGuidePath()}) before writing a non-trivial script.
 
-start returns at once with a run id. Pass budget (output tokens) whenever the user states a token limit for the work, such as 500000 for "cap this at 500k": it is a hard ceiling, so once the run's agents have spent it, counting running agents' live usage and the subagents they start themselves, every agent() call that hasn't started throws a budget error while agents already running finish, which can overshoot by what they spend. The script runs in a sandbox while you keep working, and exactly one notification arrives with its return value or error; don't wait or poll for it. status shows progress and usage (tokens, cost when known, tool uses), what needs you (agent questions to answer with subagent_reply, paused or contained agents with how to recover them, agents queued behind a paused writer), and the agents worth a look: running ones with elapsed time first, then failed or skipped ones with reasons, then queued ones with what they wait for. Agents that started show their subagent run id: inspect one with subagent_status, and a subagent_lifecycle stop on a running one makes its agent() call resolve null; queued agents have no subagent yet. For this session's runs from before a reload or Pi restart, status shows a summary from the run's files instead; stop cancels and returns the final state (no notification follows unless the stop call itself is interrupted); list shows saved workflows and this session's runs. Reloading, /tree navigation, replacing the session or exiting Pi stops running workflows and their agents; the next start of the same session, including pi --continue after a restart, posts one notice per interrupted run.
+start returns at once with a run id, and the script runs in a sandbox. Then end your turn, after any unrelated work: the run's one notification, with its return value or error, starts your next turn automatically, so don't call status to wait for it. Pass budget (output tokens) whenever the user states a token limit for the work, such as 500000 for "cap this at 500k": a hard ceiling on what the run's agents spend, the subagents they start included; agents already running when it is reached finish, so the run can overshoot. status shows a run's progress, usage and anything that needs you, with how to act on it; a repeat within a minute while nothing changed gets one line instead. stop cancels a run and returns its final state, and no notification follows. ${WORKFLOW_STOP_GUIDANCE} list shows saved workflows and this session's runs.
 
 A script is plain JavaScript (not TypeScript) that begins with a pure-literal
-export const meta = { name: "review", description: "…", whenToUse: "…", phases: [{ title: "Find", detail: "…", agents: ["finder", { label: "checker", profile: "reviewer" }] }] };
-(whenToUse, args, phases, detail and agents are optional), followed by top-level code that awaits agents and returns a JSON value. Declare meta.args, a JSON Schema for the script's args in the subset agent() schemas accept (any root), such as args: { type: "object", properties: { target: { type: "string" } }, required: ["target"] }, so a start, resume or workflow() call whose args (null when omitted) don't match is refused with the failing path, and saved workflows show what to pass. List the agents you already know in each phase's agents (labels up to 80 characters; 64 per phase, 256 in all) so the user sees the plan before they run. They start nothing and set no options (pass profile to agent() too): an agent() call in that phase with the same label, or with no label, takes the next planned entry, and a labelled call before any phase takes its own workflow's entry with that label and that entry's phase. The user can skip a planned agent before it starts; the call that takes it then resolves null.
+export const meta = { name: "review", description: "…", whenToUse: "…", args: { … }, phases: [{ title: "Find", detail: "…", agents: ["finder", { label: "checker", profile: "reviewer" }] }] };
+(only name and description are required), followed by top-level code that awaits agents and returns a JSON value. meta.args is a JSON Schema for the start's args (null when omitted), in the subset agent() schemas accept; a start, resume or workflow() call whose args don't match is refused. List the agents you already know in each phase's agents (labels up to 80 characters, 64 per phase, 256 in all) so the user sees the plan and can skip one. Planned agents start nothing and set no options: an agent() call in a phase (by phase() or the phase option) takes that phase's next entry with its label, or, unlabelled, the phase's next entry; a labelled call outside any phase takes the next entry with its label. A call that takes an entry the user skipped resolves null.
 
 Globals:
-- agent(prompt, options?) resolves to the agent's final text, or with options.schema to the validated JSON value. It resolves null when the agent fails, is stopped or is skipped. Once the budget is spent it throws a budget error (error.name "WorkflowBudgetError") instead of starting an agent: uncaught, that fails the run, and inside parallel or pipeline its item yields null. A catch around agent() should rethrow other errors. An invalid call fails the run, even inside parallel or pipeline, unless the script catches its error. Options: label (display name, clipped to 80 characters), phase, profile (a subagent profile, default generalist; profiles choose model and effort, so model, effort and agentType are rejected), schema (JSON Schema without $ref or $defs; every pattern must compile with the JavaScript u flag, so escape - only inside a character class), writes (exact workspace-relative files for a writer profile such as worker), isolation: "worktree" (runs a writer in its own worktree).
-- parallel(items) waits for functions or promises running concurrently: each item is a function such as () => agent(...), which it calls, or a promise such as agent(...) itself. An item that throws or rejects yields null.
-- pipeline(items, ...stages) passes each item through the stages independently as stage(previous, item, index); a throwing stage yields null for that item.
+- agent(prompt, options?) resolves to the agent's final text, or with options.schema to the validated JSON value, and to null when the agent fails, is stopped or is skipped. Options: label (display name), phase, profile (a subagent profile, default generalist; profiles choose model and effort, so model, effort and agentType are rejected), schema (JSON Schema without $ref or $defs; every pattern must compile with the JavaScript u flag), writes (1 to 64 exact workspace-relative files for a writer profile such as worker), isolation: "worktree" (runs a writer in its own worktree). An invalid call fails the run, even inside parallel or pipeline, unless the script catches its error. Once the budget is spent, a call whose agent hasn't started throws a budget error (error.name "WorkflowBudgetError"): uncaught, that fails the run, and inside parallel or pipeline its item yields null. A catch around agent() should rethrow other errors.
+- parallel(items) waits for functions such as () => agent(...), which it calls, or promises, running concurrently; an item that throws or rejects yields null.
+- pipeline(items, ...stages) passes each item through the stages independently, with no barrier between stages, as stage(previous, item, index), where previous is null after a stage that resolved null; a throwing stage yields null for that item. Prefer it to parallel() between stages unless a stage needs every earlier result together.
 - phase(title) groups later agents; log(message) adds a progress line.
-- workflow(name or { scriptPath }, args?) runs a saved workflow inline, one level deep. A name or path that doesn't load, or args that don't match its meta.args, make it an invalid call.
-- args is the start args, frozen. budget.total is the start's budget (null without one); budget.spent() counts output tokens of this run's finished agents, including the subagents they started, and reused results add nothing; budget.remaining() is what's left (Infinity without a total). Guard loops with it, such as while (budget.total && budget.remaining() > 50000) { ... }: a sequential loop then never hits the budget error, but spent() excludes running agents, which the ceiling counts, so a concurrent fan-out can still overshoot and see throws. A nested workflow() shares the budget.
+- workflow(name or { scriptPath }, args?) runs a saved workflow inline, one level deep; one that doesn't load is an invalid call.
+- args is the start args, frozen. budget.total is the start's budget (null without one); budget.spent() counts output tokens of this run's finished agents; budget.remaining() is what's left (Infinity without a total). With a budget, split it across phases before writing the script (keep room to verify and summarize), never start more agents at once than remaining() pays for (a finder reading a package spends 30k to 60k output tokens, a verifier 5k to 15k), and check remaining() before each phase and every top-level call; spent() excludes running agents, so a fan-out wider than that overshoots and later calls throw. Guard loops with it, such as while (budget.total && budget.remaining() > 50000) { ... }.
 
-Rules: prompts must be self-contained, because agents don't see this conversation. Await every agent() call: agents still running when the script returns are stopped. Date.now(), new Date() and Math.random() throw, so runs can resume; there are no timers, fetch, files or modules. Each run executes up to min(16, CPUs - 2, maxDirectChildren - 2) agents at once (at least one) and 1000 agent() calls in total, counting calls the budget refused; a call past that fails the run even if caught. Extra calls queue and start in the order they were made, across runs. Workflow agents leave 2 of the root's direct-child slots for your own subagent_start, unless no workflow agent is running. Agents are ordinary subagents: writers follow the session's writer mode and file claims (shared-checkout writers without disjoint writes run one at a time; the others queue), worktree proposals are listed in the notification for review with subagent_workspace (a worktree writer that made no changes, not even an untracked or ignored file, has its worktree discarded and is only counted), and an agent may ask you a question (answer with subagent_reply; the workflow then continues).
+Rules: prompts must be self-contained, because agents don't see this conversation. Await every agent() call: agents still running when the script returns are stopped. Date.now(), new Date() and Math.random() throw, so runs can resume; there are no timers, fetch, files or modules. Each run executes up to min(16, CPUs - 2) agents at once (at least one), which don't count toward your own subagent limit, and 1000 agent() calls in total, counting calls the budget refused; a call past that fails the run even if caught. Extra calls queue and start in call order, so pass every item. Agents are ordinary subagents: writers follow the session's writer mode and file claims (shared-checkout writers whose writes overlap, or that have none, run one at a time, and one that edits a file it didn't claim is contained), worktree proposals are listed in the notification for review with subagent_workspace, and an agent may ask you a question (answer with subagent_reply; the workflow then continues).
 
-Saved workflows are ${savedWorkflowFiles(locations)}. Write them with your file tools and start them with name; scriptPath runs any .js file. To change a saved workflow or script file, edit that file and start it again with name or scriptPath. An inline script is saved to a private file named in the start result: to change it, edit that file and start it with scriptPath. To fix a failed script, adjust one you stopped yourself, or extend a completed run, edit it and start it with resumeFromRunId to reuse results of agent() calls with the same prompt, profile, schema, isolation and writes (this works for the session's runs after a Pi restart too, while their run files remain); once a writer-profile call without isolation: "worktree" runs live instead of being reused (changed, new, unfinished before, or its earlier worktree can no longer be reused), every later call runs live too. Don't restart a run the user stopped unless they ask. The notification and status name the run's results journal, one JSON line per finished agent() call (label, phase, state, usage, result); Read it to check what each agent actually returned.
+Pass one-off work as an inline script, which is saved to a private file named in the start result; write a saved workflow only when the user wants one to reuse. Saved workflows are ${savedWorkflowFiles(locations)}. Write them with your file tools and start them with name; scriptPath runs any .js file. To fix a failed run, adjust one you stopped yourself, or extend a completed one, edit its script file and start it again with resumeFromRunId: agent() calls with the same prompt, profile, schema, isolation and writes reuse their results, until a writer call without isolation: "worktree" runs live, after which every later call runs live. Don't restart a run the user stopped unless they ask. The notification and status name the run's results journal, one JSON line per finished agent() call; read it before diagnosing an empty or surprising result.
 
-Example:
-export const meta = { name: "review", description: "Review the diff, then verify findings", phases: [{ title: "Review", agents: ["correctness", "security"] }, { title: "Verify" }] };
-const BUGS = { type: "object", properties: { bugs: { type: "array", items: { type: "string" } } }, required: ["bugs"], additionalProperties: false };
-const VERDICT = { type: "object", properties: { real: { type: "boolean" }, reason: { type: "string" } }, required: ["real"], additionalProperties: false };
-const found = await parallel(["correctness", "security"].map((area) => () =>
-  agent(\`Review the uncommitted diff in this repository for \${area} bugs. Report only real defects, each with file and line.\`, { label: area, phase: "Review", profile: "reviewer", schema: BUGS })));
-phase("Verify");
-const bugs = found.flatMap((review) => review?.bugs ?? []);
-const verdicts = await parallel(bugs.map((bug) => () => agent(\`Check this reported bug against the code and decide whether it is real: \${bug}\`, { profile: "reviewer", schema: VERDICT })));
-return bugs.filter((_, index) => verdicts[index]?.real);`;
+Example (find by dimension, merge reports by location, then three reviewer refuters per location and a majority vote):
+${workflowToolExample}`;
 
 const SAVED_LISTED = 20;
 const SAVED_TEXT_CHARS = 200;
@@ -255,11 +273,35 @@ const fail = (action: WorkflowToolAction, error: WorkflowToolError): WorkflowToo
   };
 };
 
+/** A status call's result: a repeat's short answer while nothing changed, or the full status. */
+const statusResult = (status: WorkflowToolStatus, now: number): WorkflowToolResult => {
+  switch (status.kind) {
+    case "recorded":
+      return succeed("status", workflowRecordedStatusText(status.run, now), {
+        run: workflowRecordedRunSummary(status.run),
+      });
+    case "unchanged":
+      return succeed("status", workflowUnchangedStatusText(status.run, status.sinceMs), {
+        run: workflowRunSummary(status.run),
+        unchanged: true,
+      });
+    case "view":
+      return succeed("status", workflowStatusText(status.run, now, status.attention), {
+        run: workflowRunSummary(status.run),
+      });
+  }
+};
+
 const executeWorkflowTool = <Args>(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
-  args: Args & { readonly action: WorkflowToolAction },
+  args: Args & {
+    readonly action?: WorkflowToolAction | undefined;
+    readonly script?: string | undefined;
+    readonly name?: string | undefined;
+    readonly scriptPath?: string | undefined;
+  },
 ) =>
   Effect.gen(function* () {
     const request = yield* decodeWorkflowToolRequest(args);
@@ -270,20 +312,14 @@ const executeWorkflowTool = <Args>(
         const run = yield* workflows.start(request.start, host);
         return succeed("start", workflowStartText(run), { run: workflowRunSummary(run) });
       }
-      case "status": {
-        const status = yield* workflows.status(request.runId);
-        const now = yield* Clock.currentTimeMillis;
-        return status.kind === "recorded"
-          ? succeed("status", workflowRecordedStatusText(status.run, now), {
-              run: workflowRecordedRunSummary(status.run),
-            })
-          : succeed("status", workflowStatusText(status.run, now, status.attention), {
-              run: workflowRunSummary(status.run),
-            });
-      }
+      case "status":
+        return statusResult(
+          yield* workflows.toolStatus(request.runId),
+          yield* Clock.currentTimeMillis,
+        );
       case "stop": {
         const run = yield* workflows.stop(request.runId, "tool");
-        const text = workflowStatusText(run, yield* Clock.currentTimeMillis);
+        const text = workflowStopText(run, yield* Clock.currentTimeMillis);
         return succeed("stop", text, { run: workflowRunSummary(run) });
       }
       case "list": {
@@ -296,9 +332,15 @@ const executeWorkflowTool = <Args>(
         });
       }
     }
-  }).pipe(Effect.catch((error) => Effect.succeed(fail(args.action, error))));
+  }).pipe(
+    // A call without a recognizable action fails as a start, the default action.
+    Effect.catch((error) => Effect.succeed(fail(workflowToolAction(args) ?? "start", error))),
+  );
 
-/** Registers the root-only, model-only workflow runner tool. */
+/**
+ * Registers the root-only, model-only workflow runner tool, inactive: the application activates
+ * it only while the user has opted into workflows with ultracode.
+ */
 export function registerWorkflowTool(pi: ExtensionAPI, runtime: WorkflowToolRuntime): void {
   const tool = defineTool<typeof WorkflowToolParameters, WorkflowToolDetails, WorkflowRenderState>({
     name: WORKFLOW_TOOL_NAME,
@@ -310,10 +352,11 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtime: WorkflowToolRunt
     promptSnippet:
       "Run planned multi-agent JavaScript workflows in the background and get one result notification",
     promptGuidelines: [
-      "For planned fan-out or multi-stage work that needs more than a few subagents, write one subagent_workflow script instead of starting and awaiting agents one by one, then continue other work until its notification arrives.",
+      "For planned fan-out or multi-stage work that needs more than a few subagents, write one subagent_workflow script instead of starting and awaiting agents one by one. After starting it, finish any unrelated work and end your turn: its notification starts your next turn with the result. Don't poll status or stop the run to finish sooner.",
       "To fix a failed workflow, adjust one you stopped yourself, or extend a completed one, edit its script and start it again with resumeFromRunId so unchanged agents are reused. A run the user stopped stays stopped unless they ask for it again.",
     ],
     exposure: "model-only",
+    defaultActive: false,
     parameters: WorkflowToolParameters,
     execute: (_id, args, signal, _onUpdate, ctx) =>
       runtime.run(executeWorkflowTool(pi, ctx, runtime.environment, args), signal),

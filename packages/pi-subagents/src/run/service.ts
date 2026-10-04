@@ -26,7 +26,7 @@ import {
   SubagentNotFoundError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
-import { makeQueuedStartChecks, makeRunAdmissionSignal } from "./admission-signal.ts";
+import { makeQueuedWriterCheck, makeRunAdmissionSignal } from "./admission-signal.ts";
 import { makeRunAssignment } from "./assignment.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
 import { makeRunPeerNotifier } from "./coordination.ts";
@@ -244,9 +244,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   let nextAssignmentAttemptOrdinal = 1;
   let closed = false;
   const questionnaires = makeQuestionnaireLifetimes(() => closed);
-  // Workspace launch slots join the signal once workspace control exists below.
-  let launchSlotHoldings = (): Iterable<string> => [];
-  const admission = makeRunAdmissionSignal(records, writerPools, () => launchSlotHoldings());
+  const admission = makeRunAdmissionSignal(records, writerPools);
   const recheckAdmission = Effect.sync(admission.observe);
 
   // Every locked section ends with an admission check, so a claim taken under the lock is in
@@ -491,7 +489,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...(options.workspaceSourceCwd && { sourceCwd: options.workspaceSourceCwd }),
     isClosed: () => closed,
   });
-  launchSlotHoldings = workspaces.launchSlotHoldings;
 
   const delivery = yield* makeRunNotificationDelivery({
     ...runContext,
@@ -707,10 +704,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       .validate(request, scriptedRoot)
       .pipe(
         Effect.andThen(
-          workspaces.withLaunch(
-            request,
-            (prepared) => launch.start(prepared, scriptedRoot, ownership),
-            { runId: ownership?.runId },
+          workspaces.withLaunch(request, (prepared) =>
+            launch.start(prepared, scriptedRoot, ownership),
           ),
         ),
       );
@@ -762,12 +757,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       ),
     stop,
   });
-  const queuedStarts = makeQueuedStartChecks({
-    ...runContext,
-    heldLaunchSlots: (caller) => workspaces.heldLaunchSlots(caller),
-    launchSlotHeldBy: workspaces.launchSlotHeldBy,
-    withSessionNesting,
-  });
+  const queuedWriterConflict = makeQueuedWriterCheck(runContext);
 
   const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (
     request,
@@ -869,9 +859,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     waitForRevision,
     admissionRevision: admission.current,
     waitForAdmissionChange: admission.waitForChange,
-    queuedStartsAdmissible: queuedStarts.admissible,
-    queuedWriterConflict: queuedStarts.writerConflict,
-    rootChildLimit,
+    queuedWriterConflict,
     workspaceBindingStatus: workspaces.workspaceBindingStatus,
   };
 

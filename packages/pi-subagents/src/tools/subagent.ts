@@ -244,8 +244,9 @@ export function registerSubagentTools(
     return owned;
   };
 
-  // V1 script orchestration stays at root and follows the scripted-workflows setting.
-  const scriptsEnabled = !runtime.proxyCall && runtime.scriptedWorkflows !== false;
+  // Native codemode may batch the root orchestration tools; proxied child registrations stay
+  // model-only. Ultracode gates only subagent_workflow.
+  const scriptsEnabled = !runtime.proxyCall;
   const register = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     // Judgment tools remain model-issued; the structured contract stays for model calls too.

@@ -23,6 +23,7 @@
   "files": [
     "index.ts",
     "src/",
+    "skills/",
     "docs/",
     "README.md",
     "ARCHITECTURE.md",
@@ -85,6 +86,7 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "skills": []
   }
 }

@@ -6,8 +6,9 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
 
 ## Modules
 
-- `service.ts` is the session-scoped `WorkflowService` (`start`, `stop`, `skip`, `status`, `list`).
+- `service.ts` is the session-scoped `WorkflowService` (`start`, `stop`, `skip`, `status`, `toolStatus`, `list`).
   It validates a start, registers the run, forks one run fiber per run into a `FiberMap`, and ends each run in `finish`.
+  `toolStatus` serves only the main agent's `subagent_workflow` status call: `status-repeat.ts` remembers that agent's last call per live run and turns a repeat within a minute with nothing material changed into an `unchanged` answer; `finish` forgets the run.
   `errors.ts` holds its tagged errors.
 - `runs.ts` keeps every run view in one `SynchronizedRef`, together with the live runs' controls (skips, stop signal, journal lock), and coalesces publishes to the host's synchronous Activity bridge.
 - `source.ts` loads inline scripts, saved workflows, script files, nested `workflow()` references, and resume replays, and reserves run ids for planned agents.
@@ -44,8 +45,7 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
 - `layer.ts` builds `WorkflowService` on `SubagentService`, so on replacement or shutdown the workflow finalizers run first, in reverse acquisition order:
   1. the Activity publisher's closed flag, so a closing session publishes nothing and a pending publish is dropped;
   2. delivery's closed flag, then the interruption of background deliveries;
-  3. the run fibers, whose own finalizers stop their agents while the subagent service is still open;
-  4. last, the capacity queue's watcher.
+  3. last, the run fibers, whose own finalizers stop their agents while the subagent service is still open.
 - A torn-down run is recorded as `interrupted` and left open in the journal, so the next activation announces it.
 
 ## Sandbox and host calls
@@ -90,26 +90,23 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
 
 ## Admission
 
-- `admission-queue.ts` holds FIFO grants ordered by queue time, then by the call's rank among its run's calls queued at that time, then by run start order, so runs at equal times alternate.
-  Each run has its own slot queue, sized by `workflowRunConcurrency`, and the session has one capacity queue.
-- The service creates the capacity queue first, so its watcher fiber, which pumps the queue on every admission-revision change, outlives every run fiber.
+- `admission-queue.ts` holds each run's own slots, `workflowConcurrency` of them (`min(16, max(1, CPUs − 2))`, or the service's `concurrency` option), granted in order of queue time, then the call's rank among its run's calls queued at that time.
+  A call back from a writer wait keeps its order, so it goes ahead of later calls.
 - In `admission.ts`, a call first holds one of its run's slots and resolves its launch once.
-  A cheap `queuedWriterConflict` check runs before any attempt.
-- Each start attempt then waits in the capacity queue, which grants starts in queue order only as far as the root's `queuedStartsAdmissible` allows.
-  A grant lasts until its start settles; the root counts it by the call's reserved run id only until the start holds a launch slot, an eviction claim, or a record of its own.
-- A start refused for capacity waits again in its place.
+  A cheap `queuedWriterConflict` check runs before every start attempt.
+- The start itself holds that slot, raced against budget exhaustion; the root applies no direct-child limit to it.
   A transient writer conflict (`SubagentWriterConflictError.transient`) gives the slot back and waits, holding nothing.
   A change in that writer's paused state only updates the waiting reason.
   After each admission-revision release it asks `queuedWriterConflict` again, and once no transient conflict remains it waits for a run slot again.
   Other refusals resolve the call to `null` with a warning.
-- On the root side, `run/admission-signal.ts` keeps an admission revision that advances only when a holding that can refuse a start is released: a process slot, writer slot, file a writer or retry claims, unfinished cleanup, retry or eviction claim, unavailable writer pool, or a worktree launch's held direct-child slot.
+- On the root side, `run/admission-signal.ts` keeps an admission revision that advances only when a holding that can end a writer conflict is released: a writer slot, file a writer or retry claims, unfinished cleanup, retry or eviction claim, or unavailable writer pool.
   The service rechecks it on every exit from the run lock and every publication; release points outside both call `RunContext.recheckAdmission`.
-- `queuedStartsAdmissible` and `queuedWriterConflict` check under the run lock, without validation, backend resolution, or preflight.
-  They count only holdings whose release advances the revision, and only conflicts that clear by themselves, so they never keep waiting a start that a full start would admit.
-- Main-agent reserve: workflow starts (`request.workflow`) leave `WORKFLOW_ROOT_RESERVE` (2) root slots free for the main agent while another workflow agent holds a slot or a let-through start is pending, in launch admission, the worktree pre-check, and the queued-start checks alike.
-  A workflow agent holds a slot through its run, or through the launch slot of a worktree it is still creating (`LaunchSlot.workflow`), so a reader of another run can't take the reserve meanwhile.
-  With no workflow agent holding a slot, one may take any free slot.
-  The main agent's own starts ignore the reserve, and `workflowRunConcurrency` keeps each run within the slots workflow agents may hold.
+- `queuedWriterConflict` checks under the run lock, without validation, backend resolution, or preflight.
+  It reports only conflicts that clear by themselves, with a release that advances the revision, so it never keeps waiting a start that a full start would admit.
+- Own concurrency: workflow starts (`request.workflow`) are exempt from the root's `maxDirectChildren`, and a run its workflow still owns (`workflowOwned`: its view keeps that `workflow` placement and its owner is live) occupies no root direct-child slot, so the main agent's own starts count only non-workflow children.
+  This holds in launch admission, the worktree pre-check, eviction claims (a workflow start's claim names no parent) and resume of a paused workflow agent; a workflow writer's worktree launch holds no launch slot.
+  Once its workflow relinquishes a run, a later resume counts it as an ordinary root child.
+  Subagents a workflow agent starts are its own children, under the usual depth and direct-child limits.
 
 ## Token budget
 
@@ -145,6 +142,7 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
 - `journal.ts` keeps `agent()` results for resume in a process-global `Symbol.for` slot (`workflow-journal/v3`), the module's only `globalThis` property, so journals survive `/reload` and `/tree`.
 - Journals are keyed by Pi session id: at most 16 sessions, and per session the 32 most recent runs and 16 MiB of result text, never dropping an open run or the newest closed one.
 - A run stays open until Pi accepts its notification, or closes at once when it needs none.
+  The service's run observer hears when a run opens, at start or when its interrupted notice is posted, and when it closes, with whether the agent run under way or the one its notification starts handles the outcome, or the next one, for a notice that waits for the next turn (a stopped or interrupted run's); the application's ultracode window keeps `subagent_workflow` active in between and through that agent run.
   The next activation of the same session reports runs still open as `interrupted` before opening its own, and each stays open until its notice is accepted, so a notice lost to another teardown is posted again.
 - Without a session id, journals last only for the activation and runs keep no record.
 
@@ -204,7 +202,7 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
 ## Owned runs
 
 - `run/owned-runs.ts` owns the registry of in-process owners, such as workflow runs, and their claims on reports.
-- `startOwned` admits an ordinary root child carrying `workflow` membership.
+- `startOwned` admits a root child carrying `workflow` membership, which takes no root direct-child slot while its owner holds it.
   Under the admission lock, launch claims completion generation 1 for the owner before the record is registered, so root delivery never selects it, and the claim is bound to the caller's scope.
 - `awaitOwned` waits through questions and pauses, then consumes the generation in the same locked step that reads it.
   The outcome carries the run's usage and its tool-use count, which `run/events.ts` raises on each recorded tool start.

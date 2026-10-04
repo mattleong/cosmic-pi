@@ -22,6 +22,7 @@ import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 import { WorkflowJournal } from "./workflow/journal.ts";
 import type { WorkflowActivitySink } from "./workflow/runs.ts";
+import type { WorkflowRunObserver } from "./workflow/run-observer.ts";
 import { WorkflowService } from "./workflow/service.ts";
 import { WorkflowStore } from "./workflow/store.ts";
 
@@ -51,6 +52,8 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly isProjectTrusted?: (() => boolean) | undefined;
   readonly publish: (projection: SubagentProjection) => void;
   readonly workflowActivity?: WorkflowActivitySink | undefined;
+  /** Follows which workflow runs still need the main agent, which keeps workflows available. */
+  readonly workflowObserver?: WorkflowRunObserver | undefined;
   readonly notify: SubagentNotifier;
   readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
   readonly questionnaireHandler?: SubagentServiceOptions["questionnaireHandler"] | undefined;
@@ -102,6 +105,7 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   // Built on the subagent service, so its runs are interrupted before that service stops.
   const workflows = WorkflowService.layer({
     ...(options.workflowActivity && { activity: options.workflowActivity }),
+    ...(options.workflowObserver && { observer: options.workflowObserver }),
     notify: options.notify,
     sessionKey: options.sessionKey,
   }).pipe(

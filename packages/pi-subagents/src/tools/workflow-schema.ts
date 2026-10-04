@@ -12,6 +12,21 @@ export const WORKFLOW_TOOL_NAME = "subagent_workflow";
 export const WORKFLOW_TOOL_ACTIONS = ["start", "status", "stop", "list"] as const;
 export type WorkflowToolAction = (typeof WORKFLOW_TOOL_ACTIONS)[number];
 
+/**
+ * The action a call asks for. Like Claude Code's Workflow tool, a call that names a script, a
+ * saved workflow or a script file without an action starts it.
+ */
+export const workflowToolAction = (args: {
+  readonly action?: WorkflowToolAction | undefined;
+  readonly script?: string | undefined;
+  readonly name?: string | undefined;
+  readonly scriptPath?: string | undefined;
+}): WorkflowToolAction | undefined =>
+  args.action ??
+  (args.script !== undefined || args.name !== undefined || args.scriptPath !== undefined
+    ? "start"
+    : undefined);
+
 const RUN_ID_MAX_CHARS = 128;
 const PATH_MAX_CHARS = 4_096;
 const BUDGET_MAX = Number.MAX_SAFE_INTEGER;
@@ -20,10 +35,12 @@ const BUDGET_MAX = Number.MAX_SAFE_INTEGER;
 // per-action rules are checked at runtime.
 export const WorkflowToolParameters = Type.Object(
   {
-    action: StringEnum(WORKFLOW_TOOL_ACTIONS, {
-      description:
-        "start runs a script in the background; status and stop take runId; list shows saved workflows and this session's runs.",
-    }),
+    action: Type.Optional(
+      StringEnum(WORKFLOW_TOOL_ACTIONS, {
+        description:
+          "start runs a script in the background (the default when script, name or scriptPath is given); status and stop take runId; list shows saved workflows and this session's runs.",
+      }),
+    ),
     script: Type.Optional(
       Type.String({
         description:
@@ -75,7 +92,8 @@ const Text = (maximum: number) =>
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 
 const StartInputSchema = Schema.Struct({
-  action: Schema.Literal("start"),
+  // Like Claude Code's Workflow tool, a start may leave the action out.
+  action: Schema.optional(Schema.Literal("start")),
   script: Schema.optional(Text(WORKFLOW_SCRIPT_MAX_CHARS)),
   name: Schema.optional(Text(64)),
   scriptPath: Schema.optional(Text(PATH_MAX_CHARS)),
@@ -146,7 +164,7 @@ export const decodeWorkflowToolRequest = <Input>(
     if (Option.isSome(decodeList(input))) return Effect.succeed({ action: "list" as const });
     return Effect.fail(
       inputError(
-        'Invalid subagent_workflow arguments: "start" takes script, name, or scriptPath with optional args, resumeFromRunId and budget (a positive whole number of output tokens); "status" and "stop" take only runId; "list" takes nothing else.',
+        'Invalid subagent_workflow arguments: "start" (the default action) takes script, name, or scriptPath with optional args, resumeFromRunId and budget (a positive whole number of output tokens); "status" and "stop" take only runId; "list" takes nothing else.',
       ),
     );
   });
@@ -185,6 +203,11 @@ export const WorkflowToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literals(WORKFLOW_TOOL_ACTIONS),
   run: Schema.optional(WorkflowRunSummarySchema),
+  /**
+   * Set on a status repeated within a minute while nothing material changed, whose text is one
+   * line of counts and a reminder not to poll instead of the full status.
+   */
+  unchanged: Schema.optional(Schema.Boolean),
   saved: Schema.optional(Count),
   diagnostics: Schema.optional(Count),
   runs: Schema.optional(Count),

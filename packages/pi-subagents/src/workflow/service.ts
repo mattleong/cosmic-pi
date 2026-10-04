@@ -11,18 +11,14 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { synchronousRandomHex } from "pi-cosmic-core";
+import { invokeHostCallback, synchronousRandomHex } from "pi-cosmic-core";
 import { runWorkflowSandbox, type WorkflowSandboxOutcome } from "../boundary/codemode-sandbox.ts";
 import { nodeAvailableParallelism } from "../boundary/node-builtins.ts";
 import { saveWorkflowResult } from "../boundary/workflow-result-file.ts";
 import type { WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import { SubagentService } from "../run/service.ts";
 import type { WorkflowHost } from "./agent.ts";
-import {
-  makeWorkflowCapacity,
-  makeWorkflowSlots,
-  makeWorkflowWaitOrder,
-} from "./admission-queue.ts";
+import { makeWorkflowSlots, makeWorkflowWaitOrder } from "./admission-queue.ts";
 import { requireStartArgs } from "./args.ts";
 import { workflowViewStatus, type WorkflowViewStatus } from "./attention.ts";
 import { makeWorkflowBudget } from "./budget.ts";
@@ -33,7 +29,6 @@ import {
   emptyWorkflowUsage,
   isWorkflowRunFinished,
   workflowConcurrency,
-  workflowRunConcurrency,
   type WorkflowFailure,
   type WorkflowResult,
   type WorkflowRunView,
@@ -47,6 +42,11 @@ import {
   workflowValueText,
 } from "./notification.ts";
 import { makeWorkflowRecovery } from "./recovery.ts";
+import {
+  notificationHandoff,
+  type WorkflowRunHandoff,
+  type WorkflowRunObserver,
+} from "./run-observer.ts";
 import { WORKFLOW_RUN_FILES_REFRESH_MS, type WorkflowRecordedRun } from "./run-record.ts";
 import { makeWorkflowRunRecordWriter } from "./run-record-writer.ts";
 import {
@@ -57,6 +57,7 @@ import {
 } from "./runs.ts";
 import { workflowPlannedAgents, type WorkflowScriptError } from "./script.ts";
 import { makeWorkflowSkip } from "./skip.ts";
+import { makeWorkflowStatusRepeats, type WorkflowUnchangedStatus } from "./status-repeat.ts";
 import { makeWorkflowSources, type WorkflowSourceRequest } from "./source.ts";
 import {
   concludeWorkflow,
@@ -85,6 +86,9 @@ export type WorkflowStatus =
   | WorkflowViewStatus
   | { readonly kind: "recorded"; readonly run: WorkflowRecordedRun };
 
+/** What the main agent's own status call gets: the status, or a repeat's short answer. */
+export type WorkflowToolStatus = WorkflowStatus | WorkflowUnchangedStatus;
+
 export interface WorkflowServiceContract {
   /** Validates the source and starts the run in the background; returns its first view. */
   readonly start: (
@@ -101,6 +105,12 @@ export interface WorkflowServiceContract {
     origin?: WorkflowStopOrigin,
   ) => Effect.Effect<WorkflowRunView, WorkflowNotFoundError>;
   readonly status: (runId: string) => Effect.Effect<WorkflowStatus, WorkflowNotFoundError>;
+  /**
+   * Status for the main agent's subagent_workflow call: a live run with nothing material changed
+   * since that agent's previous call, within a minute, comes back unchanged instead, so polling
+   * gets a short answer (see `status-repeat.ts`). Other callers use `status`.
+   */
+  readonly toolStatus: (runId: string) => Effect.Effect<WorkflowToolStatus, WorkflowNotFoundError>;
   readonly list: Effect.Effect<ReadonlyArray<WorkflowRunView>>;
   /**
    * Resolves a queued or running workflow agent to null, by its subagent run id, or skips a planned
@@ -113,16 +123,14 @@ export interface WorkflowServiceOptions {
   /** Synchronous host bridge for Activity; stages every change and gets coalesced publishes. */
   readonly activity?: WorkflowActivitySink | undefined;
   readonly notify?: WorkflowNotify | undefined;
-  /**
-   * Agents one run executes at once; defaults from the CPU count. Each run also stays within
-   * the root slots workflow agents may hold.
-   */
+  /** Agents one run executes at once; defaults from the CPU count (`workflowConcurrency`). */
   readonly concurrency?: number | undefined;
   /**
    * The Pi session id run records are written under and must name to be resumed, announced or
    * described after a restart; without one, runs keep no record.
    */
   readonly sessionKey?: string | undefined;
+  readonly observer?: WorkflowRunObserver | undefined;
 }
 
 /** A starting run's private files, or the warning it logs instead. */
@@ -141,16 +149,16 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     options.concurrency ?? workflowConcurrency(nodeAvailableParallelism()),
   );
   // Finalizers run in reverse: Activity publishes and the closed flag first, then deliveries,
-  // then run fibers, whose own finalizers stop their agents while the subagent service is still
-  // open, and last the capacity queue's watcher. Keep this order.
-  const capacity = yield* makeWorkflowCapacity(subagents);
+  // and last run fibers, whose own finalizers stop their agents while the subagent service is
+  // still open. Keep this order.
   const fibers = yield* FiberMap.make<string>();
   const delivery = yield* makeWorkflowDelivery(options.notify);
   const runs = yield* makeWorkflowRuns(options.activity);
   const records = makeWorkflowRunRecordWriter({ store, runs, sessionKey: options.sessionKey });
   const recovery = makeWorkflowRecovery({ store, sessionKey: options.sessionKey });
   const sources = makeWorkflowSources({ store, journal, recovery, subagents, runs });
-  const members = makeWorkflowMembers({ runs, subagents, journal, store, sources, capacity });
+  const members = makeWorkflowMembers({ runs, subagents, journal, store, sources });
+  const repeats = makeWorkflowStatusRepeats();
   // Clock-derived, so run ids stay unique across reloads that share a session's journals, and
   // random, so Pi processes that start in the same millisecond don't share run directories.
   const activatedAt = (yield* Clock.currentTimeMillis).toString(36);
@@ -174,8 +182,19 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       return { ...fitted, ...(path !== undefined && { path }) } satisfies WorkflowResult;
     });
 
+  /** Tells the observer about a run; a failing host callback can't affect the run. */
+  const observe = (tell: (observer: WorkflowRunObserver) => void) =>
+    Effect.sync(() => {
+      const observer = options.observer;
+      if (observer) invokeHostCallback(() => tell(observer), undefined);
+    });
+
   /** Closes a run once Pi accepted its report or notice, or when it needs none. */
-  const closeRun = (id: string) => journal.finish(id).pipe(Effect.andThen(records.notified(id)));
+  const closeRun = (id: string, handoff: WorkflowRunHandoff) =>
+    observe((observer) => observer.closed(id, handoff)).pipe(
+      Effect.andThen(journal.finish(id)),
+      Effect.andThen(records.notified(id)),
+    );
 
   /** Runs once the script's scope has closed, so every agent call has already settled. */
   const finish = (id: string, exit: Exit.Exit<WorkflowSandboxOutcome>) =>
@@ -202,13 +221,16 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       const finished = yield* runs.update(id, (run) =>
         finishWorkflowRun(run, conclusion, result, at),
       );
+      // Once the view is final, a later status call can't note the run as live again.
+      repeats.forget(id);
       yield* runs.mutate(retainWorkflowRuns);
       if (finished) yield* records.end(finished, tornDown);
       if (tornDown) return;
       // A teardown before Pi accepts the report then says how the run ended.
       if (finished && isWorkflowRunFinished(finished.state))
         yield* journal.noteEnded(id, finished.state);
-      yield* delivery.report(finished && workflowNotification(finished), closeRun(id));
+      const notification = finished && workflowNotification(finished);
+      yield* delivery.report(notification, closeRun(id, notificationHandoff(notification)));
     });
 
   /**
@@ -293,9 +315,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
         request.resumeFromRunId === undefined
           ? undefined
           : yield* sources.resumeReplay(request.resumeFromRunId);
-      const slots = makeWorkflowSlots(
-        workflowRunConcurrency(concurrency, yield* subagents.rootChildLimit),
-      );
+      const slots = makeWorkflowSlots(concurrency);
       const startedAt = yield* Clock.currentTimeMillis;
       const ordinal = nextRunOrdinal++;
       const id = `wf-${namespace}-${ordinal}`;
@@ -349,6 +369,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
             journal: { written: false, warned: false, results: 0 },
           };
           runs.controls.add(id, control);
+          yield* observe((observer) => observer.opened(id));
           yield* FiberMap.run(
             fibers,
             id,
@@ -360,7 +381,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
                 host,
                 replay,
                 slots,
-                order: makeWorkflowWaitOrder(ordinal),
+                order: makeWorkflowWaitOrder(),
                 budget,
                 control,
                 files: saved.files,
@@ -427,8 +448,24 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       return yield* workflowNotFound(id);
     });
 
-  const announce = (interrupted: WorkflowInterruptedRun) =>
-    delivery.report(interruptedWorkflowNotification(interrupted), closeRun(interrupted.runId));
+  const toolStatus: WorkflowServiceContract["toolStatus"] = (id) =>
+    Effect.gen(function* () {
+      const found = yield* status(id);
+      if (found.kind !== "view") return found;
+      const now = yield* Clock.currentTimeMillis;
+      const sinceMs = yield* Effect.sync(() => repeats.note(found, now));
+      if (sinceMs === undefined) return found;
+      return { kind: "unchanged", run: found.run, sinceMs } satisfies WorkflowUnchangedStatus;
+    });
+
+  const announce = (interrupted: WorkflowInterruptedRun) => {
+    const notice = interruptedWorkflowNotification(interrupted);
+    return observe((observer) => observer.opened(interrupted.runId)).pipe(
+      Effect.andThen(
+        delivery.report(notice, closeRun(interrupted.runId, notificationHandoff(notice))),
+      ),
+    );
+  };
 
   /** A run memory holds is closed instead when another Pi process of the session announced it. */
   const announceRemembered = (interrupted: WorkflowInterruptedRun) =>
@@ -436,7 +473,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       .noticeAccepted(interrupted.runId)
       .pipe(
         Effect.flatMap((accepted) =>
-          accepted ? closeRun(interrupted.runId) : announce(interrupted),
+          accepted ? closeRun(interrupted.runId, "next-turn") : announce(interrupted),
         ),
       );
 
@@ -456,6 +493,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     start,
     stop,
     status,
+    toolStatus,
     list: runs.list,
     skip: makeWorkflowSkip(runs),
   });

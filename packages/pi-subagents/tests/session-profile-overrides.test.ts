@@ -14,6 +14,7 @@ import {
   decodeSessionProfileOverrideSeed,
   makeSessionProfileSnapshot,
   MAX_SESSION_PROFILE_REVISION,
+  patchSessionFeatureSnapshot,
   patchSessionProfileSnapshot,
   replaceSessionProfileSnapshot,
   sessionProfileSeed,
@@ -670,27 +671,89 @@ describe("session profile overrides", () => {
     }),
   );
 
-  it.effect("keeps session edits across reload while adopting reloaded workflow settings", () =>
+  it.effect("keeps session edits across reload while adopting reloaded saved switches", () =>
     Effect.gen(function* () {
-      const withWorkflows = (scriptedWorkflows: boolean) =>
+      const withUltracode = (ultracode: boolean) =>
         resolveTestConfig({
           version: 6,
           defaultProfileSet: "default",
           profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
-          scriptedWorkflows,
+          ultracode,
         });
-      const initial = makeSessionProfileSnapshot(withWorkflows(true));
+      const initial = makeSessionProfileSnapshot(withUltracode(true));
       const edited = yield* patchSessionProfileSnapshot(initial, {
         profile: "worker",
         route: route("openai/session"),
         expectedRevision: 0,
       });
-      expect(edited.effectiveConfig.scriptedWorkflows).toBe(true);
+      expect(edited.effectiveConfig.ultracode).toBe(true);
 
-      const reloaded = makeSessionProfileSnapshot(withWorkflows(false), sessionProfileSeed(edited));
-      expect(reloaded.effectiveConfig.scriptedWorkflows).toBe(false);
+      const reloaded = makeSessionProfileSnapshot(withUltracode(false), sessionProfileSeed(edited));
+      expect(reloaded.effectiveConfig.ultracode).toBe(false);
       expect(reloaded.effectiveConfig.profileSources.worker).toBe("session");
       expect(reloaded.effectiveConfig.profiles.worker.candidates[0]?.model).toBe("openai/session");
+    }),
+  );
+
+  it.effect("sets and clears the session's own ultracode over the saved value", () =>
+    Effect.gen(function* () {
+      const saved = resolveTestConfig({ version: 6, ultracode: true });
+      const service = yield* makeSubagentProfileService(saved);
+      const off = yield* service.patchSessionFeature({
+        toggle: "ultracode",
+        enabled: false,
+        expectedRevision: 0,
+      });
+      expect(off.effectiveConfig).toMatchObject({
+        ultracode: false,
+        featureSources: { ultracode: "session" },
+      });
+      // A repeated value changes nothing, so a stale revision isn't needed for it.
+      expect(
+        (yield* service.patchSessionFeature({
+          toggle: "ultracode",
+          enabled: false,
+          expectedRevision: off.revision,
+        })).revision,
+      ).toBe(off.revision);
+      expect(
+        Exit.isFailure(
+          yield* Effect.exit(
+            service.patchSessionFeature({
+              toggle: "ultracode",
+              enabled: true,
+              expectedRevision: 0,
+            }),
+          ),
+        ),
+      ).toBe(true);
+
+      const cleared = yield* service.patchSessionFeature({
+        toggle: "ultracode",
+        expectedRevision: off.revision,
+      });
+      expect(cleared.effectiveConfig).toMatchObject({
+        ultracode: true,
+        featureSources: { ultracode: "global" },
+      });
+    }),
+  );
+
+  it.effect("carries the session's ultracode through tree and reload handoffs", () =>
+    Effect.gen(function* () {
+      const initial = makeSessionProfileSnapshot(resolveTestConfig({ version: 6 }));
+      const on = yield* patchSessionFeatureSnapshot(initial, {
+        toggle: "ultracode",
+        enabled: true,
+        expectedRevision: 0,
+      });
+      const handedOff = decodeSessionProfileOverrideSeed(sessionProfileSeed(on));
+      expect(handedOff?.features).toEqual({ ultracode: true });
+      const restored = makeSessionProfileSnapshot(resolveTestConfig({ version: 6 }), handedOff);
+      expect(restored.effectiveConfig.ultracode).toBe(true);
+      expect(
+        decodeSessionProfileOverrideSeed({ revision: 0, overrides: {}, features: { other: true } }),
+      ).toBeUndefined();
     }),
   );
 });

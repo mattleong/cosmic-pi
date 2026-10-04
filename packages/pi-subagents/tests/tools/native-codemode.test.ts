@@ -427,33 +427,3 @@ describe("profile selection in native sessions", () => {
       15_000,
     );
 });
-
-describe("scripted workflow exposure", () => {
-  it.live(
-    "keeps every coordinator tool model-only when scripted workflows are off",
-    () =>
-      Effect.gen(function* () {
-        const requests: StartSubagentRequest[] = [];
-        const h = yield* nativeCodemodeSession(capturingService(requests), {
-          scriptedWorkflows: false,
-        });
-        expect(
-          h.session.getCallableToolNames().filter((name) => name.startsWith("subagent_")),
-        ).toEqual([]);
-        expect(h.session.getActiveToolNames()).toEqual(
-          expect.arrayContaining(["subagent_start", "subagent_await", "subagent_status"]),
-        );
-        const scripted = yield* h.run(
-          "await tools.subagent_start({agents:[{task:'Map the entry points',profile:'scout'}]});",
-        );
-        expect(scripted.isError).toBe(true);
-        expect(requests).toEqual([]);
-        const direct = yield* h.call("subagent_start", {
-          agents: [{ task: "Map the entry points", profile: "scout" }],
-        });
-        expect(direct.isError).toBe(false);
-        expect(requests.map((request) => request.profile)).toEqual(["scout"]);
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
-});

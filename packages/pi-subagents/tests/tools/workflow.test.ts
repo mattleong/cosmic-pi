@@ -1,6 +1,7 @@
 // Promise assertions are test-runner boundaries.
 import { describe, expect, it } from "@effect/vitest";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -18,18 +19,34 @@ import {
   workflowToolDescription,
   type WorkflowToolRuntime,
 } from "../../src/tools/workflow.ts";
-import { workflowListText, workflowRunSummary } from "../../src/tools/workflow-format.ts";
+import {
+  WORKFLOW_END_TURN_TEXT,
+  WORKFLOW_STOP_GUIDANCE,
+  workflowListText,
+  workflowRunSummary,
+} from "../../src/tools/workflow-format.ts";
 import {
   workflowCompactSummary,
   type WorkflowToolArgs,
 } from "../../src/tools/workflow-presentation.ts";
+import { countWorkflowRunAgents, type WorkflowRunView } from "../../src/workflow/model.ts";
 import { WORKFLOW_BUDGET_ERROR } from "../../src/workflow/prelude.ts";
+import { WorkflowService } from "../../src/workflow/service.ts";
+import { WORKFLOW_STATUS_REPEAT_MS } from "../../src/workflow/status-repeat.ts";
 import { workflowRunView } from "../fixtures/run-view.ts";
 import {
   decodeWorkflowToolDetails,
   type WorkflowToolDetails,
 } from "../../src/tools/workflow-schema.ts";
-import { memoryLocations, script, workflowFixture } from "../workflow/fixtures/workflow-harness.ts";
+import {
+  inline,
+  memoryLocations,
+  reportTask,
+  runWhere,
+  script,
+  testHost,
+  workflowFixture,
+} from "../workflow/fixtures/workflow-harness.ts";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -46,10 +63,39 @@ const registeredTool = (runtime: WorkflowToolRuntime = renderOnly) => {
   return tool!;
 };
 
-/** The registered tool over the real workflow and subagent services. */
-const liveTool = (scripts: Readonly<Record<string, string>> = {}) => {
+/** The live clock moved ahead by `shift.ms`, so a test can jump past a window; sleeps stay live. */
+const shiftedClock = (live: Clock.Clock, shift: { ms: number }): Clock.Clock => {
+  const millis = () => live.currentTimeMillisUnsafe() + shift.ms;
+  const nanos = () => live.currentTimeNanosUnsafe() + BigInt(shift.ms) * 1_000_000n;
+  return {
+    currentTimeMillisUnsafe: millis,
+    currentTimeMillis: Effect.sync(millis),
+    currentTimeNanosUnsafe: nanos,
+    currentTimeNanos: Effect.sync(nanos),
+    monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: live.monotonicTimeNanos,
+    sleep: (duration) => live.sleep(duration),
+  };
+};
+
+/**
+ * The registered tool over the real workflow and subagent services, with `clock` as the wall
+ * clock when given. `startRun` starts an inline script on the service directly, whose agents the
+ * harness's host launches, so a test can report them.
+ */
+const liveTool = (scripts: Readonly<Record<string, string>> = {}, clock?: Clock.Clock) => {
   const fixture = workflowFixture({ scripts });
-  const runtime = ManagedRuntime.make(Layer.merge(fixture.layer, fixture.backend.layer));
+  const services = Layer.merge(fixture.layer, fixture.backend.layer);
+  const runtime = ManagedRuntime.make(
+    clock === undefined ? services : Layer.merge(services, Layer.succeed(Clock.Clock, clock)),
+  );
+  const onService = <A, E>(
+    effect: (workflows: typeof WorkflowService.Service) => Effect.Effect<A, E>,
+  ) => Effect.promise(() => runtime.runPromise(WorkflowService.use(effect)));
+  const startRun = (body: string) =>
+    onService((workflows) => workflows.start({ source: inline(body), args: null }, testHost()));
+  const runMatching = (id: string, predicate: (run: WorkflowRunView) => boolean) =>
+    onService((workflows) => runWhere(workflows, id, predicate));
   const tool = registeredTool({
     environment: { cwd: "/project", projectTrusted: false },
     savedWorkflowLocations: memoryLocations,
@@ -64,7 +110,13 @@ const liveTool = (scripts: Readonly<Record<string, string>> = {}) => {
           AgentToolResult<WorkflowToolDetails> & { readonly isError?: boolean }
         >,
     );
-  return { execute, dispose: Effect.promise(() => runtime.dispose()) };
+  return {
+    execute,
+    fixture,
+    startRun,
+    runMatching,
+    dispose: Effect.promise(() => runtime.dispose()),
+  };
 };
 
 const textOf = (result: AgentToolResult<WorkflowToolDetails>) =>
@@ -92,6 +144,8 @@ describe("subagent_workflow tool", () => {
       const run = detailsOf(started).run!;
       expect(started.isError).toBeUndefined();
       expect(textOf(started)).toContain(run.id);
+      // The start tells the main agent to end its turn and wait for the notification.
+      expect(textOf(started)).toContain(WORKFLOW_END_TURN_TEXT);
       let status = yield* execute({ action: "status", runId: run.id });
       for (
         let attempt = 0;
@@ -107,6 +161,18 @@ describe("subagent_workflow tool", () => {
       expect(detailsOf(stopped).run?.state).toBe("completed");
       const listed = yield* execute({ action: "list" });
       expect(detailsOf(listed)).toMatchObject({ action: "list", runs: 1, saved: 0 });
+      yield* dispose;
+    }),
+  );
+
+  it.live("starts a script given without an action, like Claude Code's Workflow tool", () =>
+    Effect.gen(function* () {
+      const { execute, dispose } = liveTool();
+      const started = yield* execute({ script: script("return 1;") });
+      expect(started.isError).toBeUndefined();
+      expect(detailsOf(started)).toMatchObject({ action: "start" });
+      const unclear = yield* execute({ runId: detailsOf(started).run!.id });
+      expect(unclear.isError).toBe(true);
       yield* dispose;
     }),
   );
@@ -144,6 +210,82 @@ describe("subagent_workflow tool", () => {
       yield* dispose;
     }),
   );
+});
+
+describe("subagent_workflow status repeats", () => {
+  /** The subagent run ids of a run's agents that are running, which full status rows name. */
+  const runningIds = (run: WorkflowRunView) =>
+    run.agents.filter((agent) => agent.state === "running").map((agent) => agent.runId);
+
+  const fanOut = (tasks: ReadonlyArray<string>) =>
+    `return await parallel(${JSON.stringify(tasks)}.map((task) => () => agent(task)));`;
+
+  it.live("answers a repeat with nothing new in one line until something changes", () =>
+    Effect.gen(function* () {
+      const shift = { ms: 0 };
+      const { execute, fixture, startRun, runMatching, dispose } = liveTool(
+        {},
+        shiftedClock(yield* Clock.Clock, shift),
+      );
+      const status = (runId: string) => execute({ action: "status", runId });
+      const unchanged = (runId: string) =>
+        status(runId).pipe(Effect.map((result) => detailsOf(result).unchanged === true));
+
+      const first = yield* startRun(fanOut(["first", "second"]));
+      const both = yield* runMatching(first.id, (run) => countWorkflowRunAgents(run).running === 2);
+      const full = yield* status(first.id);
+      expect(detailsOf(full).unchanged).toBeUndefined();
+      for (const runId of runningIds(both)) expect(textOf(full)).toContain(runId);
+
+      const repeated = yield* status(first.id);
+      expect(detailsOf(repeated)).toMatchObject({
+        action: "status",
+        unchanged: true,
+        run: { id: first.id, state: "running", running: 2 },
+      });
+      // The short answer leaves out the agent rows the full status lists.
+      for (const runId of runningIds(both)) expect(textOf(repeated)).not.toContain(runId);
+      expect(textOf(repeated).length).toBeLessThan(textOf(full).length);
+
+      // Each run keeps its own last call: another run's first status is full.
+      const other = yield* startRun(fanOut(["third"]));
+      yield* runMatching(other.id, (run) => countWorkflowRunAgents(run).running === 1);
+      expect(yield* unchanged(other.id)).toBe(false);
+      expect(yield* unchanged(first.id)).toBe(true);
+      expect(yield* unchanged(other.id)).toBe(true);
+
+      // An agent that finishes is a change, after which repeats are short again.
+      yield* reportTask(fixture, "first", "first done");
+      yield* runMatching(first.id, (run) => countWorkflowRunAgents(run).completed === 1);
+      expect(yield* unchanged(first.id)).toBe(false);
+      expect(yield* unchanged(first.id)).toBe(true);
+
+      // A call once the window has passed gets the full status.
+      shift.ms += WORKFLOW_STATUS_REPEAT_MS + 1_000;
+      expect(yield* unchanged(first.id)).toBe(false);
+      expect(yield* unchanged(first.id)).toBe(true);
+
+      // A finished run always gets its full status, with its result.
+      yield* reportTask(fixture, "second", "second done");
+      yield* runMatching(first.id, (run) => run.endedAt !== undefined);
+      for (let call = 0; call < 2; call++) {
+        const ended = yield* status(first.id);
+        expect(detailsOf(ended).unchanged).toBeUndefined();
+        expect(detailsOf(ended).run?.state).toBe("completed");
+        expect(textOf(ended)).toContain("second done");
+      }
+
+      // Stopping a run the main agent started says when to stop one.
+      const stopped = yield* execute({ action: "stop", runId: other.id });
+      expect(detailsOf(stopped).run?.state).toBe("stopped");
+      expect(textOf(stopped)).toContain(WORKFLOW_STOP_GUIDANCE);
+      yield* dispose;
+    }),
+  );
+
+  it("says in the description when to stop a run", () => {
+    expect(registeredTool().description).toContain(WORKFLOW_STOP_GUIDANCE);
+  });
 });
 
 describe("subagent_workflow args schemas", () => {

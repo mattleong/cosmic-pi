@@ -1,6 +1,5 @@
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { clipText, formatDuration, formatTokens, sanitizeDiagnosticContent } from "pi-cosmic-core";
-import { WORKFLOW_ROOT_RESERVE } from "../run/limits.ts";
 import type { SubagentUsage } from "../run/model.ts";
 import {
   isWorkflowPlannedSkipped,
@@ -221,8 +220,6 @@ const waitingDetail = (waiting: WorkflowAgentWaiting | undefined): string => {
       return "Queued; it starts once it gets a slot.";
     case "slot":
       return "Waiting for one of this workflow's agent slots; it starts when an earlier agent of the run finishes.";
-    case "capacity":
-      return `Waiting for a free subagent slot. Workflow agents leave ${WORKFLOW_ROOT_RESERVE} slots for the main agent and start in the order they were queued.`;
     case "writer":
       return waiting.paused
         ? `Waiting behind writer ${waiting.name}, which is paused and won't finish by itself.`

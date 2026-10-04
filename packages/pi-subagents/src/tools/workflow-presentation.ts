@@ -34,6 +34,7 @@ import {
   type WorkflowRunSummary,
   type WorkflowToolDetails,
   type WorkflowToolParameters,
+  workflowToolAction,
 } from "./workflow-schema.ts";
 
 export type WorkflowToolArgs = Static<typeof WorkflowToolParameters>;
@@ -52,6 +53,8 @@ interface WorkflowRenderContext {
 }
 
 const TITLE = "Workflow";
+/** How a status repeated while nothing changed reads in the row and the digest. */
+const UNCHANGED = "unchanged since the last check";
 const PREVIEW_LINES = 8;
 const META_NAME = /\bname\s*:\s*(["'`])([^"'`\n]{1,80})\1/u;
 
@@ -62,8 +65,9 @@ const baseName = (path: string): string => path.split(/[\\/]/u).filter(Boolean).
 
 /** A human subject from the arguments alone; a run id is never a subject. */
 const callSubject = (args: Partial<WorkflowToolArgs>): string => {
-  if (args.action === "list") return "saved workflows and runs";
-  if (args.action !== "start") return "";
+  const action = workflowToolAction(args);
+  if (action === "list") return "saved workflows and runs";
+  if (action !== "start") return "";
   if (args.name) return args.name;
   if (args.scriptPath) return baseName(args.scriptPath);
   return args.script?.match(META_NAME)?.[2] ?? "inline script";
@@ -120,6 +124,15 @@ const settledRun = (
       ...(run.phases > 0 && { counters: [countLabel(run.phases, "phase")] }),
       outcome: "success",
     };
+  // A repeated status with nothing new says so instead of repeating the counts.
+  if (details.unchanged === true) {
+    const state = workflowStateLabel(run.state);
+    return {
+      ...base,
+      counters: [`${state} · ${UNCHANGED}`, `${state} · unchanged`, state],
+      outcome: "returned",
+    };
+  }
   const failed = run.state === "failed";
   return {
     ...base,
@@ -136,9 +149,10 @@ export const workflowCompactSummary: CompactSummaryProvider<
   WorkflowRenderState
 > = ({ phase, args, result }) => {
   const details = detailsOf(result);
+  const action = workflowToolAction(args);
   const base: CompactSummary = {
     subject: subjectOf(args, details?.run?.name),
-    ...(args.action !== undefined && { action: args.action }),
+    ...(action !== undefined && { action }),
   };
   if (phase !== "settled") return base;
   if (!details) return undefined;
@@ -203,7 +217,7 @@ export const renderWorkflowCall = (
   // Drawn lazily: the result, rendered after the call, names the run a status call is about.
   container.addChild(
     composeToolComponent((width) => {
-      const subtitle = [args.action, subjectOf(args, context.state.workflowName)]
+      const subtitle = [workflowToolAction(args), subjectOf(args, context.state.workflowName)]
         .filter(Boolean)
         .join(" ");
       const header = new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(
@@ -214,7 +228,7 @@ export const renderWorkflowCall = (
         : header;
     }),
   );
-  if (args.action === "start" && args.script)
+  if (workflowToolAction(args) === "start" && args.script)
     container.addChild(scriptComponent(args.script, theme, context.expanded));
   return container;
 };
@@ -229,6 +243,7 @@ const digest = (details: WorkflowToolDetails): string => {
     return `${countLabel(details.saved ?? 0, "saved workflow")} · ${countLabel(details.runs ?? 0, "run")}`;
   if (details.action === "start")
     return `Running in the background${run.phases > 0 ? ` · ${countLabel(run.phases, "phase")}` : ""}`;
+  if (details.unchanged === true) return `${workflowStateLabel(run.state)} · ${UNCHANGED}`;
   return [
     workflowStateLabel(run.state),
     run.currentPhase ? `phase ${sanitizeTerminalLine(run.currentPhase)}` : "",

@@ -29,9 +29,7 @@ import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { BackendProxyRequest } from "../backend/model.ts";
-import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
-import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config/store.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
 import {
@@ -44,13 +42,8 @@ import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
-import {
-  registerSubagentManagerCommand,
-  type FleetManagerActions,
-} from "../settings/controller.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
-import type { FleetMessageDelivery } from "../ui/fleet.ts";
 import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerWorkflowTool } from "../tools/workflow.ts";
@@ -61,8 +54,9 @@ import {
 } from "../workflow/store.ts";
 import { WORKFLOW_TOOL_NAME } from "../tools/workflow-schema.ts";
 import { WorkflowService } from "../workflow/service.ts";
-import { discoverActivityView } from "pi-cosmic-ui/activity/view";
+import { registerApplicationCommands } from "./commands.ts";
 import { registerSubagentMessageRenderers } from "./messages.ts";
+import { registerUltracodeController } from "./ultracode.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import {
   IncompatibleProfileReloadHandoffError,
@@ -106,6 +100,8 @@ interface PreparedActivation {
   readonly savedWorkflows: ReadonlyArray<SavedWorkflowSummary>;
   readonly savedWorkflowLocations: WorkflowLocations;
   readonly toolRuntime: SubagentToolRuntime;
+  /** The session's effective ultracode setting when its tools register. */
+  readonly ultracode: boolean;
 }
 
 /**
@@ -159,6 +155,7 @@ export function registerSubagentApplication(
   const bridge = makeSubagentProjectionBridge(pi.events);
   const workflowViews = makeWorkflowActivitySource();
   const notify = makeHostNotifier(pi);
+  const ultracode = registerUltracodeController(pi);
   let releaseActivity: (() => void) | undefined;
   const revokeActivity = () => {
     releaseActivity?.();
@@ -226,6 +223,7 @@ export function registerSubagentApplication(
           }),
           isProjectTrusted: () => isProjectTrusted(activation.ctx),
           workflowActivity: workflowViews,
+          workflowObserver: ultracode.observer(),
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
@@ -285,25 +283,24 @@ export function registerSubagentApplication(
           );
           const projection = yield* SubagentService.use((service) => service.projection);
           const scheduler = yield* CodePreviewSchedulerService;
-          // Feature switches follow the session's frozen base config, so saved changes apply
-          // after /reload while /tree keeps the values this session started with.
+          // Feature switches follow the session's frozen base config and its own values, so saved
+          // changes apply after /reload while /tree keeps the values this session started with.
           const profiles = yield* SubagentProfileService.use((service) => service.capture);
-          // The tool description lists saved workflows as the session found them at start.
-          const savedWorkflows = profiles.effectiveConfig.scriptedWorkflows
-            ? (yield* WorkflowStore.use((store) => store.list)).workflows
-            : [];
+          // The inactive workflow tool's description lists saved workflows as the session found
+          // them at start; the model sees them only while workflows are opted in.
+          const savedWorkflows = (yield* WorkflowStore.use((store) => store.list)).workflows;
           const savedWorkflowLocations = yield* WorkflowStore.use((store) => store.locations);
           return {
             scheduler,
             projection,
             savedWorkflows,
             savedWorkflowLocations,
+            ultracode: profiles.effectiveConfig.ultracode,
             toolRuntime: {
               environment: {
                 cwd: activation.cwd,
                 projectTrusted: activation.projectTrusted,
               },
-              scriptedWorkflows: profiles.effectiveConfig.scriptedWorkflows,
               toolPresentation: bridge.bindToolPresentation(),
               run: (effect, signal) => run(effect, signal),
             },
@@ -321,14 +318,14 @@ export function registerSubagentApplication(
             { ...prepared.toolRuntime, scheduleAnimation },
             { receipts, owner: receipts.activate() },
           );
-          if (prepared.toolRuntime.scriptedWorkflows)
-            registerWorkflowTool(pi, {
-              environment: prepared.toolRuntime.environment,
-              savedWorkflows: prepared.savedWorkflows,
-              savedWorkflowLocations: prepared.savedWorkflowLocations,
-              scheduleAnimation,
-              run: (effect, signal) => run(effect, signal),
-            });
+          // Registered inactive; the ultracode controller activates it while workflows are on.
+          registerWorkflowTool(pi, {
+            environment: prepared.toolRuntime.environment,
+            savedWorkflows: prepared.savedWorkflows,
+            savedWorkflowLocations: prepared.savedWorkflowLocations,
+            scheduleAnimation,
+            run: (effect, signal) => run(effect, signal),
+          });
           // A first registration keeps what Pi activated. Later ones deactivate only tools Pi
           // activated that the session had not kept active.
           const activatedByRegistration = activeSubagentTools(pi).filter(
@@ -359,7 +356,12 @@ export function registerSubagentApplication(
         if (activation.restoreReloadHandoff && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);
         bridge.setContext(activation.ctx);
-        reactivateSubagentTools(pi, startupFailureTools);
+        ultracode.activate(activation.ctx, prepared.ultracode);
+        // The workflow tool's activation is the ultracode controller's alone.
+        reactivateSubagentTools(
+          pi,
+          startupFailureTools.filter((name) => name !== WORKFLOW_TOOL_NAME),
+        );
         startupFailureTools = [];
         if (activation.sessionKey && slot.isCurrent(token))
           releaseActivity = registerSubagentActivity({
@@ -404,6 +406,7 @@ export function registerSubagentApplication(
           });
         if (!slot.isCurrent(token)) {
           revokeActivity();
+          ultracode.suspend();
           rememberDisabledTools(deactivateSubagentTools(pi));
           currentActivation = undefined;
           bridge.clear();
@@ -413,6 +416,7 @@ export function registerSubagentApplication(
       onDeactivated: () => {
         receipts.deactivate();
         revokeActivity();
+        ultracode.suspend();
         if (!retainingTools) rememberDisabledTools(deactivateSubagentTools(pi));
         currentActivation = undefined;
         bridge.clear();
@@ -434,174 +438,13 @@ export function registerSubagentApplication(
     signal?: AbortSignal,
   ): Promise<A> => slot.run(effect, signal);
 
-  const withCurrentActivation = <A>(
-    operation: (activation: CapturedActivation) => Promise<A>,
-  ): Promise<A> => {
-    const activation = currentActivation;
-    return activation
-      ? operation(activation).then((result) => {
-          if (currentActivation !== activation) throw new Error("Subagents session was replaced.");
-          return result;
-        })
-      : Promise.reject(new Error("Subagents are not active; run /reload and try again."));
-  };
-
-  const withConfigStore =
-    <Patch, A, E>(
-      select: (
-        store: SubagentConfigStoreContract,
-      ) => (cwd: string, agentDirectory: string, patch: Patch) => Effect.Effect<A, E>,
-    ) =>
-    (patch: Patch): Promise<A> =>
-      withCurrentActivation((activation) =>
-        run(
-          SubagentConfigStore.use((store) =>
-            select(store)(activation.cwd, activation.agentDirectory, patch),
-          ),
-        ),
-      );
-
-  const managerActions: FleetManagerActions = {
-    openActivity: (signal) => {
-      const activation = currentActivation;
-      if (!activation || !slot.isActive() || signal?.aborted)
-        return Promise.reject(new Error("Subagents aren't available in this session"));
-      const capability = activation.sessionKey
-        ? discoverActivityView(pi.events, activation.sessionKey)
-        : undefined;
-      return Promise.resolve(capability ? capability.open("subagents", signal) : false).then(
-        (opened) => {
-          if (currentActivation !== activation || !slot.isActive() || signal?.aborted)
-            throw new Error("Subagents session was replaced");
-          return opened;
-        },
-      );
-    },
-    isAvailable: () => currentActivation !== undefined,
-    captureModelRefresh: () => {
-      const activation = currentActivation;
-      const isCurrent = () => activation !== undefined && currentActivation === activation;
-      return {
-        isCurrent,
-        run: (effect, signal) =>
-          isCurrent()
-            ? run(effect, signal)
-            : Promise.reject(new Error("Subagents session was replaced.")),
-      };
-    },
-    stop: (id) => run(SubagentService.use((service) => service.stop(id))).then(() => undefined),
-    interrupt: (id) =>
-      run(SubagentService.use((service) => service.interrupt(id))).then(() => undefined),
-    resume: (id, message) =>
-      run(SubagentService.use((service) => service.resume(id, message))).then(() => undefined),
-    send: (id, message) =>
-      run(
-        SubagentService.use((service) =>
-          service.send(id, message).pipe(
-            Effect.as<FleetMessageDelivery>("delivered"),
-            // Backend-owned pending guidance is neither delivered nor failed; only that exact
-            // typed disposition resolves. Generic uncertainty and failures still reject.
-            Effect.catchIf(isPendingDeliveryError, () =>
-              Effect.succeed<FleetMessageDelivery>("pending"),
-            ),
-          ),
-        ),
-      ),
-    reply: (id, message) =>
-      run(SubagentService.use((service) => service.reply(id, message))).then(() => undefined),
-    rename: (id, name) =>
-      run(SubagentService.use((service) => service.rename(id, name))).then(() => undefined),
-    inspectProfiles: (projectTrusted) =>
-      withCurrentActivation((activation) =>
-        run(
-          Effect.gen(function* () {
-            const store = yield* SubagentConfigStore;
-            const profiles = yield* SubagentProfileService;
-            const persistent = yield* store.inspect(
-              activation.cwd,
-              activation.agentDirectory,
-              projectTrusted,
-            );
-            const session = yield* profiles.capture;
-            return { ...persistent, session };
-          }),
-        ),
-      ),
-    inspectWriterWorkspace: () =>
-      run(SubagentService.use((service) => service.inspectWriterWorkspace)),
-    setWriterWorkspaceMode: (mode) =>
-      withCurrentActivation((activation) =>
-        run(
-          Effect.gen(function* () {
-            const store = yield* SubagentConfigStore;
-            const service = yield* SubagentService;
-            const projectTrusted = activation.ctx.isProjectTrusted();
-            const inspection = yield* store.inspect(
-              activation.cwd,
-              activation.agentDirectory,
-              projectTrusted,
-            );
-            const scope = projectTrusted ? "project" : "global";
-            const document =
-              scope === "project" ? inspection.projectDocument : inspection.globalDocument;
-            yield* service.setWriterWorkspaceMode(
-              mode,
-              store.patchWriterWorkspace(activation.cwd, activation.agentDirectory, {
-                scope,
-                expectedExists: document !== undefined,
-                expectedDocument: document,
-                projectTrusted,
-                writerWorkspaceMode: mode,
-              }),
-            );
-          }),
-        ),
-      ),
-    patchProfile: withConfigStore((store) => store.patchProfile),
-    restoreProfileDeclaration: withConfigStore((store) => store.restoreProfileDeclaration),
-    patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),
-    createProfileSetFromSnapshot: (request) =>
-      withCurrentActivation((activation) => {
-        const { expectedRevision, ...patch } = request;
-        return run(
-          Effect.gen(function* () {
-            const store = yield* SubagentConfigStore;
-            const profiles = yield* SubagentProfileService;
-            yield* profiles.withSnapshotAtRevision(expectedRevision, (snapshot) =>
-              store.createProfileSetFromSnapshot(activation.cwd, activation.agentDirectory, {
-                ...patch,
-                profiles: snapshot.effectiveConfig.profiles,
-              }),
-            );
-          }),
-        );
-      }),
-    copyProfileSet: withConfigStore((store) => store.copyProfileSet),
-    renameProfileSet: withConfigStore((store) => store.renameProfileSet),
-    deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
-    patchNesting: withConfigStore((store) => store.patchNesting),
-    patchFeatureToggle: withConfigStore((store) => store.patchFeatureToggle),
-    patchSessionProfile: (patch) =>
-      withCurrentActivation(() =>
-        run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
-      ),
-    replaceSessionProfiles: (patch) =>
-      withCurrentActivation(() =>
-        run(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))),
-      ),
-    patchSessionNesting: (patch) =>
-      run(SubagentProfileService.use((profiles) => profiles.patchSessionNesting(patch))).then(
-        () => undefined,
-      ),
-    listNativeModels: (runtime, signal) =>
-      withCurrentActivation((activation) =>
-        run(
-          Effect.flatMap(NativeModelCatalog, (catalog) => catalog.list(runtime, activation.cwd)),
-          signal,
-        ),
-      ),
-  };
-  registerSubagentManagerCommand(pi, bridge, managerActions);
+  registerApplicationCommands(pi, {
+    bridge,
+    ultracode,
+    run,
+    current: () => currentActivation,
+    isActive: () => slot.isActive(),
+  });
 
   const prepareActivation = (
     ctx: ExtensionContext,
@@ -611,6 +454,9 @@ export function registerSubagentApplication(
   ): Promise<void> => {
     receipts.deactivate();
     revokeActivity();
+    ultracode.suspend();
+    // Runs the replaced activation leaves open are announced again, which reopens the window.
+    ultracode.reset();
     currentActivation = undefined;
     bridge.clear();
     workflowViews.clear();
@@ -659,6 +505,8 @@ export function registerSubagentApplication(
   pi.on("session_shutdown", (event, ctx) => {
     receipts.deactivate();
     revokeActivity();
+    ultracode.suspend();
+    ultracode.reset();
     activeProfileGeneration = -1;
     const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;
     currentActivation = undefined;

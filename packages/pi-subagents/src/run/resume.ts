@@ -3,7 +3,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
+import {
+  canonicalizeWriterCwd,
+  processCapacityError,
+  workflowOwned,
+  writerConflictError,
+} from "./admission.ts";
 import { beginNextAssignmentLocked, type RunAssignment } from "./assignment.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./tool-policy.ts";
@@ -347,13 +352,15 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   "backend_resume_unavailable",
                   `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                 );
+              // A workflow agent has its workflow's own concurrency instead of a direct-child slot.
+              if (workflowOwned(selected)) return;
               const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
               const capacityFailure = processCapacityError(
                 records,
                 parentRunId,
                 yield* dependencies.currentChildLimit,
                 selected,
-                dependencies.heldLaunchSlots(parentRunId).total,
+                dependencies.heldLaunchSlots(parentRunId),
               );
               if (capacityFailure) return yield* capacityFailure;
             });

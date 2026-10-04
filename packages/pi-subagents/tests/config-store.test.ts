@@ -996,10 +996,10 @@ describe("feature switch persistence", () => {
   effectTest("fails activation closed on malformed or undeclared switch values", function* () {
     const paths = yield* step(fixture);
     for (const document of [
-      { version: 6, scriptedWorkflows: "false" },
-      { version: 6, scriptedWorkflows: null },
+      { version: 6, ultracode: "true" },
+      { version: 6, ultracode: null },
       { version: 6, automaticProfileRouting: null, unknownFeature: true },
-      { version: 5, scriptedWorkflows: false },
+      { version: 5, ultracode: true },
       { version: 4, automaticProfileRouting: true },
       { version: 5, automaticProfileRouting: false },
     ]) {
@@ -1007,24 +1007,25 @@ describe("feature switch persistence", () => {
       yield* rejects(() => paths.load(false), "activate", paths.globalPath);
     }
     yield* step(() => paths.writeGlobal({ version: 6 }));
-    yield* step(() => paths.writeProject({ version: 6, scriptedWorkflows: "off" }));
+    yield* step(() => paths.writeProject({ version: 6, ultracode: "on" }));
     yield* rejects(() => paths.load(true), "activate", paths.projectPath);
     // An untrusted project is never read, so its malformed value cannot block activation.
-    expect((yield* step(() => paths.load(false))).scriptedWorkflows).toBe(true);
+    expect((yield* step(() => paths.load(false))).ultracode).toBe(false);
   });
 
-  effectTest("ignores retired v6 routing values without rewriting either scope", function* () {
+  effectTest("ignores retired v6 values without rewriting either scope", function* () {
     const paths = yield* step(fixture);
     for (const scope of ["global", "project"] as const)
       for (const value of [true, false, null, 0, "off", [], { enabled: "private-value" }]) {
-        const raw = { version: 6, automaticProfileRouting: value };
+        const raw = { version: 6, automaticProfileRouting: value, scriptedWorkflows: value };
         const target = scope === "global" ? paths.globalPath : paths.projectPath;
         yield* step(() => (scope === "global" ? paths.writeGlobal(raw) : paths.writeProject(raw)));
         const before = yield* step(() => readFile(target, "utf8"));
         const beforeStat = yield* step(() => stat(target));
         const loaded = yield* step(() => paths.load(scope === "project"));
         expect(loaded).not.toHaveProperty("automaticProfileRouting");
-        expect(loaded.scriptedWorkflows).toBe(true);
+        expect(loaded).not.toHaveProperty("scriptedWorkflows");
+        expect(loaded.ultracode).toBe(false);
         expect(loaded.diagnostics).toEqual([]);
         expect(yield* step(() => readFile(target, "utf8"))).toBe(before);
         const afterStat = yield* step(() => stat(target));
@@ -1032,14 +1033,14 @@ describe("feature switch persistence", () => {
       }
   });
 
-  effectTest("loads trusted Project workflows over Global and otherwise inherits", function* () {
+  effectTest("loads trusted Project ultracode over Global and otherwise inherits", function* () {
     const paths = yield* step(fixture);
-    yield* step(() => paths.writeGlobal({ version: 6, scriptedWorkflows: false }));
-    yield* step(() => paths.writeProject({ version: 6, scriptedWorkflows: true }));
-    expect((yield* step(() => paths.load(true))).scriptedWorkflows).toBe(true);
-    expect((yield* step(() => paths.load(false))).scriptedWorkflows).toBe(false);
+    yield* step(() => paths.writeGlobal({ version: 6, ultracode: true }));
+    yield* step(() => paths.writeProject({ version: 6, ultracode: false }));
+    expect((yield* step(() => paths.load(true))).ultracode).toBe(false);
+    expect((yield* step(() => paths.load(false))).ultracode).toBe(true);
     yield* step(() => paths.writeProject({ version: 6 }));
-    expect((yield* step(() => paths.load(true))).scriptedWorkflows).toBe(false);
+    expect((yield* step(() => paths.load(true))).ultracode).toBe(true);
   });
 
   effectTest("saves and clears one switch while preserving every other field", function* () {
@@ -1056,27 +1057,27 @@ describe("feature switch persistence", () => {
     yield* step(() =>
       paths.patchFeatureToggle({
         scope: "project",
-        toggle: "scriptedWorkflows",
-        enabled: false,
+        toggle: "ultracode",
+        enabled: true,
         expectedExists: true,
         expectedDocument: original,
       }),
     );
-    const saved = { ...original, scriptedWorkflows: false };
+    const saved = { ...original, ultracode: true };
     expect(yield* step(paths.readProject)).toEqual(saved);
-    expect((yield* step(() => paths.load(true))).scriptedWorkflows).toBe(false);
+    expect((yield* step(() => paths.load(true))).ultracode).toBe(true);
 
     yield* step(() =>
       paths.patchFeatureToggle({
         scope: "project",
-        toggle: "scriptedWorkflows",
+        toggle: "ultracode",
         expectedExists: true,
         expectedDocument: saved,
       }),
     );
     expect(yield* step(paths.readProject)).toEqual(original);
     const reloaded = yield* step(() => paths.load(true));
-    expect(reloaded.scriptedWorkflows).toBe(true);
+    expect(reloaded.ultracode).toBe(false);
     expect(reloaded).not.toHaveProperty("automaticProfileRouting");
 
     const nesting = { maxDirectChildren: 8, maxDepth: 3 };
@@ -1100,7 +1101,7 @@ describe("feature switch persistence", () => {
       yield* step(() =>
         paths.patchFeatureToggle({
           scope,
-          toggle: "scriptedWorkflows",
+          toggle: "ultracode",
           expectedExists: false,
         }),
       );
@@ -1109,12 +1110,12 @@ describe("feature switch persistence", () => {
     yield* step(() =>
       paths.patchFeatureToggle({
         scope: "global",
-        toggle: "scriptedWorkflows",
+        toggle: "ultracode",
         enabled: true,
         expectedExists: false,
       }),
     );
-    expect(yield* step(paths.readGlobal)).toEqual({ version: 6, scriptedWorkflows: true });
+    expect(yield* step(paths.readGlobal)).toEqual({ version: 6, ultracode: true });
   });
 
   effectTest("rejects every runtime patch of the retired key, even without a file", function* () {
@@ -1156,12 +1157,12 @@ describe("feature switch persistence", () => {
     "refuses stale, untrusted, and invalid writes without changing the file",
     function* () {
       const paths = yield* step(fixture);
-      const current = { version: 6, scriptedWorkflows: true };
+      const current = { version: 6, ultracode: true };
       yield* step(() => paths.writeProject(current));
       const before = yield* step(() => readFile(paths.projectPath, "utf8"));
       const base = {
         scope: "project",
-        toggle: "scriptedWorkflows",
+        toggle: "ultracode",
         enabled: false,
         expectedExists: true,
         expectedDocument: current,
@@ -1202,8 +1203,8 @@ describe("feature switch persistence", () => {
     yield* step(() =>
       paths.patchFeatureToggle({
         scope: "global",
-        toggle: "scriptedWorkflows",
-        enabled: false,
+        toggle: "ultracode",
+        enabled: true,
         expectedExists: true,
         expectedDocument: legacy,
       }),
@@ -1213,10 +1214,10 @@ describe("feature switch persistence", () => {
       version: 6,
       defaultProfileSet: "default",
       nesting: legacy.nesting,
-      scriptedWorkflows: false,
+      ultracode: true,
       profileSets: { default: { profiles: { worker: { openaiFastMode: true } } } },
     });
     const loaded = yield* step(() => paths.load(false));
-    expect([loaded.scriptedWorkflows, loaded.profileSources.worker]).toEqual([false, "global"]);
+    expect([loaded.ultracode, loaded.profileSources.worker]).toEqual([true, "global"]);
   });
 });

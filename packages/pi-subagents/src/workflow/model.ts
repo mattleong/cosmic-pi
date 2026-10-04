@@ -1,7 +1,6 @@
 import type * as Schema from "effect/Schema";
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { safeTextPrefix } from "pi-cosmic-core";
-import { WORKFLOW_ROOT_RESERVE } from "../run/limits.ts";
 import { emptyUsage, type SubagentUsage } from "../run/model.ts";
 import { addUsage } from "../run/state.ts";
 import type { WorkflowPhase } from "./script.ts";
@@ -35,16 +34,13 @@ export const WORKFLOW_RESULT_MAX_CHARS = 28 * 1024;
 export const WORKFLOW_NOTIFICATION_MAX_CHARS = 30 * 1024;
 const WORKFLOW_CONCURRENCY_LIMIT = 16;
 
-/** Agents one run executes at once by CPU count: leaves two cores for Pi and its tools. */
+/**
+ * Agents one run executes at once by CPU count, as Claude Code caps them: at most 16, leaving two
+ * cores for Pi and its tools, and always at least one. Every run has these slots of its own,
+ * apart from the root's direct-child limit, which governs only the main agent's own subagents.
+ */
 export const workflowConcurrency = (availableParallelism: number): number =>
   Math.min(WORKFLOW_CONCURRENCY_LIMIT, Math.max(1, Math.floor(availableParallelism) - 2));
-
-/**
- * Agents one run executes at once: at most `limit`, and no more than the root slots workflow
- * agents may hold beside the ones they leave for the main agent, but always at least one.
- */
-export const workflowRunConcurrency = (limit: number, maxDirectChildren: number): number =>
-  Math.min(limit, Math.max(1, maxDirectChildren - WORKFLOW_ROOT_RESERVE));
 
 /** How a run ends by itself or when stopped, as opposed to a teardown interrupting it. */
 export type WorkflowEndedState = "completed" | "failed" | "stopped";
@@ -79,13 +75,11 @@ export type WorkflowSource =
   | { readonly kind: "file"; readonly path: string };
 
 /**
- * Why a queued agent waits: for one of its run's slots, for root capacity, including the slots
- * workflow agents leave for the main agent, or behind a writer it conflicts with. A writer the
- * user paused never clears by itself.
+ * Why a queued agent waits: for one of its run's slots, or behind a writer it conflicts with. A
+ * writer the user paused never clears by itself.
  */
 export type WorkflowAgentWaiting =
   | { readonly kind: "slot" }
-  | { readonly kind: "capacity" }
   | {
       readonly kind: "writer";
       /** The writer's subagent run id, which a paused writer is inspected and resumed by. */

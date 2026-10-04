@@ -26,12 +26,7 @@ import {
   type WorkflowObservedRun,
   type WorkflowSettlement,
 } from "./agent-settlement.ts";
-import type {
-  WorkflowAdmissionQueue,
-  WorkflowCapacityWaiter,
-  WorkflowQueued,
-  WorkflowWaitOrder,
-} from "./admission-queue.ts";
+import type { WorkflowSlots, WorkflowWaitOrder } from "./admission-queue.ts";
 import type { WorkflowBudget } from "./budget.ts";
 import type { WorkflowJournalContract, WorkflowJournalEntry, WorkflowReplay } from "./journal.ts";
 import {
@@ -79,8 +74,9 @@ export interface WorkflowHost {
     spec: WorkflowAgentSpec,
   ) => Effect.Effect<WorkflowAgentAccess, WorkflowAgentCallError>;
   /**
-   * Resolves the launch once the call first gets one of its run's slots, which can be before
-   * the root has room for it; failures here are environmental.
+   * Resolves the launch once the call first gets one of its run's slots, which can be well
+   * before it starts when it then waits behind a conflicting writer; failures here are
+   * environmental.
    */
   readonly resolveAgent: (
     spec: WorkflowAgentSpec,
@@ -94,8 +90,8 @@ export interface WorkflowAgentRun {
   readonly host: WorkflowHost;
   readonly replay: WorkflowReplay | undefined;
   /** The run's slots, held by each start and the agent it admits, never behind a writer. */
-  readonly slots: WorkflowAdmissionQueue<WorkflowQueued>;
-  /** Where a call queued at `queuedAt` stands among the session's waiting starts. */
+  readonly slots: WorkflowSlots;
+  /** Where a call queued at `queuedAt` stands among the run's waiting calls. */
   readonly order: (queuedAt: number) => WorkflowWaitOrder;
   /** The run's token budget, which also tracks its spent output tokens without a total. */
   readonly budget: WorkflowBudget;
@@ -156,8 +152,6 @@ export interface WorkflowAgentServices {
     | "projection"
   >;
   readonly journal: Pick<WorkflowJournalContract, "record" | "noteWorkspace" | "dropWorkspace">;
-  /** The session's workflow starts waiting for root capacity. */
-  readonly capacity: WorkflowAdmissionQueue<WorkflowCapacityWaiter>;
 }
 
 /** The prompt and options, then the nested workflow() the call was made in, by name. */
@@ -176,7 +170,6 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
   const { subagents, journal } = services;
   const gate: WorkflowAdmissionGate = {
     slots: run.slots,
-    capacity: services.capacity,
     budget: run.budget,
     log: run.log,
     subagents,
@@ -220,11 +213,9 @@ export const makeWorkflowAgentCall = (run: WorkflowAgentRun, services: WorkflowA
   ): Effect.Effect<WorkflowSettlement> =>
     admitWorkflowAgent(gate, {
       order,
-      runId: agent.runId,
       label: spec.name,
       // The route, and a fork-context profile's fork of the root conversation, resolve once,
-      // when the call first gets a slot. A call the root then refuses for capacity or a writer
-      // conflict keeps that request while it waits.
+      // when the call first gets a slot. A call that waits behind a writer keeps that request.
       resolve: run.host.resolveAgent(spec).pipe(
         Effect.map(
           (resolved): StartSubagentRequest => ({

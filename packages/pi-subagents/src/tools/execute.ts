@@ -69,11 +69,6 @@ export interface SubagentToolRuntime {
     | undefined;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
   readonly toolPresentation?: SubagentToolPresentation | undefined;
-  /**
-   * Whether native codemode may call the root orchestration tools. Absent means allowed; false
-   * keeps every coordinator tool model-only. Proxied child registrations are model-only anyway.
-   */
-  readonly scriptedWorkflows?: boolean | undefined;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
     signal?: AbortSignal,

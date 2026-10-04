@@ -114,10 +114,7 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     admissionRevision: base.admissionRevision ?? unexpected("admissionRevision"),
     waitForAdmissionChange:
       base.waitForAdmissionChange ?? (() => unexpected("waitForAdmissionChange")),
-    queuedStartsAdmissible:
-      base.queuedStartsAdmissible ?? (() => unexpected("queuedStartsAdmissible")),
     queuedWriterConflict: base.queuedWriterConflict ?? (() => unexpected("queuedWriterConflict")),
-    rootChildLimit: base.rootChildLimit ?? unexpected("rootChildLimit"),
     workspaceBindingStatus:
       base.workspaceBindingStatus ?? (() => unexpected("workspaceBindingStatus")),
   };

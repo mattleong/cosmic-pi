@@ -84,6 +84,7 @@ import {
   WorkflowService,
   type WorkflowServiceContract,
   type WorkflowStatus,
+  type WorkflowToolStatus,
 } from "../src/workflow/service.ts";
 import { WorkflowStore } from "../src/workflow/store.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
@@ -1198,7 +1199,7 @@ const workflowRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView =>
         profile: "reviewer",
         state: "queued",
         queuedAt: now - 30_000,
-        waiting: { kind: "capacity" },
+        waiting: { kind: "slot" },
       },
     ],
     logs: [{ at: now - 60_000, level: "info", message: "correctness review found 2 findings" }],
@@ -1499,6 +1500,27 @@ const recordedElsewhere: WorkflowRecordedRun = {
   journalPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-k3c9-3/journal.jsonl",
 };
 
+const galleryWorkflowStatus: WorkflowServiceContract["status"] = (runId) => {
+  if (runId === stuckWorkflow.id)
+    return Effect.succeed<WorkflowStatus>({
+      kind: "view",
+      run: stuckWorkflow,
+      attention: stuckAttention,
+    });
+  const found = [workflowRun(), budgetedWorkflow, budgetFailedWorkflow, ...workflowRuns].find(
+    (run) => run.id === runId,
+  );
+  if (found) return Effect.succeed<WorkflowStatus>({ kind: "view", run: found, attention: [] });
+  const recorded = [recordedWorkflow, recordedElsewhere].find((run) => run.id === runId);
+  if (recorded) return Effect.succeed<WorkflowStatus>({ kind: "recorded", run: recorded });
+  return Effect.fail(
+    new WorkflowNotFoundError({ message: `No workflow run ${runId} in this session.` }),
+  );
+};
+
+/** A running run whose previous status call, 14 seconds earlier, saw the same counts. */
+const repeatedWorkflow = workflowRun({ id: "wf-mg3k2l-9" });
+
 /** A fixed workflow service: the tool's real execute path, deterministic views. */
 const galleryWorkflows: WorkflowServiceContract = {
   start: (request) =>
@@ -1513,24 +1535,16 @@ const galleryWorkflows: WorkflowServiceContract = {
           })),
         )
       : Effect.succeed(workflowRun({ agents: [], logs: [] })),
-  stop: () => Effect.succeed(stoppedWorkflow),
-  status: (runId) => {
-    if (runId === stuckWorkflow.id)
-      return Effect.succeed<WorkflowStatus>({
-        kind: "view",
-        run: stuckWorkflow,
-        attention: stuckAttention,
-      });
-    const found = [workflowRun(), budgetedWorkflow, budgetFailedWorkflow, ...workflowRuns].find(
-      (run) => run.id === runId,
-    );
-    if (found) return Effect.succeed<WorkflowStatus>({ kind: "view", run: found, attention: [] });
-    const recorded = [recordedWorkflow, recordedElsewhere].find((run) => run.id === runId);
-    if (recorded) return Effect.succeed<WorkflowStatus>({ kind: "recorded", run: recorded });
-    return Effect.fail(
-      new WorkflowNotFoundError({ message: `No workflow run ${runId} in this session.` }),
-    );
-  },
+  stop: () => Effect.succeed({ ...stoppedWorkflow, stoppedBy: "tool" }),
+  status: galleryWorkflowStatus,
+  toolStatus: (runId) =>
+    runId === repeatedWorkflow.id
+      ? Effect.succeed<WorkflowToolStatus>({
+          kind: "unchanged",
+          run: repeatedWorkflow,
+          sinceMs: 14_000,
+        })
+      : galleryWorkflowStatus(runId),
   list: Effect.succeed(workflowRuns),
   skip: () => Effect.void,
 };
@@ -1634,6 +1648,10 @@ const workflowScenarios = Effect.gen(function* () {
     yield* execute("status past its token budget, agents waiting", {
       action: "status",
       runId: budgetedWorkflow.id,
+    }),
+    yield* execute("status repeated within a minute while nothing changed", {
+      action: "status",
+      runId: repeatedWorkflow.id,
     }),
     yield* execute("status of a stuck fan-out that needs the user", {
       action: "status",

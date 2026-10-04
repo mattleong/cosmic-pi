@@ -61,10 +61,12 @@ export interface OwnedRunCoordinatorContract {
   readonly reserveRunId: Effect.Effect<string>;
   readonly openOwner: (ownerId: string) => Effect.Effect<void>;
   /**
-   * Admits a root-visible run whose first report belongs to the owner. A failed or interrupted
-   * start never leaves an admitted run running or its report claimed. The claim is bound to the
-   * caller's scope: closing it before the outcome is consumed or handed back stops a live run
-   * and releases its report as `closeOwner` does.
+   * Admits a root-visible run whose first report belongs to the owner. A run whose request names
+   * its `workflow` takes none of the root's direct-child slots while the owner holds it, since the
+   * workflow bounds its own concurrency; any other owned run counts as an ordinary root child.
+   * A failed or interrupted start never leaves an admitted run running or its report claimed.
+   * The claim is bound to the caller's scope: closing it before the outcome is consumed or handed
+   * back stops a live run and releases its report as `closeOwner` does.
    */
   readonly startOwned: (
     request: StartSubagentRequest,
@@ -85,8 +87,9 @@ export interface OwnedRunCoordinatorContract {
   /** Waits for a projection revision newer than `after`. */
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
   /**
-   * Advances only when a process slot, writer slot, cleanup or claim that can refuse a start is
-   * released. Read it before a start that may be refused for capacity or a transient conflict.
+   * Advances only when a writer slot, claim, cleanup, reservation or unavailable writer pool that
+   * can refuse a writer start is released. Read it before a start that may be refused for a
+   * transient writer conflict.
    */
   readonly admissionRevision: Effect.Effect<number>;
   /** Waits until the admission revision passes `after`. */
@@ -94,26 +97,13 @@ export interface OwnedRunCoordinatorContract {
     after: number,
   ) => Effect.Effect<void, SubagentRuntimeClosedError>;
   /**
-   * How many of these queued workflow starts, from the front, the root could admit now, checked
-   * under the run lock without validation, backend resolution or preflight. It counts the slots
-   * worktree launches hold while they acquire workspaces and the root slots workflow agents
-   * leave free for the main agent. `letThrough` names the run ids of owned starts already let
-   * through; each one that holds no slot of its own yet counts as a workflow agent. A count only
-   * means those starts may now be admitted. Read the admission revision before checking.
-   */
-  readonly queuedStartsAdmissible: (
-    requests: ReadonlyArray<StartSubagentRequest>,
-    letThrough: ReadonlyArray<string>,
-  ) => Effect.Effect<number>;
-  /**
    * The writer a queued shared-checkout writer still conflicts with in a way that clears by
-   * itself, checked the same way; undefined when none does.
+   * itself, checked under the run lock without validation, backend resolution or preflight;
+   * undefined when none does. Read the admission revision before checking.
    */
   readonly queuedWriterConflict: (
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentWriterConflictError | undefined>;
-  /** The direct-child limit the session's current nesting policy sets for the root. */
-  readonly rootChildLimit: Effect.Effect<number>;
   /** What this session's coordinator knows of a writer workspace, read under the run lock. */
   readonly workspaceBindingStatus: (workspaceId: string) => Effect.Effect<WorkspaceBindingStatus>;
 }

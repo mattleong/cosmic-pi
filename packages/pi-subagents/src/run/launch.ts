@@ -7,12 +7,7 @@ import type { BackendLaunchRequest } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
-import {
-  canonicalizeWriterCwd,
-  processCapacityError,
-  workflowCapacityError,
-  writerConflictError,
-} from "./admission.ts";
+import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
 import {
@@ -295,12 +290,16 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           predecessor: RunRecord | undefined,
         ) =>
           Effect.gen(function* () {
-            const held = dependencies.heldLaunchSlots(parentRunId, request);
-            const limit = nestingPolicy.maxDirectChildren;
-            // A workflow agent also leaves root slots free for the main agent.
+            // A workflow agent has its workflow's own concurrency instead of a direct-child slot.
             const capacityFailure = request.workflow
-              ? workflowCapacityError(records, parentRunId, limit, ownReservation, held)
-              : processCapacityError(records, parentRunId, limit, ownReservation, held.total);
+              ? undefined
+              : processCapacityError(
+                  records,
+                  parentRunId,
+                  nestingPolicy.maxDirectChildren,
+                  ownReservation,
+                  dependencies.heldLaunchSlots(parentRunId, request),
+                );
             if (capacityFailure) return yield* capacityFailure;
             if (!canonicalWriterCwd) return;
             const writerFailure = writerConflictError(
@@ -529,12 +528,12 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     request.supersedes ? records.get(request.supersedes.runId) : undefined,
                   );
                   candidate.evictionClaim = {
-                    parentRunId,
+                    // A workflow start reserves no direct-child slot.
+                    ...(request.workflow === undefined && { parentRunId }),
                     ...(canonicalWriterCwd && {
                       writerCwdDigest: canonicalWriterCwd.digest,
                       writeClaims,
                     }),
-                    ...(ownership?.runId !== undefined && { runId: ownership.runId }),
                   };
                   // The claim now reserves this start's process slot, so a worktree launch's
                   // own slot hold ends here rather than counting twice while history is reclaimed.

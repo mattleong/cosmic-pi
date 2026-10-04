@@ -13,9 +13,7 @@ import {
   finished,
   inline,
   journalLines,
-  mainChildren,
   nativeReportRequest,
-  profileLayerFor,
   reportTask,
   resultValue,
   runningTask,
@@ -392,42 +390,6 @@ describe("workflow token budget", () => {
         yield* reportTask(fixture, "a", "a done");
         const run = yield* finished(workflows, started.id);
         expect(resultValue(run)).toEqual([null, "a done"]);
-        expect(run.warnings).toHaveLength(1);
-      }),
-    );
-  });
-
-  it.live("refuses a call waiting for root capacity once the budget runs out", () => {
-    // Four root slots, two held by the main agent: one workflow agent fits beside the reserve.
-    const fixture = workflowFixture({
-      profiles: profileLayerFor({ version: 6, nesting: { maxDirectChildren: 4, maxDepth: 3 } }),
-    });
-    return withWorkflows(fixture, (workflows, subagents) =>
-      Effect.gen(function* () {
-        yield* mainChildren(subagents, ["main-1", "main-2"]);
-        const started = yield* workflows.start(
-          {
-            source: inline(
-              'return await parallel(["first", "second"].map((task) => () => agent(task, { label: task })));',
-            ),
-            args: null,
-            budget: 100,
-          },
-          testHost(),
-        );
-        yield* agentRunning(workflows, started.id, "first");
-        yield* runWhere(workflows, started.id, (run) =>
-          run.agents.some((agent) => agent.waiting?.kind === "capacity"),
-        );
-        yield* spend(fixture, "first", 150);
-        const refused = yield* refusedAgent(workflows, started.id, "second");
-        expect(refused.budget).toMatchObject({ spent: 150, refused: 1 });
-        expect(stateOfTask(fixture, "second")).toBeUndefined();
-
-        yield* reportTask(fixture, "first", "first done");
-        const run = yield* finished(workflows, started.id);
-        expect(resultValue(run)).toEqual(["first done", null]);
-        expect(run.budget?.refused).toBe(1);
         expect(run.warnings).toHaveLength(1);
       }),
     );

@@ -101,6 +101,7 @@ const actions = (value: ProfileSettingsInspection) =>
     deleteProfileSet: vi.fn(() => Promise.resolve()),
     patchNesting: vi.fn(() => Promise.resolve()),
     patchFeatureToggle: vi.fn(() => Promise.resolve()),
+    patchSessionFeatureToggle: vi.fn(() => Promise.resolve()),
     inspectWriterWorkspace: vi.fn(() =>
       Promise.resolve({ mode: "worktree" as const, canSwitch: true }),
     ),
@@ -719,15 +720,15 @@ describe("feature switch settings", () => {
   const featurePatches = (fixture: ReturnType<typeof setup>) =>
     vi.mocked(fixture.managerActions.patchFeatureToggle).mock.calls.map(([patch]) => patch);
 
-  effectTest("saves workflows to either named scope against its inspected document", function* () {
+  effectTest("saves ultracode to either named scope against its inspected document", function* () {
     const fixture = setup();
     const value = inspection();
-    yield* step(() => fixture.settings("global scriptedWorkflows false"));
-    yield* step(() => fixture.settings("project scriptedWorkflows true"));
+    yield* step(() => fixture.settings("global ultracode false"));
+    yield* step(() => fixture.settings("project ultracode true"));
     expect(featurePatches(fixture)).toEqual([
       {
         scope: "global",
-        toggle: "scriptedWorkflows",
+        toggle: "ultracode",
         enabled: false,
         expectedExists: true,
         expectedDocument: value.globalDocument,
@@ -735,7 +736,7 @@ describe("feature switch settings", () => {
       },
       {
         scope: "project",
-        toggle: "scriptedWorkflows",
+        toggle: "ultracode",
         enabled: true,
         expectedExists: true,
         expectedDocument: value.projectDocument,
@@ -750,28 +751,38 @@ describe("feature switch settings", () => {
       trusted: false,
       value: makeProfileSettingsInspection({ projectTrusted: false }),
     });
-    yield* step(() => fixture.settings("global scriptedWorkflows inherit"));
+    yield* step(() => fixture.settings("global ultracode inherit"));
     const [patch] = featurePatches(fixture);
     expect(patch).toMatchObject({ scope: "global", expectedExists: false });
     expect(patch).not.toHaveProperty("enabled");
     expect(patch).not.toHaveProperty("expectedDocument");
   });
 
-  effectTest("has no session scope and changes nothing without a persistent one", function* () {
+  effectTest("sets the session's own value by default and clears it with inherit", function* () {
     const fixture = setup();
-    for (const args of ["scriptedWorkflows false", "session scriptedWorkflows inherit"])
+    for (const args of ["ultracode true", "session ultracode inherit"])
       yield* step(() => fixture.settings(args));
+    expect(
+      vi
+        .mocked(fixture.managerActions.patchSessionFeatureToggle)
+        .mock.calls.map(([patch]) => patch),
+    ).toEqual([
+      { toggle: "ultracode", enabled: true, expectedRevision: 0 },
+      { toggle: "ultracode", expectedRevision: 0 },
+    ]);
     expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
-    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+    expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "error");
   });
 
-  effectTest("rejects retired routing commands without writing any scope", function* () {
+  effectTest("rejects retired switch commands without writing any scope", function* () {
     const fixture = setup();
-    for (const scope of ["global", "project", "session"])
-      for (const value of ["true", "false", "inherit"])
-        yield* step(() => fixture.settings(`${scope} automaticProfileRouting ${value}`));
+    for (const retired of ["automaticProfileRouting", "scriptedWorkflows"])
+      for (const scope of ["global", "project", "session"])
+        for (const value of ["true", "false", "inherit"])
+          yield* step(() => fixture.settings(`${scope} ${retired} ${value}`));
     expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
+    expect(fixture.managerActions.patchSessionFeatureToggle).not.toHaveBeenCalled();
     expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
     expect(fixture.managerActions.patchSessionNesting).not.toHaveBeenCalled();
     expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
@@ -780,14 +791,14 @@ describe("feature switch settings", () => {
   effectTest("rejects values other than true, false, or inherit", function* () {
     const fixture = setup();
     for (const value of ["off", "1", "yes"])
-      yield* step(() => fixture.settings(`global scriptedWorkflows ${value}`));
+      yield* step(() => fixture.settings(`global ultracode ${value}`));
     expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
   });
 
   effectTest("refuses Project writes before trust and when trust is revoked", function* () {
     const untrusted = setup({ trusted: false });
-    yield* step(() => untrusted.settings("project scriptedWorkflows false"));
+    yield* step(() => untrusted.settings("project ultracode false"));
     expect(untrusted.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(untrusted.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "warning");
 
@@ -797,7 +808,7 @@ describe("feature switch settings", () => {
       revoked.setProjectTrusted(false);
       return vi.mocked(inspect).getMockImplementation()!(trusted);
     });
-    yield* step(() => revoked.settings("project scriptedWorkflows false"));
+    yield* step(() => revoked.settings("project ultracode false"));
     expect(revoked.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(revoked.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
   });
@@ -811,7 +822,7 @@ describe("feature switch settings", () => {
         message: "Subagents settings changed on disk; reopen /subagents profiles and try again.",
       }),
     );
-    yield* step(() => fixture.settings("global scriptedWorkflows false"));
+    yield* step(() => fixture.settings("global ultracode false"));
     expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
     expect(fixture.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "info");
   });
@@ -828,7 +839,7 @@ describe("feature switch settings", () => {
       current = false;
       return vi.mocked(inspect).getMockImplementation()!(trusted);
     });
-    yield* step(() => fixture.settings("global scriptedWorkflows false"));
+    yield* step(() => fixture.settings("global ultracode false"));
     expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(fixture.ui.notify).not.toHaveBeenCalled();
   });

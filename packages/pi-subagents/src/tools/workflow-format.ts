@@ -1,4 +1,4 @@
-import { clipText, countLabel, formatDuration } from "pi-cosmic-core";
+import { clipText, countLabel, formatDuration, formatElapsed } from "pi-cosmic-core";
 import { workflowArgsSummary } from "../workflow/args.ts";
 import type { WorkflowAgentAttention } from "../workflow/attention.ts";
 import {
@@ -8,6 +8,7 @@ import {
   workflowPlannedByPhase,
   workflowReusedByPhase,
   workflowSkippedByPhase,
+  workflowSkippedPlanned,
   type WorkflowAgentView,
   type WorkflowRunView,
 } from "../workflow/model.ts";
@@ -84,6 +85,17 @@ const phaseList = (run: WorkflowRunView): string => {
     .join(", ")}`;
 };
 
+/**
+ * What the main agent does once a run started: end its turn, since the run's notification starts
+ * the next one. The start result ends with it.
+ */
+export const WORKFLOW_END_TURN_TEXT =
+  "It runs in the background. End your turn now, after any unrelated work: the run's notification starts your next turn automatically with its result. Don't call status to wait for it or stop the run to answer sooner.";
+
+/** When to stop a run, which the tool description and the result of a stop both give. */
+export const WORKFLOW_STOP_GUIDANCE =
+  "Stop a run only when the user asks or it is clearly broken (a wrong script, a runaway loop), never to answer sooner: its unfinished agents' work is lost, and a resume reruns them at full cost.";
+
 export const workflowStartText = (run: WorkflowRunView): string =>
   [
     `Started workflow "${run.name}" (${run.id}) with ${phaseList(run)}.`,
@@ -93,11 +105,25 @@ export const workflowStartText = (run: WorkflowRunView): string =>
     run.budget
       ? `Once its agents spend ${run.budget.total} output tokens, agent() calls that haven't started throw a budget error.`
       : undefined,
-    `It runs in the background; you'll get one notification with its result. Continue with other work; use action "status" to check progress or "stop" to cancel.`,
     workflowEditLine(run),
+    WORKFLOW_END_TURN_TEXT,
   ]
     .filter(Boolean)
     .join(" ");
+
+/**
+ * A repeated status call's answer while nothing material changed: the run's state and counts on
+ * one line, then that polling won't bring the result sooner than the run's notification.
+ */
+export const workflowUnchangedStatusText = (run: WorkflowRunView, sinceMs: number): string => {
+  const phase = run.currentPhase === undefined ? "" : `, phase ${run.currentPhase}`;
+  const counts = workflowAgentCountsText(run.agents, run.reused, workflowSkippedPlanned(run));
+  const agents = `${countLabel(workflowAgentTotal(run), "agent")}${counts ? ` · ${counts}` : ""}`;
+  return [
+    `${workflowRunSubject(run.name, run.id)}: ${run.state}${phase} · ${agents}.`,
+    `Nothing changed since your last status call ${formatElapsed(sinceMs)} ago. Don't poll: end your turn; this run's notification starts your next turn when it finishes.`,
+  ].join("\n");
+};
 
 const phaseLines = (run: WorkflowRunView): ReadonlyArray<string> => {
   const titles = [
@@ -295,6 +321,12 @@ export const workflowStatusText = (
     .filter((line): line is string => line !== undefined)
     .join("\n");
 };
+
+/** A stop's result: the run's final state, and when to stop one, after a stop the main agent made. */
+export const workflowStopText = (run: WorkflowRunView, now: number): string =>
+  run.stoppedBy === "tool"
+    ? `${workflowStatusText(run, now)}\n${WORKFLOW_STOP_GUIDANCE}`
+    : workflowStatusText(run, now);
 
 /** A run only its files describe, in the summary shape status details carry. */
 export const workflowRecordedRunSummary = (run: WorkflowRecordedRun): WorkflowRunSummary => ({

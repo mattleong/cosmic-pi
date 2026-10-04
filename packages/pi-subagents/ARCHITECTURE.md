@@ -16,7 +16,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 - The root Pi session (depth 0) owns one managed runtime for every descendant; nested Pi processes are authenticated proxy clients that construct no application services.
 - `src/application/` and `src/layer.ts` compose that runtime in the shared session-runtime slot; only the current slot token may register tools or publish activation state, and `/tree` and `/reload` carry the Current Session profiles across replacement.
 - Replacement and shutdown close the run tree leaf-first.
-  `WorkflowService` depends on `SubagentService`, so its finalizers run first: Activity publishes stop, deliveries end, run fibers stop their agents, and the capacity queue's watcher ends last.
+  `WorkflowService` depends on `SubagentService`, so its finalizers run first: Activity publishes stop, deliveries end, and run fibers stop their agents last.
 
 ## Ownership
 
@@ -27,18 +27,24 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 - `src/backend/` holds the local Pi, Claude, and Codex drivers; `src/boundary/` and `src/supervisor/` hold host, process, filesystem, lease, and supervisor adapters.
 - `src/tools/` owns schemas, execution, persisted details, and compact renderers for the 11 coordinator tools, `subagent_workflow`, and child-only tools; `src/ui/` holds pure projections.
 - `boundary/host-activity.ts` registers the root's Cosmic UI Activity provider for runs and workflows, whose items and details pure `ui/run-activity.ts` projects; actions recheck session, revision, and capabilities before reaching `SubagentService` or `WorkflowService`.
-- `src/settings/` owns `/subagents`, its settings, and the profile dashboard.
-  The `scriptedWorkflows` switch (Global or trusted Project, default on, kept across `/tree`, reread on `/reload`) registers `subagent_workflow` and lets native codemode call four root tools.
+- `src/settings/` owns `/subagents`, its settings, and the profile dashboard; `application/commands.ts` registers it and `/ultracode` over the current activation.
+- Workflows are opt-in: `subagent_workflow` always registers inactive, and `application/ultracode.ts` alone adds it to or removes it from Pi's active tools, touching no other tool.
+  It is active while the `ultracode` switch (Session, Global, or trusted Project, default off) is on or the one-off `/ultracode` window is open; it also owns the footer marker and the `before_agent_start` guidance, a system-prompt section of its own.
+  The window is pure state in `application/ultracode-window.ts`, moved by `/ultracode` requests, Pi's `before_agent_start`, `agent_start` and `agent_settled`, and `WorkflowService`'s run observer (`workflow/run-observer.ts`), which opens a run at start or when its interrupted notice is posted and closes it once Pi accepts its notification, saying whether the current or the next agent run handles it; session boundaries reset it.
+  Between an activation and the next agent run the controller only adds the tool, so Pi's pending restore list survives.
+  Native codemode can always call the four root tools; ultracode gates only `subagent_workflow`.
+- `skills/workflow-authoring/SKILL.md` is the main agent's workflow authoring guide. It isn't a declared Pi skill (`pi.skills` is empty), so it stays out of the skill list while workflows are off; the tool description and the ultracode guidance name its path, which `boundary/workflow-authoring-guide.ts` resolves.
 - `src/workflow/` owns dynamic workflow runs: `service.ts` starts and stops them and forks one fiber per run, `skip.ts` skips their planned, queued, and running agents, and `runs.ts` holds their views and coalesces Activity publishes.
 
 ## Workflow runs
 
 - Scripts run in a fresh in-process `CodemodeSandbox` with only `agent`, `event`, and `load` host members, whose calls are fibers of the run's scope.
-- Each `agent()` call is an owned run admitted through its run's FIFO slots, then the session's FIFO capacity queue.
+- Each `agent()` call is an owned run admitted through its run's own FIFO slots, `min(16, CPUs - 2)` of them, as in Claude Code.
   Only the launch is interruptible, so a settled call always records its view, usage, and journal lines.
 - Owned-run rule (`run/owned-runs.ts`): the workflow claims its agent's first report before the record is registered, and root await, retry, and resume of a completed member fail with `workflow_owned_run` while it is live.
   Closing the owner stops its live runs, hands any it couldn't stop and unread completed writer reports back to root delivery, and consumes the rest.
-- Admission: `run/admission-signal.ts` advances a revision only when a holding that can refuse a start is released, and workflow starts leave `WORKFLOW_ROOT_RESERVE` (2) root slots for the main agent while a workflow agent holds one.
+- Admission: workflow starts are exempt from the root's direct-child limit, and runs a workflow still owns, or its writers' worktree launches, hold none of its slots, so that limit governs only the main agent's own subagents.
+  A queued writer waits behind a conflicting writer on `run/admission-signal.ts`, which advances a revision only when a holding that can end a writer conflict is released.
 - What persists where: the resume journal lives in process memory per Pi session and survives `/reload` and `/tree`; run files (script copy, results journal, full results) live under `<agent-dir>/subagents/workflow-runs`; `run.json` lets a later Pi process of the same session resume, announce, or describe a run.
 - Structured results: `domain/result-contract.ts` compiles the schema on `domain/json-schema.ts`, which workflow `meta.args` schemas share, local Pi children submit through `subagent_result`, Claude and Codex through the supervisor report, and `run/settlement.ts` decides precedence.
 - A worktree writer that made no changes is discarded through `workspaceDiscardUnchanged`, which holds its binding like any root workspace operation.
@@ -59,7 +65,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
   Snapshot heuristics and cooperative claims are not filesystem or confidentiality sandboxes.
 - A public or proxied start batch captures one profile and nesting-policy revision.
   Default policy is 12 direct children and depth 3, with strict bounds of 1 through 32 and 0 through 8.
-  Admission counts active direct children, race reservations, and slots held by worktree launches still acquiring workspaces, for one parent only.
+  Admission counts active direct children, race reservations, and slots held by worktree launches still acquiring workspaces, for one parent only; runs a workflow owns and their launches count for none.
   There is no tree-wide active-run budget.
   A node at max depth cannot spawn.
 - Completed respawn checks the current direct-child policy, including held worktree launch slots, under the admission lock before reserving its process slot.

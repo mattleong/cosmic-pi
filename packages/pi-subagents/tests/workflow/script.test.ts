@@ -76,13 +76,26 @@ describe("workflow script parsing", () => {
     );
   });
 
-  it("reports syntax errors, including TypeScript annotations, before anything runs", () => {
-    expect(
-      failure("export const meta = { name: 'a', description: 'b' };\nconst x: string[] = [];"),
-    ).toContain("SyntaxError");
-    expect(failure("export const meta = { name: 'a', description: 'b' };\nreturn (")).toContain(
-      "SyntaxError",
-    );
+  it("reports syntax errors, including TypeScript annotations, with their line", () => {
+    const meta = "export const meta = { name: 'a', description: 'b' };\n";
+    for (const body of ["const x: string[] = [];", "return (", "\nconst items = [1, 2;"]) {
+      const message = failure(`${meta}${body}`);
+      expect(message).toContain("SyntaxError");
+      const line = 2 + body.split("\n").length - 1;
+      expect(message, message).toContain(`line ${line}`);
+    }
+  });
+
+  it("quotes the failing code of a long line with a caret under the position", () => {
+    const meta = "export const meta = { name: 'a', description: 'b' };\n";
+    const body = `const work = [${"'item', ".repeat(40)}]; const found = await parallel(work.map((w) => () => agent(w, { label: w }));`;
+    const message = failure(`${meta}${body}`);
+    const [, excerpt, caret] = message.split("\n");
+    expect(excerpt?.length).toBeLessThan(110);
+    expect(caret?.trim()).toBe("^");
+    // The caret sits under the token the parser stopped at.
+    const at = caret!.indexOf("^");
+    expect(excerpt!.slice(at, at + 1)).toBe(";");
   });
 
   it("allows top-level await and return in the script body", () => {

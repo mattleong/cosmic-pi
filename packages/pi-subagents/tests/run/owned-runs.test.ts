@@ -6,19 +6,16 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import type * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { compileResultContract } from "../../src/domain/result-contract.ts";
 import { childSystemPrompt } from "../../src/run/tool-policy.ts";
-import { type SubagentError, subagentErrorCode as errorCode } from "../../src/run/errors.ts";
+import { subagentErrorCode as errorCode } from "../../src/run/errors.ts";
 import {
   emptyUsage,
   type StartSubagentRequest,
   type SubagentProjection,
 } from "../../src/run/model.ts";
-import type { OwnedRunHandle } from "../../src/run/owned-runs.ts";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import { createOnlyWorkspaceEngine } from "../fixtures/workspace-engine.ts";
 import {
@@ -61,27 +58,6 @@ const questions = (notifications: ReadonlyArray<SubagentNotification>) =>
 
 /** Lets every delivery worker run past its retry delay. */
 const drainDelivery = TestClock.adjust("5 seconds");
-
-/** Retries a capacity-limited start on each newer projection, like a queued workflow agent. */
-const startWhenCapacityAllows = (
-  service: SubagentServiceContract,
-  request: StartSubagentRequest,
-  onCapacity: () => void,
-): Effect.Effect<OwnedRunHandle, SubagentError, Scope.Scope> =>
-  service.projection.pipe(
-    Effect.flatMap(({ revision }) =>
-      service.startOwned(request, owner).pipe(
-        Effect.catchIf(
-          (error) => errorCode(error) === "direct_child_capacity",
-          () =>
-            Effect.sync(onCapacity).pipe(
-              Effect.andThen(service.waitForRevision(revision)),
-              Effect.andThen(startWhenCapacityAllows(service, request, onCapacity)),
-            ),
-        ),
-      ),
-    ),
-  );
 
 describe("owned subagent runs", () => {
   it.effect("keeps a report that settles during startup away from root delivery", () => {
@@ -220,49 +196,14 @@ describe("owned subagent runs", () => {
     });
   });
 
-  it.effect("wakes a capacity waiter when a finished run releases its process slot", () => {
-    const releaseGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ omitPid: true, releaseGate }),
-      {},
-      // Owned starts without a captured policy still honor the session's configured limit.
-      profileLayerFor({ version: 6, nesting: { maxDirectChildren: 1, maxDepth: 3 } }),
-    );
-    const limited = ownedRequest();
-    return withService(layer, function* (service) {
-      yield* service.openOwner(OWNER);
-      const first = yield* service.startOwned(limited, owner);
-      const blocked = yield* service.startOwned(limited, owner).pipe(Effect.flip);
-      expect(errorCode(blocked)).toBe("direct_child_capacity");
-
-      let capacityFailures = 0;
-      const queued = yield* startWhenCapacityAllows(service, limited, () => {
-        capacityFailures += 1;
-      }).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => capacityFailures === 1);
-      backend.controls[0]!.report(first.runId, 1, "first", "First finished.");
-      yield* yieldUntil(() => stateOf(projections, first.runId) === "completed");
-      // The finished run still holds its slot until backend cleanup releases it.
-      yield* yieldUntil(() => capacityFailures === 2);
-      yield* Deferred.succeed(releaseGate, undefined);
-      yield* yieldUntil(() => queued.pollUnsafe() !== undefined);
-      expect((yield* Fiber.join(queued)).runId).not.toBe(first.runId);
-      expect(yield* service.awaitOwned(first)).toMatchObject({ kind: "completed" });
-    });
-  });
-
-  it.effect("leaves two root slots for the main agent while a workflow agent runs", () => {
-    const nestingPolicy = { maxDirectChildren: 4, maxDepth: 3 };
+  it.effect("takes none of the root's direct-child slots while its workflow owns it", () => {
+    const nestingPolicy = { maxDirectChildren: 2, maxDepth: 3 };
     const { layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
       yield* service.openOwner(OWNER);
-      yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
-      yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
-      const reserved = yield* service
-        .startOwned(ownedRequest({ nestingPolicy }), owner)
-        .pipe(Effect.flip);
-      expect(errorCode(reserved)).toBe("direct_child_capacity");
-      // The main agent's own starts may take the slots workflow agents leave.
+      for (let index = 0; index < 3; index++)
+        yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
+      // The main agent's own starts still have every slot, and only they fill it.
       yield* service.start(nativeReportRequest({ name: "main-1", nestingPolicy }));
       yield* service.start(nativeReportRequest({ name: "main-2", nestingPolicy }));
       const full = yield* service
@@ -272,17 +213,64 @@ describe("owned subagent runs", () => {
     });
   });
 
-  it.effect("lets a lone workflow agent take any free root slot", () => {
-    const nestingPolicy = { maxDirectChildren: 2, maxDepth: 3 };
+  it.effect("counts an owned run without a workflow placement as an ordinary root child", () => {
+    const nestingPolicy = { maxDirectChildren: 1, maxDepth: 3 };
     const { layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
       yield* service.openOwner(OWNER);
-      yield* service.start(nativeReportRequest({ name: "main", nestingPolicy }));
-      yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
+      yield* service.startOwned(ownedRequest({ nestingPolicy, workflow: undefined }), owner);
       const full = yield* service
-        .startOwned(ownedRequest({ nestingPolicy }), owner)
+        .start(nativeReportRequest({ name: "main", nestingPolicy }))
         .pipe(Effect.flip);
       expect(errorCode(full)).toBe("direct_child_capacity");
+    });
+  });
+
+  it.effect("holds a workflow agent's own subagents to the depth and direct-child limits", () => {
+    const nestingPolicy = { maxDirectChildren: 1, maxDepth: 2 };
+    const { layer } = nativeReportServiceFixture();
+    return withService(layer, function* (service) {
+      yield* service.openOwner(OWNER);
+      const agent = yield* service.startOwned(ownedRequest({ nestingPolicy }), owner);
+      yield* service.start(nativeReportRequest({ name: "main", nestingPolicy }));
+      const child = yield* service.startSessionOwnedFrom(
+        agent.runId,
+        nativeReportRequest({ name: "child", nestingPolicy }),
+      );
+      expect(child).toMatchObject({ parentRunId: agent.runId, depth: 2 });
+      const sibling = yield* service
+        .startSessionOwnedFrom(agent.runId, nativeReportRequest({ name: "sibling", nestingPolicy }))
+        .pipe(Effect.flip);
+      expect(errorCode(sibling)).toBe("direct_child_capacity");
+      const grandchild = yield* service
+        .startSessionOwnedFrom(child.id, nativeReportRequest({ name: "grandchild", nestingPolicy }))
+        .pipe(Effect.flip);
+      expect(errorCode(grandchild)).toBe("nesting_depth_limit");
+    });
+  });
+
+  it.effect("counts a former workflow agent toward the root's limit once resumed", () => {
+    const nestingPolicy = { maxDirectChildren: 1, maxDepth: 3 };
+    const { backend, layer } = nativeReportServiceFixture(
+      fakeNativeReportBackendLayer({
+        capabilities: ["steer", "interrupt", "resume", "rename-display", "parent-contact"],
+        resumable: true,
+      }),
+      {},
+      profileLayerFor({ version: 6, nesting: nestingPolicy }),
+    );
+    return withService(layer, function* (service) {
+      yield* service.openOwner(OWNER);
+      const handle = yield* service.startOwned(ownedRequest(), owner);
+      const main = yield* service.start(nativeReportRequest({ name: "main", nestingPolicy }));
+      backend.controls[0]!.report(handle.runId, 1, "result", "Checked.");
+      expect(yield* service.awaitOwned(handle)).toMatchObject({ kind: "completed" });
+      yield* service.closeOwner(OWNER);
+      // Handed back, it is an ordinary root child, so resuming it needs a free root slot.
+      const refused = yield* service.resume(handle.runId, "Continue.").pipe(Effect.flip);
+      expect(errorCode(refused)).toBe("direct_child_capacity");
+      yield* service.stop(main.id);
+      expect((yield* service.resume(handle.runId, "Continue.")).state).toBe("running");
     });
   });
 
@@ -453,14 +441,14 @@ describe("owned subagent runs", () => {
     });
   });
 
-  it.effect("advances the admission revision only when a held slot is released", () => {
+  it.effect("advances the admission revision only when a writer's hold is released", () => {
     const releaseGate = Deferred.makeUnsafe<void>();
     const { backend, projections, layer } = nativeReportServiceFixture(
       fakeNativeReportBackendLayer({ releaseGate }),
     );
     return withService(layer, function* (service) {
       yield* service.openOwner(OWNER);
-      const handle = yield* service.startOwned(ownedRequest(), owner);
+      const handle = yield* service.startOwned(ownedRequest({ writeIntent: "writer" }), owner);
       const before = yield* service.admissionRevision;
       const waiting = yield* service.waitForAdmissionChange(before).pipe(Effect.forkScoped);
       for (let output = 1; output <= 5; output++)
@@ -470,7 +458,7 @@ describe("owned subagent runs", () => {
       );
       backend.controls[0]!.report(handle.runId, 1, "done", "Done.");
       yield* yieldUntil(() => stateOf(projections, handle.runId) === "completed");
-      // Progress and settlement leave the slot held until backend cleanup releases it.
+      // Progress and settlement leave the writer's hold in place until backend cleanup ends it.
       expect(yield* service.admissionRevision).toBe(before);
       expect(waiting.pollUnsafe()).toBeUndefined();
       yield* Deferred.succeed(releaseGate, undefined);

@@ -6,12 +6,8 @@ import type * as Schema from "effect/Schema";
 import type { WorkflowSandboxHost } from "../boundary/codemode-sandbox.ts";
 import type { WorkflowRunFileError, WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
-import { makeWorkflowAgentCall, type WorkflowAgentServices, type WorkflowHost } from "./agent.ts";
-import type {
-  WorkflowAdmissionQueue,
-  WorkflowQueued,
-  WorkflowWaitOrder,
-} from "./admission-queue.ts";
+import { makeWorkflowAgentCall, type WorkflowHost } from "./agent.ts";
+import type { WorkflowSlots, WorkflowWaitOrder } from "./admission-queue.ts";
 import type { WorkflowBudget } from "./budget.ts";
 import type { WorkflowJournalContract, WorkflowReplay } from "./journal.ts";
 import {
@@ -48,7 +44,7 @@ export interface WorkflowRunSetup {
   readonly args: Schema.Json;
   readonly host: WorkflowHost;
   readonly replay: WorkflowReplay | undefined;
-  readonly slots: WorkflowAdmissionQueue<WorkflowQueued>;
+  readonly slots: WorkflowSlots;
   readonly order: (queuedAt: number) => WorkflowWaitOrder;
   readonly budget: WorkflowBudget;
   readonly control: WorkflowRunControl;
@@ -62,12 +58,11 @@ export interface WorkflowMembersServices {
   readonly journal: WorkflowJournalContract;
   readonly store: Pick<WorkflowStoreContract, "appendRunJournal" | "writeRunResult">;
   readonly sources: Pick<WorkflowSources, "loadNested">;
-  readonly capacity: WorkflowAgentServices["capacity"];
 }
 
 /** Builds the `__workflow` members of a run's sandbox over the service's state. */
 export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
-  const { runs, subagents, journal, store, sources, capacity } = services;
+  const { runs, subagents, journal, store, sources } = services;
 
   /**
    * Queues a call atomically: it claims a planned entry, or reserves its own run id, and its skip
@@ -213,7 +208,7 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
           runs.modify(setup.id, (run) => reuseWorkflowResult(run, entry, claim)),
         writeResult: (line) => writeResult(setup, line),
       },
-      { subagents, journal, capacity },
+      { subagents, journal },
     ),
     event: (event) =>
       Option.match(decodeWorkflowEvent(event), {

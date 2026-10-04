@@ -44,7 +44,7 @@ export interface RunContext {
   readonly publish: Effect.Effect<void>;
   /**
    * Rechecks start admission after a release that publishes nothing, such as a cleared claim
-   * or a released process slot, so starts queued behind it retry. Publishing and every run-lock
+   * or finished cleanup, so writers queued behind it retry. Publishing and every run-lock
    * release recheck too.
    */
   readonly recheckAdmission: Effect.Effect<void>;
@@ -165,11 +165,10 @@ export interface RunRecord {
    */
   evictionClaim?:
     | {
+        /** The parent whose direct-child slot the claim reserves; none for a workflow start. */
         readonly parentRunId?: string | undefined;
         readonly writerCwdDigest?: string | undefined;
         readonly writeClaims?: ReadonlyArray<string> | undefined;
-        /** The run id the claiming owned start reserved. */
-        readonly runId?: string | undefined;
       }
     | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
@@ -260,7 +259,7 @@ export const workflowOwnedRunError = (
     : owner.ownerId;
   return invalidRequest(
     "workflow_owned_run",
-    `Subagent ${record.view.id} belongs to workflow ${workflow}, which receives its result, so it cannot ${operation}. Check or stop the workflow with subagent_workflow; stopping this subagent resolves its agent() call to null as stopped.`,
+    `Subagent ${record.view.id} belongs to workflow ${workflow}, which receives its result, so it cannot ${operation}. The workflow's notification starts your next turn with its result, so end your turn rather than waiting on this subagent; stop the workflow with subagent_workflow only when the user asks or it is clearly broken. Stopping this subagent resolves its agent() call to null as stopped.`,
   );
 };
 

@@ -96,6 +96,7 @@ export const fleetManagerActionsFixture = (
     deleteProfileSet: unused,
     patchNesting: unused,
     patchFeatureToggle: unused,
+    patchSessionFeatureToggle: unused,
     inspectWriterWorkspace: unused,
     setWriterWorkspaceMode: unused,
     patchSessionProfile: unused,

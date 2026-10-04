@@ -104,7 +104,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
   `contract-schema.ts` defines the authoritative Effect output schemas, and `contract.ts` projects domain facts.
 - `execute-workspace.ts` dispatches strict workspace operations through the coordinator, pages complete immutable diffs, and keeps patches out of persisted detail metadata.
 - `workflow.ts` registers root-only, model-only `subagent_workflow`, with its schema, text, and compact presentation in `workflow-schema.ts`, `workflow-format.ts`, and `workflow-presentation.ts`; `result-presentation.ts` renders the child-only `subagent_result`.
-- With `scriptedWorkflows` on, root scripts may launch read-only assignments, await, inspect status, and stop; off, registration marks those four contract tools model-only as well, leaving native codemode and model calls unchanged.
+- Root scripts may launch read-only assignments, await, inspect status, and stop; ultracode gates only `subagent_workflow`.
   All other coordinator tools and every nested-Pi coordinator definition remain model-only.
 - `boundary/host-tool-result.ts` owns bounded activation, call, and detail-identity receipts that set Pi's tool error flag without discarding returned evidence, including decoded child-proxy results.
   It also tracks native host-derived call identity from execution-start and admission events, never argument fields or ID spelling.

@@ -1,7 +1,6 @@
 /**
- * `/subagents settings` through the shared settings shell: the writer workspace, feature switches
- * for the global or trusted-project scope, and nesting limits for the session, global, or
- * trusted-project scope.
+ * `/subagents settings` through the shared settings shell: the writer workspace, and feature
+ * switches and nesting limits for the session, global, or trusted-project scope.
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
@@ -46,7 +45,7 @@ import {
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
 
-type NestingScope = "session" | "global" | "project";
+type NestingScope = FeatureScope;
 type NestingField = keyof SubagentNestingPolicy;
 
 const INHERIT = "inherit";
@@ -82,7 +81,7 @@ const isNestingField = (id: string): id is NestingField => Object.hasOwn(NESTING
 const NESTING_FIELD_IDS = Object.keys(NESTING_FIELDS).filter(isNestingField);
 
 const SCOPES = [
-  { name: "session", description: "Change nesting limits for this session only" },
+  { name: "session", description: "Change features and nesting limits for this session only" },
   { name: "global", description: "Change features and nesting limits for new sessions everywhere" },
   { name: "project", description: "Change features and nesting limits for this trusted project" },
 ] as const;
@@ -245,7 +244,10 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
             scopeLine("session"),
             scopeLine("global"),
             ...(trusted ? [scopeLine("project")] : []),
-            ...featureToggleStatusLines(inspection, trusted ? ["global", "project"] : ["global"]),
+            ...featureToggleStatusLines(
+              inspection,
+              trusted ? ["session", "global", "project"] : ["session", "global"],
+            ),
           ].join("\n");
         });
 
@@ -260,7 +262,6 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
         const scopes: readonly NestingScope[] = trusted
           ? ["session", "global", "project"]
           : ["session", "global"];
-        const featureScopes: readonly FeatureScope[] = trusted ? ["global", "project"] : ["global"];
         const withCurrent = (values: readonly string[], currentValue: string) =>
           values.includes(currentValue) ? [...values] : [currentValue, ...values];
         const items: SettingItem[] = [
@@ -271,7 +272,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
             currentValue: WORKSPACE_LABELS[workspace.mode],
             values: Object.values(WORKSPACE_LABELS),
           },
-          ...featureToggleItems(inspection, featureScopes),
+          ...featureToggleItems(inspection, scopes),
           ...scopes.flatMap((scope) =>
             NESTING_FIELD_IDS.map((field) => {
               const own = scopeNesting(inspection, scope);
@@ -352,16 +353,16 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     ],
     examples: [
       "writerWorkspace worktree",
-      "global scriptedWorkflows false",
-      "project scriptedWorkflows inherit",
+      "ultracode true",
+      "global ultracode true",
+      "project ultracode inherit",
       "global maxDepth 2",
       "session maxDirectChildren inherit",
     ],
     notes: () => [
-      "Nesting limits apply to the named scope, session by default. Session changes apply now;",
-      `global and project changes after /reload. ${INHERIT} clears a scope's own limits.`,
-      "Feature switches need global or project and take effect after /reload; project wins.",
-      "The writer workspace applies to new sessions and ignores the scope.",
+      "Feature switches and nesting limits apply to the named scope, session by default. Session",
+      `changes apply now; global and project changes after /reload, and project wins. ${INHERIT}`,
+      "clears a scope's own value. The writer workspace applies to new sessions and ignores the scope.",
     ],
     scopes: SCOPES,
     scopeBlocked: (ctx, scope) =>

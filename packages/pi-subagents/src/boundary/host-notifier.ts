@@ -218,6 +218,14 @@ const questionContent = (
 /** A display name for compact rows, bounded like the transcript's other one-line labels. */
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
+/**
+ * Whether a workflow notification joins the agent run under way or starts one. A run the user
+ * stopped, or one torn down before it finished, informs the next turn instead of prompting work.
+ */
+export const workflowNotificationWakesAgent = (
+  notification: SubagentWorkflowNotification,
+): boolean => notification.outcome === "completed" || notification.outcome === "failed";
+
 const sendWorkflow = (
   pi: ExtensionAPI,
   notification: SubagentWorkflowNotification,
@@ -247,12 +255,8 @@ const sendWorkflow = (
         },
         display: true,
       },
-      // A result joins an active turn or wakes an idle parent, like completions. The user's
-      // own stop and a torn-down run wait for the next turn instead of prompting new work.
-      {
-        deliverAs: "steer",
-        triggerTurn: notification.outcome === "completed" || notification.outcome === "failed",
-      },
+      // A result joins an active turn or wakes an idle parent, like completions.
+      { deliverAs: "steer", triggerTurn: workflowNotificationWakesAgent(notification) },
     );
     return { actionAccepted: true };
   } catch {

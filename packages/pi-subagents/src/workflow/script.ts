@@ -222,10 +222,27 @@ const isModuleDeclaration = (node: Node): boolean =>
   node.type === "ExportDefaultDeclaration" ||
   node.type === "ExportAllDeclaration";
 
-/** The position acorn's syntax error carries beside its message. */
+/** The position acorn's syntax error carries beside its message; its column counts from 0. */
 const decodeSyntaxPosition = Schema.decodeUnknownOption(
-  Schema.Struct({ loc: Schema.Struct({ line: Schema.Finite }) }),
+  Schema.Struct({ loc: Schema.Struct({ line: Schema.Finite, column: Schema.Finite }) }),
 );
+
+const EXCERPT_BEFORE = 60;
+const EXCERPT_AFTER = 40;
+
+/**
+ * The failing line around the parser's position, with a caret under it, so a long one-line
+ * script can be fixed in one try instead of guessing at a column.
+ */
+const syntaxExcerpt = (source: string, line: number, column: number): string => {
+  const text = source.split("\n")[line - 1];
+  if (text === undefined) return "";
+  const from = Math.max(0, column - EXCERPT_BEFORE);
+  const to = Math.min(text.length, column + EXCERPT_AFTER);
+  const lead = from > 0 ? "…" : "";
+  const tail = to < text.length ? "…" : "";
+  return `\n  ${lead}${text.slice(from, to)}${tail}\n  ${" ".repeat(lead.length + column - from)}^`;
+};
 
 function parseProgram(source: string): Program {
   try {
@@ -238,9 +255,14 @@ function parseProgram(source: string): Program {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const line = Option.getOrUndefined(decodeSyntaxPosition(error))?.loc.line;
+    const position = Option.getOrUndefined(decodeSyntaxPosition(error))?.loc;
+    const line = position?.line;
+    // Fits both a slip, such as an unclosed bracket, and TypeScript syntax.
+    const near = line === undefined ? "" : ` near line ${line}`;
+    const excerpt =
+      position === undefined ? "" : syntaxExcerpt(source, position.line, position.column);
     throw new WorkflowScriptError({
-      message: `SyntaxError: ${message}. Scripts are plain JavaScript, not TypeScript.`,
+      message: `SyntaxError: ${message}. Check the syntax${near} (scripts are plain JavaScript, without TypeScript types).${excerpt}`,
       syntax: {
         // Acorn ends its message with the position, which `line` carries instead.
         reason: message.replace(/\s*\(\d+:\d+\)$/u, ""),

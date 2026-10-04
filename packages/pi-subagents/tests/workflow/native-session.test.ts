@@ -14,6 +14,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -49,6 +50,7 @@ const workflowSession = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagents-dynamic-workflow-" });
   let notifier: SubagentNotifier | undefined;
+  let host: ExtensionAPI | undefined;
   const fixture = workflowFixture({ profiles: claudeProfiles, notify: (n) => notifier?.(n) });
   const runtime = yield* Effect.acquireRelease(
     Effect.sync(() => ManagedRuntime.make(Layer.merge(fixture.layer, fixture.backend.layer))),
@@ -84,6 +86,7 @@ const workflowSession = Effect.gen(function* () {
       {
         name: "subagents-dynamic-workflow-test",
         factory: (pi) => {
+          host = pi;
           notifier = makeHostNotifier(pi);
           registerWorkflowTool(pi, {
             environment: { cwd: directory, projectTrusted: false },
@@ -116,6 +119,9 @@ const workflowSession = Effect.gen(function* () {
       ),
   );
   yield* step(() => session.bindExtensions({ mode: "print" }));
+  // Pi registers the runner inactive; the application activates it while workflows are on.
+  const activateRunner = () =>
+    host?.setActiveTools([...host.getActiveTools(), "subagent_workflow"]);
   const call = (name: string, args: JsonObject) =>
     Effect.gen(function* () {
       fake.setResponses([
@@ -130,14 +136,16 @@ const workflowSession = Effect.gen(function* () {
         return yield* Effect.die(new Error("The agent loop returned no tool result."));
       return message.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
     });
-  return { session, fake, fixture, call };
+  return { session, fake, fixture, call, activateRunner };
 });
 
 // Live time is intentional: the script runs in a real QuickJS worker.
 describe("dynamic workflows in a Pi session", () => {
   it.live("runs a script in the background and steers its result into the conversation", () =>
     Effect.gen(function* () {
-      const { session, fake, fixture, call } = yield* workflowSession;
+      const { session, fake, fixture, call, activateRunner } = yield* workflowSession;
+      expect(session.getActiveToolNames()).not.toContain("subagent_workflow");
+      activateRunner();
       const scriptable = yield* call("codemode", {
         code: 'text(String("subagent_workflow" in tools));',
       });

@@ -32,6 +32,7 @@ import type {
 } from "../config/store.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
+  type SessionFeaturePatch,
   type SessionNestingPatch,
   type SessionProfilePatch,
   type SessionProfileSetPatch,
@@ -78,6 +79,8 @@ export interface FleetManagerActions {
   readonly patchNesting: (patch: SubagentNestingPatch) => Promise<void>;
   /** Saves or clears one scope's feature switch; the running session keeps its value until /reload. */
   readonly patchFeatureToggle: (patch: SubagentFeatureTogglePatch) => Promise<void>;
+  /** Sets or clears this session's own value for a feature switch, which applies at once. */
+  readonly patchSessionFeatureToggle: (patch: SessionFeaturePatch) => Promise<void>;
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
   /** The coordinator rejects unsafe switches and persists accepted preferences for new sessions. */
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;

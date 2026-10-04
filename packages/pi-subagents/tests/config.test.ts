@@ -31,44 +31,49 @@ describe("writer workspace configuration", () => {
 });
 
 describe("feature switch configuration", () => {
-  it.each([4, 5, 6])(
-    "enables scripted workflows for version %s documents by default",
-    (version) => {
-      expect(resolve({ version }).scriptedWorkflows).toBe(true);
+  it.each([4, 5, 6])("leaves ultracode off for version %s documents by default", (version) => {
+    expect(resolve({ version })).toMatchObject({
+      ultracode: false,
+      featureSources: { ultracode: "default" },
+    });
+  });
+
+  it("resolves ultracode with trusted Project over Global", () => {
+    const global = { version: 6, ultracode: true };
+    expect(resolve(global)).toMatchObject({
+      ultracode: true,
+      featureSources: { ultracode: "global" },
+    });
+    expect(resolve(global, { version: 6 }).ultracode).toBe(true);
+    expect(resolve(global, { version: 6, ultracode: false })).toMatchObject({
+      ultracode: false,
+      featureSources: { ultracode: "project" },
+    });
+    expect(resolve(global, { version: 6, ultracode: false }, false).ultracode).toBe(true);
+    expect(resolve({ version: 6 }, { version: 6, ultracode: true }).ultracode).toBe(true);
+  });
+
+  it("reports non-boolean ultracode values without retaining them", () => {
+    for (const value of ["true", 1, null, { enabled: true }]) {
+      const decoded = decodeSubagentConfig({ version: 6, ultracode: value });
+      expect(decoded.file.ultracode).toBeUndefined();
+      expect(decoded.diagnostics).toContain("config.ultracode");
+    }
+  });
+
+  it.each(["automaticProfileRouting", "scriptedWorkflows"])(
+    "ignores all retired v6 %s values without an effective field",
+    (key) => {
+      for (const value of [true, false, null, 0, "off", [], { enabled: "private-value" }]) {
+        const raw = { version: 6, [key]: value };
+        const decoded = decodeSubagentConfig(raw);
+        expect(decoded.diagnostics).toEqual([]);
+        expect(decoded.file).toEqual({ version: 6 });
+        expect(resolve(raw)).toEqual(resolve({ version: 6 }));
+        expect(resolve({ version: 6 }, raw)).toEqual(resolve({ version: 6 }));
+      }
     },
   );
-
-  it("resolves scripted workflows with trusted Project over Global", () => {
-    const global = { version: 6, scriptedWorkflows: false };
-    expect(resolve(global).scriptedWorkflows).toBe(false);
-    expect(resolve(global, { version: 6 }).scriptedWorkflows).toBe(false);
-    expect(resolve(global, { version: 6, scriptedWorkflows: true }).scriptedWorkflows).toBe(true);
-    expect(resolve(global, { version: 6, scriptedWorkflows: true }, false).scriptedWorkflows).toBe(
-      false,
-    );
-    expect(
-      resolve({ version: 6 }, { version: 6, scriptedWorkflows: false }).scriptedWorkflows,
-    ).toBe(false);
-  });
-
-  it("reports non-boolean workflow values without retaining them", () => {
-    for (const value of ["false", 0, null, { enabled: false }]) {
-      const decoded = decodeSubagentConfig({ version: 6, scriptedWorkflows: value });
-      expect(decoded.file.scriptedWorkflows).toBeUndefined();
-      expect(decoded.diagnostics).toContain("config.scriptedWorkflows");
-    }
-  });
-
-  it("ignores all retired v6 routing values without an effective field", () => {
-    for (const value of [true, false, null, 0, "off", [], { enabled: "private-value" }]) {
-      const raw = { version: 6, automaticProfileRouting: value };
-      const decoded = decodeSubagentConfig(raw);
-      expect(decoded.diagnostics).toEqual([]);
-      expect(decoded.file).toEqual({ version: 6 });
-      expect(resolve(raw)).toEqual(resolve({ version: 6 }));
-      expect(resolve({ version: 6 }, raw)).toEqual(resolve({ version: 6 }));
-    }
-  });
 
   it("never reads the retired routing value", () => {
     let reads = 0;

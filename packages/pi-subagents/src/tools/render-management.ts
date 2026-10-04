@@ -48,7 +48,7 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
   [
     ["workflow_owned_run"],
-    "The run's report belongs to its workflow; check progress with subagent_workflow status, or stop the workflow to take the run back.",
+    "The run reports to its workflow, whose notification starts your next turn; end your turn rather than waiting on it, and stop the workflow with subagent_workflow only when the user asks or it is clearly broken.",
   ],
   [["notfound", "not_found"], "Refresh run IDs with subagent_list.", ["not found"]],
   [

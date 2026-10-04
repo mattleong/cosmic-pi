@@ -9,6 +9,8 @@ import {
   decodeSubagentNesting,
   isProfileSetName,
   ownDataProperty,
+  SUBAGENT_FEATURE_TOGGLES,
+  type SubagentFeatureToggle,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
@@ -26,6 +28,10 @@ import {
 } from "./model.ts";
 
 export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, ProfileRoute>>>;
+/** Feature switches this session sets itself, over the persistent configuration. */
+export type SessionFeatureOverrides = Partial<
+  Readonly<Record<SubagentFeatureToggle, boolean | undefined>>
+>;
 
 /** Revisions remain exact integers; a state at this value is immutable except for no-op requests. */
 export const MAX_SESSION_PROFILE_REVISION = Number.MAX_SAFE_INTEGER;
@@ -42,6 +48,7 @@ export interface SessionProfileOverrideSeed {
   readonly revision: number;
   readonly overrides: SessionProfileOverrides;
   readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly features?: SessionFeatureOverrides | undefined;
   /** Optional only for decoding handoffs published before complete baselines were introduced. */
   readonly baseline?: SessionProfileBaseline | undefined;
 }
@@ -66,6 +73,13 @@ export interface SessionProfileSetPatch extends SessionProfileBaseline {
 export interface SessionNestingPatch {
   /** Undefined clears the session policy and reveals persistent configuration. */
   readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly expectedRevision: number;
+}
+
+export interface SessionFeaturePatch {
+  readonly toggle: SubagentFeatureToggle;
+  /** Undefined clears the session value and reveals persistent configuration. */
+  readonly enabled?: boolean | undefined;
   readonly expectedRevision: number;
 }
 
@@ -114,6 +128,9 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   ),
   overrides: SessionOverridesInputSchema,
   nesting: Schema.optional(Schema.Unknown),
+  features: Schema.optional(
+    Schema.Record(Schema.Literals(SUBAGENT_FEATURE_TOGGLES), Schema.optional(Schema.Boolean)),
+  ),
   baseline: Schema.optional(SessionProfileBaselineInputSchema),
 });
 const decodeSeedInput = Schema.decodeUnknownOption(SessionProfileOverrideSeedInputSchema, {
@@ -251,6 +268,18 @@ const isDetachedBaselineProvenanceValid = (baseline: SessionProfileBaseline): bo
   });
 };
 
+/** The switches a session sets, or undefined when it sets none. */
+const cloneFeatures = (
+  features: SessionFeatureOverrides | undefined,
+): SessionFeatureOverrides | undefined => {
+  const cloned: Partial<Record<SubagentFeatureToggle, boolean>> = {};
+  for (const toggle of SUBAGENT_FEATURE_TOGGLES) {
+    const value = features?.[toggle];
+    if (value !== undefined) cloned[toggle] = value;
+  }
+  return Object.keys(cloned).length > 0 ? cloned : undefined;
+};
+
 export const emptySessionProfileOverrideSeed = (): SessionProfileOverrideSeed =>
   freezeSnapshot({ revision: 0, overrides: {} });
 
@@ -265,10 +294,12 @@ export const cloneSessionProfileOverrideSeed = (
   const revision = Number.isFinite(seed.revision)
     ? Math.min(MAX_SESSION_PROFILE_REVISION, Math.max(0, Math.floor(seed.revision)))
     : 0;
+  const features = cloneFeatures(seed.features);
   const base = {
     revision,
     overrides,
     ...(seed.nesting !== undefined && { nesting: { ...seed.nesting } }),
+    ...(features !== undefined && { features }),
     ...(seed.baseline !== undefined && { baseline: cloneBaseline(seed.baseline) }),
   };
   return freezeSnapshot(base);
@@ -315,6 +346,7 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
     revision: decoded.value.revision,
     overrides,
     ...(nesting !== undefined && { nesting }),
+    ...(decoded.value.features !== undefined && { features: decoded.value.features }),
     ...(baseline !== undefined && { baseline }),
   });
 };
@@ -324,9 +356,15 @@ export const applySessionProfileOverrides = (
   overrides: SessionProfileOverrides,
   nesting?: SubagentNestingPolicy,
   baseline: SessionProfileBaseline = baselineFromConfig(baseConfig),
+  features?: SessionFeatureOverrides,
 ): ResolvedSubagentConfig => {
   return freezeSnapshot({
     ...baseConfig,
+    ultracode: features?.ultracode ?? baseConfig.ultracode,
+    featureSources: {
+      ultracode:
+        features?.ultracode === undefined ? baseConfig.featureSources.ultracode : "session",
+    },
     currentProfileSet: baseline.origin,
     profiles: mapProfileIds((id) => cloneProfileRoute(overrides[id] ?? baseline.profiles[id])),
     profileSources: mapProfileIds((id) =>
@@ -352,7 +390,9 @@ export const makeSessionProfileSnapshot = (
       cloned.overrides,
       cloned.nesting,
       baseline,
+      cloned.features,
     ),
+    ...(cloned.features && { features: cloned.features }),
   };
   return freezeSnapshot(cloned.nesting ? { ...base, nesting: cloned.nesting } : base);
 };
@@ -517,6 +557,28 @@ export const patchSessionNestingSnapshot = (
       ...snapshot,
       revision,
       nesting: patch.nesting,
+    }),
+  );
+};
+
+export const patchSessionFeatureSnapshot = (
+  snapshot: SessionProfileSnapshot,
+  patch: SessionFeaturePatch,
+): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> => {
+  if (patch.expectedRevision !== snapshot.revision)
+    return conflict(
+      snapshot,
+      patch.expectedRevision,
+      "Session subagent settings changed while this page was open; refresh and try again.",
+    );
+  if (snapshot.features?.[patch.toggle] === patch.enabled) return Effect.succeed(snapshot);
+  const revision = incrementRevision(snapshot);
+  if (revision === undefined) return revisionLimit(snapshot);
+  return Effect.succeed(
+    makeSessionProfileSnapshot(snapshot.baseConfig, {
+      ...snapshot,
+      revision,
+      features: { ...snapshot.features, [patch.toggle]: patch.enabled },
     }),
   );
 };

@@ -10,7 +10,6 @@ import {
   fakeNativeReportBackendLayer,
   finished,
   inline,
-  profileLayerFor,
   reportTask,
   resultValue,
   runningTask,
@@ -91,32 +90,6 @@ describe("workflow runs", () => {
         }
         const run = yield* finished(workflows, started.id);
         expect(resultValue(run)).toEqual(["one done", "two done", "three done"]);
-      }),
-    );
-  });
-
-  it.live("waits for root capacity instead of failing an agent", () => {
-    const fixture = workflowFixture({
-      concurrency: 2,
-      profiles: profileLayerFor({ version: 6, nesting: { maxDirectChildren: 1, maxDepth: 3 } }),
-    });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline('return await parallel([() => agent("first"), () => agent("second")]);'),
-            args: null,
-          },
-          testHost(),
-        );
-        yield* runningTask(fixture, "first");
-        const waiting = yield* runWhere(workflows, started.id, (run) => run.agents.length === 2);
-        expect(waiting.agents.find((agent) => agent.label === "agent-2")?.state).toBe("queued");
-        expect(stateOfTask(fixture, "second")).toBeUndefined();
-        yield* reportTask(fixture, "first", "first done");
-        yield* reportTask(fixture, "second", "second done");
-        const run = yield* finished(workflows, started.id);
-        expect(resultValue(run)).toEqual(["first done", "second done"]);
       }),
     );
   });

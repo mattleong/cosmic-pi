@@ -33,15 +33,18 @@ export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checko
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
 
 /**
- * Version-6 feature switches are optional root booleans that Project overrides over Global;
- * an absent declaration inherits, and features are enabled by default.
+ * Version-6 feature switches are optional root booleans that Project overrides over Global; an
+ * absent declaration inherits, and a session may override both. `ultracode` opts the session
+ * into dynamic workflows, so it is off by default.
  */
-export const SUBAGENT_FEATURE_TOGGLES = ["scriptedWorkflows"] as const;
+export const SUBAGENT_FEATURE_TOGGLES = ["ultracode"] as const;
 export type SubagentFeatureToggle = (typeof SUBAGENT_FEATURE_TOGGLES)[number];
 export type SubagentFeatureToggles = Readonly<Record<SubagentFeatureToggle, boolean>>;
 export const DEFAULT_SUBAGENT_FEATURE_TOGGLES: SubagentFeatureToggles = Object.freeze({
-  scriptedWorkflows: true,
+  ultracode: false,
 });
+/** Where a switch's effective value comes from. */
+export type SubagentFeatureSource = "default" | "global" | "project" | "session";
 export const isSubagentFeatureToggle = <Value>(
   value: Value,
 ): value is Value & SubagentFeatureToggle =>
@@ -74,7 +77,7 @@ export interface SubagentConfigFile {
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
   readonly nesting?: SubagentNestingPolicy | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
-  readonly scriptedWorkflows?: boolean | undefined;
+  readonly ultracode?: boolean | undefined;
 }
 
 export interface DecodedSubagentConfig {
@@ -401,7 +404,9 @@ const ROOT_KEYS_BY_VERSION = {
     "nesting",
     "writerWorkspaceMode",
     ...SUBAGENT_FEATURE_TOGGLES,
-    "automaticProfileRouting", // Retired and ignored; preserve compatibility with saved v6 files.
+    // Retired and ignored; preserve compatibility with saved v6 files.
+    "automaticProfileRouting",
+    "scriptedWorkflows",
   ],
 } as const;
 

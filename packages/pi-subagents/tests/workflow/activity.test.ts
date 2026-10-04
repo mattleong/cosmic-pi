@@ -430,11 +430,9 @@ describe("workflow activity", () => {
     expect(writer.summary).toContain("migrator");
     expect(writer.detail).toContain("migrator");
     const summaries = new Set(
-      [undefined, { kind: "slot" as const }, { kind: "capacity" as const }].map(
-        (waiting) => queued(waiting).summary,
-      ),
+      [undefined, { kind: "slot" as const }].map((waiting) => queued(waiting).summary),
     );
-    expect(summaries.size).toBe(3);
+    expect(summaries.size).toBe(2);
   });
 
   it("publishes declared agents as planned rows beneath their phase, skippable while pending", () => {
