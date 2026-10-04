@@ -356,6 +356,82 @@ describe("BackgroundTaskService", () => {
     });
   });
 
+  it.effect("returns the running snapshot when the spawn completes asynchronously", () => {
+    const spawnGate = Deferred.makeUnsafe<void>();
+    const harness = serviceHarness({}, () => {}, { spawnGate });
+    return harness.run(function* (service) {
+      const starting = yield* service.start(taskInput()).pipe(forkNow);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(spawnGate, undefined);
+      expect(yield* Fiber.join(starting)).toMatchObject({ state: "running", pid: 10_000 });
+    });
+  });
+
+  it.effect("keeps a log long-poll waiting when another task's output trims its history", () => {
+    const harness = serviceHarness({
+      maxRunning: 2,
+      logBufferBytesPerTask: 4_096,
+      totalLogBufferBytes: 8_192,
+    });
+    return harness.run(function* (service) {
+      const first = yield* service.start(taskInput({ command: "first" }));
+      const second = yield* service.start(taskInput({ command: "second" }));
+      const control = harness.controls[0];
+      const earlier = yield* emitAndRead(service, control, first.id, 0, "a".repeat(3_000));
+      const polling = yield* service
+        .logs({ id: first.id, afterCursor: earlier.nextCursor, waitSeconds: 30 })
+        .pipe(forkNow);
+      yield* emitAndRead(service, harness.controls[1], second.id, 0, "b".repeat(3_000));
+      expect((yield* service.status(first.id)).droppedLogBytes).toBe(3_000);
+      yield* TestClock.adjust("1 second");
+
+      control?.offer("stdout", "later\n");
+      expect((yield* Fiber.join(polling)).events.map((event) => event.text)).toEqual(["later\n"]);
+    });
+  });
+
+  it.effect("ends a log long-poll at its deadline when no new output arrives", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const polling = yield* service
+        .logs({ id: started.id, afterCursor: 0, waitSeconds: 5 })
+        .pipe(forkNow);
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(polling)).toMatchObject({ events: [], state: "running" });
+    });
+  });
+
+  it.effect("bounds an output wait by elapsed time when the wall clock steps backward", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      yield* TestClock.adjust("1 hour");
+      const started = yield* service.start(taskInput());
+      const waiting = yield* service.wait(outputWait(started.id, { waitSeconds: 5 })).pipe(forkNow);
+      yield* TestClock.setTime(0);
+      yield* emitAndRead(service, harness.controls[0], started.id, 0, "booting\n");
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "timeout" });
+    });
+  });
+
+  it.effect("keeps the trailing output publish on time when the wall clock steps backward", () => {
+    const trailing = Deferred.makeUnsafe<void>();
+    const harness = serviceHarness({}, (projection) => {
+      const text = projection.tasks[0]?.logs.map((entry) => entry.text).join("");
+      if (text === "ab") Deferred.doneUnsafe(trailing, Effect.void);
+    });
+    return harness.run(function* (service) {
+      yield* TestClock.adjust("1 hour");
+      const started = yield* service.start(taskInput());
+      const first = yield* emitAndRead(service, harness.controls[0], started.id, 0, "a");
+      yield* TestClock.setTime(0);
+      yield* emitAndRead(service, harness.controls[0], started.id, first.nextCursor, "b");
+      yield* TestClock.adjust("1 second");
+      yield* Deferred.await(trailing);
+    });
+  });
+
   it.effect(
     "admits normalized start metadata at the bounds and rejects overflow before spawn",
     () => {
@@ -565,6 +641,27 @@ describe("BackgroundTaskService", () => {
         snapshot: { state: "running" },
       });
       expect((yield* service.status(started.id)).state).toBe("running");
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("reports how long it let each wait run, capped at maxWaitSeconds", () => {
+    const harness = serviceHarness({ maxWaitSeconds: 10 });
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const capped = yield* service.wait(exitWait(started.id, 90)).pipe(forkNow);
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* Fiber.join(capped)).toMatchObject({
+        outcome: "timeout",
+        appliedWaitSeconds: 10,
+      });
+
+      const shorter = yield* service.wait(outputWait(started.id, { waitSeconds: 4 })).pipe(forkNow);
+      yield* TestClock.adjust("4 seconds");
+      expect(yield* Fiber.join(shorter)).toMatchObject({
+        outcome: "timeout",
+        appliedWaitSeconds: 4,
+      });
       yield* service.stop(started.id);
     });
   });
@@ -861,6 +958,31 @@ describe("BackgroundTaskService", () => {
         snapshot: { state: "exited", exitCode: 0 },
       });
     });
+  });
+
+  it.live("fails a start the process boundary refuses synchronously and frees its slot", () => {
+    const layer = BackgroundTaskService.layer().pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          LocalProcess.layer,
+          Layer.succeed(BackgroundTaskConfigStore, normalizeConfig({ maxRunning: 1 })),
+          Path.layer,
+        ),
+      ),
+    );
+    const refusedStart = (service: BackgroundTaskServiceContract) =>
+      service
+        .start(taskInput({ command: "echo \u0000" }))
+        .pipe(Effect.timeout("2 seconds"), Effect.flip);
+    return Effect.gen(function* () {
+      const service = yield* BackgroundTaskService;
+      expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
+      const [failed] = yield* service.list();
+      expect(failed).toMatchObject({ state: "failed", error: expect.any(String) });
+      expect(failed?.endedAt).toBeDefined();
+      // With one running slot, a second start is admitted only if the first released it.
+      expect(yield* refusedStart(service)).toMatchObject({ _tag: "BackgroundSpawnError" });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
   it.effect("confirms active termination before the fixed monitor scope closes", () => {

@@ -186,6 +186,7 @@ const waitFor = (
   earliestAvailableCursor: 1,
   droppedBytes: 0,
   ...(matchCursor !== undefined && { matchCursor }),
+  appliedWaitSeconds: 30,
 });
 
 const unexpected = () => Effect.die("Gallery reached an unexpected service call");

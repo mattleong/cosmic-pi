@@ -107,6 +107,10 @@ export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("wait"),
     wait: BackgroundTaskWaitResultSchema,
+    // Beside the frozen wait member, so the v1 Code Mode output never carries it.
+    appliedWaitSeconds: Schema.optionalKey(
+      Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: BOUNDS.maxWaitSeconds })),
+    ),
     causes: CauseSpans,
   }),
   Schema.Struct({ action: Schema.Literal("clear"), removed: Schema.Natural }),

@@ -53,9 +53,14 @@ const ACTION_LABELS = {
   clear: "clear",
 } as const satisfies Record<Action, string>;
 
-/** An action as people read it: `stop_all` is "stop all". */
+/**
+ * An action as people read it: `stop_all` is "stop all". Foreign arguments can name any action,
+ * so only own keys count; `constructor` must not resolve to `Object.prototype`'s.
+ */
 export const backgroundTaskActionLabel = (action: Action): string =>
-  ACTION_LABELS[action] ?? sanitizeTerminalLine(String(action));
+  Object.hasOwn(ACTION_LABELS, action)
+    ? ACTION_LABELS[action]
+    : sanitizeTerminalLine(String(action));
 
 /** Literal text a wait matches, quoted and bounded for one row. */
 export const quotedWaitText = (text: string): string =>
@@ -250,16 +255,21 @@ function taskLabels(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
   });
 }
 
-/** How long a wait lasted and for what, when its arguments say. */
+/**
+ * How long a timed-out wait lasted and what it awaited. The time is the wait the service applied,
+ * never the requested `waitSeconds`, which the `maxWaitSeconds` setting can shorten. Older details
+ * without it leave elapsed time to the shell's measured timing.
+ */
 function waitTimeoutIssue(
   id: string,
   snapshot: BackgroundTaskSnapshot,
   args: Partial<BackgroundTaskToolInput>,
+  appliedWaitSeconds: number | undefined,
 ): CompactIssue {
   const state = taskStateLabel(snapshot.state);
   const contains = args.until === "output" && Predicate.isString(args.contains) && args.contains;
-  const waited = Predicate.isNumber(args.waitSeconds)
-    ? `Waited ${formatDuration(args.waitSeconds * 1_000)}`
+  const waited = appliedWaitSeconds
+    ? `Waited ${formatDuration(appliedWaitSeconds * 1_000)}`
     : "Stopped waiting";
   return issue(
     "warning",
@@ -267,7 +277,7 @@ function waitTimeoutIssue(
     contains
       ? `${waited} for ${quotedWaitText(contains)}; the task is still ${state}`
       : `${waited} for the task to exit; it is still ${state}`,
-    "Wait timed out; this does not stop the background task.",
+    "Wait timed out; this does not stop the background task. Waits end at waitSeconds or the maxWaitSeconds setting, whichever is shorter.",
   );
 }
 
@@ -370,7 +380,8 @@ export const projectBackgroundTaskCompactSummary = ({
         ...cursorIssues(wait),
       ];
       const timeout = wait.outcome === "timeout";
-      if (timeout) issues.unshift(waitTimeoutIssue(wait.id, wait.snapshot, args));
+      const applied = details.appliedWaitSeconds;
+      if (timeout) issues.unshift(waitTimeoutIssue(wait.id, wait.snapshot, args, applied));
       const state = task.metadata?.[0] ?? taskStateLabel(wait.snapshot.state);
       return {
         ...task,
@@ -384,6 +395,8 @@ export const projectBackgroundTaskCompactSummary = ({
         ],
         issues,
         outcome: timeout && task.outcome === "success" ? "warning" : task.outcome,
+        // Without the applied wait, the measured call time says how long a timed-out wait lasted.
+        ...(timeout && applied === undefined && { showTiming: true as const }),
       };
     }
     case "logs": {

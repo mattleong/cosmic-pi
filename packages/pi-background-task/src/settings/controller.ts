@@ -23,7 +23,7 @@ import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import type { BackgroundTaskProjectionBridge } from "../boundary/host-ui.ts";
 import type { BackgroundTaskConfig } from "../config/schema.ts";
-import type { BackgroundTaskSettingsLocation } from "../config/store.ts";
+import { BackgroundTaskConfigError, type BackgroundTaskSettingsLocation } from "../config/store.ts";
 import { BACKGROUND_TASK_SETTINGS, backgroundTaskSettingValue } from "../config/options.ts";
 import { TaskManagerComponent } from "../ui/manager.ts";
 import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
@@ -161,10 +161,23 @@ type TaskSettingsScope = (typeof SCOPES)[number]["name"];
 const INHERIT = "inherit";
 const UNTRUSTED = "Trust this project before changing its background task settings";
 
+/** One scope's own values, or why its file couldn't be read. */
+type ScopeFile =
+  | { readonly scope: TaskSettingsScope; readonly own: Partial<BackgroundTaskConfig> }
+  | { readonly scope: TaskSettingsScope; readonly problem: string };
+
 const scopeOf = (scope: string | undefined): TaskSettingsScope =>
   scope === "project" ? "project" : "global";
 const rowKey = (scope: TaskSettingsScope, id: string) => `${scope}:${id}`;
 const scopeLabel = (scope: TaskSettingsScope) => (scope === "project" ? "Project" : "Global");
+
+/** Without values the row can't be changed, so the picker never writes over a broken file. */
+const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): SettingItem => ({
+  id: rowKey(scope, "file"),
+  label: `${scopeLabel(scope)} · Settings file`,
+  description: problem,
+  currentValue: "unavailable",
+});
 
 /** `/tasks settings` through the shared settings shell; changes apply after /reload. */
 export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionSubcommand {
@@ -183,9 +196,9 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
       ) => Promise<void>;
     },
     config: BackgroundTaskConfig,
-    files: ReadonlyArray<readonly [TaskSettingsScope, Partial<BackgroundTaskConfig>]>,
+    files: ReadonlyArray<ScopeFile>,
   ) => {
-    const items: SettingItem[] = files.flatMap(([scope, own]) =>
+    const settingRows = (scope: TaskSettingsScope, own: Partial<BackgroundTaskConfig>) =>
       BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0).map((setting) => {
         const stored = own[setting.id];
         const currentValue = stored === undefined ? INHERIT : sanitizeTerminalLine(String(stored));
@@ -199,7 +212,11 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
           currentValue,
           values: values.includes(currentValue) ? values : [currentValue, ...values],
         };
-      }),
+      });
+    const items: SettingItem[] = files.flatMap((file) =>
+      "problem" in file
+        ? [unavailableScopeRow(file.scope, file.problem)]
+        : settingRows(file.scope, file.own),
     );
     const generations = settingsRowGenerations();
     return openOwnedSurfacePromise<undefined>(ctx, {
@@ -245,8 +262,9 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
       description: setting.description,
       ...(setting.values.length > 0 && { values: [...setting.values, INHERIT] }),
       openValues: setting.openValues,
+      // Help prints this; a configured value such as shellPath can carry terminal controls.
       currentValue: (config: BackgroundTaskConfig) =>
-        backgroundTaskSettingValue(config, setting.id),
+        sanitizeTerminalLine(backgroundTaskSettingValue(config, setting.id)),
     })),
     examples: ["maxRunning 16", "project maxWaitSeconds 60", `project maxRunning ${INHERIT}`],
     notes: () => [
@@ -300,11 +318,19 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
       const scopes: readonly TaskSettingsScope[] = isProjectTrusted(ctx)
         ? ["global", "project"]
         : ["global"];
-      return Promise.all(
-        scopes.map((scope) =>
-          actions.read({ cwd: ctx.cwd, scope }).then((own) => [scope, own] as const),
-        ),
-      ).then(
+      // A broken file closes only its own scope; an unavailable runtime closes the picker.
+      const readScope = (scope: TaskSettingsScope): Promise<ScopeFile> =>
+        actions.read({ cwd: ctx.cwd, scope }).then(
+          (own) => ({ scope, own }),
+          (error) => {
+            if (!(error instanceof BackgroundTaskConfigError)) throw error;
+            return {
+              scope,
+              problem: `${sanitizeTerminalLine(error.path)} can't be read or isn't a JSON object`,
+            };
+          },
+        );
+      return Promise.all(scopes.map(readScope)).then(
         (files) => openPicker(ctx, session, config, files),
         () => ({ _tag: "Blocked" as const }),
       );

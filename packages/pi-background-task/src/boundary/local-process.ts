@@ -1,7 +1,8 @@
 // Long-lived shell output is decoded into a byte-bounded queue here. Effect owns spawn,
 // streams, forced cleanup, and scope lifetime; immediate graceful signal dispatch, the
-// POSIX post-leader process-group sweep, and Windows taskkill run through core's
-// process-tree helpers under this boundary's graceful/force policy.
+// POSIX post-leader process-group sweep (deferred through a graceful stop's grace
+// window), and Windows taskkill while the leader lives run through core's process-tree
+// helpers under this boundary's graceful/force policy.
 import { StringDecoder } from "node:string_decoder";
 import {
   effectProcessExit,
@@ -13,11 +14,13 @@ import {
 } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
@@ -32,6 +35,7 @@ if (!nodeFsModule) throw new Error("Node fs builtin is unavailable.");
 const { stat } = nodeFsModule.promises;
 
 const INGRESS_CHUNKS = 32;
+const GROUP_EXIT_POLL = "20 millis";
 const BLOCKED_ENVIRONMENT_KEYS = new Set([
   "BASH_ENV",
   "ENV",
@@ -123,6 +127,14 @@ export function makeBackgroundProcessEnvironment(
   return environment;
 }
 
+/** One platform's process-tree policy: stop requests and the sweep after the leader exits. */
+interface ProcessTreeTermination {
+  /** Graceful starts a stop; the caller escalates to force when its grace period ends. */
+  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
+  /** Runs once in the exit observer, after the leader's exit and before `awaitExit` settles. */
+  readonly settleExit: Effect.Effect<void>;
+}
+
 // Exit and termination can race; final settlement is observed separately.
 const dispatchGracefulTermination = (pid: number) => {
   if (signalProcessGroup(pid, "SIGTERM") !== "present") signalProcess(pid, "SIGTERM");
@@ -135,9 +147,14 @@ export const makeWindowsTreeTermination = (
 ) =>
   Effect.gen(function* () {
     const ownerScope = yield* Effect.scope;
+    // Windows may reuse an exited leader's PID, so once its exit is recorded taskkill is
+    // skipped, and a taskkill racing that exit counts its nonzero result as settled. The
+    // upstream spawner is outside this guard: after a nonzero exit its exit listener and
+    // scope finalizer still run their own taskkill on the exited PID.
+    let exited = false;
     // Every core terminator failure maps to the same redacted boundary error.
     const taskkill = (mode: "graceful" | "force") =>
-      terminateWindowsProcessTree({ pid, mode, spawnTaskkill }).pipe(
+      terminateWindowsProcessTree({ pid, mode, spawnTaskkill, targetExited: () => exited }).pipe(
         Effect.mapError(() => processError("terminate")),
       );
     let gracefulFiber: Fiber.Fiber<void> | undefined;
@@ -153,24 +170,90 @@ export const makeWindowsTreeTermination = (
         );
       }).pipe(Effect.uninterruptible),
     );
-    return (mode: "graceful" | "force") =>
-      mode === "force"
-        ? force
-        : Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (dispatched) return;
-              dispatched = true;
-              gracefulFiber = yield* taskkill("graceful").pipe(
-                Effect.ignore,
-                Effect.forkIn(ownerScope, { startImmediately: true }),
-              );
-            }),
-          );
+    return {
+      terminate: (mode) =>
+        mode === "force"
+          ? force
+          : Effect.uninterruptible(
+              Effect.gen(function* () {
+                if (dispatched) return;
+                dispatched = true;
+                gracefulFiber = yield* taskkill("graceful").pipe(
+                  Effect.ignore,
+                  Effect.forkIn(ownerScope, { startImmediately: true }),
+                );
+              }),
+            ),
+      // An exited PID no longer identifies the tree, so there is nothing safe to sweep.
+      settleExit: Effect.sync(() => {
+        exited = true;
+      }),
+    } satisfies ProcessTreeTermination;
   });
 
 // A group-free normal exit is the common case, so the sweep result is ignored.
 const terminateLingeringGroup = (pid: number) =>
   Effect.sync(() => void signalProcessGroup(pid, "SIGKILL"));
+
+/** True once the group is confirmed gone; polls while any member may still exit. */
+const awaitGroupExit = (pid: number) =>
+  Effect.sync(() => signalProcessGroup(pid, 0)).pipe(
+    // Darwin can report EPERM while an exiting group is being reaped.
+    Effect.repeat({
+      schedule: Schedule.spaced(GROUP_EXIT_POLL),
+      while: (group) => group === "present" || group === "permission",
+    }),
+    Effect.map((group) => group === "absent"),
+  );
+
+/** The Effect child-process handle members the POSIX policy uses. */
+interface GroupLeader {
+  readonly isRunning: Effect.Effect<boolean, PlatformError.PlatformError>;
+  readonly kill: (options: {
+    readonly killSignal: "SIGKILL";
+  }) => Effect.Effect<void, PlatformError.PlatformError>;
+}
+
+const makePosixGroupTermination = (pid: number, child: GroupLeader) =>
+  Effect.gen(function* () {
+    const forceRequested = yield* Deferred.make<void>();
+    let gracefulStop = false;
+    const forceLeader = child.isRunning.pipe(
+      Effect.orElseSucceed(() => true),
+      Effect.flatMap((running) =>
+        running
+          ? child.kill({ killSignal: "SIGKILL" }).pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.fail(processError("terminate")),
+              }),
+            )
+          : terminateLingeringGroup(pid),
+      ),
+      Effect.mapError((error) =>
+        error instanceof LocalProcessError ? error : processError("terminate"),
+      ),
+    );
+    return {
+      terminate: (mode) =>
+        mode === "force"
+          ? Deferred.succeed(forceRequested, undefined).pipe(Effect.andThen(forceLeader))
+          : Effect.sync(() => {
+              gracefulStop = true;
+              dispatchGracefulTermination(pid);
+            }),
+      // Outside a stop, descendants die with their leader. A graceful stop gives the whole
+      // group its grace window: wait until the group is gone or force ends the window.
+      settleExit: Effect.suspend(() =>
+        gracefulStop
+          ? Effect.raceFirst(
+              awaitGroupExit(pid),
+              Deferred.await(forceRequested).pipe(Effect.as(false)),
+            )
+          : Effect.succeed(false),
+      ).pipe(Effect.flatMap((gone) => (gone ? Effect.void : terminateLingeringGroup(pid)))),
+    } satisfies ProcessTreeTermination;
+  });
 
 const verifyCwd = (
   cwd: string,
@@ -219,10 +302,17 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     killSignal: "SIGTERM",
     forceKillAfter: 1_000,
   });
-  const child = yield* spawner.spawn(command).pipe(Effect.mapError(() => processError("spawn")));
+  // Node throws synchronously, before any child exists, for arguments it refuses (a NUL
+  // character) and some spawn errnos; Effect surfaces that throw as a defect.
+  const child = yield* spawner.spawn(command).pipe(
+    Effect.mapError(() => processError("spawn")),
+    Effect.catchDefect(() => Effect.fail(processError("spawn"))),
+  );
   const pid = Number(child.pid);
-  const windowsTermination =
-    process.platform === "win32" ? yield* makeWindowsTreeTermination(pid) : undefined;
+  const tree: ProcessTreeTermination =
+    process.platform === "win32"
+      ? yield* makeWindowsTreeTermination(pid)
+      : yield* makePosixGroupTermination(pid, child);
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
@@ -293,39 +383,10 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
         exitCode: observed.code,
         ...(observed.signal && { signal: observed.signal }),
       };
-      return (
-        windowsTermination
-          ? windowsTermination("force").pipe(Effect.ignore)
-          : terminateLingeringGroup(pid)
-      ).pipe(Effect.as(result));
+      return tree.settleExit.pipe(Effect.as(result));
     }),
     Effect.forkScoped({ startImmediately: true }),
   );
-
-  const forceTermination = windowsTermination
-    ? windowsTermination("force")
-    : child.isRunning.pipe(
-        Effect.orElseSucceed(() => true),
-        Effect.flatMap((running) =>
-          running
-            ? child.kill({ killSignal: "SIGKILL" }).pipe(
-                Effect.timeoutOrElse({
-                  duration: "2 seconds",
-                  orElse: () => Effect.fail(processError("terminate")),
-                }),
-              )
-            : terminateLingeringGroup(pid),
-        ),
-        Effect.mapError((error) =>
-          error instanceof LocalProcessError ? error : processError("terminate"),
-        ),
-      );
-  const terminate = (mode: "graceful" | "force") =>
-    mode === "force"
-      ? forceTermination
-      : windowsTermination
-        ? windowsTermination("graceful")
-        : Effect.sync(() => dispatchGracefulTermination(pid));
 
   const output = Stream.fromQueue(outputQueue).pipe(
     Stream.mapEffect((event) =>
@@ -341,9 +402,9 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     output,
     awaitExit: Fiber.join(exitFiber),
     droppedOutputBytes: () => totalDroppedBytes,
-    terminate,
+    terminate: tree.terminate,
     release: child.unref.pipe(
-      Effect.andThen(terminate("force")),
+      Effect.andThen(tree.terminate("force")),
       Effect.timeoutOrElse({ duration: "2500 millis", orElse: () => Effect.void }),
       Effect.ignore,
       Effect.ensuring(Effect.sync(closeOutput)),

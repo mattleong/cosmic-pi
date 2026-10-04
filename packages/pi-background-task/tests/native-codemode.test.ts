@@ -44,6 +44,7 @@ const waitResult = (
   earliestAvailableCursor: 1,
   droppedBytes: 0,
   ...(matchCursor !== undefined && { matchCursor }),
+  appliedWaitSeconds: 30,
 });
 
 /** The service's view of one retained stdout line per cursor after `afterCursor`. */

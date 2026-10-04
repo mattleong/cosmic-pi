@@ -126,6 +126,7 @@ describe("background_task contract", () => {
             earliestAvailableCursor: 2,
             droppedBytes: 0,
             matchCursor: 2,
+            appliedWaitSeconds: 30,
           }),
         clear: Effect.succeed(2),
       };
@@ -335,6 +336,7 @@ describe("background_task contract", () => {
               nextCursor: 3,
               earliestAvailableCursor: 1,
               droppedBytes: 0,
+              appliedWaitSeconds: 1,
             }),
         },
       );

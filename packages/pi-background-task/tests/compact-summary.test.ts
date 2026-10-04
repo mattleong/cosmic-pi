@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { resolveCompactSummary, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
-import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
+import { formatDuration } from "pi-cosmic-core";
+import {
+  backgroundTaskActionLabel,
+  projectBackgroundTaskCompactSummary,
+} from "../src/ui/compact-summary.ts";
 import { taskStateLabel } from "../src/ui/task-state.ts";
 import type { BackgroundTaskSnapshot } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
@@ -209,6 +213,13 @@ describe("background task compact semantics", () => {
     expect(project({ action: "clear", removed: 1 })).toBeUndefined();
   });
 
+  it("labels an unknown action by its own text, never an inherited object property", () => {
+    for (const action of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      // SAFETY: Persisted or foreign arguments can carry actions outside the declared union.
+      expect(backgroundTaskActionLabel(action as BackgroundTaskToolInput["action"])).toBe(action);
+    }
+  });
+
   it("classifies a rejected call as an error the shell explains from its text", () => {
     const summary = projectBackgroundTaskCompactSummary({
       phase: "settled",
@@ -321,18 +332,22 @@ describe("background task compact semantics", () => {
 
   it("reports wait timeout without claiming task timeout or completion", () => {
     const result = project(
-      wait(
-        "timeout",
-        { ...snapshot, droppedLogBytes: 3 },
-        {
-          earliestAvailableCursor: 4,
-          droppedBytes: 3,
-        },
-      ),
+      {
+        ...wait(
+          "timeout",
+          { ...snapshot, droppedLogBytes: 3 },
+          {
+            earliestAvailableCursor: 4,
+            droppedBytes: 3,
+          },
+        ),
+        // The default maxWaitSeconds cap the service applied to the request below.
+        appliedWaitSeconds: 30,
+      },
       "wait",
       "settled",
       false,
-      { until: "exit", waitSeconds: 30 },
+      { until: "exit", waitSeconds: 90 },
     );
     expect(result?.outcome).toBe("warning");
     expect(result?.metadata).toHaveLength(1);
@@ -343,8 +358,17 @@ describe("background task compact semantics", () => {
     expect(find(result, "task-1:log-loss")?.detail).toContain("cursor 4");
     const timeout = find(result, "task-1:wait-timeout");
     expect(timeout?.severity).toBe("warning");
-    expect(timeout?.message).toContain("30s");
+    // A capped wait reports how long it lasted, not the time it requested.
+    expect(timeout?.message).toContain(formatDuration(30_000));
+    expect(timeout?.message).not.toContain(formatDuration(90_000));
     expect(find(result, "task-1:runtime-timeout")).toBeUndefined();
+
+    // Details without the applied wait never fall back to the requested time.
+    const older = project(wait("timeout"), "wait", "settled", false, {
+      until: "exit",
+      waitSeconds: 90,
+    });
+    expect(find(older, "task-1:wait-timeout")?.message).not.toContain(formatDuration(90_000));
   });
 
   it.each([
@@ -503,7 +527,7 @@ describe("background task compact semantics", () => {
       project(logs("failed", {}, true), "logs"),
       project(logs("timed_out"), "logs"),
       project(logs("running", { droppedBytes: 18_432 }), "logs"),
-      project(wait("timeout", snapshot), "wait", "settled", false, {
+      project({ ...wait("timeout", snapshot), appliedWaitSeconds: 30 }, "wait", "settled", false, {
         until: "output",
         contains: "ready in",
         waitSeconds: 30,

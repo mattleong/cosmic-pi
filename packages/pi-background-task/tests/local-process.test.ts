@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -28,6 +29,14 @@ const collectUntilExit = (handle: LocalProcessHandle) =>
     { concurrency: "unbounded" },
   );
 
+const firstOutput = (handle: LocalProcessHandle) =>
+  handle.output.pipe(
+    Stream.take(1),
+    Stream.runCollect,
+    Effect.timeout("5 seconds"),
+    Effect.map((events) => [...events].map((event) => event.text).join("")),
+  );
+
 const processAlive = (pid: number) => signalProcess(pid, 0) === "present";
 
 const awaitProcessDeath = (pid: number) =>
@@ -41,13 +50,13 @@ const awaitProcessDeath = (pid: number) =>
 
 /** One bounded force `taskkill` through the boundary's graceful/force owner. */
 const forceTaskkill = (spawn: ProcessTreeTerminatorSpawn) =>
-  makeWindowsTreeTermination(42, spawn).pipe(Effect.flatMap((terminate) => terminate("force")));
+  makeWindowsTreeTermination(42, spawn).pipe(Effect.flatMap((tree) => tree.terminate("force")));
 
 describe("windows tree terminator", () => {
   it.effect("maps synchronous helper spawn failure without preventing later escalation", () =>
     Effect.gen(function* () {
       const fake = fakeProcessTreeTerminator();
-      const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) => {
+      const { terminate } = yield* makeWindowsTreeTermination(42, (command, args, options) => {
         if (!args.includes("/F")) throw new Error("private spawn details");
         return fake.spawn(command, args, options);
       });
@@ -92,7 +101,7 @@ describe("windows tree terminator", () => {
     Effect.gen(function* () {
       const graceful = fakeProcessTreeTerminator();
       const force = fakeProcessTreeTerminator();
-      const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) =>
+      const { terminate } = yield* makeWindowsTreeTermination(42, (command, args, options) =>
         (args.includes("/F") ? force : graceful).spawn(command, args, options),
       );
       yield* terminate("graceful");
@@ -110,7 +119,7 @@ describe("windows tree terminator", () => {
     Effect.gen(function* () {
       const graceful = fakeProcessTreeTerminator();
       const force = fakeProcessTreeTerminator();
-      const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) =>
+      const { terminate } = yield* makeWindowsTreeTermination(42, (command, args, options) =>
         (args.includes("/F") ? force : graceful).spawn(command, args, options),
       );
       yield* terminate("graceful");
@@ -139,7 +148,7 @@ describe("windows tree terminator", () => {
       const fake = fakeProcessTreeTerminator();
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const terminate = yield* makeWindowsTreeTermination(42, fake.spawn);
+          const { terminate } = yield* makeWindowsTreeTermination(42, fake.spawn);
           yield* terminate("graceful");
         }),
       );
@@ -199,6 +208,34 @@ describe("windows tree terminator", () => {
       expect(fake.isUnrefed()).toBe(true);
       // Settle listeners are gone; only the harmless late-error listener remains.
       expect(fake.listenerCounts()).toEqual({ exit: 0, error: 1 });
+    }).pipe(Effect.scoped),
+  );
+
+  // Windows may reuse an exited PID, so its exit sweep and later stops never target it.
+  it.effect("never runs taskkill after the leader's exit is recorded", () =>
+    Effect.gen(function* () {
+      const fake = fakeProcessTreeTerminator();
+      const tree = yield* makeWindowsTreeTermination(42, fake.spawn);
+      yield* tree.settleExit;
+      yield* tree.terminate("graceful");
+      yield* tree.terminate("force");
+      expect(fake.spawns).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("settles a force taskkill that races the leader's natural exit", () =>
+    Effect.gen(function* () {
+      const fake = fakeProcessTreeTerminator();
+      const tree = yield* makeWindowsTreeTermination(42, fake.spawn);
+      const stopping = yield* tree
+        .terminate("force")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* tree.settleExit;
+      // taskkill reports the vanished target as a nonzero exit.
+      fake.emit("exit", 128);
+      yield* Fiber.join(stopping);
+      yield* tree.terminate("force");
+      expect(fake.spawns).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
 });
@@ -325,6 +362,22 @@ describe("local process boundary", () => {
     ),
   );
 
+  it.live("reports a spawn that Node refuses synchronously as a redacted typed failure", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        // Node throws before any child exists when an argument holds a NUL character.
+        for (const [command, overrides] of [
+          ["echo api_key=FAKE_SECRET_123\u0000", {}],
+          ["echo api_key=FAKE_SECRET_123", { shellPath: "/bin/sh\u0000" }],
+        ] as const) {
+          const failure = yield* spawnProcess(command, overrides).pipe(Effect.flip);
+          expect(failure).toMatchObject({ _tag: "LocalProcessError", reason: "spawn" });
+          expect(String(failure)).not.toContain("FAKE_SECRET_123");
+        }
+      }),
+    ),
+  );
+
   it.live("bounds ingress when a producer outruns log consumption", () =>
     withLocalProcess(
       Effect.gen(function* () {
@@ -407,6 +460,47 @@ describe("local process boundary", () => {
       expect(yield* awaitProcessDeath(pids.leader)).toBe(true);
       expect(yield* awaitProcessDeath(pids.descendant)).toBe(true);
     }),
+  );
+
+  // `; true` keeps the shell as the group leader, so it exits on SIGTERM before its child.
+  it.live.skipIf(process.platform === "win32")(
+    "a graceful stop keeps the group's grace window after a compound command's leader exits",
+    () =>
+      withLocalProcess(
+        Effect.gen(function* () {
+          const handle = yield* spawnProcess(
+            `node -e "process.on('SIGTERM', () => setTimeout(() => { process.stdout.write('cleaned'); process.exit(0) }, 200)); process.stdout.write('ready'); setInterval(() => {}, 1000)"; true`,
+          );
+          expect(yield* firstOutput(handle)).toBe("ready");
+          yield* handle.terminate("graceful");
+          const result = yield* collectUntilExit(handle).pipe(Effect.timeout("5 seconds"));
+          expect(result.exit).toEqual({ exitCode: null, signal: "SIGTERM" });
+          expect([...result.events].map((event) => event.text).join("")).toContain("cleaned");
+        }),
+      ),
+  );
+
+  it.live.skipIf(process.platform === "win32")(
+    "force ends a graceful stop's group grace window and kills lingering descendants",
+    () =>
+      withLocalProcess(
+        Effect.gen(function* () {
+          const handle = yield* spawnProcess(
+            `node -e "process.on('SIGTERM', () => {}); process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)"; true`,
+          );
+          const descendant = Number(yield* firstOutput(handle));
+          expect(Number.isSafeInteger(descendant)).toBe(true);
+          yield* handle.terminate("graceful");
+          const early = yield* handle.awaitExit.pipe(Effect.timeoutOption("300 millis"));
+          expect(Option.isNone(early)).toBe(true);
+          expect(processAlive(descendant)).toBe(true);
+          yield* handle.terminate("force");
+          const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
+          // The leader exited on the graceful signal; only its group waited for force.
+          expect(exit).toEqual({ exitCode: null, signal: "SIGTERM" });
+          expect(yield* awaitProcessDeath(descendant)).toBe(true);
+        }),
+      ),
   );
 
   it.live("force-terminates a running process", () =>

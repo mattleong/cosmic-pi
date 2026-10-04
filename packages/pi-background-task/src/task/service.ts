@@ -111,6 +111,7 @@ export interface BackgroundTaskServiceOptions {
 const invalidCommand = (message: string) => new InvalidBackgroundCommandError({ message });
 
 const waitResult = (
+  appliedWaitSeconds: number,
   snapshot: BackgroundTaskStatus,
   slice: BackgroundLogSlice,
   outcome: BackgroundTaskWaitResult["outcome"],
@@ -123,10 +124,14 @@ const waitResult = (
   earliestAvailableCursor: slice.earliestAvailableCursor,
   droppedBytes: slice.droppedBytes,
   ...(matchCursor !== undefined && { matchCursor }),
+  appliedWaitSeconds,
 });
 
 /** Output chunks coalesce into at most one projection publish per interval. */
 const OUTPUT_PUBLISH_INTERVAL_MILLIS = 1_000;
+
+/** Deadlines use elapsed time, which wall-clock steps cannot move; timestamps stay wall-clock. */
+const monotonicMillis = Effect.map(Clock.monotonicTimeNanos, (nanos) => Number(nanos / 1_000_000n));
 
 const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   options: BackgroundTaskServiceOptions,
@@ -179,7 +184,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       Effect.flatMap(() =>
         withLock(
           Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis;
+            const now = yield* monotonicMillis;
             return Math.max(0, outputPublishDeadline - now);
           }),
         ),
@@ -190,8 +195,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           Effect.gen(function* () {
             Latch.closeUnsafe(outputPublishWake);
             if (!outputPublishPending) return;
-            outputPublishDeadline =
-              (yield* Clock.currentTimeMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+            outputPublishDeadline = (yield* monotonicMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
             publish();
           }),
         ),
@@ -281,8 +285,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         // Output-driven publishes coalesce onto an interval; a trailing flush
         // covers chunks that land between the leading edge and quiescence.
         outputPublishPending = true;
-        if (timestamp >= outputPublishDeadline) {
-          outputPublishDeadline = timestamp + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+        const now = yield* monotonicMillis;
+        if (now >= outputPublishDeadline) {
+          outputPublishDeadline = now + OUTPUT_PUBLISH_INTERVAL_MILLIS;
           publish();
         } else {
           Latch.openUnsafe(outputPublishWake);
@@ -397,17 +402,19 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         });
         const terminateLateHandle = yield* withLock(
           Effect.sync(() => {
-            Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
-            const record = tasks.get(id);
-            if (record !== ownerRecord || !isActiveTaskState(ownerRecord.snapshot.state)) {
-              return true;
-            }
+            const current =
+              tasks.get(id) === ownerRecord && isActiveTaskState(ownerRecord.snapshot.state);
             const stopping = ownerRecord.snapshot.state === "stopping";
-            ownerRecord.snapshot = {
-              ...ownerRecord.snapshot,
-              state: stopping ? "stopping" : "running",
-              pid: handle.pid,
-            };
+            if (current) {
+              ownerRecord.snapshot = {
+                ...ownerRecord.snapshot,
+                state: stopping ? "stopping" : "running",
+                pid: handle.pid,
+              };
+            }
+            // Waiters resume synchronously, so start must already see the running snapshot.
+            Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
+            if (!current) return true;
             wake(ownerRecord);
             publish();
             return stopping;
@@ -600,25 +607,27 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const logs: BackgroundTaskServiceContract["logs"] = (request) =>
     Effect.gen(function* () {
       const record = yield* admitRecord(request.id);
-      const prepared = yield* withLock(
-        Effect.sync(() => {
-          const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, request);
-          const shouldWait =
-            (request.waitSeconds ?? 0) > 0 &&
-            slice.events.length === 0 &&
-            isActiveTaskState(record.snapshot.state);
-          return { slice, wake: shouldWait ? record.wake : undefined };
-        }),
-      );
-      if (!prepared.wake) return prepared.slice;
-      yield* Deferred.await(prepared.wake).pipe(
-        Effect.timeoutOption(
-          Duration.seconds(Math.min(request.waitSeconds ?? 0, config.maxWaitSeconds)),
-        ),
-      );
-      return yield* withLock(
-        Effect.sync(() => readLogBuffer(request.id, record.logs, record.snapshot.state, request)),
-      );
+      const waitSeconds = request.waitSeconds ?? 0;
+      const deadline =
+        (yield* monotonicMillis) + Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
+      // Other wakes (trimmed history, stop requests) leave nothing new to return; keep waiting.
+      while (true) {
+        const prepared = yield* withLock(
+          Effect.sync(() => {
+            const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, request);
+            const shouldWait =
+              waitSeconds > 0 &&
+              slice.events.length === 0 &&
+              isActiveTaskState(record.snapshot.state);
+            return { slice, wake: shouldWait ? record.wake : undefined };
+          }),
+        );
+        const remainingMillis = deadline - (yield* monotonicMillis);
+        if (!prepared.wake || remainingMillis <= 0) return prepared.slice;
+        yield* Deferred.await(prepared.wake).pipe(
+          Effect.timeoutOption(Duration.millis(remainingMillis)),
+        );
+      }
     });
 
   const wait: BackgroundTaskServiceContract["wait"] = (request) =>
@@ -664,8 +673,8 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             }),
           ),
       );
-      const timeoutMillis = Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
-      const deadline = (yield* Clock.currentTimeMillis) + timeoutMillis;
+      const appliedWaitSeconds = Math.min(waitSeconds, config.maxWaitSeconds);
+      const deadline = (yield* monotonicMillis) + appliedWaitSeconds * 1_000;
       let scanAfterCursor = request.afterCursor ?? 0;
       const carryByStream = { stdout: "", stderr: "" } satisfies Record<
         BackgroundLogStream,
@@ -701,14 +710,20 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               if (matchCursor !== undefined) {
                 return {
                   _tag: "result",
-                  result: waitResult(record.snapshot, slice, "matched", matchCursor),
+                  result: waitResult(
+                    appliedWaitSeconds,
+                    record.snapshot,
+                    slice,
+                    "matched",
+                    matchCursor,
+                  ),
                 };
               }
             }
             if (!isActiveTaskState(record.snapshot.state)) {
               return {
                 _tag: "result",
-                result: waitResult(record.snapshot, slice, "completed"),
+                result: waitResult(appliedWaitSeconds, record.snapshot, slice, "completed"),
               };
             }
             return {
@@ -726,9 +741,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       while (true) {
         const inspected = yield* inspect();
         if (inspected._tag === "result") return inspected.result;
-        const remainingMillis = deadline - (yield* Clock.currentTimeMillis);
+        const remainingMillis = deadline - (yield* monotonicMillis);
         if (remainingMillis <= 0) {
-          return waitResult(inspected.snapshot, inspected.slice, "timeout");
+          return waitResult(appliedWaitSeconds, inspected.snapshot, inspected.slice, "timeout");
         }
         const awakened = yield* inspected.awaitChange.pipe(
           Effect.timeoutOption(Duration.millis(remainingMillis)),
@@ -737,7 +752,12 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           const finalInspection = yield* inspect();
           return finalInspection._tag === "result"
             ? finalInspection.result
-            : waitResult(finalInspection.snapshot, finalInspection.slice, "timeout");
+            : waitResult(
+                appliedWaitSeconds,
+                finalInspection.snapshot,
+                finalInspection.slice,
+                "timeout",
+              );
         }
       }
     }).pipe(Effect.scoped);

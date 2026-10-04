@@ -86,4 +86,28 @@ describe("background log buffer", () => {
     expect(slice.events.map((event) => event.text).join("")).toContain("four");
     expect(slice.events.map((event) => event.text).join("")).not.toContain("one");
   });
+
+  it("tails logical lines that span chunks or end without a newline", () => {
+    const tail = (buffer: LogBuffer, tailLines: number) =>
+      readLogBuffer("task-1", buffer, "running", { tailLines })
+        .events.map((event) => event.text)
+        .join("");
+    const open = new LogBuffer().append("stdout", "one\ntw", 1, 1024);
+    open.append("stdout", "o\nthree\nfour", 2, 1024);
+    expect(tail(open, 1)).toBe("four");
+    expect(tail(open, 2)).toBe("three\nfour");
+    expect(tail(open, 3)).toBe("two\nthree\nfour");
+    expect(tail(open, 5)).toBe("one\ntwo\nthree\nfour");
+
+    const terminated = new LogBuffer().append("stdout", "one\ntw", 1, 1024);
+    terminated.append("stderr", "o\n", 2, 1024);
+    expect(tail(terminated, 1)).toBe("two\n");
+    expect(tail(terminated, 2)).toBe("one\ntwo\n");
+
+    const boundary = new LogBuffer().append("stdout", "one\n", 1, 1024);
+    boundary.append("stdout", "two\n", 2, 1024);
+    expect(readLogBuffer("task-1", boundary, "running", { tailLines: 1 }).events).toMatchObject([
+      { cursor: 2, text: "two\n" },
+    ]);
+  });
 });

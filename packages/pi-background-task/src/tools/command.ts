@@ -4,6 +4,7 @@ import {
   truncateHead,
   truncateLine,
   truncateTail,
+  type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -166,19 +167,67 @@ const formatWait = (result: BackgroundTaskStatusWait): string => {
 
 const NO_NEW_OUTPUT = "(no new output)";
 
-/** `content` is the slice's sanitized combined output, shared with its contract. */
-const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number) => {
-  const cut = truncateTail(content, { maxLines: DEFAULT_MAX_LINES, maxBytes });
-  const { truncated, outputBytes, totalBytes, outputLines, totalLines } = cut;
+/** The output a `logs` text keeps and how much of it that is. */
+type LogTail = Pick<TruncationResult, "content" | "outputBytes" | "outputLines">;
+const NO_TAIL: LogTail = { content: "", outputBytes: 0, outputLines: 0 };
+
+/**
+ * The longest tail of `whole` that `fits` accepts. A longer tail never encodes smaller, so a
+ * binary search over the byte bound finds it with a few cuts of the already bounded output.
+ */
+const fittingTail = (whole: TruncationResult, fits: (tail: string) => boolean): LogTail => {
+  if (fits(whole.content)) return whole;
+  let best = NO_TAIL;
+  let low = 0;
+  let high = whole.outputBytes - 1;
+  while (low <= high) {
+    const maxBytes = Math.floor((low + high) / 2);
+    const candidate = truncateTail(whole.content, { maxLines: DEFAULT_MAX_LINES, maxBytes });
+    if (fits(candidate.content)) {
+      best = candidate;
+      low = maxBytes + 1;
+    } else high = maxBytes - 1;
+  }
+  return best;
+};
+
+/**
+ * `content` is the slice's sanitized combined output, shared with its contract. The output is cut
+ * once, from its oldest end, within what the metadata lines and `fits` leave of the text's bounds,
+ * so the newest lines survive and the truncation fields describe exactly what the text holds.
+ */
+const formatLogs = (
+  slice: BackgroundLogSlice,
+  content: string,
+  maxBytes: number,
+  fits: (text: string) => boolean,
+) => {
   // `backgroundLogLines` reads this layout back: one metadata line, then the gap line, if any.
   const metadata = `[${slice.id} state=${slice.state} cursor=${slice.nextCursor} earliest=${slice.earliestAvailableCursor}]\n`;
   const gap = slice.droppedBytes > 0 ? `[${discardedOutputText(slice.droppedBytes)}]\n` : "";
+  const header = `${metadata}${gap}`;
+  if (!content) return { text: boundedText(`${header}${NO_NEW_OUTPUT}`, maxBytes) };
+  const headerBytes = utf8ByteLength(header);
+  const whole = truncateTail(content, {
+    maxLines: DEFAULT_MAX_LINES - (gap ? 2 : 1),
+    maxBytes: Math.max(0, maxBytes - headerBytes),
+  });
+  const tail =
+    headerBytes > maxBytes ? NO_TAIL : fittingTail(whole, (output) => fits(`${header}${output}`));
   return {
-    text: `${metadata}${gap}${cut.content || NO_NEW_OUTPUT}`,
+    text: headerBytes > maxBytes ? boundedText(header, maxBytes) : `${header}${tail.content}`,
     // Five explicit fields: persisted details never store the truncated log text a second time.
-    truncation: truncated
-      ? { truncated, outputBytes, totalBytes, outputLines, totalLines }
-      : undefined,
+    truncation:
+      whole.truncated || tail !== whole
+        ? {
+            truncated: true,
+            outputBytes: tail.outputBytes,
+            totalBytes: whole.totalBytes,
+            // A tail cut to nothing holds no line, not one empty partial line.
+            outputLines: tail.content ? tail.outputLines : 0,
+            totalLines: whole.totalLines,
+          }
+        : undefined,
   };
 };
 
@@ -235,7 +284,14 @@ export interface BackgroundTaskCommandOptions {
   readonly maxTextBytes?: number;
   /** Optional nested-call barrier, evaluated after exact start normalization and before service.start. */
   readonly startOutputFits?: (request: StartBackgroundTask, maxTextBytes: number) => boolean;
+  /**
+   * Optional nested-call bound on a `logs` result beyond `maxTextBytes`, such as its encoded
+   * envelope. The text keeps the newest output this accepts.
+   */
+  readonly logsTextFits?: (text: string, logs: BackgroundLogMetadata) => boolean;
 }
+
+const acceptAnyText = (): boolean => true;
 
 /** Shared action executor used by the top-level Pi tool and the explicit Code Mode adapter. */
 export const executeBackgroundTaskCommand = (
@@ -302,10 +358,16 @@ export const executeBackgroundTaskCommand = (
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
         });
         const output = combinedLogOutput(slice.events);
-        const { text, truncation } = formatLogs(slice, output, maxTextBytes);
         const { events: _events, ...logs } = slice;
+        const fits = options.logsTextFits;
+        const { text, truncation } = formatLogs(
+          slice,
+          output,
+          maxTextBytes,
+          fits ? (candidate) => fits(candidate, logs) : acceptAnyText,
+        );
         return reply(
-          boundedText(text, maxTextBytes),
+          text,
           { action: input.action, logs, ...(truncation && { truncation }) },
           logsContract(slice, output),
         );
@@ -323,11 +385,12 @@ export const executeBackgroundTaskCommand = (
           ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
         });
+        const { appliedWaitSeconds, ...member } = wait;
         return taskReply(
           formatWait(wait),
           wait.snapshot,
           maxTextBytes,
-          (snapshot) => ({ action: "wait", wait: { ...wait, snapshot } }),
+          (snapshot) => ({ action: "wait", wait: { ...member, snapshot }, appliedWaitSeconds }),
           waitContract(wait),
         );
       }

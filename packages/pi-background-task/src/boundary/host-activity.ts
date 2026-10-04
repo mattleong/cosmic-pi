@@ -5,15 +5,24 @@ import {
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
-import { isActiveTaskState, type BackgroundTaskProjection } from "../task/model.ts";
+import {
+  isActiveTaskState,
+  sortTasksByActivity,
+  type BackgroundTaskProjection,
+} from "../task/model.ts";
 import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
 import { taskStateLabel } from "../ui/task-state.ts";
 
+/**
+ * One snapshot holds at most `ACTIVITY_LIMITS.items`, or the host rejects all of it. Retained
+ * finished tasks can exceed that, so active tasks come first and the oldest finished ones drop.
+ */
 export function backgroundTaskActivityItems(
   projection: BackgroundTaskProjection,
 ): readonly ActivityItem[] {
+  const tasks = sortTasksByActivity(projection.tasks).slice(0, ACTIVITY_LIMITS.items);
   return Object.freeze(
-    projection.tasks.map((task) => {
+    tasks.map((task) => {
       const title = sanitizeDiagnosticContent(task.name ?? task.command, {
         maximumLength: ACTIVITY_LIMITS.title,
       });

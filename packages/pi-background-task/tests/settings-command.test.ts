@@ -14,9 +14,11 @@ import {
   opaqueFixture,
   plainTheme,
 } from "pi-cosmic-core/testing";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { vi } from "vitest";
 import { BACKGROUND_TASK_SETTINGS } from "../src/config/options.ts";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
+import { BackgroundTaskConfigError } from "../src/config/store.ts";
 import { taskSettingsSubcommand, type TaskSettingsActions } from "../src/settings/controller.ts";
 
 const harness = (options: { readonly trusted?: boolean; readonly started?: boolean } = {}) => {
@@ -43,15 +45,19 @@ const harness = (options: { readonly trusted?: boolean; readonly started?: boole
 };
 
 /** The settings list opened in a terminal, driven by keys. */
-const pickerHarness = (trusted: boolean) => {
+const pickerHarness = (
+  trusted: boolean,
+  read: TaskSettingsActions["read"] = () => Promise.resolve({}),
+) => {
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   let surface: Component | undefined;
   const modal = deferredPromise<unknown>();
   const write = vi.fn<TaskSettingsActions["write"]>(() => Promise.resolve());
+  const notify = vi.fn();
   const command = taskSettingsSubcommand({
     config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
-    read: () => Promise.resolve({}),
+    read,
     write,
   });
   const tui: TUI = opaqueFixture({ requestRender: () => undefined });
@@ -76,11 +82,20 @@ const pickerHarness = (trusted: boolean) => {
     hasUI: true,
     signal: new AbortController().signal,
     isProjectTrusted: () => trusted,
-    ui: { custom, notify: vi.fn() },
+    ui: { custom, notify },
   });
   const opened = Promise.resolve(command.handler("", ctx));
   const input = (data: string) => surface?.handleInput?.(data);
-  return { write, input, opened, close: () => modal.resolve(undefined), isOpen: () => !!surface };
+  const screen = () => surface?.render(300).join("\n") ?? "";
+  return {
+    write,
+    notify,
+    input,
+    screen,
+    opened,
+    close: () => modal.resolve(undefined),
+    isOpen: () => !!surface,
+  };
 };
 
 const flush = Effect.callback<void>((resume) => {
@@ -100,6 +115,18 @@ describe("/tasks settings", () => {
       const idle = harness({ started: false });
       yield* idle.run("status");
       expect(idle.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
+    }),
+  );
+
+  it.effect("shows help with the session's values, without terminal controls", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* h.run("help");
+      const [message, level] = h.notify.mock.calls.at(-1) ?? [];
+      expect(level).toBe("info");
+      expect(message).toContain("shellPath");
+      expect(message).not.toContain("\u001b");
+      expect(message).not.toMatch(/\nspoof/u);
     }),
   );
 
@@ -148,6 +175,51 @@ describe("/tasks settings", () => {
         h.close();
         yield* Effect.promise(() => h.opened);
       }
+    }),
+  );
+
+  it.effect("opens the readable scopes and keeps a broken file's scope unavailable", () =>
+    Effect.gen(function* () {
+      const rows = BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0);
+      const path = "/project/.pi/extensions/pi-background-task.json";
+      const h = pickerHarness(true, (location) =>
+        location.scope === "project"
+          ? Promise.reject(
+              new BackgroundTaskConfigError({ operation: "read", path, message: "Unreadable." }),
+            )
+          : Promise.resolve({}),
+      );
+      yield* flush;
+      expect(h.isOpen()).toBe(true);
+      expect(h.notify).not.toHaveBeenCalled();
+      // The project row says which file is broken, in the shared message style.
+      for (const _ of rows) h.input("j");
+      const reason =
+        h
+          .screen()
+          .split("\n")
+          .find((line) => line.includes(path))
+          ?.trim() ?? "";
+      expect(issueMessageStyleProblems(reason, { maxLength: 200 })).toEqual([]);
+      // The broken scope refuses edits; the global rows still take them.
+      h.input("\r");
+      yield* flush;
+      expect(h.write).not.toHaveBeenCalled();
+      h.input("j");
+      h.input("\r");
+      yield* flush;
+      expect(h.write.mock.calls.map(([location]) => location.scope)).toEqual(["global"]);
+      h.close();
+      yield* Effect.promise(() => h.opened);
+    }),
+  );
+
+  it.effect("stays closed when the settings runtime is unavailable", () =>
+    Effect.gen(function* () {
+      const h = pickerHarness(true, () => Promise.reject(new Error("not running")));
+      yield* Effect.promise(() => h.opened);
+      expect(h.isOpen()).toBe(false);
+      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
     }),
   );
 });

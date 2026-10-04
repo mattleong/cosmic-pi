@@ -1,7 +1,11 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot, invokeHostCallback } from "pi-cosmic-core";
-import type { BackgroundTaskSnapshot, StartBackgroundTask } from "../task/model.ts";
+import type {
+  BackgroundLogMetadata,
+  BackgroundTaskSnapshot,
+  StartBackgroundTask,
+} from "../task/model.ts";
 import {
   backgroundTaskStartCommandResult,
   type BackgroundTaskCommandResult,
@@ -12,14 +16,30 @@ import {
   type BackgroundTaskCodeModeOutput,
 } from "./protocol.ts";
 
-// Logs drop the display-only truncation here because the byte-size check runs before decoding.
+/**
+ * Exactly the members the v1 output returns, since the byte-size check runs before decoding:
+ * detail-only fields (log truncation, cause spans, the applied wait) never count against it.
+ */
 const borrowOutput = ({
   text,
   details,
-}: BackgroundTaskCommandResult): BackgroundTaskCodeModeOutput =>
-  details.action === "logs"
-    ? { action: details.action, text, logs: details.logs }
-    : { text, ...details };
+}: BackgroundTaskCommandResult): BackgroundTaskCodeModeOutput => {
+  switch (details.action) {
+    case "start":
+    case "status":
+    case "stop":
+      return { action: details.action, text, snapshot: details.snapshot };
+    case "list":
+    case "stop_all":
+      return { action: details.action, text, tasks: details.tasks };
+    case "logs":
+      return { action: details.action, text, logs: details.logs };
+    case "wait":
+      return { action: details.action, text, wait: details.wait };
+    case "clear":
+      return { action: details.action, text, removed: details.removed };
+  }
+};
 
 /**
  * Proves that any successful initial start snapshot fits before the service allocates a task id.
@@ -69,6 +89,20 @@ export const backgroundTaskCodeModeOutputFits = (
   // Cyclic or non-JSON-representable hostile payloads are refused, never accepted.
   return invokeHostCallback(() => Buffer.byteLength(JSON.stringify(output)) <= limit, false);
 };
+
+/**
+ * Whether a `logs` result with `text` fits once encoded, envelope and JSON escapes included, so
+ * the executor can keep the newest output that does.
+ */
+export const backgroundTaskCodeModeLogsOutputFits = (
+  text: string,
+  logs: BackgroundLogMetadata,
+  maxOutputBytes: number,
+): boolean =>
+  backgroundTaskCodeModeOutputFits(
+    borrowOutput({ text, details: { action: "logs", logs } }),
+    maxOutputBytes,
+  );
 
 const decodeOutput = Schema.decodeUnknownOption(BackgroundTaskCodeModeOutputSchema);
 

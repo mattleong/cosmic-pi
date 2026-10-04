@@ -82,27 +82,45 @@ export class LogBuffer {
   }
 }
 
+/** Events from `index`, with the first clipped to start at `offset` in its text. */
+function eventsFrom(
+  events: ReadonlyArray<BackgroundLogEvent>,
+  index: number,
+  offset: number,
+): ReadonlyArray<BackgroundLogEvent> {
+  const first = events[index];
+  if (!first || offset >= first.text.length) return events.slice(index + 1);
+  const text = first.text.slice(offset);
+  return [
+    Object.freeze({ ...first, text, bytes: utf8ByteLength(text) }),
+    ...events.slice(index + 1),
+  ];
+}
+
+/** The last `lineLimit` logical lines of the combined text; lines may span chunks. */
 function tailEvents(
   events: ReadonlyArray<BackgroundLogEvent>,
   lineLimit: number,
 ): ReadonlyArray<BackgroundLogEvent> {
   if (lineLimit <= 0) return [];
-  let lines = 0;
-  let start = events.length;
-  while (start > 0 && lines < lineLimit) {
-    start -= 1;
-    const event = events[start];
-    if (!event) continue;
-    lines += Math.max(1, event.text.split("\n").length - 1);
+  // A final newline ends the last line rather than starting another.
+  let ignoredBreaks = events.at(-1)?.text.endsWith("\n") ? 1 : 0;
+  let linesLeft = lineLimit;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const text = events[index]?.text ?? "";
+    for (let end = text.length; end > 0; ) {
+      const newline = text.lastIndexOf("\n", end - 1);
+      if (newline < 0) break;
+      end = newline;
+      if (ignoredBreaks > 0) {
+        ignoredBreaks -= 1;
+        continue;
+      }
+      linesLeft -= 1;
+      if (linesLeft === 0) return eventsFrom(events, index, newline + 1);
+    }
   }
-  const selected = events.slice(start);
-  if (selected.length === 0 || lines <= lineLimit) return selected;
-  const first = selected[0];
-  if (!first) return selected;
-  const parts = first.text.split("\n");
-  const excess = lines - lineLimit;
-  const text = parts.slice(Math.min(excess, parts.length - 1)).join("\n");
-  return [Object.freeze({ ...first, text, bytes: utf8ByteLength(text) }), ...selected.slice(1)];
+  return events.slice();
 }
 
 export function readLogBuffer(

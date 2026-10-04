@@ -18,6 +18,7 @@ import {
   type BackgroundTaskCodeModeInput,
 } from "../code-mode/protocol.ts";
 import {
+  backgroundTaskCodeModeLogsOutputFits,
   backgroundTaskCodeModeStartOutputFits,
   projectBackgroundTaskCodeModeOutput,
 } from "../code-mode/output.ts";
@@ -118,6 +119,10 @@ export const makeBackgroundTaskCodeModeHost = (
                     maxTextBytes: maxOutputBytes,
                     startOutputFits: (request, maxTextBytes) =>
                       backgroundTaskCodeModeStartOutputFits(request, maxTextBytes, maxOutputBytes),
+                    // The text alone may not take the whole allowance: the envelope and JSON
+                    // escapes count too, so logs keep the newest output whose result fits.
+                    logsTextFits: (text, logs) =>
+                      backgroundTaskCodeModeLogsOutputFits(text, logs, maxOutputBytes),
                   },
                 ),
               ),

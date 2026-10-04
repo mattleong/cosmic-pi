@@ -16,6 +16,11 @@ export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
 export type BackgroundTaskStatus = BackgroundTaskSnapshot & { readonly failureCause?: string };
 export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot"> & {
   readonly snapshot: BackgroundTaskStatus;
+  /**
+   * How long the service let the wait run: the shorter of `waitSeconds` and the `maxWaitSeconds`
+   * setting. A timed-out wait waited this long. Not part of the frozen v1 wait member.
+   */
+  readonly appliedWaitSeconds: number;
 };
 export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
 export type BackgroundTaskWaitResult = typeof BackgroundTaskWaitResultSchema.Type;

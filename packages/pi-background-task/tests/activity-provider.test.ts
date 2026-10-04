@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
+import * as Schema from "effect/Schema";
+import { ACTIVITY_HOST, ACTIVITY_LIMITS, ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
   backgroundTaskActivityDetail,
@@ -78,6 +79,43 @@ describe("background task activity provider", () => {
     )!;
     for (const evidence of ["17", "SIGTERM", "42", "private output", task.cwd])
       expect(detail).toContain(evidence);
+  });
+
+  it("keeps every active task in a snapshot within the protocol limit", () => {
+    // Retained finished tasks plus running ones can exceed one snapshot; listed oldest first.
+    const finished = Array.from({ length: 540 }, (_, index) => ({
+      ...task,
+      id: `finished-${index}`,
+      state: "exited" as const,
+      exitCode: 0,
+      startedAt: index,
+      endedAt: index + 1,
+    }));
+    const running = Array.from({ length: 24 }, (_, index) => ({
+      ...task,
+      id: `running-${index}`,
+      startedAt: index,
+    }));
+    const transport = fakeActivityHost();
+    const bridge = makeProjectionBridge();
+    bridge.publish({ tasks: [...finished, ...running] });
+    const dispose = registerBackgroundTaskActivity({
+      events: transport.events,
+      sessionId: "session",
+      bridge,
+      isCurrent: () => true,
+      stop: () => Promise.resolve(),
+    });
+    // The host rejects an oversized snapshot outright, which would hide every row.
+    const published = Schema.decodeUnknownSync(ActivitySnapshotSchema)(transport.get()?.items);
+    expect(published).toHaveLength(ACTIVITY_LIMITS.items);
+    const ids = new Set(published.map((item) => item.id));
+    for (const entry of running) expect(ids.has(entry.id)).toBe(true);
+    const dropped = finished.filter((entry) => !ids.has(entry.id));
+    expect(dropped.map((entry) => entry.id)).toEqual(
+      finished.slice(0, dropped.length).map((entry) => entry.id),
+    );
+    dispose();
   });
 
   it("projects wait ownership without changing task status", () => {
