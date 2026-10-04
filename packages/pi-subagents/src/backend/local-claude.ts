@@ -36,8 +36,8 @@ import {
   claudeLeadingTagDiagnostic,
   claudeOutboundAgeDiagnostic,
   claudeSessionDiagnostic,
+  claudeTaskNotificationReplay,
   claudeTextLengthDiagnostic,
-  isClaudeQueuedTaskNotificationReplay,
   isInternalReplayOrigin,
   isSameClaudeSession,
   makeClaudeResultCorrelation,
@@ -298,12 +298,17 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     event.uuid === undefined &&
     sameSession;
 
-  const isQueuedTaskNotificationReplay = (event: ClaudeUserProtocolEvent): boolean =>
-    inputs.pending === undefined &&
-    claudeSessionDiagnostic(event.sessionId, nativeSessionId) === "match" &&
-    assignmentEpoch > 0 &&
-    correlation.hasOutstandingAssignment(assignmentEpoch) &&
-    isClaudeQueuedTaskNotificationReplay(event);
+  const isQueuedTaskNotificationReplay = (event: ClaudeUserProtocolEvent): boolean => {
+    const replay = claudeTaskNotificationReplay(event);
+    return (
+      replay !== undefined &&
+      // Only Claude's origin label rules out pending adapter input replayed without its UUID.
+      (replay === "labelled" || inputs.pending === undefined) &&
+      claudeSessionDiagnostic(event.sessionId, nativeSessionId) === "match" &&
+      assignmentEpoch > 0 &&
+      correlation.hasOutstandingAssignment(assignmentEpoch)
+    );
+  };
 
   const isSyntheticSubturn = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
     (event.uuid === undefined ||
@@ -318,7 +323,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     correlation.hasInternalReplayUuid(event.uuid) &&
     sameSession &&
     ((event.isSynthetic && isInternalReplayOrigin(event.originKind, event.originSubkind)) ||
-      isClaudeQueuedTaskNotificationReplay(event));
+      claudeTaskNotificationReplay(event) !== undefined);
 
   const isKnownReplay = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
     // A delayed or duplicate replay of an input this handle already
@@ -528,8 +533,9 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           Effect.suspend(() => {
             // Claude-owned task notifications and auto-continuations are
             // causal subturns of the active assignment. Older frames may omit
-            // their UUID; 2.1.259 command-queue replays may instead omit the
-            // synthetic/origin flags. A private identity owns the result FIFO.
+            // their UUID; command-queue replays omit the synthetic flag, and
+            // 2.1.259 also omitted the origin. A private identity owns the
+            // result FIFO.
             const syntheticUuid = event.uuid ?? `synthetic:${synchronousRandomUuid()}`;
             if (event.uuid !== undefined) correlation.rememberInternalReplayUuid(event.uuid);
             correlation.register(

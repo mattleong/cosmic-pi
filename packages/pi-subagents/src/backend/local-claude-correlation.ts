@@ -97,14 +97,30 @@ export const isInternalReplayOrigin = (
   originSubkind: string | undefined,
 ): boolean => originSubkind === undefined && INTERNAL_REPLAY_ORIGINS.has(originKind ?? "");
 
+const hasTaskNotificationEnvelope = (text: string): boolean => {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith("<task-notification>") &&
+    trimmed.indexOf("</task-notification>", "<task-notification>".length) >= 0
+  );
+};
+
 /**
- * Claude 2.1.259's command-queue replay omits synthetic/origin metadata for a
- * pending task notification. This complete fixed envelope is protocol evidence,
- * not content identity: its UUID still cannot confirm any adapter input.
+ * `labelled`: current Claude derives the unqualified `task-notification`
+ * origin only for its own queued task-notification commands, so adapter input
+ * can never carry it. `unlabelled`: Claude 2.1.259 omitted the origin.
  */
-export const isClaudeQueuedTaskNotificationReplay = (
+export type ClaudeTaskNotificationReplay = "labelled" | "unlabelled";
+
+/**
+ * Claude replays a non-meta task notification that it drains from its command
+ * queue into a running turn, or folds into a merged turn, with `isReplay`, a
+ * fresh UUID, and no synthetic flag. The complete fixed envelope is protocol
+ * evidence, not content identity: its UUID still cannot confirm adapter input.
+ */
+export const claudeTaskNotificationReplay = (
   event: Extract<ClaudeProtocolEvent, { readonly type: "user" }>,
-): boolean => {
+): ClaudeTaskNotificationReplay | undefined => {
   if (
     !event.isReplay ||
     event.isSynthetic ||
@@ -113,17 +129,14 @@ export const isClaudeQueuedTaskNotificationReplay = (
     event.uuid === undefined ||
     event.sessionId === undefined ||
     event.parentToolUseId !== undefined ||
-    event.originKind !== undefined ||
     event.originSubkind !== undefined ||
     event.toolResults.length > 0 ||
-    event.contentKind !== "text"
+    event.contentKind !== "text" ||
+    !hasTaskNotificationEnvelope(event.text)
   )
-    return false;
-  const text = event.text.trimStart();
-  return (
-    text.startsWith("<task-notification>") &&
-    text.indexOf("</task-notification>", "<task-notification>".length) >= 0
-  );
+    return undefined;
+  if (event.originKind === undefined) return "unlabelled";
+  return event.originKind === "task-notification" ? "labelled" : undefined;
 };
 
 const DIAGNOSTIC_ORIGINS: ReadonlySet<string> = new Set([
@@ -321,8 +334,11 @@ export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
     resultExpectations.set(owned.uuid, owned);
     resultOrder.push(owned);
     while (resultOrder.length > SENT_UUID_LIMIT) {
-      const oldest = resultOrder.shift();
-      if (oldest) resultExpectations.delete(oldest.uuid);
+      // A replayed notification that Claude drained into a running turn owns no
+      // result, so synthetic expectations go first and never evict adapter input.
+      const synthetic = resultOrder.findIndex((candidate) => candidate.kind === "synthetic");
+      const [evicted] = resultOrder.splice(Math.max(0, synthetic), 1);
+      if (evicted) resultExpectations.delete(evicted.uuid);
     }
   };
 

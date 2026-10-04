@@ -136,7 +136,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 - Claude and Codex native agents stay inside their parent run and sandbox.
   They do not enter the Pi registry, depth calculation, or writer admission.
   Claude classifies `parent_tool_use_id` frames as native-agent forwarding, refuses cross-session input in the generated local settings, and requires same-session UUID authority for adapter-input replay.
-  One narrow exception owns Claude 2.1.259's same-session active-assignment command-queue replay of a complete task-notification envelope when synthetic/origin metadata is absent; its fresh UUID is internal subturn evidence, never an alias for adapter input.
+  One narrow exception owns Claude's same-session active-assignment command-queue replay of a complete task-notification envelope without the synthetic flag, labelled with the unqualified `task-notification` origin or, as in 2.1.259, unlabelled; its fresh UUID is internal subturn evidence, never an alias for adapter input, and its synthetic result expectation never evicts adapter-owned ones.
   Every near miss remains unexplained.
   Unexplained replay stays fail closed until the supervisor proves an exact-epoch accepted report; only then may the adapter warn and reproject that report for normal close-on-report settlement.
   Digest equality is diagnostic evidence, never authority.

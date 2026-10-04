@@ -11,6 +11,7 @@ import type { Scope } from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
+import { SENT_UUID_LIMIT } from "../src/backend/local-claude-correlation.ts";
 import {
   decodeClaudeProtocolEvent,
   type ClaudeInboundFrame,
@@ -59,11 +60,29 @@ type ReplayScenario =
   | "accepted-report-cost-only"
   | "accepted-report-close";
 
+/**
+ * Claude 2.1.28x replays a task notification drained into a running turn with
+ * a fresh UUID and its derived unqualified origin; the other forms are near misses.
+ */
+type TaskNotificationReplay =
+  | "labelled"
+  | "unlabelled"
+  | "qualified"
+  | "untagged"
+  | "cross-session"
+  | "auto-continuation";
+
+const TASK_NOTIFICATION =
+  "<task-notification><task-id>background-shell</task-id><status>completed</status><summary>Background command completed.</summary></task-notification>";
+
 interface ReplayHarness {
   readonly processes: LocalCliProcessContract;
   readonly supervisors: SupervisorChannelContract;
   readonly guidanceSent: Effect.Effect<void>;
   readonly replayGuidance: Effect.Effect<void>;
+  /** Offers a Claude-owned replay; passing a previous UUID repeats that replay. */
+  readonly taskNotification: (form: TaskNotificationReplay, uuid?: string) => Effect.Effect<string>;
+  readonly assignmentResult: Effect.Effect<void>;
   readonly rejectReplay: (
     kind: "wrong-uuid" | "wrong-session" | "absent-session",
   ) => Effect.Effect<void>;
@@ -85,6 +104,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     let pendingResult: ClaudeInboundFrame | undefined;
     let pendingGuidance: ClaudeUserFrame | undefined;
     let assignmentUuid: string | undefined;
+    let taskNotifications = 0;
     const guidanceSent = Deferred.makeUnsafe<void>();
     const exited = Deferred.makeUnsafe<{ exitCode: number; stderr: string }>();
     let terminations = 0;
@@ -409,6 +429,40 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             message: pendingGuidance.message,
           });
         }),
+      taskNotification: (form, repeated) =>
+        Effect.sync(() => {
+          taskNotifications += 1;
+          const uuid = repeated ?? `claude-task-notification-${taskNotifications}`;
+          offerChild({
+            type: "user",
+            uuid,
+            isReplay: true,
+            session_id:
+              form === "cross-session" ? "different-claude-session" : "claude-replay-session",
+            ...(form !== "unlabelled" && {
+              origin: {
+                kind: form === "auto-continuation" ? "auto-continuation" : "task-notification",
+                ...(form === "qualified" && { subkind: "peer-send-message" }),
+              },
+            }),
+            message: {
+              role: "user",
+              content: form === "untagged" ? "A background command completed." : TASK_NOTIFICATION,
+            },
+          });
+          return uuid;
+        }),
+      assignmentResult: Effect.sync(() =>
+        offerChild({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "claude-replay-session",
+          user_message_uuid: assignmentUuid,
+          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+          total_cost_usd: 0.001,
+        }),
+      ),
       replayGuidance: Effect.sync(() => {
         if (pendingGuidance) offerReplay(pendingGuidance);
         offerChild({
@@ -914,6 +968,133 @@ describe("local Claude replay classification", () => {
           usage: expect.objectContaining({ cost: 0.001 }),
         });
         expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+      }),
+    ),
+  );
+});
+
+describe("local Claude task-notification replays", () => {
+  it.effect.each([
+    ["one labelled replay", 1],
+    ["more labelled replays than the result window", SENT_UUID_LIMIT + 1],
+  ] as const)("tolerates %s mid-run and still completes the assignment", ([, count]) =>
+    withStartedBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 12 });
+        expect(yield* take(backend)).toMatchObject({
+          type: "assistant_message",
+          assignmentEpoch: 12,
+        });
+        for (let index = 0; index < count; index += 1) {
+          yield* harness.taskNotification("labelled");
+          expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        }
+        // The assignment's own result still correlates to the adapter-sent input.
+        yield* harness.assignmentResult;
+        expect(yield* take(backend)).toMatchObject({
+          type: "assistant_message",
+          assignmentEpoch: 12,
+          usage: expect.objectContaining({ cost: 0.001 }),
+        });
+        yield* harness.acceptReport(12);
+        expect(yield* take(backend)).toMatchObject({
+          type: "report",
+          assignmentEpoch: 12,
+          text: "Completed assignment",
+        });
+        expect(harness.terminations()).toBe(0);
+      }),
+    ),
+  );
+
+  it.effect("suppresses a repeated labelled replay without owning another subturn", () =>
+    withStartedBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* take(backend);
+        yield* take(backend);
+        const uuid = yield* harness.taskNotification("labelled");
+        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        yield* harness.taskNotification("labelled", uuid);
+        yield* harness.assignmentResult;
+        expect(yield* take(backend)).toMatchObject({
+          type: "assistant_message",
+          usage: expect.objectContaining({ cost: 0.001 }),
+        });
+      }),
+    ),
+  );
+
+  it.effect("never lets a labelled replay confirm or displace pending guidance", () =>
+    withStartedBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* take(backend);
+        yield* take(backend);
+        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
+        yield* harness.guidanceSent;
+        expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "pending" });
+        yield* harness.taskNotification("labelled");
+        expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
+        expect(yield* Effect.flip(backend.controls.steer("Another guidance"))).toMatchObject({
+          code: "steer_not_sent",
+        });
+        yield* harness.replayGuidance;
+        expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "confirmed" });
+        yield* Fiber.join(caller);
+      }),
+    ),
+  );
+
+  it.effect("keeps the unlabelled envelope fail closed while guidance is pending", () =>
+    withStartedBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* take(backend);
+        yield* take(backend);
+        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
+        yield* harness.guidanceSent;
+        yield* take(backend);
+        yield* harness.taskNotification("unlabelled");
+        expect(yield* take(backend)).toMatchObject({
+          type: "protocol_error",
+          message: expect.stringContaining("pending=steer"),
+        });
+        yield* Fiber.interrupt(caller);
+      }),
+    ),
+  );
+
+  it.effect.each(["labelled", "unlabelled"] as const)(
+    "keeps a %s replay fail closed once the assignment result has settled",
+    (form) =>
+      withStartedBackend("steering", 12, (backend, harness) =>
+        Effect.gen(function* () {
+          yield* take(backend);
+          yield* take(backend);
+          yield* harness.assignmentResult;
+          expect(yield* take(backend)).toMatchObject({
+            type: "assistant_message",
+            usage: expect.objectContaining({ cost: 0.001 }),
+          });
+          yield* harness.taskNotification(form);
+          expect(yield* take(backend)).toMatchObject({ type: "protocol_error" });
+        }),
+      ),
+  );
+
+  it.effect.each([
+    ["qualified", "subkind=peer-send-message"],
+    ["untagged", "tag=none"],
+    ["cross-session", "session=mismatch"],
+    ["auto-continuation", "origin=auto-continuation"],
+  ] as const)("rejects the %s near-miss replay", ([form, diagnostic]) =>
+    withStartedBackend("steering", 12, (backend, harness) =>
+      Effect.gen(function* () {
+        yield* take(backend);
+        yield* take(backend);
+        yield* harness.taskNotification(form);
+        expect(yield* take(backend)).toMatchObject({
+          type: "protocol_error",
+          message: expect.stringContaining(diagnostic),
+        });
       }),
     ),
   );

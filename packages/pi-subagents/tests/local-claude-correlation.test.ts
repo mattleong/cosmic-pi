@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  isClaudeQueuedTaskNotificationReplay,
+  claudeTaskNotificationReplay,
   isInternalReplayOrigin,
   makeClaudeResultCorrelation,
   SENT_UUID_LIMIT,
@@ -32,7 +32,7 @@ describe("local Claude result correlation", () => {
     });
   });
 
-  it("recognizes only the complete metadata-deficient task-notification replay envelope", () => {
+  it("recognizes only complete task-notification replay envelopes, labelled or not", () => {
     const replay: Extract<ClaudeProtocolEvent, { readonly type: "user" }> = {
       type: "user",
       text: "<task-notification><status>completed</status></task-notification>",
@@ -46,20 +46,45 @@ describe("local Claude result correlation", () => {
       isMeta: false,
       isCompactSummary: false,
     };
-    expect(isClaudeQueuedTaskNotificationReplay(replay)).toBe(true);
-    for (const nearMiss of [
-      { ...replay, uuid: undefined },
-      { ...replay, sessionId: undefined },
-      { ...replay, isReplay: false },
-      { ...replay, isSynthetic: true },
-      { ...replay, isMeta: true },
-      { ...replay, isCompactSummary: true },
-      { ...replay, originKind: "channel" },
-      { ...replay, parentToolUseId: "native-tool" },
-      { ...replay, contentKind: "blocks" as const },
-      { ...replay, text: "<task-notification>missing close" },
-    ])
-      expect(isClaudeQueuedTaskNotificationReplay(nearMiss)).toBe(false);
+    const labelled = { ...replay, originKind: "task-notification" };
+    expect(claudeTaskNotificationReplay(replay)).toBe("unlabelled");
+    expect(claudeTaskNotificationReplay(labelled)).toBe("labelled");
+    for (const envelope of [replay, labelled])
+      for (const nearMiss of [
+        { ...envelope, uuid: undefined },
+        { ...envelope, sessionId: undefined },
+        { ...envelope, isReplay: false },
+        { ...envelope, isSynthetic: true },
+        { ...envelope, isMeta: true },
+        { ...envelope, isCompactSummary: true },
+        { ...envelope, originKind: "channel" },
+        { ...envelope, originKind: "auto-continuation" },
+        { ...envelope, originKind: "task-notification", originSubkind: "peer-send-message" },
+        { ...envelope, originSubkind: "scheduled-trigger" },
+        { ...envelope, parentToolUseId: "native-tool" },
+        { ...envelope, toolResults: [{ id: "native-tool", isError: false }] },
+        { ...envelope, contentKind: "blocks" as const },
+        { ...envelope, text: "<task-notification>missing close" },
+        { ...envelope, text: "A background command completed." },
+      ])
+        expect(claudeTaskNotificationReplay(nearMiss)).toBeUndefined();
+  });
+
+  it("never lets Claude-owned subturns evict an adapter-owned result expectation", () => {
+    const correlation = makeClaudeResultCorrelation();
+    correlation.register({ uuid: "assignment", kind: "assignment", epoch: 4 }, zeroUsageComponents);
+    for (let index = 0; index <= SENT_UUID_LIMIT; index += 1)
+      correlation.register(
+        { uuid: `internal-${index}`, kind: "synthetic", epoch: 4 },
+        zeroUsageComponents,
+      );
+
+    expect(correlation.hasOutstandingAssignment(4)).toBe(true);
+    expect(correlation.take("internal-0", undefined, undefined)).toBeUndefined();
+    expect(correlation.take(`internal-${SENT_UUID_LIMIT}`, undefined, undefined)?.kind).toBe(
+      "synthetic",
+    );
+    expect(correlation.take("assignment", undefined, undefined)?.kind).toBe("assignment");
   });
 
   it("keeps Claude-owned replay UUIDs separate from adapter-sent identity", () => {
