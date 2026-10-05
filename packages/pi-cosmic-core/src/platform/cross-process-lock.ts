@@ -9,7 +9,11 @@ import { acquireNativeLock, type NativeLockOptions } from "./cross-process-lock-
 
 export class CrossProcessLockError extends Schema.TaggedError<CrossProcessLockError>()(
   "CrossProcessLockError",
-  { reason: Schema.Literals(["unavailable", "recovery-required", "acquire-timeout"]) },
+  {
+    reason: Schema.Literals(["unavailable", "recovery-required", "acquire-timeout"]),
+    /** For recovery-required at admission: the directory that needs manual recovery. */
+    slot: Schema.optionalKey(Schema.String),
+  },
 ) {}
 
 /** Native completion callbacks are capabilities of this exact owner, not lock paths. */

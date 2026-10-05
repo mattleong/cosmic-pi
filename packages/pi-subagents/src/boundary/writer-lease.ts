@@ -118,6 +118,14 @@ const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
       }),
   });
 
+/** The refusal names the lock to recover and the check to make before removing it. */
+const recoveryMessage = (slot: string | undefined): string =>
+  `Writer ownership of this directory needs manual recovery, so writer startup was denied.\n${
+    slot === undefined
+      ? "Its writer lock is damaged or was left by a Pi session that ended while a writer ran."
+      : `Its lock at ${slot} is damaged or was left by a Pi session that ended while a writer ran. Remove that lock directory only after confirming that no writer from an earlier session is still running: its owner.json names the owner's process id.`
+  }`;
+
 export const makeWriterLease = (
   agentDirectory: string,
   lock: CrossProcessLockContract,
@@ -186,8 +194,7 @@ export const makeWriterLease = (
           error.reason === "recovery-required"
             ? new WriterLeaseConflictError({
                 reason: "recovery-required",
-                message:
-                  "Writer-lease ownership state needs manual recovery; ownership remains locked and writer startup was denied.",
+                message: recoveryMessage(error.slot),
               })
             : denied("Unable to acquire private writer-lease state"),
         ),

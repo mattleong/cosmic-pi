@@ -111,9 +111,14 @@ it.live("tryAcquire fails closed on a dead native-pending owner", () =>
     const first = yield* spawn(directory, "pending");
     yield* first.wait("acquired");
     yield* killChild(first.child);
-    expect(yield* Effect.flip(tryAcquire(directory))).toMatchObject({
-      reason: "recovery-required",
-    });
+    const failure = yield* Effect.flip(tryAcquire(directory));
+    expect(failure).toMatchObject({ reason: "recovery-required" });
+    // The error names the slot to recover: the directory holding the dead owner's evidence.
+    expect(failure.slot?.startsWith(directory)).toBe(true);
+    const evidence = yield* Effect.promise(() =>
+      fs.readFile(path.join(failure.slot ?? "", "owner.json"), "utf8"),
+    );
+    expect(evidence).toContain("native-pending");
   }).pipe(Effect.scoped),
 );
 

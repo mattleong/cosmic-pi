@@ -15,6 +15,8 @@ const { join } = nodePath;
 
 type LockOutcome = "live" | "recovery-required" | "unavailable";
 
+const RECOVERY_SLOT = "/agent/subagents/writer-leases-v3/slot";
+
 /** One fake core slot that records handle calls; `failing` makes a call throw. */
 const fakeLock = (outcomes: Array<LockOutcome> = []) => {
   const calls: Array<keyof CrossProcessLease | "tryAcquire"> = [];
@@ -38,6 +40,8 @@ const fakeLock = (outcomes: Array<LockOutcome> = []) => {
       Effect.suspend(() => {
         calls.push("tryAcquire");
         const outcome = outcomes.shift();
+        if (outcome === "recovery-required")
+          return Effect.fail(new CrossProcessLockError({ reason: outcome, slot: RECOVERY_SLOT }));
         if (outcome !== undefined && outcome !== "live")
           return Effect.fail(new CrossProcessLockError({ reason: outcome }));
         const admitted = outcome === undefined && !held;
@@ -72,7 +76,10 @@ describe.skipIf(process.platform === "win32")("writer lease adapter", () => {
         "unavailable",
       ]);
       expect(yield* Effect.flip(acquire)).toMatchObject({ reason: "live" });
-      expect(yield* Effect.flip(acquire)).toMatchObject({ reason: "recovery-required" });
+      const recovery = yield* Effect.flip(acquire);
+      expect(recovery).toMatchObject({ reason: "recovery-required" });
+      // A refusal that needs a person names the lock to recover.
+      expect(recovery.message).toContain(RECOVERY_SLOT);
       expect(yield* Effect.flip(acquire)).toMatchObject({ _tag: "WriterLeaseAcquireError" });
       // Core's single call already retries after retiring a dead owner; the adapter never retries.
       yield* acquire;

@@ -29,7 +29,18 @@ const Owner = Schema.Struct({
 type Owner = typeof Owner.Type;
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(Owner));
 const encode = Schema.encodeSync(Schema.fromJsonString(Owner));
-const recovery = () => new CrossProcessLockError({ reason: "recovery-required" });
+const recovery = (slot?: string) =>
+  new CrossProcessLockError({ reason: "recovery-required", ...(slot !== undefined && { slot }) });
+/** Names the directory an admission-time recovery error is about. */
+const inSlot = <A>(slot: string, run: () => A): A => {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof CrossProcessLockError && error.reason === "recovery-required")
+      throw recovery(slot);
+    throw error;
+  }
+};
 const code = (...expected: string[]) =>
   Schema.is(Schema.Struct({ code: Schema.Literals(expected) }));
 const uid = () => {
@@ -123,17 +134,17 @@ export const acquireNativeLock = (
   } catch (error) {
     if (!code("EEXIST")(error)) throw error;
   }
-  privateDirectory(root);
+  inSlot(root, () => privateDirectory(root));
   const directory = path.join(root, nodeLockHash(namespace));
   let previous: Owner | undefined;
   try {
     previous = readOwner(directory);
   } catch (error) {
-    if (!code("ENOENT")(error)) throw recovery();
+    if (!code("ENOENT")(error)) throw recovery(directory);
     // Only absence is available. An existing directory with no owner is corrupt, not stale.
     try {
       fs.lstatSync(directory);
-      throw recovery();
+      throw recovery(directory);
     } catch (statError) {
       if (!code("ENOENT")(statError)) throw statError;
     }
@@ -141,7 +152,7 @@ export const acquireNativeLock = (
   if (previous) {
     if (!dead(previous.pid)) return undefined;
     // PID death proves the JS owner stopped, not that a native service finished a mutation.
-    if (previous.phase === "native-pending") throw recovery();
+    if (previous.phase === "native-pending") throw recovery(directory);
     try {
       retire(directory, previous, root);
     } catch (retireError) {
