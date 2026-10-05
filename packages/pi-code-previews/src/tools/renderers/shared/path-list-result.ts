@@ -49,7 +49,7 @@ export function renderPathListResult(
   });
   if (prelude) return prelude;
   if (!expanded && !config.previewEnabled)
-    return renderHiddenPreviewExpandHint(context.state, theme);
+    return renderHiddenPreviewExpandHint(context.state, theme, config.footerNoun);
   if (!output || output === config.emptyMarker)
     return new Text(theme.fg("muted", config.emptyLabel(output)), 0, 0);
   const { lines: rawLines, notice } = splitListingNotice(output.split("\n"));

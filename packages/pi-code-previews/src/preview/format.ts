@@ -1,5 +1,5 @@
-import type { AppKeybinding, Theme } from "@earendil-works/pi-coding-agent";
-import { getKeybindings } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { forEachPreviewTextLine } from "./line-counts";
 import { countLabel } from "pi-cosmic-core";
 
@@ -110,25 +110,9 @@ export function metadata(theme: Theme, parts: Array<string | undefined>): string
   return present.length ? theme.fg("dim", ` · ${present.join(" · ")}`) : "";
 }
 
-function themedKeyHint(theme: Theme, keybinding: AppKeybinding, description: string): string {
-  const keyText = getKeybindings().getKeys(keybinding).join("/");
-  if (!keyText) return theme.fg("muted", description);
-  return theme.fg("dim", keyText) + theme.fg("muted", ` ${description}`);
-}
-
-export function hiddenPreviewExpandLabel(theme: Theme): string {
-  return themedKeyHint(theme, "app.tools.expand", "expand");
-}
-
-export function hiddenPreviewExpandHint(theme: Theme): string {
-  return `${theme.fg("muted", "╰─ ")}${hiddenPreviewExpandLabel(theme)}`;
-}
-
+/** A clipped preview's count, with the configured expansion hint. */
 export function showingFooter(theme: Theme, shown: number, total: number, label: string): string {
-  return previewFooter(
-    theme,
-    `Showing ${shown} of ${total} ${label} · ${themedKeyHint(theme, "app.tools.expand", "expand")}`,
-  );
+  return `\n${renderExpansionAffordance(`Showing ${shown} of ${total} ${label}`, false, theme)}`;
 }
 
 export function previewFooter(theme: Theme, text: string): string {

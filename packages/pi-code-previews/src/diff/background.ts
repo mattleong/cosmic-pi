@@ -1,8 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../config/state";
 
-export type DiffLineKind = "add" | "remove";
-export type DiffBackgroundResolver = (kind: DiffLineKind) => string | undefined;
+type DiffLineKind = "add" | "remove";
+type DiffBackgroundResolver = (kind: DiffLineKind) => string | undefined;
 
 export function createDiffBackgroundResolver(theme?: Theme): DiffBackgroundResolver {
   const intensity = codePreviewSettings.diffIntensity;

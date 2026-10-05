@@ -57,10 +57,7 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
           renderContext.state.editCallPreviewComponent = undefined;
         }
 
-        const text =
-          renderContext.lastComponent instanceof Text
-            ? renderContext.lastComponent
-            : new Text("", 0, 0);
+        const text = new Text("", 0, 0);
         renderContext.state.editHeaderText = text;
         text.setText(formatEditHeader(path, cwd, theme, renderContext.state.editSummaryText));
 
@@ -70,7 +67,9 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
         if (!renderContext.argsComplete || operations.length === 0) return preview;
 
         if (!renderContext.expanded && !codePreviewSettings.editDiffPreview) {
-          preview.addChild(renderHiddenPreviewExpandHint(renderContext.state, theme));
+          preview.addChild(
+            renderHiddenPreviewExpandHint(renderContext.state, theme, "proposed edit"),
+          );
           return preview;
         }
 
@@ -148,7 +147,7 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
             renderContext.argsComplete && getEditPreviewOperations(renderContext.args).length > 0;
           return callHint
             ? new Container()
-            : renderHiddenPreviewExpandHint(renderContext.state, theme);
+            : renderHiddenPreviewExpandHint(renderContext.state, theme, "diff");
         }
         // Expansion keeps the exact proposed edits above the applied diff.
         setResultDiffShown(renderContext.state, !expanded);

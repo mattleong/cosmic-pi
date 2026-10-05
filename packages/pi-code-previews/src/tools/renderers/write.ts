@@ -22,15 +22,9 @@ import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewRenderers } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
-import {
-  getWriteDiffGuard,
-  getWriteDiffSkipReason,
-  hasWriteDiffSizeEvidence,
-  readExistingFileForPreview,
-} from "../../write/diff";
+import { readExistingFileForPreview } from "../../write/diff";
 import {
   executeWriteWithPreview,
-  getCodePreviewBeforeWrite,
   isKnownNewWrite,
   withCodePreviewBeforeWrite,
 } from "../../write/preview-execution";
@@ -41,6 +35,7 @@ import { diffPreviewLineLimit, diffSkippedNote, formatDiffPreview } from "./shar
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { renderPreviewError } from "./shared/result-prelude";
 import type { RendererState } from "./shared/types";
+import { writeBeforeSnapshot, writeDiffPlan } from "./shared/write-result";
 import { countLabel, formatBytes } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
@@ -55,6 +50,7 @@ export function createWritePreviewTool(cwd: string) {
       const [toolCallId, params, signal, onUpdate, ctx] = args;
       const path = getPathArg(params);
       const content = getObjectValue(params, "content");
+      // Runs for an empty path, which Pi's schema admits, or an unvalidated direct call.
       if (!path || !Predicate.isString(content)) {
         const before = path
           ? readExistingFileForPreview(path, cwd, "")
@@ -95,7 +91,7 @@ export function createWritePreviewRenderers(cwd: string, session?: CodePreviewRe
         container.addChild(heading);
         container.addChild(previewIssuesSlot(renderContext));
         if (!renderContext.expanded && !codePreviewSettings.writeContentPreview) {
-          const hint = hiddenPreviewExpandHintForShell(renderContext.state, theme);
+          const hint = hiddenPreviewExpandHintForShell(renderContext.state, theme, "content");
           if (hint) container.addChild(new Text(hint, 0, 0));
           return container;
         }
@@ -130,42 +126,32 @@ export function createWritePreviewRenderers(cwd: string, session?: CodePreviewRe
         }
 
         const path = getPathArg(renderContext.args);
-        const content = Predicate.isString(renderContext.args?.content)
-          ? renderContext.args.content
-          : "";
-        const stateKey = "codePreviewWriteBeforeSnapshot";
-        const before = Object.hasOwn(state, stateKey)
-          ? state[stateKey]
-          : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
-        state[stateKey] = before;
+        const before = writeBeforeSnapshot(state, renderContext.toolCallId, result.details);
         // Only an observed absent file is new; the heading says so once the write is known.
         setWriteNewFile(state, isKnownNewWrite(before, result.details), cwd, theme);
-        const skipReason = getWriteDiffSkipReason(before, content);
-        if (skipReason !== undefined) {
-          // Other skipped snapshots are explained by the "Diff unavailable" issue.
-          return hasWriteDiffSizeEvidence(before)
-            ? new Text(theme.fg("muted", `diff skipped: ${escapeControlChars(skipReason)}`), 0, 0)
+        const plan = writeDiffPlan(before, getObjectValue(renderContext.args, "content"));
+        if (plan.kind === "skipped")
+          return plan.measured
+            ? new Text(theme.fg("muted", `diff skipped: ${escapeControlChars(plan.reason)}`), 0, 0)
             : new Container();
-        }
-        const beforeContent = getObjectValue(before, "content");
-        if (!Predicate.isString(beforeContent)) return new Container();
-        if (beforeContent === content) return new Text(theme.fg("muted", "no changes"), 0, 0);
+        if (plan.kind === "unknown") return new Container();
+        if (plan.kind === "unchanged") return new Text(theme.fg("muted", "no changes"), 0, 0);
         // A hidden collapsed preview leaves expansion to the call's hint.
         if (!expanded && !codePreviewSettings.writeContentPreview) return new Container();
-        const guard = getWriteDiffGuard(beforeContent, content);
-        if (guard) return new Text(diffSkippedNote(theme, guard), 0, 0);
+        if (plan.kind === "guarded") return new Text(diffSkippedNote(theme, plan.guard), 0, 0);
+        const { previous, content } = plan;
         // Expansion keeps the exact written content above the diff.
         setResultDiffShown(state, !expanded);
         const render = () =>
           renderWriteDiffPreview(
-            beforeContent,
+            previous,
             content,
             path,
             expanded,
             theme,
             renderContext.invalidate,
           );
-        const source = `${beforeContent}\0${content}`;
+        const source = `${previous}\0${content}`;
         const previewKey = diffPreviewCacheKey(
           "write-result",
           source,

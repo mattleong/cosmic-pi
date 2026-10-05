@@ -55,7 +55,7 @@ export function createGrepPreviewTool(cwd: string, session?: CodePreviewRenderer
         });
         if (prelude) return prelude;
         if (!expanded && !codePreviewSettings.grepResultPreview)
-          return renderHiddenPreviewExpandHint(renderContext.state, theme);
+          return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
         if (!output || output === "No matches found")
           return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 

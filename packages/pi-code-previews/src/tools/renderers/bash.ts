@@ -60,7 +60,7 @@ export function createBashPreviewTool(cwd: string, session?: CodePreviewRenderer
         const prelude = renderResultPrelude({ isPartial, theme });
         if (prelude) return prelude;
         if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
-          return renderHiddenPreviewExpandHint(renderContext.state, theme);
+          return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
         const output = trimSingleTrailingNewline(getTextContent(result.content));
         const lines = output ? output.split("\n") : [];
         // The shell's issue line states a failed command's closing status; show only its output.

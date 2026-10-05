@@ -6,9 +6,9 @@ import {
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
-import { hiddenPreviewExpandHint, hiddenPreviewExpandLabel } from "./format";
 import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
+import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
 
 export type BorderSlot = "call" | "result";
 
@@ -214,18 +214,30 @@ function startsWithDiffBackground(line: string): boolean {
   return channels.length === 3 && channels.every((channel) => /^\d+$/.test(channel));
 }
 
-export function hiddenPreviewExpandHintForShell(state: RendererState, theme: Theme): string {
+/**
+ * The affordance for a preview hidden by settings, such as "▸ output · ctrl+o to expand". A
+ * bordered row shows only the configured hint, in its bottom border, and returns "".
+ */
+export function hiddenPreviewExpandHintForShell(
+  state: RendererState,
+  theme: Theme,
+  label: string,
+): string {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const shellState = state as BorderState;
   const slot = shellState.codePreviewBorderCurrentSlot;
-  if (slot !== "call" && slot !== "result") return hiddenPreviewExpandHint(theme);
-  if (slot === "call")
-    shellState.codePreviewBorderCallExpandLabel = hiddenPreviewExpandLabel(theme);
-  else shellState.codePreviewBorderResultExpandLabel = hiddenPreviewExpandLabel(theme);
+  if (slot !== "call" && slot !== "result") return renderExpansionAffordance(label, false, theme);
+  const corner = theme.fg("muted", toolExpandHint());
+  if (slot === "call") shellState.codePreviewBorderCallExpandLabel = corner;
+  else shellState.codePreviewBorderResultExpandLabel = corner;
   return "";
 }
 
-export function renderHiddenPreviewExpandHint(state: RendererState, theme: Theme): Component {
-  const hint = hiddenPreviewExpandHintForShell(state, theme);
+export function renderHiddenPreviewExpandHint(
+  state: RendererState,
+  theme: Theme,
+  label: string,
+): Component {
+  const hint = hiddenPreviewExpandHintForShell(state, theme, label);
   return hint ? new Text(hint, 0, 0) : new Container();
 }

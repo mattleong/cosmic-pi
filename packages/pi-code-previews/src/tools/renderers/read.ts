@@ -11,12 +11,13 @@ import { escapeControlChars } from "../../shared/terminal-text";
 import { resolvePreviewLanguage } from "../../syntax/language";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg, getReadStartLine } from "../data/args";
-import { getTextContent, isTruncated, splitReadContinuationNotice } from "../data/results";
+import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewRenderers } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderContentPreview } from "./shared/content-preview";
-import { agentNotesSection, oversizedReadNotice } from "./shared/output-notice";
+import { agentNotesSection } from "./shared/output-notice";
+import { readResultBody } from "./shared/read-result";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
@@ -54,32 +55,26 @@ export function createReadPreviewTool(cwd: string, session?: CodePreviewRenderer
         if (prelude) return prelude;
 
         const path = getPathArg(renderContext.args);
+        const body = readResultBody(result, renderContext.args);
 
         // Pi already renders image content parts natively. Avoid emitting terminal image
         // escape sequences here; show only a compact note beside Pi's image renderer.
-        if (result.content?.some((part) => part.type === "image")) {
+        if (body.kind === "image") {
           return new Text(
-            theme.fg("dim", escapeControlChars(firstText.replace(/^Read image file/i, "image"))),
+            theme.fg("dim", escapeControlChars(body.text.replace(/^Read image file/i, "image"))),
             0,
             0,
           );
         }
 
         if (!expanded && !codePreviewSettings.readContentPreview)
-          return renderHiddenPreviewExpandHint(renderContext.state, theme);
+          return renderHiddenPreviewExpandHint(renderContext.state, theme, "content");
 
-        // An oversized first line returns only the agent's recovery instruction, which the
-        // issue line already reports. It is never numbered as file content.
-        const oversized = oversizedReadNotice(result.details, firstText);
-        if (oversized !== undefined)
-          return expanded && oversized ? agentNotesSection(theme, oversized) : new Container();
+        // The issue line already reports an oversized first line; expansion adds the agent's notes.
+        if (body.kind === "oversized")
+          return expanded && body.notice ? agentNotesSection(theme, body.notice) : new Container();
 
-        // Continuation and truncation notices are issues above the body.
-        const { content } =
-          isTruncated(result.details) || Predicate.isNumber(renderContext.args?.limit)
-            ? splitReadContinuationNotice(firstText)
-            : { content: firstText };
-
+        const { content, firstLine } = body;
         const lang = resolvePreviewLanguage({
           path,
           content,
@@ -91,9 +86,7 @@ export function createReadPreviewTool(cwd: string, session?: CodePreviewRenderer
           lang,
           theme,
           invalidate: renderContext.invalidate,
-          firstLine: codePreviewSettings.readLineNumbers
-            ? getReadStartLine(renderContext.args)
-            : undefined,
+          firstLine,
           emptyLabel: "Empty file",
           skipHighlightLabel: "Syntax highlighting skipped for large file",
         });

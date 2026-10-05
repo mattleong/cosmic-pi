@@ -9,13 +9,8 @@ import type { CodePreviewRendererCallbacks } from "../../renderer-adapter";
 import type { BuiltinCompactTool } from "../../builtin-subject";
 import { getObjectValue } from "../../../shared/helpers";
 import { escapeControlChars } from "../../../shared/terminal-text";
-import { getEditPreviewOperations, getPathArg, getReadStartLine } from "../../data/args";
-import {
-  getEditDiff,
-  getTextContent,
-  isTruncated,
-  splitReadContinuationNotice,
-} from "../../data/results";
+import { getEditPreviewOperations, getPathArg } from "../../data/args";
+import { getEditDiff, getTextContent } from "../../data/results";
 import { codePreviewSettings } from "../../../config/state";
 import { renderHighlightedText } from "../../../syntax/render";
 import { resolvePreviewLanguage } from "../../../syntax/language";
@@ -32,15 +27,11 @@ import { FullWidthDiffText } from "../../../diff/full-width-text";
 import { createSimpleDiff } from "../../../diff/structured";
 import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
-import { getCodePreviewBeforeWrite } from "../../../write/preview-execution";
-import {
-  getWriteDiffGuard,
-  getWriteDiffSkipReason,
-  hasWriteDiffSizeEvidence,
-} from "../../../write/diff";
 import { expandedSection } from "../../../preview/expanded-section";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
+import { readResultBody } from "./read-result";
 import type { RendererState, ToolRenderContext } from "./types";
+import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
 
 /** Detailed content only. The shared shell owns headings, outcome, and attention. */
 export function builtinExpandedContent(
@@ -149,22 +140,12 @@ function builtinResultBody(
   const output = getTextContent(result.content);
   const path = getPathArg(context.args);
   if (tool === "read") {
+    const body = readResultBody(result, context.args);
     // Images remain Pi-owned, including mixed image/text results.
-    if (result.content.some((part: { type: string }) => part.type === "image"))
-      return new Text(escapeControlChars(output), 0, 0);
-    // An oversized first line returns only the agent's recovery instruction, never content.
-    if (oversizedReadNotice(result.details, output) !== undefined) return new Container();
-    // A host continuation notice is an issue above the body, not a numbered file line. Only
-    // truncated or limited reads carry one; otherwise a matching line is file content.
-    const paged =
-      isTruncated(result.details) || Predicate.isNumber(getObjectValue(context.args, "limit"));
-    return source(
-      paged ? splitReadContinuationNotice(output).content : output,
-      path,
-      theme,
-      context.invalidate,
-      codePreviewSettings.readLineNumbers ? getReadStartLine(context.args) : undefined,
-    );
+    if (body.kind === "image") return new Text(escapeControlChars(body.text), 0, 0);
+    // The agent's notes carry an oversized line's recovery instruction.
+    if (body.kind === "oversized") return new Container();
+    return source(body.content, path, theme, context.invalidate, body.firstLine);
   }
   if (tool === "edit") {
     const diff = getEditDiff(result.details);
@@ -174,26 +155,16 @@ function builtinResultBody(
     return content;
   }
   if (tool === "write") {
-    const before = Object.hasOwn(context.state, "codePreviewWriteBeforeSnapshot")
-      ? context.state.codePreviewWriteBeforeSnapshot
-      : getCodePreviewBeforeWrite(context.toolCallId, result.details);
-    const previous = getObjectValue(before, "content");
-    const content = getObjectValue(context.args, "content");
+    const plan = writeDiffPlan(
+      writeBeforeSnapshot(context.state, context.toolCallId, result.details),
+      getObjectValue(context.args, "content"),
+    );
     const body = new Container();
-    const skipReason = Predicate.isString(content)
-      ? getWriteDiffSkipReason(before, content)
-      : undefined;
-    if (skipReason && hasWriteDiffSizeEvidence(before))
-      body.addChild(new Text(theme.fg("muted", escapeControlChars(skipReason)), 0, 0));
-    if (
-      Predicate.isString(previous) &&
-      Predicate.isString(content) &&
-      previous !== content &&
-      !skipReason &&
-      !getWriteDiffGuard(previous, content)
-    )
+    if (plan.kind === "skipped" && plan.measured)
+      body.addChild(new Text(theme.fg("muted", escapeControlChars(plan.reason)), 0, 0));
+    if (plan.kind === "diff")
       body.addChild(
-        renderDiff(createSimpleDiff(previous, content), path, theme, context.invalidate),
+        renderDiff(createSimpleDiff(plan.previous, plan.content), path, theme, context.invalidate),
       );
     if (output) body.addChild(rawResult(output, theme));
     return body;
@@ -225,7 +196,6 @@ function builtinResultBody(
   return new Text(escapeControlChars(shown), 0, 0);
 }
 
-/** Options the heading does not already show, as short labels. */
 /** Values the heading shows exactly: short, single-spaced, and free of control characters. */
 function headingShowsExactly(value: string): boolean {
   return (

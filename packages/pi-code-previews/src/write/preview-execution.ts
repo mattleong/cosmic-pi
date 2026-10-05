@@ -31,7 +31,7 @@ type WithCodePreviewWriteDetails<T extends { details?: unknown }> = Omit<T, "det
     ? T["details"] & CodePreviewWriteDetails
     : CodePreviewWriteDetails;
 };
-export class CodePreviewWriteError extends Schema.TaggedError<CodePreviewWriteError>()(
+class CodePreviewWriteError extends Schema.TaggedError<CodePreviewWriteError>()(
   "CodePreviewWriteError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}

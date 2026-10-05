@@ -13,7 +13,7 @@ import {
 const MAX_BEFORE_WRITE_CACHE_ENTRIES = 64;
 type WriteState = CodePreviewWriteSnapshot;
 
-export interface CodePreviewWriteServiceContract {
+interface CodePreviewWriteServiceContract {
   readonly rememberBeforeWrite: (
     toolCallId: string,
     before: CodePreviewBeforeWrite,
