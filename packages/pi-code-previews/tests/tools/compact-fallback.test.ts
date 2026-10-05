@@ -88,6 +88,28 @@ test("transient renderer failures clear original slot caches so changed inputs r
   }
 });
 
+test("an expanded failed call renderer still shows the exact arguments, inertly", () => {
+  for (const mode of modes) {
+    const tool = withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: () => {
+          throw new Error("call renderer failure");
+        },
+        renderResult: () => new Text("BODY", 0, 0),
+      },
+      { mode, compactSummary: () => ({ subject: "file.ts", outcome: "success" }) },
+    );
+    // JSON escapes C0 controls; a C1 introducer would otherwise reach the terminal raw.
+    const args = { path: "src/\u009b31mfile.ts", offset: 17, limit: 42 };
+    const text = paint(tool, context({ args })).rows.join("\n");
+    for (const value of [/31mfile\.ts/u, /offset\D+17/u, /limit\D+42/u])
+      assert.match(text, value, mode);
+    assert.doesNotMatch(text, /\u009b/u);
+    assert.match(text, /BODY/u);
+  }
+});
+
 test("without content callbacks, issues sit once between the original call and result", () => {
   const issues: CompactIssue[] = [
     { severity: "error", code: "failed", message: "Remote write failed", detail: "Run status" },

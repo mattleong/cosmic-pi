@@ -464,6 +464,33 @@ test("enabling duration display at settlement still cancels an animation-only ti
   assert.equal(h.state.codePreviewTimingStartedAt, undefined);
 });
 
+test("redraws reuse the summary until the row updates, and still follow settings", () => {
+  let provided = 0;
+  const h = harness(
+    (input) => {
+      provided += 1;
+      return { ...summarize(input), subject: "Inspect", showTiming: true };
+    },
+    "off",
+    { timing: true },
+  );
+  h.state.codePreviewTimingStartedAt = 100;
+  h.state.codePreviewTimingEndedAt = 1_600;
+  for (const expanded of [false, true]) {
+    h.update({ expanded, isPartial: false }, result("first"));
+    h.rows();
+    const before = provided;
+    // Every TUI frame redraws each row, at whatever width the terminal has.
+    for (const width of [120, 40, 120, 80]) h.rows(width);
+    assert.equal(provided, before, `expanded ${expanded}`);
+  }
+  h.update({ expanded: false }, result("second"));
+  assert.match(h.rows().join("\n"), /second/u);
+  assert.match(h.rows().join("\n"), /1\.5s/u);
+  setCodePreviewSettings({ ...codePreviewSettings, toolCallTiming: false });
+  assert.doesNotMatch(h.rows().join("\n"), /1\.5s/u);
+});
+
 test("theme invalidation reaches retained detail components even while collapsed", () => {
   let value = "old-theme";
   let cached: string | undefined;

@@ -6,7 +6,9 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 import { toolStatusLine } from "pi-cosmic-ui/tool";
+import { codePreviewSettings } from "../config/state";
 import type { CompactIssue } from "../tools/compact-issues";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import {
@@ -69,7 +71,16 @@ function previewIssues(provider: Provider, context: Context): PreviewIssues {
   const result = currentResult(context);
   const phase: CompactPhase =
     result && !context.isPartial ? "settled" : context.executionStarted ? "running" : "pending";
-  const inputs = [result, context.args, context.isError, phase];
+  // Pi builds a new result envelope on every update, including each animation tick, but keeps
+  // its content and details. Settings replace atomically, covering the policy providers read.
+  const inputs = [
+    result?.content,
+    result?.details,
+    context.args,
+    context.isError,
+    phase,
+    codePreviewSettings,
+  ];
   const cached = cache.get(context.state);
   if (cached && inputs.every((value, index) => Object.is(value, cached.inputs[index])))
     return cached.value;
@@ -116,6 +127,7 @@ export const unwrapPreviewIssues = (component: Component | undefined): Component
   component instanceof PreviewIssuesFrame ? component.body : component;
 
 const EMPTY: Component = { render: () => [], invalidate: () => undefined };
+const UNSTYLED: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
 interface IssueSlot {
   readonly lines: Component;
@@ -150,20 +162,17 @@ export function renderWithPreviewIssues(
     render: (width) => {
       const current = latestContext(context);
       const { issues, cancelled } = previewIssues(provider, current);
-      try {
-        const rows = renderCompactIssues(issues, theme, width, current.expanded, "");
-        return rows.length === 0 && cancelled
-          ? [toolStatusLine(theme, "stopped", "Cancelled")]
+      const draw = (style: Pick<Theme, "fg">) => {
+        const rows = renderCompactIssues(issues, style, width, current.expanded, "");
+        return rows.length === 0 && cancelled && width > 0
+          ? [clipToWidth(toolStatusLine(style, "stopped", "Cancelled"), width, "")]
           : rows;
+      };
+      try {
+        return draw(theme);
       } catch {
-        // A failing host theme cannot hide what went wrong.
-        const plain: string[] = [];
-        for (const issue of issues) {
-          if (issue.severity === "info" && !current.expanded) continue;
-          plain.push(issue.message);
-          if (current.expanded && issue.detail) plain.push(issue.detail);
-        }
-        return plain;
+        // A failing host theme cannot hide what went wrong, nor widen the row past the terminal.
+        return draw(UNSTYLED);
       }
     },
     invalidate: () => undefined,

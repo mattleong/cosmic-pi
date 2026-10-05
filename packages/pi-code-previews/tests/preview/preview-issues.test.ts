@@ -1,5 +1,5 @@
 import { createReadToolDefinition, type Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, Text, visibleWidth } from "@earendil-works/pi-tui";
 import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { beforeEach, expect, test } from "vitest";
 import { previewIssuesSlot } from "../../index";
@@ -24,7 +24,7 @@ const summary: CompactSummaryProvider = ({ phase }) =>
     ? { subject: "subject", outcome: "error", issues: [failure] }
     : { subject: "subject", issues: [risk] };
 
-const tool = (placeUnderHeading = false) => {
+const tool = (placeUnderHeading = false, compactSummary = summary) => {
   const read = createReadToolDefinition("/project");
   return withCodePreviewShell(
     {
@@ -38,7 +38,7 @@ const tool = (placeUnderHeading = false) => {
       },
       renderResult: () => new Text("BODY", 0, 0),
     },
-    { compactSummary: summary },
+    { compactSummary },
   );
 };
 
@@ -79,15 +79,62 @@ test("argument warnings show before any result exists", () => {
   expect(order(harness.render(80))).toEqual(["HEADING", "RISKY", "CALL-CONTENT"]);
 });
 
+const hostile: Theme = opaqueFixture({
+  ...plainTheme,
+  fg: () => {
+    throw new Error("theme unavailable");
+  },
+});
+
 test("a failing host theme still shows what went wrong", () => {
-  const hostile: Theme = opaqueFixture({
-    ...plainTheme,
-    fg: () => {
-      throw new Error("theme unavailable");
-    },
-  });
   const harness = createToolPresentationHarness(tool(), { theme: hostile });
   harness.call({ path: "a.ts" }, { executionStarted: true });
   harness.result(textResult("failed"), { isError: true });
   expect(order(harness.render(80))).toContain("PROBLEM");
+});
+
+test("a failing host theme keeps every issue line within the row width", () => {
+  const message = "The remote service rejected the request after retries";
+  const narrow: CompactSummaryProvider = () => ({
+    subject: "subject",
+    outcome: "error",
+    issues: [
+      {
+        severity: "error",
+        code: "failed",
+        message,
+        detail: "first detail line\nsecond \u001b[31mdetail line",
+      },
+    ],
+  });
+  const harness = createToolPresentationHarness(tool(false, narrow), { theme: hostile });
+  harness.call({ path: "a.ts" }, { executionStarted: true, expanded: true });
+  harness.result(textResult("failed"), { isError: true, expanded: true });
+  for (const width of [20, 7]) {
+    for (const line of harness.render(width)) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      expect(line.includes("\n") || line.includes("\u001b")).toBe(false);
+    }
+  }
+  const text = harness.render(20).join(" ").replace(/\s+/gu, " ");
+  for (const fact of [message, "first detail line", "detail line"]) expect(text).toContain(fact);
+});
+
+test("animation ticks reuse the issues while the result's evidence is unchanged", () => {
+  let provided = 0;
+  const harness = createToolPresentationHarness(
+    tool(false, (input) => {
+      provided += 1;
+      return summary(input);
+    }),
+  );
+  harness.call({ path: "a.ts" }, { executionStarted: true });
+  harness.result(textResult("failed"), { isError: true });
+  harness.render(80);
+  const before = provided;
+  // Like Pi, each invalidation rebuilds both slots around a fresh result envelope.
+  harness.invalidate();
+  harness.invalidate();
+  expect(order(harness.render(80))).toEqual(["HEADING", "CALL-CONTENT", "PROBLEM", "BODY"]);
+  expect(provided).toBe(before);
 });

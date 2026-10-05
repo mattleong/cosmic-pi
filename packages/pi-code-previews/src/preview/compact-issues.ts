@@ -34,7 +34,7 @@ export function compactIssueLabel(issues: readonly CompactIssue[], theme: Theme)
  */
 export function renderCompactIssues(
   issues: readonly CompactIssue[] | undefined,
-  theme: Theme,
+  theme: Pick<Theme, "fg">,
   width: number,
   expanded = false,
   indent = "  ",

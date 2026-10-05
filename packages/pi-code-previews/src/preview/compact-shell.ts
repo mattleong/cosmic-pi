@@ -1,5 +1,7 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
+import { invokeHostCallback } from "pi-cosmic-core";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -12,7 +14,10 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "../tools/compact-summary";
-import type { ToolRenderContext as HostToolRenderContext } from "../tools/renderers/shared/types";
+import type {
+  RendererArguments,
+  ToolRenderContext as HostToolRenderContext,
+} from "../tools/renderers/shared/types";
 import {
   BorderedToolCall,
   borderState,
@@ -38,6 +43,12 @@ export interface CompactShellOptions {
 type ToolRenderContext = HostToolRenderContext<any, any>;
 type RenderBody = (context: ToolRenderContext) => Component;
 
+interface CompactPlan {
+  readonly phase: CompactPhase;
+  readonly summary: CompactSummary | undefined;
+  readonly collapsedSummary: CompactSummary;
+}
+
 /** One mounted call shell owns both slots. The result slot is visible only without that call. */
 class CompactShell implements Component {
   private context: ToolRenderContext;
@@ -54,6 +65,14 @@ class CompactShell implements Component {
   private elapsedMs: number | undefined;
   private timingLabel: string | undefined;
   private display: Component | undefined;
+  /**
+   * TUI frames redraw every row, but the plan's inputs change only in update() and invalidate().
+   * Settings replace atomically, so their identity stands in for the policy providers read.
+   */
+  private planned: { settings: object; plan: CompactPlan } | undefined;
+  private collapsed:
+    | { plan: CompactPlan; width: number; frame: number | undefined; rows: string[] }
+    | undefined;
   private detailBounds: { offset: number; height: number; width: number } | undefined;
   private readonly mode: ToolCallBackgroundMode;
   private readonly options: CompactShellOptions;
@@ -109,6 +128,8 @@ class CompactShell implements Component {
     this.context = context;
     this.theme = theme;
     this.display = undefined;
+    this.planned = undefined;
+    this.collapsed = undefined;
     this.detailBounds = undefined;
     const timing = updateToolCallTiming(context, {
       animateWithoutTiming:
@@ -149,29 +170,45 @@ class CompactShell implements Component {
     }
   }
 
-  private plan(result: AgentToolResult<unknown> | undefined) {
+  private plan(result: AgentToolResult<unknown> | undefined): CompactPlan {
+    const settings = codePreviewSettings;
+    if (this.planned?.settings !== settings)
+      this.planned = { settings, plan: this.computePlan(result) };
+    return this.planned.plan;
+  }
+
+  private computePlan(result: AgentToolResult<unknown> | undefined): CompactPlan {
     const phase = this.phase(result);
-    const summary = this.provide(phase, result);
-    return {
+    const input = {
+      summary: this.provide(phase, result),
       phase,
-      ...planCompactPresentation({
-        summary,
-        phase,
-        isError: this.context.isError,
-        errorText: this.context.isError ? getTextContent(result?.content ?? []) : "",
-        heading:
-          resolveCompactSummary(summary, phase, false) ??
-          resolveCompactSummary(this.provide("pending", undefined, true), "pending", false),
-      }),
+      isError: this.context.isError,
+      errorText: this.context.isError ? getTextContent(result?.content ?? []) : "",
     };
+    const presented = planCompactPresentation(input);
+    if (presented.summary) return { phase, ...presented };
+    // Only a missing or malformed summary needs a heading, and only the arguments can supply
+    // it, so a valid summary is validated once.
+    const heading = resolveCompactSummary(
+      this.provide("pending", undefined, true),
+      "pending",
+      false,
+    );
+    return { phase, ...planCompactPresentation({ ...input, summary: undefined, heading }) };
   }
 
   render(width: number): string[] {
     const result = this.currentResult();
-    const { phase, summary, collapsedSummary } = this.plan(result);
+    const plan = this.plan(result);
+    const { phase, summary, collapsedSummary } = plan;
     if (!this.context.expanded) {
       this.detailBounds = undefined;
-      return renderCompactToolCall(
+      // Besides width, only animation ticks change between updates, through shared state.
+      const frame = timingState(this.context).codePreviewAnimationFrame;
+      const cached = this.collapsed;
+      if (cached?.plan === plan && cached.width === width && cached.frame === frame)
+        return cached.rows;
+      const rows = renderCompactToolCall(
         {
           name: this.options.name,
           phase,
@@ -179,11 +216,13 @@ class CompactShell implements Component {
           duration: this.duration,
           elapsedMs: this.elapsedMs,
           timingEnabled: codePreviewSettings.toolCallTiming,
-          animationFrame: timingState(this.context).codePreviewAnimationFrame,
+          animationFrame: frame,
         },
         this.theme,
         width,
       );
+      this.collapsed = { plan, width, frame, rows };
+      return rows;
     }
     // Build bodies only when visible. In particular, pending write/edit diffs stay uncomputed.
     this.display ??= this.renderDetails(result !== undefined, phase, summary, collapsedSummary);
@@ -266,9 +305,16 @@ class CompactShell implements Component {
   }
 
   private fallbackSlot(slot: "call" | "result", context: ToolRenderContext): Component {
-    const text = slot === "call" ? this.options.name : this.fallbackResultText();
-    const color = slot === "call" ? "toolTitle" : context.isError ? "error" : "toolOutput";
-    return new Text(this.theme.fg(color, escapeControlChars(text)), 0, 0);
+    if (slot === "result") {
+      const color = context.isError ? "error" : "toolOutput";
+      return new Text(this.theme.fg(color, escapeControlChars(this.fallbackResultText())), 0, 0);
+    }
+    // A failed call renderer still leaves the exact input readable, as Pi's own fallback does.
+    const lines = [
+      this.theme.fg("toolTitle", escapeControlChars(this.options.name)),
+      ...fallbackArguments(context.args).map((line) => this.theme.fg("muted", line)),
+    ];
+    return new Text(lines.join("\n"), 0, 0);
   }
 
   private fallbackResultText(): string {
@@ -288,7 +334,19 @@ class CompactShell implements Component {
     // Retained bodies must also hear theme invalidation while the compact row hides them.
     this.slots.invalidate();
     this.display = undefined;
+    this.planned = undefined;
+    this.collapsed = undefined;
   }
+}
+
+/** Pretty JSON lines, none for empty arguments. JSON escapes C0 controls; this escapes the rest. */
+function fallbackArguments(args: RendererArguments): string[] {
+  return invokeHostCallback(() => {
+    if (args === undefined || args === null) return [];
+    if (Predicate.isObject(args) && Object.keys(args).length === 0) return [];
+    const json = JSON.stringify(args, null, 2);
+    return json === undefined ? [] : escapeControlChars(json).split("\n");
+  }, []);
 }
 
 export function createCompactToolShell(
