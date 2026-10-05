@@ -171,6 +171,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let nextIpcAckId = 1;
   let assignmentEpoch = 0;
   let latestTerminal: BackendAssistantTerminal | undefined;
+  let transportFailure: SubagentError | undefined;
 
   const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
     events,
@@ -191,6 +192,25 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     for (const deferred of ipcAcks.values()) Deferred.doneUnsafe(deferred, Effect.fail(error));
     ipcAcks.clear();
   };
+
+  const awaitExit = child.awaitExit.pipe(
+    Effect.map((exit) => {
+      const summary = `Subagent process exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
+      return {
+        ...toBackendExit(exit),
+        diagnostic: sanitizeDiagnosticText(
+          `${summary}${exit.stderr.trim() ? ` ${exit.stderr.trim()}` : ""}`,
+          MAX_ERROR_CHARS,
+        ),
+      };
+    }),
+    Effect.tapError((error) =>
+      Effect.sync(() => {
+        transportFailure = error;
+        cancelPending(error);
+      }),
+    ),
+  );
 
   const rpc = <A extends RpcCommand>(
     command: A,
@@ -267,16 +287,15 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   const accountUsage = makeLocalPiUsage();
   const usageControl = yield* Semaphore.make(1);
   const withUsageControl = usageControl.withPermits(1);
-  let transportClosed = false;
   let usageDirty = false;
   let usageReady = false;
   let pendingSettlement: Extract<BackendEvent, { type: "run_settled" }> | undefined;
   const reconcileUsage = Effect.gen(function* () {
-    if (transportClosed) return;
+    if (transportFailure) return yield* transportFailure;
     const response = yield* rpc({ type: "get_session_stats" });
     const usage = accountUsage.account(response.data);
     if (usage) yield* offer({ type: "usage", usage });
-  }).pipe(Effect.catch(() => Effect.void));
+  });
   const requireUsageBaseline = Effect.suspend(() =>
     accountUsage.hasBaseline()
       ? Effect.void
@@ -289,7 +308,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     while (usageDirty || pendingSettlement) {
       usageDirty = false;
       const settlement = pendingSettlement;
-      yield* reconcileUsage;
+      yield* reconcileUsage.pipe(Effect.catch(() => Effect.void));
       if (settlement && settlement === pendingSettlement) {
         pendingSettlement = undefined;
         if (settlement.assignmentEpoch === assignmentEpoch) yield* offer(settlement);
@@ -468,16 +487,24 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 
   yield* Stream.fromQueue(child.events).pipe(
     Stream.runForEach(consumeChildEvent),
+    // Natural transport closure has an exit receipt. Reject RPC with that cause before the
+    // fallback finalizer can erase it. Keep the wait interruptible: scope teardown need not
+    // imply process exit, and must still cancel pending requests without waiting for one.
+    Effect.andThen(awaitExit),
+    Effect.tap((exit) =>
+      Effect.sync(() => {
+        transportFailure = new SubagentProcessError({ operation: "run", message: exit.diagnostic });
+        cancelPending(transportFailure);
+      }),
+    ),
     Effect.catchCause(() => Effect.void),
     Effect.ensuring(
       Effect.gen(function* () {
-        transportClosed = true;
-        cancelPending(
-          new SubagentProcessError({
-            operation: "run",
-            message: "Subagent backend transport closed.",
-          }),
-        );
+        transportFailure ??= new SubagentProcessError({
+          operation: "run",
+          message: "Subagent backend transport closed.",
+        });
+        cancelPending(transportFailure);
         yield* withUsageControl(drainUsage).pipe(
           Effect.interruptible,
           Effect.ensuring(Effect.sync(() => Queue.endUnsafe(events))),
@@ -613,10 +640,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   return {
     pid: child.pid,
     events,
-    awaitExit: child.awaitExit.pipe(
-      Effect.map(toBackendExit),
-      Effect.tapError((error) => Effect.sync(() => cancelPending(error))),
-    ),
+    awaitExit,
     controls,
     acknowledge,
     terminate: child.terminate,

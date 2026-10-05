@@ -177,7 +177,8 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
   Only the delivery is interruptible: once Pi accepts a report or notice, closing the run in the journal and marking its record notified happen uninterruptibly, so a teardown can't leave an announced run open to be announced again.
 - Workflow notifications use the `pi-subagents-workflow` message through the shared host notifier.
   Completed and failed runs join or start a turn; a user's stop, an interrupted tool stop, and interrupted-run notices wait for the next turn.
-- `run-text.ts` holds the restart guidance, which sends a saved workflow or script file back to its own file and only an inline script to the run's copy.
+- `state.ts` preserves sandbox outcome kind in the in-memory failure and marks unexpected runner defects separately; foreign names/messages never determine infrastructure recovery. Aborts remain stopped. This classification is not added to the minimal `run.json` record.
+- `run-text.ts` shares failure-specific recovery across status and notifications: script errors retain edit/resume advice, while sandbox/runner failures recommend a user-managed full Pi restart and continuation of the same session before an unchanged retry. Worktree proposals and other active work must be handled first. Guidance sends a saved workflow or script file back to its own file and only an inline script to the run's copy.
 
 ## Activity projection
 

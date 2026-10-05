@@ -235,7 +235,11 @@ describe("workflow runs", () => {
         );
         const run = yield* finished(workflows, started.id);
         expect(run.state).toBe("failed");
-        expect(run.failure).toMatchObject({ name: "TypeError", message: "bad input" });
+        expect(run.failure).toMatchObject({
+          kind: "script",
+          name: "TypeError",
+          message: "bad input",
+        });
         yield* eventually(() => fixture.delivered[0], "the failure notification");
         const content = fixture.workflowNotifications[0]!.content;
         expect(content).toContain("bad input");

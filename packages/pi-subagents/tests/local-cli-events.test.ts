@@ -82,14 +82,22 @@ const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope>) =>
 it.effect("Pi reconciles cumulative charges before settlement without blocking RPC dispatch", () =>
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+    const exited = yield* Deferred.make<Extract<ChildWireEvent, { type: "exit" }>>();
     let tokens = 100;
     let closeOnStats = false;
     const backend = yield* spawnPi(
       Effect.succeed(
         piChild(childEvents, {
+          awaitExit: Deferred.await(exited),
           send: (command) =>
             closeOnStats && command.type === "get_session_stats"
-              ? Effect.sync(() => Queue.endUnsafe(childEvents))
+              ? Effect.sync(() => {
+                  Queue.endUnsafe(childEvents);
+                  Deferred.doneUnsafe(
+                    exited,
+                    Effect.succeed({ type: "exit", exitCode: 0, stderr: "" }),
+                  );
+                })
               : Queue.offer(childEvents, rpcResponse(command, { tokens, cost: tokens / 100 })).pipe(
                   Effect.asVoid,
                 ),

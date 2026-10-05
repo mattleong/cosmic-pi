@@ -387,13 +387,17 @@ export const workflowExtendLine = (run: WorkflowRunView): string => {
 };
 
 /**
- * How the main agent fixes a failed run's script and starts it again, reusing finished agents.
+ * Failure-specific recovery: runtime failures need a user-managed restart, not script edits.
  * When an uncaught budget error failed the run, it says first that a resumed run gets a new
  * budget, since the limit the user set is already spent.
  */
 export const workflowRetryLine = (run: WorkflowRunView): string => {
   const restart = workflowRestart(run.source, run.scriptPath);
   const resume = `resumeFromRunId: "${run.id}" to reuse the results of agents that already finished`;
+  if (run.failure?.kind === "sandbox" || run.failure?.kind === "runner") {
+    const target = restart === undefined ? "" : `${restart.argument} and `;
+    return `The workflow runtime failed. Preserve or resolve outstanding worktree proposals and stop other active work before asking the user to fully restart Pi and continue this session. Check the runtime installation if the failure persists. Then retry the unchanged workflow with ${target}resumeFromRunId: "${run.id}" and the same args; eligible completed agent results may be reused.`;
+  }
   if (run.failure?.name === WORKFLOW_BUDGET_ERROR) {
     const spent =
       "The run's token budget is spent, and a run resumed with resumeFromRunId gets a new one, so ask the user before spending more.";

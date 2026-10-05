@@ -200,7 +200,10 @@ export interface FakeChildControl {
   readonly offer: (value: RpcWireValue) => void;
   readonly offerIpc: (value: IpcWireValue) => void;
   readonly offerProtocolError: (message: string) => void;
-  readonly exit: (exitCode?: number | null) => void;
+  readonly exit: (
+    exitCode?: number | null,
+    diagnostic?: { readonly stderr?: string; readonly signal?: string },
+  ) => void;
   readonly failExit: (message: string) => void;
 }
 
@@ -382,9 +385,12 @@ export function fakeChildLayer(
           };
           const offerProtocolError = (message: string) =>
             Queue.offerUnsafe(events, { type: "protocol_error", message });
-          const exit = (exitCode: number | null = 0) => {
+          const exit: FakeChildControl["exit"] = (exitCode = 0, diagnostic = {}) => {
             Queue.endUnsafe(events);
-            Deferred.doneUnsafe(exited, Effect.succeed({ type: "exit", exitCode, stderr: "" }));
+            Deferred.doneUnsafe(
+              exited,
+              Effect.succeed({ type: "exit", exitCode, stderr: "", ...diagnostic }),
+            );
           };
           const failExit = (message: string) => {
             Queue.endUnsafe(events);

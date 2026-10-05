@@ -39,6 +39,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 ## Workflow runs
 
 - Scripts run in a fresh in-process `CodemodeSandbox` with only `agent`, `event`, and `load` host members, whose calls are fibers of the run's scope.
+  Failed views retain sandbox/script/timeout provenance, with runner defects classified separately, so shared recovery guidance never diagnoses infrastructure failure from a foreign error name.
 - Each `agent()` call is an owned run admitted through its run's own FIFO slots, `min(16, CPUs - 2)` of them, as in Claude Code.
   Only the launch is interruptible, so a settled call always records its view, usage, and journal lines.
 - Owned-run rule (`run/owned-runs.ts`): the workflow claims its agent's first report before the record is registered, and root await, retry, and resume of a completed member fail with `workflow_owned_run` while it is live.

@@ -235,6 +235,8 @@ export interface WorkflowLogEntry {
 }
 
 export interface WorkflowFailure {
+  /** Failure provenance, not inferred from the foreign error's name or message. */
+  readonly kind?: "script" | "timeout" | "sandbox" | "runner" | undefined;
   readonly name?: string | undefined;
   readonly message: string;
   readonly stack?: string | undefined;

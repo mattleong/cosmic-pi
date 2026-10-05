@@ -315,11 +315,6 @@ export const withAgentChange = (
   agents: run.agents.map((agent) => (agent.runId === runId ? { ...agent, ...change } : agent)),
 });
 
-const failureOf = (outcome: Extract<WorkflowSandboxOutcome, { _tag: "Failed" }>) =>
-  outcome.kind === "timeout" || outcome.kind === "sandbox"
-    ? { ...outcome.failure, name: outcome.failure.name ?? "SandboxError" }
-    : outcome.failure;
-
 /** Maps the run fiber's exit: interruption means the run was stopped or torn down. */
 export const concludeWorkflow = (exit: Exit.Exit<WorkflowSandboxOutcome>): WorkflowConclusion => {
   if (Exit.isSuccess(exit)) {
@@ -327,13 +322,22 @@ export const concludeWorkflow = (exit: Exit.Exit<WorkflowSandboxOutcome>): Workf
     if (outcome._tag === "Completed")
       return { state: "completed", value: outcome.value, output: outcome.output };
     if (outcome.kind === "aborted") return { state: "stopped", output: outcome.output };
-    return { state: "failed", failure: failureOf(outcome), output: outcome.output };
+    return {
+      state: "failed",
+      failure: {
+        ...outcome.failure,
+        kind: outcome.kind,
+        ...(outcome.kind !== "script" && { name: outcome.failure.name ?? "SandboxError" }),
+      },
+      output: outcome.output,
+    };
   }
   if (Cause.hasInterruptsOnly(exit.cause)) return { state: "stopped", output: [] };
   const detail = Cause.pretty(exit.cause).trim();
   return {
     state: "failed",
     failure: {
+      kind: "runner",
       name: "WorkflowRunnerError",
       message: detail.split("\n")[0] || "The workflow runner failed unexpectedly.",
       ...(detail.includes("\n") && { stack: detail }),

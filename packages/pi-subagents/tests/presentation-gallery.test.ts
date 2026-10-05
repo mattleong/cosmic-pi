@@ -1251,6 +1251,18 @@ const failedWorkflow = workflowRun({
     stack: "at <workflow>:9:14",
   },
 });
+const runtimeFailedWorkflow = workflowRun({
+  id: "wf-runtime-1",
+  state: "failed",
+  endedAt: now,
+  agents: [],
+  scriptPath: "/home/user/.pi/agent/subagents/workflow-runs/wf-runtime-1/script.js",
+  failure: {
+    kind: "sandbox",
+    name: "Error",
+    message: "Cannot find module '/runtime/pi-codemode/dist/runtime/worker.js'",
+  },
+});
 const stoppedWorkflow = workflowRun({
   state: "stopped",
   endedAt: now,
@@ -1431,7 +1443,11 @@ const stuckAttention: ReadonlyArray<WorkflowAgentAttention> = [
   { kind: "paused", runId: "agent-s198", writer: true, canResume: true },
 ];
 
-const workflowRuns: ReadonlyArray<WorkflowRunView> = [completedWorkflow, failedWorkflow];
+const workflowRuns: ReadonlyArray<WorkflowRunView> = [
+  completedWorkflow,
+  failedWorkflow,
+  runtimeFailedWorkflow,
+];
 
 const runDirectory = "/home/me/.pi/agent/subagents/workflow-runs/wf-mg3k2l-1";
 
@@ -1667,6 +1683,10 @@ const workflowScenarios = Effect.gen(function* () {
       action: "status",
       runId: failedWorkflow.id,
     }),
+    yield* execute("status after a runtime dependency failure", {
+      action: "status",
+      runId: runtimeFailedWorkflow.id,
+    }),
     yield* execute("status after its token budget was spent and the script didn't catch it", {
       action: "status",
       runId: budgetFailedWorkflow.id,
@@ -1773,6 +1793,7 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     })!,
   ),
   ...notified("workflow script failed", workflowNotification(failedWorkflow)!),
+  ...notified("workflow runtime failed", workflowNotification(runtimeFailedWorkflow)!),
   ...notified(
     "workflow failed when its token budget was spent",
     workflowNotification(budgetFailedWorkflow)!,
