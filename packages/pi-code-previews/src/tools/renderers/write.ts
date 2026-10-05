@@ -2,7 +2,7 @@ import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { createWriteToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { FullWidthDiffText } from "../../diff/full-width-text";
@@ -67,15 +67,11 @@ export function createWritePreviewTool(cwd: string) {
 }
 
 /** Presentation is independent of the before-write execution hook. */
-export function createWritePreviewRenderers(
-  cwd: string,
-  session?: Pick<CodePreviewRendererSession, "scheduleAnimation" | "selfShell">,
-) {
+export function createWritePreviewRenderers(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
     { name: "write" },
     {
       ...session,
-      selfShell: true,
       compactSummary: (input) => createBuiltinCompactSummary("write", input),
       expandedContent: builtinExpandedContent("write", cwd),
       renderCall(args, theme, renderContext) {

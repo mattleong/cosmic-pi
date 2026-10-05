@@ -15,7 +15,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { makePiManagedRuntime, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { opaqueFixture } from "pi-cosmic-core/testing";
 import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
 import { codePreviewApplicationLayer } from "../../src/layer";
@@ -24,6 +24,8 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { nativeManagerFixture } from "../support/native-mcp";
 import { step } from "../support/effect-test";
 import { createToolPresentationHarness } from "../../testing";
+
+afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
 const serializeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 

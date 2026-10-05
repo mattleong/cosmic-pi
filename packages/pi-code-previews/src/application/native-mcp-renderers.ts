@@ -1,7 +1,7 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { isNativeMcpName } from "../tools/native-mcp-identity";
 import { createNativeMcpRenderers } from "../tools/native-mcp-render";
-import type { CodePreviewRendererSession, PreviewToolInfo } from "./renderer-contract";
+import type { CodePreviewRendererPresentation, PreviewToolInfo } from "./renderer-contract";
 
 /**
  * Actual definitions need exact current builtin ownership. Historical calls may precede server
@@ -13,7 +13,7 @@ export function selectNativeMcpRenderers(
   tool: PreviewToolInfo | undefined,
   nativeManager: boolean,
   downstream: ToolRenderers | undefined,
-  session: CodePreviewRendererSession,
+  presentation: CodePreviewRendererPresentation,
 ): ToolRenderers | undefined {
   if (!isNativeMcpName(name)) return undefined;
   if (tool ? tool.name !== name || tool.sourceInfo.path !== "builtin:mcp" : !nativeManager)
@@ -22,8 +22,7 @@ export function selectNativeMcpRenderers(
     name,
     tool,
     downstream,
-    session.scheduleAnimation,
-    session.selfShell,
-    session,
+    presentation.scheduleAnimation,
+    presentation,
   );
 }

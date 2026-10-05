@@ -290,7 +290,7 @@ try {
       }
       const standalone = await context.executeTool("mcp__fixture__echo", {text:"standalone packed MCP"});
       const renderers = session.extensionRunner.resolveToolRenderers("mcp__fixture__echo", () => undefined);
-      if (standalone.isError || !renderers || renderers.renderShell !== "self") {
+      if (standalone.isError || !renderers) {
         throw new Error("Packed standalone native MCP presentation is unavailable.");
       }
       const snapshot = JSON.stringify(standalone.result);
@@ -298,14 +298,20 @@ try {
       const presentation = previewTesting.createToolPresentationHarness(renderers, {cwd, width:200});
       presentation.call({text:"standalone packed MCP"}, {expanded:true});
       presentation.result(standalone.result, {expanded:true, showImages:false});
-      if (!presentation.render().join("\n").includes("standalone packed MCP") ||
+      const rendered = presentation.render().join("\n");
+      // Pi's own MCP renderer has no Arguments section; Code Previews' expanded call does.
+      if (!rendered.includes("Arguments")) {
+        throw new Error("Packed standalone native MCP presentation is unavailable.");
+      }
+      if (!rendered.includes("standalone packed MCP") ||
           JSON.stringify(standalone.result) !== snapshot ||
           standalone.result.content.find((block) => block.type === "image") !== nativeImage ||
           nativeImage?.data !== image.data) {
         throw new Error("Packed native MCP rendering changed output or native image evidence.");
       }
       const programRenderers = session.extensionRunner.resolveToolRenderers("codemode", () => undefined);
-      if (!programRenderers || programRenderers.renderShell !== "self") {
+      // With no base definition, only the Code Previews resolver presents codemode.
+      if (!programRenderers) {
         throw new Error("Packed native codemode renderer is unavailable after MCP activation.");
       }
       if (errors.length !== 0) throw new Error("Packed Code Previews/native MCP lifecycle errors: " + JSON.stringify(errors));

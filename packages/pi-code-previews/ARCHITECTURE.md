@@ -25,15 +25,18 @@ disk. The former standalone `pi-mcp-previews` package is retired and must be rem
   checks the captured slot token. Deactivation clears the capability and revokes native animation.
   `application/scheduler.ts` scopes deferred and cadence callbacks in a FiberSet; disposal awaits
   remaining fibers. Cooperative extensions can compose its public Layer into their own runtime.
-- `boundary/host-tool-renderers.ts` reads exact public builtin source metadata and retains only
-  public renderer fields from `next()`. Foreign tools fall through unchanged. Core/native
+- `boundary/host-tool-renderers.ts` captures public tool and command metadata; a name listed twice
+  reads as unknown. `tools/preview-admission.ts` owns the exact-source admission that rendering,
+  status and write registration share. The resolver retains only public renderer fields from
+  `next()`, and foreign tools fall through unchanged. Core/native
   codemode presentation follows preview selection, not active-at-start status. Native MCP
   definitions require builtin MCP ownership; missing historical aliases require the independently
   proven unique builtin `/mcp` manager. Nothing is introduced or activated for presentation.
 - `application/tool-renderers.ts` publishes an originating presentation owner only after trusted
-  settings and startup succeed. `renderer-row.ts` retains cold replay call/result slots under a
-  fixed self shell, then adopts that owner's first-ready appearance and reconstructs complete
-  arguments/results. Old rows retain their appearance and cannot borrow replacement schedulers.
+  settings and startup succeed. Rows resolved after readiness get ordinary renderers in Pi's own
+  shell. `renderer-row.ts` retains only cold replay call/result slots under a fixed self shell,
+  then adopts that owner's first-ready appearance and reconstructs complete arguments/results.
+  Old rows retain their appearance and cannot borrow replacement schedulers.
 - `tools/renderers/registration.ts` registers only write's execution hook after exact builtin or
   proven prior ownership admission. It preserves activation through `defaultActive`, separates
   attempted ownership from successful installation, and permits retry after mutate-then-refresh

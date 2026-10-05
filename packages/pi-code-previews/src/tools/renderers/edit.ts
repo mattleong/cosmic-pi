@@ -2,7 +2,7 @@ import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { FullWidthDiffText } from "../../diff/full-width-text";
@@ -26,15 +26,11 @@ import { renderPreviewError } from "./shared/result-prelude";
 import { countLabel } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
-export function createEditPreviewTool(
-  cwd: string,
-  session?: Pick<CodePreviewRendererSession, "scheduleAnimation" | "selfShell">,
-) {
+export function createEditPreviewTool(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
     { name: "edit" },
     {
       ...session,
-      selfShell: true,
       compactSummary: (input) => createBuiltinCompactSummary("edit", input),
       expandedContent: builtinExpandedContent("edit", cwd),
       renderCall(args, theme, renderContext) {

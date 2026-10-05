@@ -1,7 +1,7 @@
 import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { Text } from "@earendil-works/pi-tui";
 
 import { renderDisplayPath } from "../../paths/display";
@@ -12,15 +12,11 @@ import { createCodePreviewRenderers } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderPathListResult } from "./shared/path-list-result";
 
-export function createFindPreviewTool(
-  cwd: string,
-  session?: Pick<CodePreviewRendererSession, "scheduleAnimation" | "selfShell">,
-) {
+export function createFindPreviewTool(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
     { name: "find" },
     {
       ...session,
-      selfShell: true,
       compactSummary: (input) => createBuiltinCompactSummary("find", input),
       expandedContent: builtinExpandedContent("find", cwd),
       renderCall(args, theme) {

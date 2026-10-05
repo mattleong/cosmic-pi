@@ -10,8 +10,18 @@ export type PreviewToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
 export interface CodePreviewRendererSession {
   readonly cwd: string;
   readonly scheduleAnimation: CompactAnimationScheduler;
-  readonly selfShell: true;
   readonly mode?: ToolCallBackgroundMode;
   readonly collapsedStyle?: ToolCallCollapsedStyle;
   readonly enabledTools?: readonly CodePreviewToolName[];
 }
+
+/** One row's presentation: rows Pi retained before readiness keep a fixed self shell. */
+export interface CodePreviewRendererPresentation extends CodePreviewRendererSession {
+  readonly selfShell: boolean;
+}
+
+/** The fields builtin presentation factories pass through to the shared renderer adapter. */
+export type CodePreviewRendererAppearance = Pick<
+  CodePreviewRendererPresentation,
+  "scheduleAnimation" | "selfShell" | "mode" | "collapsedStyle"
+>;

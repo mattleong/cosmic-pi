@@ -1,4 +1,4 @@
-import type { ExtensionAPI, SourceInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SourceInfo } from "@earendil-works/pi-coding-agent";
 import type { PreviewToolInfo } from "../application/renderer-contract";
 
 export interface PreviewHostTools {
@@ -9,7 +9,14 @@ export interface PreviewHostTools {
 
 /** Public metadata only. Startup deliberately lets discovery failures reach lifecycle handling. */
 export function capturePreviewHostTools(pi: ExtensionAPI): PreviewHostTools {
-  const tools = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
+  const tools = new Map<string, PreviewToolInfo>();
+  const repeated = new Set<string>();
+  for (const tool of pi.getAllTools()) {
+    if (tools.has(tool.name)) repeated.add(tool.name);
+    tools.set(tool.name, tool);
+  }
+  // A name listed twice proves no single owner, so it reads as unknown.
+  for (const name of repeated) tools.delete(name);
   const commands = pi.getCommands();
   const managers = commands.filter((command) => command.name === "mcp");
   const anchors = commands.filter(
@@ -23,38 +30,4 @@ export function capturePreviewHostTools(pi: ExtensionAPI): PreviewHostTools {
       managers[0]?.sourceInfo?.source === "builtin" &&
       managers[0]?.sourceInfo?.path === "builtin:mcp",
   };
-}
-
-/** Only renderer fields from next() are retained; never treat it as an execution definition. */
-export function rendererFields(renderers: ToolRenderers | undefined): ToolRenderers | undefined {
-  if (!renderers) return undefined;
-  return {
-    ...(renderers.renderShell && { renderShell: renderers.renderShell }),
-    ...(renderers.renderCall && { renderCall: renderers.renderCall }),
-    ...(renderers.renderResult && { renderResult: renderers.renderResult }),
-  };
-}
-
-export function isOwnedWritePreviewTool(
-  tool: PreviewToolInfo | undefined,
-  source: SourceInfo | undefined,
-): boolean {
-  const owner = tool?.sourceInfo;
-  return (
-    !!owner &&
-    !!source &&
-    source.source !== "builtin" &&
-    owner.source === source.source &&
-    owner.path === source.path &&
-    owner.scope === source.scope &&
-    owner.origin === source.origin
-  );
-}
-
-export function isBuiltinPreviewTool(tool: PreviewToolInfo | undefined): boolean {
-  return tool?.sourceInfo.source === "builtin" && tool.sourceInfo.path === `builtin:${tool.name}`;
-}
-
-export function isNativePreviewTool(tool: PreviewToolInfo | undefined, name: "codemode" | "mcp") {
-  return tool?.sourceInfo.source === "builtin" && tool.sourceInfo.path === `builtin:${name}`;
 }

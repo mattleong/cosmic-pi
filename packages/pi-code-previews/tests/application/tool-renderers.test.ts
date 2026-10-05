@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { AgentToolResult, ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, it } from "vitest";
-import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
@@ -12,7 +12,7 @@ import { capturePreviewHostTools } from "../../src/boundary/host-tool-renderers"
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
-import { createToolPresentationHarness } from "../../testing";
+import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 
 const info = (name: string, path = `builtin:${name}`): ToolInfo => ({
   name,
@@ -77,6 +77,60 @@ it("requires exact native sources and a unique builtin MCP manager for missing h
   tools = [info("codemode", "builtin:codemode")];
   assert.equal(resolver("codemode", () => downstream)?.renderShell, "self");
 });
+
+it("only exact native MCP aliases leave Pi's own presentation", () => {
+  const pi = extensionApiFixture({ getAllTools: () => [], getCommands: () => [manager] });
+  const owner = new CodePreviewPresentationOwner();
+  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  assert.equal(
+    resolver("mcp__docs-site__lookup", () => downstream)?.renderCall,
+    downstream.renderCall,
+  );
+  assert.notEqual(
+    resolver("mcp__docs_site__lookup", () => downstream)?.renderCall,
+    downstream.renderCall,
+  );
+});
+
+for (const style of ["preview", "compact"] as const)
+  for (const background of ["on", "off", "border"] as const)
+    it(`${style}/${background} ready rows keep output when each slot is resolved separately`, () => {
+      setCodePreviewSettings({
+        ...defaultCodePreviewSettings,
+        syntaxHighlighting: false,
+        toolCallTiming: false,
+        toolCallCollapsedStyle: style,
+        toolCallBackground: background,
+        tools: ["bash"],
+      });
+      const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
+      const owner = new CodePreviewPresentationOwner();
+      owner.publish("/project", new Set(["bash"]), scheduler);
+      const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+      // HTML export resolves renderers for each slot and shares only the row's state.
+      const args = { command: "echo exact" };
+      const state = {};
+      const call = resolver("bash", () => downstream)!.renderCall!(
+        args,
+        plainTheme,
+        renderContextFixture({ args, state, executionStarted: true }),
+      );
+      call.render(100);
+      const result = resolver("bash", () => downstream)!.renderResult!(
+        { content: [{ type: "text", text: "COMPLETE OUTPUT" }], details: {} },
+        { expanded: true, isPartial: false },
+        plainTheme,
+        renderContextFixture({
+          args,
+          state,
+          executionStarted: true,
+          expanded: true,
+          isPartial: false,
+        }),
+      );
+      assert.match(result.render(100).join("\n"), /COMPLETE OUTPUT/);
+      owner.retire();
+    });
 
 it("renders inactive builtin tools without touching active selection or execution registration", () => {
   setCodePreviewSettings({

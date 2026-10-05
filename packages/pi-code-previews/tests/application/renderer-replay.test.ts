@@ -187,7 +187,8 @@ it("lazy draw adoption refeeds stored result without host refresh or execution e
     "bash",
     downstream,
     owner,
-    () => owner.session && createBuiltinPreviewRenderers("bash", owner.session),
+    () =>
+      owner.session && createBuiltinPreviewRenderers("bash", { ...owner.session, selfShell: true }),
   );
   const call = renderers.renderCall!(context.args, plainTheme, context);
   const result = renderers.renderResult!(

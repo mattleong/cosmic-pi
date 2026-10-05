@@ -1,7 +1,7 @@
 import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
@@ -19,15 +19,11 @@ import { renderContentPreview } from "./shared/content-preview";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
-export function createReadPreviewTool(
-  cwd: string,
-  session?: Pick<CodePreviewRendererSession, "scheduleAnimation" | "selfShell">,
-) {
+export function createReadPreviewTool(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
     { name: "read" },
     {
       ...session,
-      selfShell: true,
       compactSummary: (input) => createBuiltinCompactSummary("read", input),
       expandedContent: builtinExpandedContent("read", cwd),
       renderCall(args, theme) {

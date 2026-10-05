@@ -1,7 +1,7 @@
 import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { showingFooter, trimSingleTrailingNewline } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
@@ -28,15 +28,11 @@ function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
   );
 }
 
-export function createBashPreviewTool(
-  cwd: string,
-  session?: Pick<CodePreviewRendererSession, "scheduleAnimation" | "selfShell">,
-) {
+export function createBashPreviewTool(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
     { name: "bash" },
     {
       ...session,
-      selfShell: true,
       compactSummary: (input) => createBuiltinCompactSummary("bash", input),
       expandedContent: builtinExpandedContent("bash", cwd),
       renderCall(args, theme, renderContext) {

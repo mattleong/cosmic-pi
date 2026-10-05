@@ -581,6 +581,16 @@ for (const [name, sabotage] of captureFailures)
     assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
   });
 
+effectTest("hosts without renderer resolvers load idle and warn at session start", function* () {
+  const h = harness();
+  const pi = extensionApiFixture({ ...h.pi, registerToolRenderer: undefined });
+  yield* step(() => codePreviewsWithDependencies(pi, h.dependencies));
+  yield* settle(() => h.handlers.get("session_start")?.({}, h.context()));
+
+  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
+  assert.equal(h.notifications.length, 1);
+});
+
 effectTest("project trust fails closed unless the callback returns literal true", function* () {
   const observedTrust: boolean[] = [];
   const h = yield* registered({

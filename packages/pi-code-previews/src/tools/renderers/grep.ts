@@ -1,7 +1,7 @@
 import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { Text } from "@earendil-works/pi-tui";
 import { renderGrepOutputLines } from "../../tools/grep-render";
 import { renderDisplayPath } from "../../paths/display";
@@ -22,15 +22,11 @@ import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
-export function createGrepPreviewTool(
-  cwd: string,
-  session?: Pick<CodePreviewRendererSession, "scheduleAnimation" | "selfShell">,
-) {
+export function createGrepPreviewTool(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
     { name: "grep" },
     {
       ...session,
-      selfShell: true,
       compactSummary: (input) => createBuiltinCompactSummary("grep", input),
       expandedContent: builtinExpandedContent("grep", cwd),
       renderCall(args, theme) {

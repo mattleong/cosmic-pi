@@ -17,11 +17,12 @@ class SelfBackgroundRow implements Component {
     this.context = context;
     this.theme = theme;
     this.box = new Box(1, 1, (text) =>
+      // Pi's own box stays pending until the call settles, even for an error update.
       this.theme.bg(
-        this.context.isError
-          ? "toolErrorBg"
-          : this.context.isPartial
-            ? "toolPendingBg"
+        this.context.isPartial
+          ? "toolPendingBg"
+          : this.context.isError
+            ? "toolErrorBg"
             : "toolSuccessBg",
         text,
       ),

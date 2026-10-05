@@ -11,7 +11,7 @@ import {
 } from "../../testing";
 import { selectNativeMcpRenderers } from "../../src/application/native-mcp-renderers";
 import type {
-  CodePreviewRendererSession,
+  CodePreviewRendererPresentation,
   PreviewToolInfo,
 } from "../../src/application/renderer-contract";
 
@@ -29,7 +29,7 @@ const metadata = (
 });
 const session = (
   scheduleAnimation = animationSchedulerProbe().schedule,
-): CodePreviewRendererSession => ({
+): CodePreviewRendererPresentation => ({
   cwd: "/project",
   scheduleAnimation,
   selfShell: true,
@@ -129,7 +129,7 @@ for (const style of ["preview", "compact"] as const)
 test("MCP rows use the session's captured appearance after settings change", () => {
   for (const capturedStyle of ["preview", "compact"] as const) {
     settings(capturedStyle === "compact" ? "preview" : "compact", "on");
-    const captured: CodePreviewRendererSession = {
+    const captured: CodePreviewRendererPresentation = {
       ...session(),
       mode: "off",
       collapsedStyle: capturedStyle,
@@ -252,7 +252,7 @@ test("retired scheduling admission never borrows the replacement owner", () => {
   const origin = animationSchedulerProbe();
   const replacement = animationSchedulerProbe();
   let live = true;
-  const ownedSchedule: CodePreviewRendererSession["scheduleAnimation"] = (interval, tick) =>
+  const ownedSchedule: CodePreviewRendererPresentation["scheduleAnimation"] = (interval, tick) =>
     live ? origin.schedule(interval, tick) : undefined;
   const renderers = selectNativeMcpRenderers(
     name,

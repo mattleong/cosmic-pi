@@ -63,8 +63,7 @@ function safeContent(
 export function createNativeCodemodeRenderers(
   cwd: string,
   scheduleAnimation: CompactAnimationScheduler,
-  selfShell = true,
-  appearance: Pick<CodePreviewShellOptions, "mode" | "collapsedStyle"> = {},
+  appearance: Pick<CodePreviewShellOptions, "selfShell" | "mode" | "collapsedStyle"> = {},
 ): ToolRenderers {
   const summary = nativeCodemodeSummary(cwd);
   const previewStyle =
@@ -237,7 +236,6 @@ export function createNativeCodemodeRenderers(
     },
     {
       ...appearance,
-      selfShell,
       compactSummary: summary,
       animateProgress: true,
       showShortTiming: true,

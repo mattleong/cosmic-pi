@@ -1,6 +1,8 @@
-import type { ExtensionAPI, SourceInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import type { CodePreviewRendererSession } from "../../application/renderer-contract";
+import type { ExtensionAPI, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { CodePreviewRendererPresentation } from "../../application/renderer-contract";
+import { capturePreviewHostTools } from "../../boundary/host-tool-renderers";
 import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
+import { admitsPreviewSource } from "../preview-admission";
 import { getEnabledCodePreviewTools } from "../selection";
 import { setCodePreviewToolStatus } from "../status";
 import { createBashPreviewTool } from "./bash";
@@ -21,13 +23,13 @@ const RENDERER_FACTORIES = {
   ls: createLsPreviewTool,
 } satisfies Record<
   (typeof CORE_CODE_PREVIEW_TOOLS)[number],
-  (cwd: string, session: CodePreviewRendererSession) => ToolRenderers
+  (cwd: string, session: CodePreviewRendererPresentation) => ToolRenderers
 >;
 
 /** Construct presentation only; lifecycle owns public source admission and routing. */
 export function createBuiltinPreviewRenderers(
   name: string,
-  session: CodePreviewRendererSession,
+  session: CodePreviewRendererPresentation,
 ): ToolRenderers | undefined {
   const coreName = CORE_CODE_PREVIEW_TOOLS.find((candidate) => candidate === name);
   if (!coreName) return undefined;
@@ -36,15 +38,6 @@ export function createBuiltinPreviewRenderers(
     : getEnabledCodePreviewTools().has(coreName);
   if (!enabled) return undefined;
   return RENDERER_FACTORIES[coreName](session.cwd, session);
-}
-
-function sameSource(left: SourceInfo, right: SourceInfo): boolean {
-  return (
-    left.source === right.source &&
-    left.path === right.path &&
-    left.scope === right.scope &&
-    left.origin === right.origin
-  );
 }
 
 /** Write alone needs an execution hook to capture before-state under Pi's mutation queue. */
@@ -58,23 +51,14 @@ export function registerWritePreviewTool(
 ): void {
   if (!getEnabledCodePreviewTools().has("write")) return;
   try {
-    const candidates = pi.getAllTools().filter((tool) => tool.name === "write");
-    const existing = candidates.length === 1 ? candidates[0] : undefined;
+    const host = capturePreviewHostTools(pi);
+    const existing = host.tools.get("write");
     if (!existing) {
       setCodePreviewToolStatus("write", { state: "unavailable" });
       return;
     }
-    const native =
-      existing.sourceInfo.source === "builtin" && existing.sourceInfo.path === "builtin:write";
-    let priorOwn = false;
-    if (!native && options.ownedTools?.has("write")) {
-      const anchors = pi
-        .getCommands()
-        .filter((command) => command.name === "code-previews" && command.source === "extension");
-      const source = anchors.length === 1 ? anchors[0]?.sourceInfo : undefined;
-      priorOwn = !!source && source.source !== "builtin" && sameSource(source, existing.sourceInfo);
-    }
-    if (!native && !priorOwn) {
+    // The same admission as rendering: exact builtin write, or a hook this extension owns.
+    if (!admitsPreviewSource("write", host, options.ownedTools ?? new Set())) {
       setCodePreviewToolStatus("write", { state: "skipped-conflict", owner: existing.sourceInfo });
       return;
     }

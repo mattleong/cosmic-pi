@@ -14,7 +14,10 @@ import {
   toolRunningLine,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import type { CodePreviewRendererSession, PreviewToolInfo } from "../application/renderer-contract";
+import type {
+  CodePreviewRendererAppearance,
+  PreviewToolInfo,
+} from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
@@ -212,8 +215,9 @@ export function createNativeMcpRenderers(
   tool: Pick<PreviewToolInfo, "namespace"> | undefined,
   downstream: ToolRenderers | undefined,
   scheduleAnimation: CompactAnimationScheduler,
-  selfShell: boolean = true,
-  appearance: Pick<CodePreviewRendererSession, "mode" | "collapsedStyle"> = {},
+  appearance: Partial<
+    Pick<CodePreviewRendererAppearance, "selfShell" | "mode" | "collapsedStyle">
+  > = {},
 ): ToolRenderers {
   const identity = nativeMcpIdentity(name, tool);
   // Without an exact public remote identity, keep the entire native call (including its label
@@ -292,7 +296,6 @@ export function createNativeMcpRenderers(
     return renderOutputPreview(result, theme, context);
   };
   const options: CodePreviewShellOptions = {
-    selfShell,
     preserveSelfShell: false,
     displayName: DISPLAY_NAME,
     compactSummary: nativeMcpSummary(identity),
@@ -300,6 +303,7 @@ export function createNativeMcpRenderers(
     scheduleAnimation,
     expandedContent: { renderCall: expandedCall, renderResult: renderOutput },
   };
+  if (appearance.selfShell !== undefined) options.selfShell = appearance.selfShell;
   if (appearance.mode !== undefined) options.mode = appearance.mode;
   if (appearance.collapsedStyle !== undefined) options.collapsedStyle = appearance.collapsedStyle;
   return withCodePreviewRenderers({ name }, { renderCall, renderResult }, options);

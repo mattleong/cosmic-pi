@@ -1,6 +1,7 @@
 /** Effect-managed Pi boundary for code previews. */
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   captureSessionHost,
@@ -106,6 +107,13 @@ export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
   dependencies: CodePreviewExtensionDependencies = defaultDependencies,
 ): Promise<void> {
+  // Pi 1.0.1 added renderer resolvers. Older hosts keep loading and explain why previews are off.
+  if (!Predicate.isFunction(pi.registerToolRenderer)) {
+    pi.on("session_start", (_event, ctx) =>
+      notifyAtHostBoundary(ctx, "Code Previews needs Pi 1.0.1 or later", "warning"),
+    );
+    return Promise.resolve();
+  }
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
   // Transcript replay may precede session_start. Those rows belong to the first startup only.

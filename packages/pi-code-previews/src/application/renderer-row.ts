@@ -83,7 +83,7 @@ class RetainedRendererRow {
   private context: ToolRenderContext | undefined;
   private value: AgentToolResult<unknown> | undefined;
   private options: ToolRenderResultOptions | undefined;
-  private dirty = true;
+  private readonly stale = { call: true, result: true };
 
   readonly callSlot = this.slot("call");
   readonly resultSlot = this.slot("result");
@@ -100,7 +100,6 @@ class RetainedRendererRow {
     this.select = select;
     this.renderers = fallback;
     owner.subscribe(() => {
-      this.dirty = true;
       // Capture this owner's first-ready shell even if the host defers its next draw.
       try {
         this.refresh();
@@ -114,8 +113,8 @@ class RetainedRendererRow {
     this.args = args;
     this.theme = theme;
     this.context = context;
-    this.dirty = true;
-    this.refresh();
+    this.stale.call = true;
+    this.refresh("call");
     return this.callSlot;
   }
 
@@ -130,12 +129,13 @@ class RetainedRendererRow {
     this.options = options;
     this.theme = theme;
     this.context = context;
-    this.dirty = true;
+    this.stale.result = true;
     this.refresh();
     return this.resultSlot;
   }
 
-  private refresh(): void {
+  /** Pi draws the call, then the result, so a call update need not rebuild retained output. */
+  private refresh(through: "call" | "result" = "result"): void {
     if (!this.context || !this.theme) return;
     this.state ??= { ...this.context.state };
     if (!this.adopted && this.owner.ready && this.owner.live) {
@@ -148,15 +148,19 @@ class RetainedRendererRow {
         this.call = undefined;
         this.result = undefined;
       }
-      this.dirty = true;
+      // Adoption rebuilds call first, then refeeds retained output: combined shells own both.
+      this.stale.call = true;
+      this.stale.result = true;
     }
-    if (!this.dirty) return;
-    this.dirty = false;
     const context = { ...this.context, state: this.state };
     const call = this.renderers.renderCall;
     const result = this.renderers.renderResult;
-    // Always build call first, then refeed retained output: combined shells own both slots.
-    if (call) this.call = call(this.args, this.theme, { ...context, lastComponent: this.call });
+    if (this.stale.call) {
+      this.stale.call = false;
+      if (call) this.call = call(this.args, this.theme, { ...context, lastComponent: this.call });
+    }
+    if (through === "call" || !this.stale.result) return;
+    this.stale.result = false;
     if (result && this.value && this.options)
       this.result = result(
         this.value,
@@ -178,7 +182,7 @@ class RetainedRendererRow {
       },
       invalidate: () => {
         this[slot]?.invalidate();
-        this.dirty = true;
+        this.stale[slot] = true;
       },
     };
   }
