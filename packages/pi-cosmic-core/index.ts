@@ -127,7 +127,7 @@ export {
   type SessionCapabilityProtocolOptions,
   type SessionCapabilityQuery,
 } from "./src/session-capability.ts";
-export { safeTextPrefix, utf8Prefix } from "./src/text.ts";
+export { safeTextPrefix, safeTextSuffix, utf8Prefix } from "./src/text.ts";
 export {
   clipText,
   countLabel,

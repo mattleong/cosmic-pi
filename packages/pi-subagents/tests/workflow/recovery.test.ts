@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as Exit from "effect/Exit";
 import type { WorkflowSandboxOutcome } from "../../src/boundary/codemode-sandbox.ts";
 import type { WorkflowRunView } from "../../src/workflow/model.ts";
-import { workflowStatusText } from "../../src/tools/workflow-format.ts";
+import { workflowRunSummary, workflowStatusText } from "../../src/tools/workflow-format.ts";
 import { workflowNotification } from "../../src/workflow/notification.ts";
 import { WORKFLOW_BUDGET_ERROR } from "../../src/workflow/prelude.ts";
 import { concludeWorkflow, finishWorkflowRun } from "../../src/workflow/state.ts";
@@ -51,7 +51,8 @@ describe("workflow failure recovery", () => {
         expect(text).toContain(`resumeFromRunId: "${run.id}"`);
         expect(text).toContain("Cannot find module worker.js");
         expect(text).toContain("at workflow:4");
-        expect(text).not.toMatch(/fix the script|with your file tools/i);
+        // The sandbox also stops when the script exhausts its memory.
+        expect(text).toMatch(/memory/i);
         if (run.source.kind === "saved") expect(text).toContain('name: "audit"');
         if (run.source.kind === "file") expect(text).toContain(`scriptPath: "${run.source.path}"`);
         if (run.scriptPath) expect(text).toContain(`scriptPath: "${run.scriptPath}"`);
@@ -78,10 +79,16 @@ describe("workflow failure recovery", () => {
       expect(text).toContain("budget.remaining()");
     }
     // Foreign names must not override an explicitly classified infrastructure failure.
-    for (const text of recoverySurfaces(failedRun("sandbox", WORKFLOW_BUDGET_ERROR))) {
+    const budget = { budget: { spent: 10, total: 10, refused: 0 } };
+    const sandbox = failedRun("sandbox", WORKFLOW_BUDGET_ERROR, budget);
+    for (const text of recoverySurfaces(sandbox)) {
       expect(text).toMatch(/restart Pi/i);
       expect(text).not.toContain("budget.remaining()");
     }
+    expect(workflowRunSummary(sandbox).budgetFailure).toBeUndefined();
+    expect(
+      workflowRunSummary(failedRun("script", WORKFLOW_BUDGET_ERROR, budget)).budgetFailure,
+    ).toBeDefined();
   });
 
   it("treats runner defects as infrastructure and aborts as stopped", () => {
@@ -92,7 +99,10 @@ describe("workflow failure recovery", () => {
       10,
     );
     expect(run.failure?.kind).toBe("runner");
-    for (const text of recoverySurfaces(run)) expect(text).toMatch(/restart Pi/i);
+    for (const text of recoverySurfaces(run)) {
+      expect(text).toMatch(/restart Pi/i);
+      expect(text).not.toMatch(/fix the script|with your file tools/i);
+    }
     const stopped = failedRun("aborted");
     expect(stopped.state).toBe("stopped");
     expect(stopped.failure).toBeUndefined();

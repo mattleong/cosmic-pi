@@ -1,12 +1,19 @@
 import { expect, it } from "@effect/vitest";
 import { clipText } from "../src/display.ts";
-import { safeTextPrefix, utf8Prefix } from "../src/text.ts";
+import { safeTextPrefix, safeTextSuffix, utf8Prefix } from "../src/text.ts";
 
 it("never splits a surrogate pair in a UTF-16 prefix", () => {
   expect(safeTextPrefix("a😀b", 2)).toBe("a");
   expect(safeTextPrefix("a😀b", 3)).toBe("a😀");
   expect(safeTextPrefix("abc", 10)).toBe("abc");
   expect(safeTextPrefix("abc", -1)).toBe("");
+});
+
+it("never splits a surrogate pair in a UTF-16 suffix", () => {
+  expect(safeTextSuffix("a😀b", 2)).toBe("b");
+  expect(safeTextSuffix("a😀b", 3)).toBe("😀b");
+  expect(safeTextSuffix("abc", 10)).toBe("abc");
+  expect(safeTextSuffix("abc", -1)).toBe("");
 });
 
 it("takes the longest code-point prefix within a UTF-8 byte budget", () => {

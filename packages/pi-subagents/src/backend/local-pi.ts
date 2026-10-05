@@ -37,6 +37,7 @@ import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
   safeTextPrefix,
+  sanitizeStreamDiagnostic,
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "../run/state.ts";
@@ -196,12 +197,12 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   const awaitExit = child.awaitExit.pipe(
     Effect.map((exit) => {
       const summary = `Subagent process exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
+      const stderr = exit.stderr.trim();
       return {
         ...toBackendExit(exit),
-        diagnostic: sanitizeDiagnosticText(
-          `${summary}${exit.stderr.trim() ? ` ${exit.stderr.trim()}` : ""}`,
-          MAX_ERROR_CHARS,
-        ),
+        diagnostic: stderr
+          ? `${summary} ${sanitizeStreamDiagnostic(stderr, MAX_ERROR_CHARS - summary.length - 1)}`
+          : summary,
       };
     }),
     Effect.tapError((error) =>

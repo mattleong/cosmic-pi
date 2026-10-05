@@ -10,6 +10,14 @@ export const safeTextPrefix = (value: string, maximumCodeUnits: number): string 
   return value.slice(0, end);
 };
 
+/** Longest suffix of at most `maximumCodeUnits` UTF-16 units that never splits a surrogate pair. */
+export const safeTextSuffix = (value: string, maximumCodeUnits: number): string => {
+  let start = Math.max(0, value.length - Math.max(0, Math.floor(maximumCodeUnits)));
+  if (isLowSurrogate(value.charCodeAt(start)) && isHighSurrogate(value.charCodeAt(start - 1)))
+    start += 1;
+  return value.slice(start);
+};
+
 /**
  * Longest code-point prefix whose UTF-8 encoding fits `maxBytes`. A lone surrogate counts as the
  * three bytes of its U+FFFD replacement, matching TextEncoder and Buffer.byteLength.

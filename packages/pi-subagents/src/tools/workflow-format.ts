@@ -22,6 +22,7 @@ import {
   workflowBudgetLine,
   workflowEditLine,
   workflowFailureSection,
+  isWorkflowBudgetFailure,
   workflowJournalLine,
   workflowLogLine,
   workflowRestart,
@@ -35,7 +36,6 @@ import {
   workflowWaitingText,
   workflowWorkspacesSection,
 } from "../workflow/run-text.ts";
-import { WORKFLOW_BUDGET_ERROR } from "../workflow/prelude.ts";
 import type { WorkflowRecordedRun } from "../workflow/run-record.ts";
 import { savedWorkflowFiles, type WorkflowListing } from "../workflow/store.ts";
 import type { WorkflowRunSummary } from "./workflow-schema.ts";
@@ -69,7 +69,7 @@ export const workflowRunSummary = (run: WorkflowRunView): WorkflowRunSummary => 
     startedAt: run.startedAt,
     ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
     ...(run.failure && { failure: run.failure.message.slice(0, 512) }),
-    ...(run.failure?.name === WORKFLOW_BUDGET_ERROR &&
+    ...(isWorkflowBudgetFailure(run.failure) &&
       run.budget && { budgetFailure: { spent: run.budget.spent, total: run.budget.total } }),
   };
 };

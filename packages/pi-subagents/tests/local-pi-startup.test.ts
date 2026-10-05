@@ -75,4 +75,39 @@ describe("local Pi startup transport closure", () => {
       }),
     );
   }
+
+  it.effect("keeps the fatal end of stderr that overflows the diagnostic budget", () =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+      const receipt = yield* Deferred.make<Extract<ChildWireEvent, { type: "exit" }>>();
+      let requested = false;
+      const driver = makeLocalPiBackendDriver({
+        reclaimRunState: () => Effect.void,
+        spawn: () =>
+          Effect.succeed({
+            pid: 4242,
+            events,
+            awaitExit: Deferred.await(receipt),
+            send: () =>
+              Effect.sync(() => {
+                requested = true;
+              }),
+            sendContactControl: () => Effect.void,
+            terminate: () => Effect.void,
+          }),
+      });
+      const backend = yield* driver.spawn(backendLaunch());
+      const initializing = yield* backend.controls.initialize.pipe(Effect.flip, Effect.forkScoped);
+      yield* yieldUntil(() => requested);
+      yield* Deferred.succeed(receipt, {
+        type: "exit",
+        exitCode: 1,
+        stderr: `${"Warning: deprecated extension option\n".repeat(400)}Fatal: missing entrypoint`,
+      });
+      Queue.endUnsafe(events);
+      const error = yield* Fiber.join(initializing);
+      expect(error.message).toContain("code 1");
+      expect(error.message).toContain("Fatal: missing entrypoint");
+    }),
+  );
 });

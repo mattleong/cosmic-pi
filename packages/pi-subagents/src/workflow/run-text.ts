@@ -4,6 +4,7 @@ import {
   formatDuration,
   formatTokens,
   safeTextPrefix,
+  safeTextSuffix,
 } from "pi-cosmic-core";
 import {
   countWorkflowAgents,
@@ -197,19 +198,13 @@ export const workflowFinishedAgentsLine = (run: WorkflowRunView): string => {
     .join(" · ")}.`;
 };
 
-const textSuffix = (text: string, length: number): string => {
-  const suffix = text.slice(Math.max(0, text.length - length));
-  // Never start the tail on the second half of a surrogate pair.
-  return /^[\uDC00-\uDFFF]/u.test(suffix) ? suffix.slice(1) : suffix;
-};
-
 /** Keeps the head and tail of long text, which usually hold a value's summary and conclusion. */
 export const clipWorkflowText = (text: string, maximum = WORKFLOW_RESULT_MAX_CHARS): string => {
   if (text.length <= maximum) return text;
   const marker = `\n… ${text.length - maximum} characters clipped …\n`;
   const budget = Math.max(0, maximum - marker.length);
   const head = Math.ceil(budget / 2);
-  return `${safeTextPrefix(text, head)}${marker}${textSuffix(text, budget - head)}`;
+  return `${safeTextPrefix(text, head)}${marker}${safeTextSuffix(text, budget - head)}`;
 };
 
 /**
@@ -386,19 +381,31 @@ export const workflowExtendLine = (run: WorkflowRunView): string => {
     : `To extend or adjust this run, edit ${restart.file} and start it with ${restart.argument} plus ${resume}`;
 };
 
+/** An uncaught budget error from the script itself; a foreign name never decides recovery. */
+export const isWorkflowBudgetFailure = (failure: WorkflowFailure | undefined): boolean =>
+  failure?.name === WORKFLOW_BUDGET_ERROR &&
+  (failure.kind === undefined || failure.kind === "script");
+
 /**
  * Failure-specific recovery: runtime failures need a user-managed restart, not script edits.
+ * The sandbox also stops when a script exhausts its memory, so that guidance offers both.
  * When an uncaught budget error failed the run, it says first that a resumed run gets a new
  * budget, since the limit the user set is already spent.
  */
 export const workflowRetryLine = (run: WorkflowRunView): string => {
   const restart = workflowRestart(run.source, run.scriptPath);
   const resume = `resumeFromRunId: "${run.id}" to reuse the results of agents that already finished`;
-  if (run.failure?.kind === "sandbox" || run.failure?.kind === "runner") {
-    const target = restart === undefined ? "" : `${restart.argument} and `;
-    return `The workflow runtime failed. Preserve or resolve outstanding worktree proposals and stop other active work before asking the user to fully restart Pi and continue this session. Check the runtime installation if the failure persists. Then retry the unchanged workflow with ${target}resumeFromRunId: "${run.id}" and the same args; eligible completed agent results may be reused.`;
+  const target = restart === undefined ? "" : `${restart.argument} and `;
+  const runtime = `Preserve or resolve outstanding worktree proposals and stop other active work before asking the user to fully restart Pi and continue this session. Check the runtime installation if the failure persists. Then retry the unchanged workflow with ${target}resumeFromRunId: "${run.id}" and the same args; eligible completed agent results may be reused.`;
+  if (run.failure?.kind === "runner") return `The workflow runtime failed. ${runtime}`;
+  if (run.failure?.kind === "sandbox") {
+    const fix =
+      restart === undefined
+        ? `change the script, then start it again with ${resume}`
+        : `edit ${restart.file} with your file tools, then start it again with ${restart.argument} and ${resume}`;
+    return `The workflow sandbox stopped. If the error mentions memory, the script held too much data at once, such as large agent() results: reduce it, then ${fix}. Otherwise treat it as a runtime failure. ${runtime}`;
   }
-  if (run.failure?.name === WORKFLOW_BUDGET_ERROR) {
+  if (isWorkflowBudgetFailure(run.failure)) {
     const spent =
       "The run's token budget is spent, and a run resumed with resumeFromRunId gets a new one, so ask the user before spending more.";
     return restart === undefined

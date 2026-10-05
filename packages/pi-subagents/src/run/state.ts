@@ -1,6 +1,7 @@
 import {
   freezeSnapshot,
   safeTextPrefix,
+  safeTextSuffix,
   sanitizeDiagnosticError,
   stripTerminalControls,
   utf8Prefix,
@@ -54,6 +55,19 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView => {
 export const sanitizeDiagnosticText = (value: string, limit: number): string => {
   const sanitized = sanitizeDiagnosticError(value, { maximumLength: limit + 2 });
   return clipText(sanitized, limit);
+};
+
+/**
+ * A stream such as stderr can lead with its fatal error or end with it after warnings, so long
+ * text keeps both ends.
+ */
+export const sanitizeStreamDiagnostic = (value: string, limit: number): string => {
+  const sanitized = sanitizeDiagnosticError(value, { maximumLength: Number.MAX_SAFE_INTEGER });
+  if (sanitized.length <= limit) return sanitized;
+  const marker = " … ";
+  const budget = Math.max(0, limit - marker.length);
+  const head = Math.ceil(budget / 2);
+  return `${safeTextPrefix(sanitized, head).trimEnd()}${marker}${safeTextSuffix(sanitized, budget - head).trimStart()}`;
 };
 
 export const sanitizeOutputText = (value: string, limit: number): string =>
