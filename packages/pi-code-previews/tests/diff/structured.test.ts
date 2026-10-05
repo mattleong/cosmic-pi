@@ -18,11 +18,35 @@ test("createSimpleDiff omits unchanged content, including empty files", () => {
     assert.equal(createSimpleDiff(text, text), "");
 });
 
-test.each(["\n", "\r\n", "\r"])("createSimpleDiff normalizes %j line endings", (ending) => {
+test.each(["\n", "\r\n"])("createSimpleDiff numbers %j-terminated lines", (ending) => {
   const text = `a${ending}b${ending}`;
   assert.equal(createSimpleDiff("", text), "@@ 1 @@\n+1 a\n+2 b");
   assert.equal(createSimpleDiff(text, ""), "@@ 1 @@\n-1 a\n-2 b");
-  assert.equal(createSimpleDiff(`a${ending}`, "a"), "@@ 1 @@\n-1 a\n+1 a");
+});
+
+test("createSimpleDiff numbers lines like Pi's read, where a lone carriage return is content", () => {
+  const diff = createSimpleDiff("prog\rdone\nold\n", "prog\rdone\nnew\n");
+  assert.match(diff, /^-2 old$/mu);
+  assert.match(diff, /^\+2 new$/mu);
+});
+
+test.each([
+  ["a\nb", "a\nb\n"],
+  ["a\nb\n", "a\nb"],
+  ["a\r\nb\r\n", "a\nb\n"],
+  ["a\nb\n", "a\r\nb\r\n"],
+])("createSimpleDiff shows an ending-only change from %j to %j", (before, after) => {
+  const rows = (kind: string) =>
+    createSimpleDiff(before, after)
+      .split("\n")
+      .filter((line) => line.startsWith(kind))
+      .map((line) => line.replace(/^[+-]\d+ /u, ""));
+  const removed = rows("-");
+  const added = rows("+");
+  assert.ok(removed.length > 0);
+  assert.equal(added.length, removed.length);
+  // No changed pair may look identical.
+  for (const [index, text] of removed.entries()) assert.notEqual(added[index], text);
 });
 
 test.each([6, 7])("createSimpleDiff compacts a %i-line gap without losing numbering", (gap) => {

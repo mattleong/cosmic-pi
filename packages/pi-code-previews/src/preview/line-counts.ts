@@ -1,19 +1,12 @@
 import { forEachRawTextLine } from "../shared/text-lines";
 
+/** Lines as Pi's read counts them: only "\n" ends a line, so a lone "\r" is content. */
 export function countContentLines(content: string): number {
   if (!content) return 0;
-  let terminators = 0;
-  for (let index = 0; index < content.length; index++) {
-    const code = content.charCodeAt(index);
-    if (code === 13) {
-      terminators++;
-      if (content.charCodeAt(index + 1) === 10) index++;
-    } else if (code === 10) {
-      terminators++;
-    }
-  }
-  const finalCode = content.charCodeAt(content.length - 1);
-  return terminators + (finalCode === 10 || finalCode === 13 ? 0 : 1);
+  let newlines = 0;
+  for (let index = content.indexOf("\n"); index >= 0; index = content.indexOf("\n", index + 1))
+    newlines++;
+  return newlines + (content.endsWith("\n") ? 0 : 1);
 }
 
 export function forEachPreviewTextLine(

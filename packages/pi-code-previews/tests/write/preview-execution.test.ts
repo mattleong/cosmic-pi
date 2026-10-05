@@ -37,6 +37,15 @@ const fixture = (prefix: string) =>
     return { fs, dir: yield* fs.makeTempDirectoryScoped({ prefix }) };
   });
 
+/** The error text a write reports, the way Pi reads a rejected tool call. */
+const writeOutcome = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.match({
+      onFailure: (error) => (error instanceof Error ? error.message : String(error)),
+      onSuccess: () => "written",
+    }),
+  );
+
 test("before-write details replace undefined details and preserve object fields", () => {
   const resultWithoutDetails: AgentToolResult<undefined> = { content: [], details: undefined };
   return withCodePreviewBeforeWrite(resultWithoutDetails, {
@@ -163,6 +172,30 @@ layer(testLayer)("session write service", (it) => {
       assert.equal(error.operation, "write");
       assert.equal(yield* isSymlink(link), true);
       assert.equal(yield* fs.exists(join(dir, "missing")), false);
+    }),
+  );
+
+  it.effect("failures report the same error text as Pi's own write", () =>
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-native-error-");
+      yield* fs.writeFileString(join(dir, "read-only.txt"), "before");
+      yield* fs.chmod(join(dir, "read-only.txt"), 0o444);
+      yield* fs.makeDirectory(join(dir, "folder"));
+      // A privileged runner may write the read-only file; the directory always fails.
+      for (const path of ["read-only.txt", "folder"]) {
+        const native = yield* writeOutcome(
+          Effect.tryPromise({
+            try: () =>
+              createWriteTool(dir).execute("native", { path, content: "after" }, undefined),
+            catch: (error) => error,
+          }),
+        );
+        if (native === "written") yield* fs.writeFileString(join(dir, path), "before");
+        const hooked = yield* writeOutcome(
+          executeWriteWithPreviewEffect(`hooked-${path}`, path, "after", dir),
+        );
+        assert.equal(hooked, native);
+      }
     }),
   );
 

@@ -91,16 +91,18 @@ test("edit previews wait for complete arguments and reuse unchanged arguments", 
     args,
     argsComplete: false,
   });
-  edit.renderCall!(args, theme, context);
+  renderComponent(edit.renderCall!(args, theme, context));
   assert.equal(context.state.editCallPreviewComponent, undefined);
   context.argsComplete = true;
-  edit.renderCall!(args, theme, context);
+  renderComponent(edit.renderCall!(args, theme, context));
   const preview = context.state.editCallPreviewComponent;
   assert.ok(preview);
-  edit.renderCall!(
-    { ...args, edits: args.edits.map((operation) => ({ ...operation })) },
-    theme,
-    context,
+  renderComponent(
+    edit.renderCall!(
+      { ...args, edits: args.edits.map((operation) => ({ ...operation })) },
+      theme,
+      context,
+    ),
   );
   assert.equal(context.state.editCallPreviewComponent, preview);
 
@@ -116,6 +118,6 @@ test("edit previews wait for complete arguments and reuse unchanged arguments", 
       renderComponent(edit.renderCall!(changed, theme, context)),
       /retained-summary/,
     );
-    assert.equal(context.state.editCallPreviewComponent, undefined);
+    assert.notEqual(context.state.editCallPreviewComponent, preview);
   }
 });

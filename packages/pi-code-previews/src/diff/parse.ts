@@ -10,8 +10,9 @@ export function diffLineNumberWidth(lines: Array<ParsedDiffLine | null>): number
   return lines.reduce((width, line) => Math.max(width, line?.lineNumber.trim().length ?? 0), 0);
 }
 
+/** A zero width omits the number, for diffs whose numbers are not file positions. */
 export function formatDiffLineNumber(lineNumber: string, width: number): string {
-  return lineNumber.trim().padStart(width, " ");
+  return width > 0 ? lineNumber.trim().padStart(width, " ") : "";
 }
 
 export function parseDiffLine(line: string): ParsedDiffLine | null {
@@ -28,6 +29,8 @@ export function parseDiffLine(line: string): ParsedDiffLine | null {
   }
 
   if (line.startsWith("+++") || line.startsWith("---")) return null;
+  // Pi's numbered diffs mark skipped context with a blank number column and "...".
+  if (/^ {2,}\.\.\.$/u.test(line)) return null;
   const prefix = line[0];
   if (prefix !== "+" && prefix !== "-" && prefix !== " ") return null;
   return { kind: prefix, lineNumber: "", content: line.slice(1) };

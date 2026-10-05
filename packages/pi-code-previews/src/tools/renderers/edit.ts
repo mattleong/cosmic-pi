@@ -6,14 +6,15 @@ import type { CodePreviewRendererAppearance } from "../../application/renderer-c
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { FullWidthDiffText } from "../../diff/full-width-text";
-import { createSimpleDiff } from "../../diff/structured";
+import { createSnippetDiff } from "../../diff/structured";
 import { diffSummarySeparator, summarizeDiff, type DiffSummary } from "../../diff/summary";
 import { renderDisplayPath } from "../../paths/display";
 import { showingFooter } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
 import { resolvePreviewLanguage } from "../../syntax/language";
-import { getEditPreviewOperations, getPathArg } from "../data/args";
+import { getWriteDiffGuard } from "../../write/diff";
+import { getEditPreviewOperations, getPathArg, type EditPreviewOperation } from "../data/args";
 import { getEditDiff, getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewRenderers } from "../renderer-adapter";
@@ -21,10 +22,18 @@ import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { cachedDeferredPreview } from "./shared/cache";
 import type { RendererArguments, RendererState } from "./shared/types";
 import { diffPreviewCacheKey } from "./shared/preview-cache-key";
-import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
+import { diffPreviewLineLimit, diffSkippedNote, formatDiffPreview } from "./shared/diff-preview";
+import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { renderPreviewError } from "./shared/result-prelude";
 import { countLabel } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
+
+/** Collapsed proposals show this many edit blocks; expansion shows every block. */
+const COLLAPSED_EDIT_BLOCKS = 3;
+
+type ProposedDiff =
+  | { readonly kind: "diff"; readonly diff: string; readonly summary: DiffSummary }
+  | { readonly kind: "skipped"; readonly guard: "size" | "complexity" };
 
 export function createEditPreviewTool(cwd: string, session?: CodePreviewRendererAppearance) {
   return createCodePreviewRenderers(
@@ -55,22 +64,12 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
         renderContext.state.editHeaderText = text;
         text.setText(formatEditHeader(path, cwd, theme, renderContext.state.editSummaryText));
 
-        const issues = previewIssuesSlot(renderContext);
-        if (
-          !renderContext.argsComplete ||
-          operations.length === 0 ||
-          renderContext.executionStarted
-        ) {
-          const heading = new Container();
-          heading.addChild(text);
-          heading.addChild(issues);
-          return heading;
-        }
+        const preview = new Container();
+        preview.addChild(text);
+        preview.addChild(previewIssuesSlot(renderContext));
+        if (!renderContext.argsComplete || operations.length === 0) return preview;
 
         if (!renderContext.expanded && !codePreviewSettings.editDiffPreview) {
-          const preview = new Container();
-          preview.addChild(text);
-          preview.addChild(issues);
           preview.addChild(renderHiddenPreviewExpandHint(renderContext.state, theme));
           return preview;
         }
@@ -86,15 +85,13 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
         const render = () =>
           renderEditCallPreview(
             operations,
+            proposedDiffs(renderContext.state, operationsSource),
             path,
             renderContext.expanded,
             theme,
             renderContext.invalidate,
           );
-        const preview = new Container();
-        preview.addChild(text);
-        preview.addChild(issues);
-        preview.addChild(
+        const proposal = () =>
           cachedDeferredPreview(
             renderContext.state,
             "editCallPreviewKey",
@@ -105,12 +102,14 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
             theme,
             render,
             renderContext.invalidate,
-          ),
-        );
+          );
+        // The proposal stays until the applied diff replaces it.
+        preview.addChild(unlessResultDiffShown(renderContext.state, proposal));
         return preview;
       },
 
       renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
+        setResultDiffShown(renderContext.state, false);
         if (isPartial) return new Text(theme.fg("warning", "Editing…"), 0, 0);
 
         const firstText = getTextContent(result.content);
@@ -122,7 +121,7 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
 
         const diff = getEditDiff(result.details);
         if (!diff) {
-          renderContext.state.editSummaryText = `${theme.fg("success", "✓ Edit applied")}${theme.fg("muted", " · no diff")}`;
+          renderContext.state.editSummaryText = theme.fg("muted", "no diff");
           updateEditHeader(renderContext, cwd, theme);
           return new Container();
         }
@@ -143,7 +142,15 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
             );
         renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
         updateEditHeader(renderContext, cwd, theme);
-        if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
+        if (hidePreview) {
+          // A call with a hidden proposal already offers expansion.
+          const callHint =
+            renderContext.argsComplete && getEditPreviewOperations(renderContext.args).length > 0;
+          return callHint
+            ? new Container()
+            : renderHiddenPreviewExpandHint(renderContext.state, theme);
+        }
+        setResultDiffShown(renderContext.state, true);
         const render = () =>
           new FullWidthDiffText(
             formatDiffPreview(diff, lang, theme, limit, {
@@ -178,19 +185,48 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
   );
 }
 
-function editOperationsSource(operations: Array<{ oldText: string; newText: string }>): string {
+function editOperationsSource(operations: EditPreviewOperation[]): string {
   return operations.map((operation) => `${operation.oldText}\0${operation.newText}`).join("\0\0");
 }
 
+/** Proposed diffs per operation, kept across expansion toggles for the same arguments. */
+function proposedDiffs(state: RendererState, source: string): Array<ProposedDiff | undefined> {
+  const cached = state.editProposedDiffs;
+  if (cached?.source === source && Array.isArray(cached.diffs)) return cached.diffs;
+  const diffs: Array<ProposedDiff | undefined> = [];
+  state.editProposedDiffs = { source, diffs };
+  return diffs;
+}
+
+/** Computed only when displayed; the write diff guard bounds each block's work. */
+function proposedDiff(
+  diffs: Array<ProposedDiff | undefined>,
+  index: number,
+  operation: EditPreviewOperation,
+): ProposedDiff {
+  const cached = diffs[index];
+  if (cached) return cached;
+  const guard = getWriteDiffGuard(operation.oldText, operation.newText);
+  let proposed: ProposedDiff;
+  if (guard) proposed = { kind: "skipped", guard };
+  else {
+    const diff = createSnippetDiff(operation.oldText, operation.newText);
+    proposed = { kind: "diff", diff, summary: summarizeDiff(diff) };
+  }
+  diffs[index] = proposed;
+  return proposed;
+}
+
 function renderEditCallPreview(
-  operations: Array<{ oldText: string; newText: string }>,
+  operations: EditPreviewOperation[],
+  diffs: Array<ProposedDiff | undefined>,
   path: string,
   expanded: boolean,
   theme: Theme,
   invalidate?: () => void,
 ): FullWidthDiffText {
   const lang = resolvePreviewLanguage({ path, piLanguage: getLanguageFromPath(path) });
-  const maxOperations = Math.min(operations.length, 3);
+  const shown = expanded ? operations.length : Math.min(operations.length, COLLAPSED_EDIT_BLOCKS);
   const perOperationLimit =
     operations.length > 1
       ? Math.max(
@@ -198,41 +234,54 @@ function renderEditCallPreview(
           Math.floor(
             (Predicate.isNumber(codePreviewSettings.editCollapsedLines)
               ? codePreviewSettings.editCollapsedLines
-              : 160) / maxOperations,
+              : 160) / shown,
           ),
         )
       : undefined;
   const sections: string[] = [];
-  const diffs = operations.map((operation) =>
-    createSimpleDiff(operation.oldText, operation.newText),
-  );
-  const summaries = diffs.map((diff) => summarizeDiff(diff));
-  const totalAdditions = summaries.reduce((total, summary) => total + summary.additions, 0);
-  const totalRemovals = summaries.reduce((total, summary) => total + summary.removals, 0);
+  // Totals cover the whole edit only when every block was diffed.
+  let complete = shown === operations.length;
+  let additions = 0;
+  let removals = 0;
 
-  for (let index = 0; index < maxOperations; index++) {
-    const diff = diffs[index];
-    const summary = summaries[index];
-    if (diff === undefined || summary === undefined) continue;
+  for (let index = 0; index < shown; index++) {
+    const operation = operations[index];
+    if (operation === undefined) continue;
+    if (operations.length > 1)
+      sections.push(theme.fg("muted", `Proposed edit ${index + 1}/${operations.length}`));
+    const proposed = proposedDiff(diffs, index, operation);
+    if (proposed.kind === "skipped") {
+      complete = false;
+      sections.push(diffSkippedNote(theme, proposed.guard));
+      continue;
+    }
+    const { diff, summary } = proposed;
+    additions += summary.additions;
+    removals += summary.removals;
     const limit =
       expanded || codePreviewSettings.editCollapsedLines === "all"
         ? summary.totalLines
         : (perOperationLimit ?? codePreviewSettings.editCollapsedLines);
-    const rendered = formatDiffPreview(diff, lang, theme, limit, {
-      totalLines: summary.totalLines,
-      hiddenLineNoun: "proposed diff lines",
-      skipHighlightLabel: "Syntax highlighting skipped for large proposed diff",
-      invalidate,
-    });
-    if (operations.length > 1)
-      sections.push(theme.fg("muted", `Proposed edit ${index + 1}/${operations.length}`));
-    sections.push(rendered);
+    // Snippet rows have no file positions, so they carry only their +/- markers.
+    sections.push(
+      formatDiffPreview(diff, lang, theme, limit, {
+        totalLines: summary.totalLines,
+        hiddenLineNoun: "proposed diff lines",
+        skipHighlightLabel: "Syntax highlighting skipped for large proposed diff",
+        invalidate,
+        lineNumbers: false,
+      }),
+    );
   }
 
-  const remainder = operations.length - maxOperations;
-  const header = `${theme.fg("muted", "proposed edit")} ${theme.fg("success", `+${totalAdditions}`)} ${theme.fg("error", `-${totalRemovals}`)}${operations.length > 1 ? theme.fg("muted", ` · ${operations.length} edit blocks`) : ""}`;
-  let text = `${header}\n${sections.join("\n")}`;
-  if (remainder > 0) text += showingFooter(theme, maxOperations, operations.length, "edit blocks");
+  const counts = complete
+    ? ` ${theme.fg("success", `+${additions}`)} ${theme.fg("error", `-${removals}`)}`
+    : "";
+  const blocks =
+    operations.length > 1 ? theme.fg("muted", ` · ${operations.length} edit blocks`) : "";
+  let text = `${theme.fg("muted", "proposed edit")}${counts}${blocks}\n${sections.join("\n")}`;
+  if (shown < operations.length)
+    text += showingFooter(theme, shown, operations.length, "edit blocks");
   return new FullWidthDiffText(text, theme);
 }
 

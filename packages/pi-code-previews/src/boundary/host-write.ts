@@ -24,7 +24,8 @@ export const executeNativeWrite = <E, R>(
       signal: AbortSignal,
     ) => Effect.Effect<void, E, R>;
   },
-  onError: () => E,
+  /** Receives what Pi's write rejected with, including an operation's own typed error. */
+  onError: (cause: unknown) => E,
   ctx?: ExtensionToolContext,
 ) =>
   Effect.scoped(

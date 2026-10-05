@@ -97,9 +97,12 @@ so closing cannot pop an unrelated stacked surface.
   Syntax acquisition/loading and request ingress are bounded and scoped; stale finalization cannot
   clear newer highlighter caches. Failed themes and grammars are remembered for the session and
   render as plain text; renderer requests never retry them, while an explicit theme initialization
-  may. Write previews retain Pi's direct-write semantics and use bounded
+  may. Write previews retain Pi's direct-write semantics and error text and use bounded
   before-write evidence without destructive renderer lookup. Shared projection tokens prevent
   stale session cleanup from clearing replacement state.
+- Preview-style write and edit show a finished change once: Pi renders the call before the
+  result, so the call's proposed content checks shared row state when drawn and yields to the
+  result's diff. It stays while pending or running, after a failure, and when no diff is shown.
 - `diff/`, `paths/`, `warnings/` and builtin projectors own deterministic bounded policy.
   Size/complexity guards, secret warnings, command risks and output limits retain uncertainty;
   unknown history never warrants a new-file claim.

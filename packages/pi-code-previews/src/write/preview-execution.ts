@@ -3,6 +3,7 @@ import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { executeNativeWrite } from "../boundary/host-write";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import {
   captureCodePreviewSessionCapability,
@@ -71,12 +72,15 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   const writeService = yield* CodePreviewWriteService;
   const fs = yield* FileSystem.FileSystem;
   let before: CodePreviewBeforeWrite;
-  const failure = () =>
-    new CodePreviewWriteError({
-      operation: "write",
-      path: absolutePath,
-      message: `Unable to write ${path}.`,
-    });
+  // Pi reports the error its own write would: the agent reads it and failures are classified by it.
+  const failure = <Cause>(cause: Cause) =>
+    cause instanceof CodePreviewWriteError
+      ? cause
+      : new CodePreviewWriteError({
+          operation: "write",
+          path: absolutePath,
+          message: nativeErrorMessage(cause),
+        });
   const result = yield* executeNativeWrite(
     toolCallId,
     path,
@@ -121,6 +125,15 @@ export function executeWriteWithPreview(
   // One native queue only: wrapping native execute in another queue deadlocks.
   // The captured runtime owns its wait and every admitted operation callback.
   return owner.run(executeWriteWithPreviewEffect(toolCallId, path, content, cwd, ctx), signal);
+}
+
+/** The Node error Pi's default operations would throw, which Effect's platform error wraps. */
+function nativeErrorMessage<Failure>(error: Failure): string {
+  const source =
+    error instanceof PlatformError.PlatformError && "cause" in error.reason
+      ? error.reason.cause
+      : error;
+  return source instanceof Error ? source.message : String(source);
 }
 
 function redactedBeforeWriteDetail(before: CodePreviewBeforeWrite): RedactedCodePreviewBeforeWrite {

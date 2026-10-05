@@ -95,10 +95,15 @@ const nativeMcpCall: ToolRenderers = {
   },
 };
 
-const text = (value: string): AgentToolResult<unknown> => ({
+const text = <Details>(value: string, details?: Details): AgentToolResult<unknown> => ({
   content: [{ type: "text", text: value }],
-  details: {},
+  details: details ?? {},
 });
+/** Live before-write evidence; replayed details carry only its size. */
+const writeBefore = (content: string | undefined) => ({
+  codePreviewBeforeWrite: content === undefined ? undefined : { kind: "content", content },
+});
+const writeSource = "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n";
 
 interface NativeGalleryDetails {
   calls: unknown[];
@@ -753,6 +758,68 @@ const scenarios: ReadonlyArray<
       content: "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
     },
     result: text("Successfully wrote 60 bytes to /project/.env"),
+  },
+  {
+    tool: "write",
+    title: "write running",
+    args: { path: "/project/src/a.ts", content: writeSource.replace("2", "20") },
+    phase: "running",
+  },
+  {
+    tool: "write",
+    title: "write overwrite",
+    args: { path: "/project/src/a.ts", content: writeSource.replace("2", "20") },
+    result: text("Successfully wrote to /project/src/a.ts", writeBefore(writeSource)),
+  },
+  {
+    tool: "write",
+    title: "write new file",
+    args: { path: "/project/src/new.ts", content: writeSource },
+    result: text("Successfully wrote to /project/src/new.ts", writeBefore(undefined)),
+  },
+  {
+    tool: "write",
+    title: "write without changes",
+    args: { path: "/project/src/a.ts", content: writeSource },
+    result: text("Successfully wrote to /project/src/a.ts", writeBefore(writeSource)),
+  },
+  {
+    tool: "write",
+    title: "write converting line endings",
+    args: { path: "/project/src/a.ts", content: writeSource },
+    result: text(
+      "Successfully wrote to /project/src/a.ts",
+      writeBefore(writeSource.replaceAll("\n", "\r\n").replace(/\r\n$/u, "")),
+    ),
+  },
+  {
+    tool: "edit",
+    title: "edit proposal",
+    args: {
+      path: "/project/src/a.ts",
+      edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
+    },
+    phase: "pending",
+  },
+  {
+    tool: "edit",
+    title: "edit applied",
+    args: {
+      path: "/project/src/a.ts",
+      edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
+    },
+    result: text("Successfully replaced text in /project/src/a.ts.", {
+      diff: " 1 export const a = 1;\n-2 export const b = 2;\n+2 export const b = 20;\n 3 export const c = 3;",
+    }),
+  },
+  {
+    tool: "edit",
+    title: "edit without a diff",
+    args: {
+      path: "/project/src/a.ts",
+      edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
+    },
+    result: text("Successfully replaced text in /project/src/a.ts."),
   },
 ];
 

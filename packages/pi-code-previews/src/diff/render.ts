@@ -23,6 +23,7 @@ export function renderSyntaxHighlightedDiff(
   theme: Theme,
   limit: number,
   invalidate?: () => void,
+  lineNumbers = true,
 ): string {
   return renderDiff(diff, {
     theme,
@@ -30,11 +31,17 @@ export function renderSyntaxHighlightedDiff(
     lang,
     invalidate,
     wordEmphasis: codePreviewSettings.wordEmphasis,
+    lineNumbers,
   });
 }
 
-export function renderPlainDiff(diff: string, theme: Theme, limit: number): string {
-  return renderDiff(diff, { theme, limit, wordEmphasis: "off" });
+export function renderPlainDiff(
+  diff: string,
+  theme: Theme,
+  limit: number,
+  lineNumbers = true,
+): string {
+  return renderDiff(diff, { theme, limit, wordEmphasis: "off", lineNumbers });
 }
 
 type DiffRenderOptions = {
@@ -43,12 +50,14 @@ type DiffRenderOptions = {
   limit: number;
   invalidate?: (() => void) | undefined;
   wordEmphasis: DiffWordEmphasis;
+  /** False when the numbers are not file positions, such as a proposed edit's snippet. */
+  lineNumbers: boolean;
 };
 
 function renderDiff(diff: string, options: DiffRenderOptions): string {
   const lines = splitLinesLimited(diff, options.limit);
   const parsedLines = lines.map(parseDiffLine);
-  const lineNumberWidth = diffLineNumberWidth(parsedLines);
+  const lineNumberWidth = options.lineNumbers ? diffLineNumberWidth(parsedLines) : 0;
   const out: string[] = [];
   const highlightedLines = options.lang
     ? highlightDiffLineRuns(parsedLines, options.lang, options.invalidate)
