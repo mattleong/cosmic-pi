@@ -32,7 +32,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
   It is active while the `ultracode` switch (Session, Global, or trusted Project, default off) is on or the one-off `/ultracode` window is open; it also owns the footer marker and the `before_agent_start` guidance, a system-prompt section of its own.
   The window is pure state in `application/ultracode-window.ts`, moved by `/ultracode` requests, Pi's `before_agent_start`, `agent_start` and `agent_settled`, and `WorkflowService`'s run observer (`workflow/run-observer.ts`), which opens a run at start or when its interrupted notice is posted and closes it once Pi accepts its notification, saying whether the current or the next agent run handles it; session boundaries reset it.
   Between an activation and the next agent run the controller only adds the tool, so Pi's pending restore list survives.
-  Native codemode can always call the four root tools; ultracode gates only `subagent_workflow`.
+  Native codemode can always call the five root tools; ultracode gates only `subagent_workflow`.
 - `skills/workflow-authoring/SKILL.md` is the main agent's workflow authoring guide. It isn't a declared Pi skill (`pi.skills` is empty), so it stays out of the skill list while workflows are off; the tool description and the ultracode guidance name its path, which `boundary/workflow-authoring-guide.ts` resolves.
 - `src/workflow/` owns dynamic workflow runs: `service.ts` starts and stops them and forks one fiber per run, `skip.ts` skips their planned, queued, and running agents, and `runs.ts` holds their views and coalesces Activity publishes.
 

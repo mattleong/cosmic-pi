@@ -88,6 +88,31 @@ describe("native scripted subagent workflows", () => {
     );
 
     it.live(
+      `lists runs as text without consuming reports with ${callId === undefined ? "generated" : "empty"} caller ID`,
+      () =>
+        Effect.gen(function* () {
+          const run = view({
+            id: "listed-run",
+            state: "completed",
+            finalText: "Report reserved for await or status",
+            reportStatus: "available",
+            reportGeneration: 1,
+          });
+          const service = subagentServiceDouble({ list: Effect.succeed([run]) });
+          const h = yield* nativeCodemodeSession(service);
+          const result = yield* h.run(print("await tools.subagent_list({})"), callId);
+          expect(result.isError).toBe(false);
+          const listed = output(result.text);
+          const direct = yield* h.call("subagent_list", {}, callId);
+          expect(direct.isError).toBe(false);
+          expect(listed).toBe(direct.text);
+          expect(listed).toContain(run.id);
+          expect(listed).not.toContain(run.finalText);
+        }).pipe(Effect.provide(nodeFilePlatformLayer)),
+      15_000,
+    );
+
+    it.live(
       `keeps judgment tools model-only and limits scripted lifecycle to stop with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -101,7 +126,6 @@ describe("native scripted subagent workflows", () => {
           const h = yield* nativeCodemodeSession(service);
           for (const name of [
             "subagent_models",
-            "subagent_list",
             "subagent_send",
             "subagent_rename",
             "subagent_reply",
