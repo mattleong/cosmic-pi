@@ -64,7 +64,10 @@ const validateStartRequest = (
     if (!request.task.trim())
       return yield* invalidRequest("task_required", "Subagent task is required.");
     if (request.task.length > MAX_TASK_CHARS)
-      return yield* invalidRequest("task_too_large", "Subagent task is too large.");
+      return yield* invalidRequest(
+        "task_too_large",
+        `Subagent task is too large: ${request.task.length.toLocaleString("en-US")} characters, over the ${MAX_TASK_CHARS.toLocaleString("en-US")}-character limit.`,
+      );
     const normalizedClaims =
       request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
     if (normalizedClaims && !normalizedClaims.ok)
