@@ -154,7 +154,8 @@ export function createWritePreviewRenderers(cwd: string, session?: CodePreviewRe
         if (!expanded && !codePreviewSettings.writeContentPreview) return new Container();
         const guard = getWriteDiffGuard(beforeContent, content);
         if (guard) return new Text(diffSkippedNote(theme, guard), 0, 0);
-        setResultDiffShown(state, true);
+        // Expansion keeps the exact written content above the diff.
+        setResultDiffShown(state, !expanded);
         const render = () =>
           renderWriteDiffPreview(
             beforeContent,

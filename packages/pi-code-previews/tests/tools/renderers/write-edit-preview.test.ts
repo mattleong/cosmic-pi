@@ -84,12 +84,12 @@ test("a finished write shows its diff once, and its content when no diff is show
   row.markExecutionStarted();
   assert.match(text(row), /line 0\b/u);
   row.updateResult(overwrite);
-  for (const expanded of [false, true]) {
-    row.setExpanded(expanded);
-    const settled = text(row);
-    assert.equal(count(settled, /LINE 10/gu), 1);
-    assert.doesNotMatch(settled, /line 0\b/u);
-  }
+  const settled = text(row);
+  assert.equal(count(settled, /LINE 10/gu), 1);
+  assert.doesNotMatch(settled, /line 0\b/u);
+  // Expansion keeps the exact written content above the diff.
+  row.setExpanded(true);
+  assert.match(text(row), /line 0\b/u);
 
   for (const withoutDiff of [
     result("EACCES: permission denied, open '/project/a.txt'", undefined, true),
@@ -156,10 +156,10 @@ test("an edit keeps its proposal until the applied diff replaces it", () => {
       diff: generateDiffString("alpha\nbeta\n", "alpha\nBETA\n").diff,
     }),
   );
-  for (const expanded of [false, true]) {
-    row.setExpanded(expanded);
-    assert.equal(count(text(row), /BETA/gu), 1);
-  }
+  assert.equal(count(text(row), /BETA/gu), 1);
+  // Expansion keeps the exact proposed edit above the applied diff.
+  row.setExpanded(true);
+  assert.equal(count(text(row), /BETA/gu), 2);
 
   const failed = liveRow("edit", edit);
   failed.markExecutionStarted();

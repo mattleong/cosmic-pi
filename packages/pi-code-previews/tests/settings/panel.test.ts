@@ -4,6 +4,9 @@ import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { updateSetting } from "../../src/config/values";
 import { SettingsList } from "@earendil-works/pi-tui";
+import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 import { createCodePreviewSettingsModel, persistSettingsChange } from "../../src/settings/panel";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
 
@@ -127,6 +130,8 @@ effectTest("restoring defaults waits for a second press and saves no values", fu
   assert.deepEqual(saved, []);
 });
 
+class DiskFull extends Data.TaggedError("DiskFull")<{ readonly message: string }> {}
+
 effectTest(
   "only the latest failed edit rolls the panel back to the published settings",
   function* () {
@@ -140,10 +145,16 @@ effectTest(
       done: () => undefined,
       loadOptions: {},
       effects: {
-        queueSave: (next) =>
-          new Promise<void>((resolve, reject) =>
-            pending.push({ next, pass: resolve, fail: () => reject(new Error("disk full")) }),
-          ),
+        queueSave: (next) => {
+          const save = Deferred.makeUnsafe<void, DiskFull>();
+          pending.push({
+            next,
+            pass: () => Deferred.doneUnsafe(save, Effect.void),
+            fail: () =>
+              Deferred.doneUnsafe(save, Effect.fail(new DiskFull({ message: "disk full" }))),
+          });
+          return Effect.runPromise(Deferred.await(save));
+        },
         queueReset: () => Promise.resolve(),
         initializeSyntax: () => Promise.resolve(),
       },

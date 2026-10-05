@@ -146,7 +146,7 @@ const modifySettingsDocument = (
         return {
           value: context,
           document,
-          write: JSON.stringify(document) !== JSON.stringify(latest),
+          write: !Equal.equals(document, latest),
           afterCommit: afterCommit(context),
         } satisfies JsonDocumentModification<SettingsSaveContext>;
       },

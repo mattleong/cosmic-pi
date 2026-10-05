@@ -9,8 +9,8 @@ export function setResultDiffShown(state: RendererState, shown: boolean): void {
 }
 
 /**
- * A finished change shows once: while the result draws its diff, the call omits the proposed
- * content. Pi renders the call before the result, so this decides when drawn, and creates the
+ * A finished change shows once: while the collapsed result draws its diff, the call omits the
+ * proposed content. Expanded rows keep both, since expansion preserves the exact input. Pi renders the call before the result, so this decides when drawn, and creates the
  * content only when it is first shown.
  */
 export function unlessResultDiffShown(state: RendererState, create: () => Component): Component {

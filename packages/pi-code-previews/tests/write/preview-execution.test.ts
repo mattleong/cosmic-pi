@@ -4,6 +4,7 @@ import { layer } from "@effect/vitest";
 import { createWriteTool, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -38,6 +39,10 @@ const fixture = (prefix: string) =>
   });
 
 /** The error text a write reports, the way Pi reads a rejected tool call. */
+class NativeWriteFailure extends Data.TaggedError("NativeWriteFailure")<{
+  readonly message: string;
+}> {}
+
 const writeOutcome = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.match({
@@ -187,7 +192,10 @@ layer(testLayer)("session write service", (it) => {
           Effect.tryPromise({
             try: () =>
               createWriteTool(dir).execute("native", { path, content: "after" }, undefined),
-            catch: (error) => error,
+            catch: (cause) =>
+              new NativeWriteFailure({
+                message: cause instanceof Error ? cause.message : String(cause),
+              }),
           }),
         );
         if (native === "written") yield* fs.writeFileString(join(dir, path), "before");

@@ -150,7 +150,8 @@ export function createEditPreviewTool(cwd: string, session?: CodePreviewRenderer
             ? new Container()
             : renderHiddenPreviewExpandHint(renderContext.state, theme);
         }
-        setResultDiffShown(renderContext.state, true);
+        // Expansion keeps the exact proposed edits above the applied diff.
+        setResultDiffShown(renderContext.state, !expanded);
         const render = () =>
           new FullWidthDiffText(
             formatDiffPreview(diff, lang, theme, limit, {
