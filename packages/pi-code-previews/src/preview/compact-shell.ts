@@ -73,7 +73,7 @@ class CompactShell implements Component {
   private collapsed:
     | { plan: CompactPlan; width: number; frame: number | undefined; rows: string[] }
     | undefined;
-  private detailBounds: { offset: number; height: number; width: number } | undefined;
+  private detailBounds: { height: number; width: number } | undefined;
   private readonly mode: ToolCallBackgroundMode;
   private readonly options: CompactShellOptions;
   readonly resultSlot: Component;
@@ -243,7 +243,7 @@ class CompactShell implements Component {
         );
       }
     }
-    this.detailBounds = { offset: 0, height: rows.length, width };
+    this.detailBounds = { height: rows.length, width };
     return rows;
   }
 
@@ -324,9 +324,8 @@ class CompactShell implements Component {
   handleMouse(event: TuiMouseEvent) {
     const bounds = this.detailBounds;
     if (!bounds || !this.display || bounds.width !== event.width) return undefined;
-    const y = event.y - bounds.offset;
-    if (y < 0 || y >= bounds.height) return undefined;
-    return this.display.handleMouse?.({ ...event, y, height: bounds.height });
+    if (event.y < 0 || event.y >= bounds.height) return undefined;
+    return this.display.handleMouse?.({ ...event, height: bounds.height });
   }
 
   invalidate(): void {

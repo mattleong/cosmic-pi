@@ -67,9 +67,6 @@ export interface CodePreviewToolRenderers<TTool extends AdaptableToolDefinition>
         readonly renderResult?: PreviewRenderResult<TTool>;
       }
     | undefined;
-  readonly execute?: (
-    ...args: Parameters<TTool["execute"]>
-  ) => ReturnType<AdaptableToolDefinition["execute"]>;
   readonly renderCall: PreviewRenderCall<TTool>;
   readonly renderResult: PreviewRenderResult<TTool>;
 }
@@ -89,7 +86,7 @@ type RendererResult = (
 
 export type CodePreviewRendererCallbacks = Omit<
   CodePreviewToolRenderers<AdaptableToolDefinition>,
-  "execute" | "renderCall" | "renderResult" | "expandedContent" | "compactSummary"
+  "renderCall" | "renderResult" | "expandedContent" | "compactSummary"
 > & {
   readonly compactSummary?: CompactSummaryProvider<any, any, any> | undefined;
   readonly renderCall: RendererCall;
@@ -161,5 +158,5 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
   // SAFETY: Both callback sets derive args, details, and state from the same owned definition.
   const presentation = createCodePreviewRenderers(tool, renderers as CodePreviewRendererCallbacks);
   // SAFETY: Rendering changes preserve the definition's schema and execution signature.
-  return { ...tool, ...presentation, execute: renderers.execute ?? tool.execute } as TTool;
+  return { ...tool, ...presentation } as TTool;
 }

@@ -11,14 +11,7 @@ import {
   shouldRenderBorderResultSeparately,
   syncBorderShellChrome,
 } from "./bordered-tool-call";
-import {
-  renderTimedResultFooter,
-  TimingPreservedComponent,
-  timingState,
-  updateToolCallTiming,
-  unwrapTimingComponent,
-  withLastComponent,
-} from "./tool-timing";
+import { renderTimedResultFooter, updateToolCallTiming, withLastComponent } from "./tool-timing";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
@@ -90,23 +83,14 @@ function renderCodePreviewCall<TState, TArgs>(
   showShortTiming: boolean,
 ): Component {
   if (mode !== "border") {
-    const state = timingState(context);
-    const component = render(
-      withLastComponent(context, unwrapTimingComponent(context.lastComponent)),
-    );
-    const previousWrapped = state.codePreviewTimingCallComponent;
-    const wrapped =
-      previousWrapped instanceof TimingPreservedComponent && previousWrapped.component === component
-        ? previousWrapped
-        : new TimingPreservedComponent(component);
-    state.codePreviewTimingCallComponent = wrapped;
+    const component = render(context);
     updateToolCallTiming(context, {
       animate: animateProgress,
       animateWithoutTiming: animateProgress,
       formatLabel: false,
       scheduleAnimation,
     });
-    return wrapped;
+    return component;
   }
   const state = borderState(context);
   const previousShell = state.codePreviewBorderShell;

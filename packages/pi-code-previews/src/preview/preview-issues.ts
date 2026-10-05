@@ -123,7 +123,7 @@ class PreviewIssuesFrame extends Container {
 }
 
 /** The tool's own component, so it can reuse what it rendered last time. */
-export const unwrapPreviewIssues = (component: Component | undefined): Component | undefined =>
+const unwrapPreviewIssues = (component: Component | undefined): Component | undefined =>
   component instanceof PreviewIssuesFrame ? component.body : component;
 
 const EMPTY: Component = { render: () => [], invalidate: () => undefined };

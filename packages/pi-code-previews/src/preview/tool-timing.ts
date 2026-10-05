@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { synchronousNow, formatDuration, invokeHostCallback } from "pi-cosmic-core";
+import { synchronousNow, formatDuration, formatElapsed, invokeHostCallback } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
@@ -24,7 +24,6 @@ export type TimingState = RendererState & {
   codePreviewTimingEndedAt?: number | undefined;
   codePreviewTimingCancel?: (() => void) | undefined;
   codePreviewAnimationFrame?: number;
-  codePreviewTimingCallComponent?: Component;
   codePreviewTimingResultComponent?: Component;
 };
 
@@ -45,10 +44,7 @@ export function renderTimedResultFooter<TContext extends ToolTimingRenderContext
 ): Component {
   const state = timingState(context);
   const resultComponent = render(
-    withLastComponent(
-      context,
-      unwrapTimingComponent(state.codePreviewTimingResultComponent ?? context.lastComponent),
-    ),
+    withLastComponent(context, state.codePreviewTimingResultComponent ?? context.lastComponent),
   );
   state.codePreviewTimingResultComponent = resultComponent;
   if (!timingLabel) return resultComponent;
@@ -96,12 +92,12 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   if (options.formatLabel === false) return undefined;
   const running = context.isPartial === true;
   const endTime = running ? synchronousNow() : (state.codePreviewTimingEndedAt ?? synchronousNow());
-  const label = running ? "Elapsed" : "Took";
   const elapsedMs = Math.max(0, endTime - startedAt);
   if (!Number.isFinite(elapsedMs)) return undefined;
-  if (!options.showShortTiming && elapsedMs < TIMING_VISIBLE_MS) return undefined;
-  const duration = formatDuration(elapsedMs);
-  return { label: `${label} ${duration}`, duration, elapsedMs };
+  // A live clock ticks in whole seconds; only a settled call shows a measured short duration.
+  if ((running || !options.showShortTiming) && elapsedMs < TIMING_VISIBLE_MS) return undefined;
+  const duration = running ? formatElapsed(elapsedMs) : formatDuration(elapsedMs);
+  return { label: `${running ? "Elapsed" : "Took"} ${duration}`, duration, elapsedMs };
 }
 
 /** Read-only animation projection; malformed or hostile renderer state uses the first frame. */
@@ -118,10 +114,6 @@ export function getCodePreviewAnimationFrame(context: { readonly state: unknown 
 export function timingState(context: { state: unknown }): TimingState {
   // SAFETY: Pi initializes renderer state as an object shared by the call and result slots.
   return context.state as TimingState;
-}
-
-export function unwrapTimingComponent(component: Component | undefined): Component | undefined {
-  return component instanceof TimingPreservedComponent ? component.component : component;
 }
 
 export function withLastComponent<TContext extends ToolTimingRenderContext>(
@@ -149,26 +141,6 @@ function clearToolCallTimingInterval(state: TimingState): void {
   if (!state.codePreviewTimingCancel) return;
   state.codePreviewTimingCancel();
   state.codePreviewTimingCancel = undefined;
-}
-
-export class TimingPreservedComponent implements Component {
-  readonly component: Component;
-
-  constructor(component: Component) {
-    this.component = component;
-  }
-
-  render(width: number): string[] {
-    return this.component.render(width);
-  }
-
-  handleMouse(event: TuiMouseEvent) {
-    return this.component.handleMouse?.(event);
-  }
-
-  invalidate(): void {
-    this.component.invalidate();
-  }
 }
 
 class ToolTimingFooter implements Component {

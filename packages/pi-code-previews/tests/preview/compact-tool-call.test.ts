@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { allocateCompactHeader, middleElide } from "../../src/preview/compact-header";
+import { layoutCompactHeader, middleElide } from "../../src/preview/compact-header";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { compactStatus } from "../../src/tools/compact-summary";
 import { plainTheme as theme, stripAnsi } from "../support/render";
+
+const allocateCompactHeader = (...args: Parameters<typeof layoutCompactHeader>) =>
+  layoutCompactHeader(...args).row;
 
 test("explicit measured timing accompanies counts without overriding disabled timing or inventing replay time", () => {
   for (const timingEnabled of [false, true]) {

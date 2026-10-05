@@ -37,18 +37,6 @@ export function middleElide(text: string, width: number): string {
   return `${head}…${tail}`;
 }
 
-export function allocateCompactHeader(
-  identity: string,
-  subject: string,
-  counters: readonly string[],
-  optional: readonly (string | undefined)[],
-  width: number,
-  separator = " · ",
-  timing?: string,
-): string {
-  return layoutCompactHeader(identity, subject, counters, optional, width, separator, timing).row;
-}
-
 /**
  * Counters are alternatives in priority order: the first that fits owns the routine-detail
  * slot, so a producer can offer a shorter fallback for narrow rows. `counter` reports which

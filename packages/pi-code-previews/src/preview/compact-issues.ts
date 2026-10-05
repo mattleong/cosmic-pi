@@ -8,7 +8,7 @@ const COLORS = { error: "error", warning: "warning", info: "muted" } as const;
 const glyph = (severity: CompactIssue["severity"]) => managerNoticeGlyph(severity);
 
 /** The issue shown on a collapsed one-line row: the first error, else the first warning. */
-export function primaryCompactIssue(
+function primaryCompactIssue(
   issues: readonly CompactIssue[] | undefined,
 ): CompactIssue | undefined {
   return (

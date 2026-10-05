@@ -147,18 +147,21 @@ export function createToolPresentationHarness(
       { ...context, lastComponent: result, invalidate: () => context.invalidate() },
     );
   };
+  /** Like ToolExecutionComponent.updateDisplay: the call, then any result, with fresh envelopes. */
+  const update = () => {
+    if (callMounted) renderCall();
+    renderResult();
+  };
   function invalidate() {
     call?.invalidate();
     result?.invalidate();
-    // ToolExecutionComponent.invalidate rebuilds both slots, with fresh envelopes.
-    if (callMounted) renderCall();
-    renderResult();
+    update();
   }
   const harness: ToolPresentationHarness = {
     call(args, overrides = {}) {
       context = { ...context, ...overrides, args, lastComponent: call };
       callMounted = true;
-      renderCall();
+      update();
       return call;
     },
     result(value, overrides = {}) {
@@ -170,7 +173,7 @@ export function createToolPresentationHarness(
         lastComponent: result,
       };
       resultValue = value;
-      renderResult();
+      update();
       return result;
     },
     render(width = options.width ?? 80) {

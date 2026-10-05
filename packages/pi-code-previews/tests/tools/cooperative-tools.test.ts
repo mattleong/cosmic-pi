@@ -29,16 +29,13 @@ type ReadDefinition = ReturnType<typeof createReadToolDefinition>;
 type ReadRenderCall = NonNullable<ReadDefinition["renderCall"]>;
 type ReadRenderResult = NonNullable<ReadDefinition["renderResult"]>;
 type ReadResult = Parameters<ReadRenderResult>[0];
-interface State {
-  codePreviewTimingOnlyRenderToken?: number;
-}
 
 beforeEach(() => applyPresentationSettings({}));
 
 test("cooperative adapter forwards renderer values and preserves tool identity fields", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false });
   const args: ReadToolInput = { path: "src/example.ts" };
-  const state: State = {};
+  const state = {};
   const callLast = new Text("old call", 0, 0);
   const resultLast = new Text("old result", 0, 0);
   const resultValue = textResult("done");
@@ -146,7 +143,7 @@ test("border shell keeps independent last components for call and result slots",
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false });
   const shell = createCodePreviewToolShell("border");
   const args: ReadToolInput = { path: "README.md" };
-  const state: State = {};
+  const state = {};
   const unrelated = new Text("unrelated", 0, 0);
   const callLast: Array<Component | undefined> = [];
   const resultLast: Array<Component | undefined> = [];
@@ -200,7 +197,7 @@ test("preview shell does not hide semantic updates during timing invalidation", 
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: true });
   const args: ReadToolInput = { path: "README.md" };
   for (const mode of ["off", "border"] as const) {
-    const state: State = {};
+    const state = {};
     const tool = {
       ...createReadToolDefinition("/project"),
       renderCall: ((receivedArgs, _theme, _context) =>
@@ -221,7 +218,6 @@ test("preview shell does not hide semantic updates during timing invalidation", 
       theme,
       context,
     );
-    state.codePreviewTimingOnlyRenderToken = 1;
     const nextArgs = { path: "changed.ts" };
     const secondCall = wrapped.renderCall(nextArgs, theme, {
       ...context,
