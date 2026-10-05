@@ -25,6 +25,7 @@ import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import type { CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewRendererSession } from "./renderer-contract";
 import { retainedCodePreviewRenderers, type RetainedRendererOwner } from "./renderer-row";
+import { isThirdPartyPreviewName, thirdPartyAdapter } from "../third-party/registry";
 
 /** Only renderer fields from next() are retained; never treat it as an execution definition. */
 function rendererFields(renderers: ToolRenderers | undefined): ToolRenderers | undefined {
@@ -106,8 +107,10 @@ function select(
   ownedTools: ReadonlySet<CodePreviewToolName>,
   selfShell: boolean,
 ): ToolRenderers | undefined {
-  if (!admitsPreviewSource(name, host, ownedTools)) return undefined;
   const presentation = { ...session, selfShell };
+  const external = thirdPartyAdapter(name, host.tools.get(name));
+  if (external) return external.create(name, downstream, presentation);
+  if (!admitsPreviewSource(name, host, ownedTools)) return undefined;
   if (isCorePreviewName(name)) return createBuiltinPreviewRenderers(name, presentation);
   if (name === "codemode")
     return session.enabledTools?.includes("codemode")
@@ -126,7 +129,7 @@ export function createCodePreviewRendererResolver(
   return (name, next) => {
     const downstream = rendererFields(next());
     const owner = currentOwner();
-    if (!owner.live || !isPreviewName(name)) return downstream;
+    if (!owner.live || (!isPreviewName(name) && !isThirdPartyPreviewName(name))) return downstream;
     const session = owner.session;
     // Rows resolved after readiness are ordinary renderers in Pi's own shell, frozen now.
     if (owner.ready && session)
@@ -141,7 +144,12 @@ export function createCodePreviewRendererResolver(
     // semantic source admission is deferred until the originating session becomes ready.
     const deferredAdmission =
       (isCorePreviewName(name) || name === "codemode") && !host?.tools.has(name);
-    if (!deferredAdmission && (!host || !admitsPreviewSource(name, host, ownedTools)))
+    if (
+      !deferredAdmission &&
+      (!host ||
+        (!admitsPreviewSource(name, host, ownedTools) &&
+          !thirdPartyAdapter(name, host.tools.get(name))))
+    )
       return downstream;
     // Pi fixes a row's shell when it is built, so cold replay keeps a self shell and adopts the
     // first-ready appearance.

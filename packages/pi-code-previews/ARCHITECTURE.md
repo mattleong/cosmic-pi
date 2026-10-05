@@ -6,7 +6,8 @@ Code Previews owns syntax-highlighted previews, structured diffs, safer write/ed
 appearance settings, and the cooperative tool shell. It registers `/code-previews health` and
 `/code-previews settings`, plus `session_start` and `session_shutdown`. One factory-time public
 `pi.registerToolRenderer` resolver presents seven core builtins, native `codemode`, and standalone
-native MCP tools/resources. Pi 1.0.1 is the minimum; the workspace tests against 1.0.2.
+native MCP tools/resources, plus explicitly supported third-party presentation. Pi 1.0.1 is the
+minimum; the workspace tests against 1.0.2.
 
 Pi independently owns native codemode/MCP execution and the `/mcp` manager. Code Previews neither
 composes nor intercepts their factories, registers their execution definitions, nor changes tool
@@ -28,7 +29,7 @@ disk. The former standalone `pi-mcp-previews` package is retired and must be rem
 - `boundary/host-tool-renderers.ts` captures public tool and command metadata; a name listed twice
   reads as unknown. `tools/preview-admission.ts` owns the exact-source admission that rendering,
   status and write registration share. The resolver retains only public renderer fields from
-  `next()`, and foreign tools fall through unchanged. Core/native
+  `next()`, and unsupported foreign tools fall through unchanged. Core/native
   codemode presentation follows preview selection, not active-at-start status. Native MCP
   definitions require builtin MCP ownership; missing historical aliases require the independently
   proven unique builtin `/mcp` manager. Nothing is introduced or activated for presentation.
@@ -42,6 +43,23 @@ disk. The former standalone `pi-mcp-previews` package is retired and must be rem
   attempted ownership from successful installation, and permits retry after mutate-then-refresh
   failures. Discovery failures stop startup; a bounded write registration error keeps rendering
   and the current runtime available.
+
+## Siloed third-party presentation
+
+`src/third-party/registry.ts` is the sole adapter list, reached by a small resolver seam; builtin
+admission and preview-tools settings do not know about external packages. Each adapter owns its
+package/source/name admission, bounded evidence projection, and renderer composition. Removing its
+registry entry disables support without touching native presentation or external execution.
+
+The `web-access/` adapter accepts only default tool names from public `npm:pi-web-access` package
+metadata with a matching package-root/known-entry relationship. Missing, duplicate, renamed, local,
+and unsupported sources remain downstream, including cold history. No filesystem probing, provider
+imports, execution definitions, activation, or stored-artifact reads are involved. It reuses the
+originating owner's readiness, appearance, and scheduler. Non-error delivery is neutral, not a
+claim verdict. Downstream components retain their own caches and mouse behavior; complete arguments
+and every raw output/recovery text block are appended on expansion because external renderers may
+truncate even expanded content. Slot failures retain raw evidence without replaying broken callbacks.
+Pi continues to own native images. See `docs/third-party-renderers.md` for adding/removing adapters.
 
 ## Settings and durable publication
 

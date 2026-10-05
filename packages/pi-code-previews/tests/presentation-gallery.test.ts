@@ -16,6 +16,7 @@ import {
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
+import { WEB_ACCESS_TOOLS, isWebAccessTool } from "../src/third-party/web-access/identity";
 import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
@@ -31,6 +32,7 @@ function registered(style: "compact" | "preview") {
   });
   const names = [
     ...ALL_CODE_PREVIEW_TOOLS,
+    ...WEB_ACCESS_TOOLS,
     "mcp__docs__lookup",
     "read_mcp_resource",
     "list_mcp_resources",
@@ -52,6 +54,14 @@ function registered(style: "compact" | "preview") {
         origin: "top-level",
       },
     };
+    if (isWebAccessTool(name))
+      tool.sourceInfo = {
+        source: "npm:pi-web-access@0.36.0",
+        origin: "package",
+        scope: "user",
+        baseDir: "/agent/npm/node_modules/pi-web-access",
+        path: "/agent/npm/node_modules/pi-web-access/dist/index.js",
+      };
     if (name === "mcp__docs__lookup") tool.namespace = { name: "mcp__docs" };
     return tool;
   });
@@ -73,11 +83,18 @@ function registered(style: "compact" | "preview") {
       name,
       captured.resolveToolRenderers(
         name,
-        name === "mcp__docs__lookup" ? nativeMcpCall : undefined,
+        name === "mcp__docs__lookup" ? nativeMcpCall : isWebAccessTool(name) ? webCall : undefined,
       )!,
     ]),
   );
 }
+
+/** Opaque third-party content; the adapter preserves it and adds exact raw expansion. */
+const webCall: ToolRenderers = {
+  renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
+  renderResult: (result) =>
+    new Text(result.content.find((part) => part.type === "text")?.text.slice(0, 200) ?? "", 0, 0),
+};
 
 /** The shape of Pi's own MCP call: its `server/tool` label, then the arguments. */
 const nativeMcpCall: ToolRenderers = {
@@ -149,6 +166,84 @@ const scenarios: ReadonlyArray<
     readonly narrow?: true;
   }
 > = [
+  {
+    tool: "web_enable",
+    title: "third-party web tools enabled",
+    args: {},
+    result: text("Web tools enabled", { enabled: ["web_search", "fetch_content"] }),
+  },
+  {
+    tool: "web_search",
+    title: "third-party search with partial failures",
+    args: { queries: ["Effect v4 documentation", "Provider availability"] },
+    result: text("Search output and provider diagnostics", {
+      queryCount: 2,
+      successfulQueries: 1,
+      totalResults: 3,
+    }),
+    narrow: true,
+  },
+  {
+    tool: "web_search",
+    title: "third-party search curator waiting",
+    args: { query: "Architecture" },
+    phase: "running",
+    result: text("Waiting for approval in the search curator", {
+      phase: "waiting-for-approval",
+      curatorUrl: "http://localhost:1234",
+    }),
+  },
+  {
+    tool: "web_search",
+    title: "third-party search cancelled",
+    args: { query: "Architecture" },
+    result: text("Search cancelled with original recovery details", {
+      cancelled: true,
+      error: "Search cancelled",
+    }),
+  },
+  {
+    tool: "source_check",
+    title: "third-party source evidence is not a verdict",
+    args: { claim: "The provider supports cancellation" },
+    result: text("Sources, cited passages, and manual review guidance", {
+      sourceCount: 2,
+      passageCount: 4,
+      searchCount: 1,
+    }),
+  },
+  {
+    tool: "fetch_content",
+    title: "third-party fetch missing recovery",
+    args: { url: "https://example.test/docs" },
+    result: text("Bounded page excerpt", { urlCount: 1, successful: 1, truncated: true }),
+  },
+  {
+    tool: "fetch_content",
+    title: "third-party fetch domain error",
+    args: { url: "https://example.test/docs" },
+    result: text("Provider failed\nFull agent-directed recovery information", {
+      error: "The provider is unavailable",
+    }),
+  },
+  {
+    tool: "get_search_content",
+    title: "third-party stored-content pagination",
+    args: { responseId: "private-reference", offset: 0, limit: 100 },
+    result: text("Content page\nContinue with the stored-content reference", {
+      contentLength: 500,
+      returnedChars: 100,
+      nextOffset: 100,
+      truncated: true,
+      responseId: "private-reference",
+    }),
+  },
+  {
+    tool: "fetch_content",
+    title: "third-party unfamiliar details preserve raw output",
+    args: { url: "https://example.test/docs", prompt: "Keep the exact prompt" },
+    result: text("Unfamiliar output and complete recovery information", { version: "future" }),
+  },
   {
     tool: "codemode",
     title: "native long single-line source",

@@ -59,11 +59,29 @@ Everything lives under one command, `/code-previews`; type it and a space to aut
 /code-previews health
 ```
 
-The health panel shows configured tools, available renderer presentation, write registration errors, unavailable tools, disabled previews, foreign-owner conflicts, and native MCP renderer availability. Individual builtin/codemode preview toggles are available in the Preview tools submenu and take effect after `/reload`; they never activate or hide executable tools. Standalone MCP presentation is independent of that list.
+The health panel shows configured tools, available renderer presentation, write registration errors, unavailable tools, disabled previews, foreign-owner conflicts, and native MCP renderer availability. Individual builtin/codemode preview toggles are available in the Preview tools submenu and take effect after `/reload`; they never activate or hide executable tools. Standalone MCP and supported third-party presentation are independent of that list.
 
 The resolver is registered once during factory loading, not once per session. Replay rows created before startup preserve downstream content, then adopt their originating session's trusted settings when ready. Appearance is captured for that owner; retirement cancels its animations without borrowing replacement settings or schedulers. Public metadata is rechecked when choosing renderers. Only write registers an execution definition: its real before-write hook preserves activation and tracks attempted/successful registration separately so a refresh failure after mutation can retry. Discovery failures stop startup; a write registration error is bounded and does not disable other presentation.
 
-### Native codemode
+### Supported third-party extensions
+
+Code Previews includes a siloed, renderer-only `pi-web-access` adapter for `web_enable`,
+`web_search`, `source_check`, `fetch_content`, and `get_search_content`. It follows the selected
+preview/compact style and background without changing execution, activation, permissions, or
+model-facing results. Expansion preserves the extension's own content and adds complete arguments
+and raw output/recovery, including text its own expanded renderer may clip. Pi still draws images.
+
+Admission requires public metadata for the exact `npm:pi-web-access` package (version/tag selectors
+included), its package root, and a known `dist/index.js` or `index.ts` entry. Local/git installs,
+renamed tools, missing/duplicate ownership, and other packages retain their original rendering.
+Unknown or malformed results use conservative generic presentation, never inferred success.
+No `pi-web-access` dependency or configuration change is required.
+
+All external support lives under `src/third-party/`, with one static registry entry per adapter.
+See [third-party adapters](docs/third-party-renderers.md) for the compatibility and add/remove
+contract; builtin/native admission remains separate.
+
+## Native codemode
 
 Code Previews chooses native `codemode` renderers only when public source metadata identifies `builtin:codemode`. It does not require activation at startup: later MCP activation gets presentation without `/reload`. Missing, excluded, inactive, and foreign tools are never introduced or enabled for styling.
 
