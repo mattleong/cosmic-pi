@@ -17,7 +17,9 @@ export function renderNativeCodemodeProgram(
   source: string,
   theme: Theme,
   context: NativeProgramContext,
+  sourceIntentNote?: string,
 ): Component {
+  const note = sourceIntentNote && context.expanded ? new Text(sourceIntentNote, 0, 0) : undefined;
   const fallback = new Text(escapeControlChars(source), 0, 0);
   let highlighted: Component | undefined;
   try {
@@ -39,7 +41,8 @@ export function renderNativeCodemodeProgram(
         highlighted = undefined;
         rows = fallback.render(width);
       }
-      if (context.expanded || rows.length <= COLLAPSED_PROGRAM_ROWS) return rows;
+      if (context.expanded) return [...(note?.render(width) ?? []), ...rows];
+      if (rows.length <= COLLAPSED_PROGRAM_ROWS) return rows;
       let hint: string;
       try {
         hint = renderExpansionAffordance("program", false, theme);
@@ -49,6 +52,7 @@ export function renderNativeCodemodeProgram(
       return [...rows.slice(0, COLLAPSED_PROGRAM_ROWS), clipToWidth(hint, width, "")];
     },
     invalidate() {
+      note?.invalidate();
       fallback.invalidate();
       try {
         highlighted?.invalidate();

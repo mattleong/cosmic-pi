@@ -10,7 +10,6 @@ import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { renderNativeCodemodeProgram } from "./native-codemode-source";
 import { escapeControlChars } from "../shared/terminal-text";
-import { renderHighlightedText } from "../syntax/render";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import type { CompactSummary } from "./compact-summary";
 import { withCodePreviewRenderers } from "./cooperative-tools";
@@ -28,25 +27,27 @@ import {
 } from "./native-codemode-evidence";
 import { safeContent } from "./native-safe-content";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import {
+  createNativeDiscoveryProjector,
+  nativeDiscoveryLabel,
+  nativeDiscoveryNote,
+  type NativeDiscoveryProjector,
+} from "./native-codemode-discovery";
 
 /** The complete program, highlighted, for the expanded view. */
-const renderSource: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-  const source =
-    Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
-  return safeContent(
-    () =>
-      expandedSection(
-        theme,
-        "Program",
-        new Text(
-          renderHighlightedText(source, "javascript", theme, context.invalidate).join("\n"),
-          0,
-          0,
-        ),
-      ),
-    source,
-  );
-};
+const renderSource =
+  (discovery: NativeDiscoveryProjector): NonNullable<ToolRenderers["renderCall"]> =>
+  (args, theme, context) => {
+    const source =
+      Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
+    const program = renderNativeCodemodeProgram(
+      source,
+      theme,
+      { expanded: true, invalidate: context.invalidate },
+      discovery(args) ? nativeDiscoveryNote : undefined,
+    );
+    return safeContent(() => expandedSection(theme, "Program", program), program);
+  };
 
 /**
  * Expanded Calls rows, laid out once per width rather than on every frame for up to 256 calls.
@@ -98,7 +99,8 @@ export function createNativeCodemodeRenderers(
   appearance: Pick<CodePreviewRendererAppearance, "scheduleAnimation"> &
     Partial<CodePreviewRendererAppearance>,
 ): ToolRenderers {
-  const summary = nativeCodemodeSummary(cwd);
+  const discovery = createNativeDiscoveryProjector();
+  const summary = nativeCodemodeSummary(cwd, discovery);
   const previewStyle =
     (appearance.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) === "preview";
 
@@ -171,13 +173,25 @@ export function createNativeCodemodeRenderers(
       renderCall(args, theme, context) {
         const source =
           Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
-        const program = renderNativeCodemodeProgram(source, theme, context);
+        const label = nativeDiscoveryLabel(discovery(args));
+        const program = renderNativeCodemodeProgram(
+          source,
+          theme,
+          context,
+          label ? nativeDiscoveryNote : undefined,
+        );
         const fallback = new Container();
-        fallback.addChild(new Text("codemode", 0, 0));
+        fallback.addChild(new Text(["codemode", label].filter(Boolean).join(" "), 0, 0));
         fallback.addChild(program);
         return safeContent(() => {
           const body = new Container();
-          body.addChild(new Text(renderToolHeader({ title: "codemode" }, theme), 0, 0));
+          body.addChild(
+            new Text(
+              renderToolHeader({ title: "codemode", ...(label && { subtitle: label }) }, theme),
+              0,
+              0,
+            ),
+          );
           body.addChild(previewIssuesSlot(context));
           body.addChild(program);
           return body;
@@ -204,6 +218,9 @@ export function createNativeCodemodeRenderers(
                 animationFrame,
                 timingEnabled: codePreviewSettings.toolCallTiming,
               });
+              // A discovery hint and dispatch count are independent facts in preview style too.
+              const counter = projected.action ? projected.counters?.[0] : undefined;
+              if (counter) rows.unshift(clipToWidth(theme.fg("muted", counter), width));
               if (
                 options.isPartial &&
                 !projected.children?.entries.some((child) => child.status === "running")
@@ -234,7 +251,7 @@ export function createNativeCodemodeRenderers(
       compactSummary: summary,
       animateProgress: true,
       showShortTiming: true,
-      expandedContent: { renderCall: renderSource, renderResult: renderOutput },
+      expandedContent: { renderCall: renderSource(discovery), renderResult: renderOutput },
     },
   );
 }

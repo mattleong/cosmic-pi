@@ -259,6 +259,50 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
+    title: "native MCP discovery intent without dispatches",
+    args: {
+      code: 'text(await searchTools("navigate_page", { namespace: "mcp__chrome_devtools", limit: 1 }));',
+    },
+    timing: true,
+    durationMs: 27,
+    result: nativeResult("completed", [], "Local tool schema and navigation parameters"),
+  },
+  {
+    tool: "codemode",
+    title: "native generic tool discovery intent",
+    args: { code: 'text(await describeTool("read"));' },
+    result: nativeResult("completed", [], "Local read tool schema"),
+  },
+  {
+    tool: "codemode",
+    title: "native MCP discovery intent with mixed MCP and regular dispatches",
+    args: {
+      code: 'text(await describeNamespace("mcp__docs")); text(await tools.read({ path: "source.ts" })); text(await tools.mcp__docs__lookup({ query: "Guide" }));',
+    },
+    timing: true,
+    durationMs: 120,
+    result: nativeResult(
+      "completed",
+      [nativeCall("ok"), nativeArgumentCall("mcp__docs__lookup", { query: "Guide" })],
+      "Local tool schemas and dispatched call output",
+    ),
+  },
+  {
+    tool: "codemode",
+    title: "native discovery intent preserves incomplete dispatch evidence",
+    args: {
+      code: 'text(await describeNamespace("mcp__docs")); text(await tools.read({ path: "source.ts" }));',
+    },
+    result: nativeResult("completed", [nativeCall("ok"), null], "Retained output and uncertainty"),
+  },
+  {
+    tool: "codemode",
+    title: "native discovery intent with unfamiliar outer metadata",
+    args: { code: 'text(await describeNamespace("mcp__docs"));' },
+    result: text("Unrecognized outer header\nComplete unfamiliar output", { calls: [] }),
+  },
+  {
+    tool: "codemode",
     title: "native running without nested calls",
     args: { code: "await new Promise(resolve => setTimeout(resolve, 1000));" },
     phase: "running",

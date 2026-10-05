@@ -59,6 +59,7 @@
     "pack:dry": "pnpm pack --dry-run"
   },
   "dependencies": {
+    "acorn": "8.15.0",
     "diff": "^8.0.4",
     "effect": "catalog:",
     "pi-cosmic-core": "workspace:*",

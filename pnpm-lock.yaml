@@ -243,6 +243,9 @@ importers:
 
   packages/pi-code-previews:
     dependencies:
+      acorn:
+        specifier: 8.15.0
+        version: 8.15.0
       diff:
         specifier: ^8.0.4
         version: 8.0.4

@@ -104,6 +104,15 @@ so closing cannot pop an unrelated stacked surface.
   neighbors independently and reports missing coverage. Subjects use observed bounded arguments
   and unambiguous MCP aliases. `tools/native-mcp-resource-subject.ts` is the shared argument-only
   resource action/subject seam; it contains no manager or standalone renderer logic.
+- `tools/native-codemode-discovery.ts` projects source-derived discovery intent with Acorn, not
+  execution telemetry. Direct unshadowed helper calls supply fixed MCP/tool hints; unused function
+  bodies, aliases, dynamic callees and unsupported/budget-exhausted source decline. Whole-program
+  bindings/mutations conservatively veto shadowed helpers. Parsing is capped at 32,768 source code
+  units, 4096 tokens/nodes and depth 128; each originating renderer memoizes one source/projection,
+  no AST. Class initialization sites are active; method bodies and instance initializers are not.
+  Both styles keep hints separate from native dispatch counts and show the intent caveat expanded.
+  Only discovery-only source plus a complete empty ledger suppresses the zero counter. Native
+  evidence alone continues to supply children, coverage warnings, outcomes and timing.
 - Native codemode collapsed source is bounded to eight wrapped rows, with five selected children;
   expansion keeps Program, Calls and Output. Saved-output recovery is informational; missing
   recovery remains a warning. Rendering never reads spill files. Parent and child measured

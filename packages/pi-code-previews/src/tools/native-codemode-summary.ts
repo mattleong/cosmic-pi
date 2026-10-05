@@ -22,6 +22,11 @@ import { selectCompactChildren } from "../preview/compact-children";
 import { nativeArgumentPreview, safeNativeArgumentText } from "./native-codemode-args";
 import { nativeCodemodeCallSubject } from "./native-codemode-subject";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
+import {
+  createNativeDiscoveryProjector,
+  nativeDiscoveryLabel,
+  type NativeDiscoveryProjector,
+} from "./native-codemode-discovery";
 
 /** Native model rows record only the `provider/id` they resolved, never prompts or image data. */
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
@@ -116,12 +121,20 @@ export function nativeCodemodeHeader(
  * guest output as nested results.
  */
 export const nativeCodemodeSummary =
-  (cwd: string): CompactSummaryProvider<{ code: string }, unknown, any> =>
-  ({ phase, result, context }) => {
-    if (!result)
-      return phase === "settled"
-        ? undefined
-        : { subject: "", showTiming: true, showShortTiming: true };
+  (
+    cwd: string,
+    discovery: NativeDiscoveryProjector = createNativeDiscoveryProjector(),
+  ): CompactSummaryProvider<{ code: string }, unknown, any> =>
+  ({ phase, args, result, context }) => {
+    const intent = discovery(args);
+    const label = nativeDiscoveryLabel(intent);
+    const heading = {
+      subject: "",
+      ...(label && { action: label }),
+      showTiming: true as const,
+      showShortTiming: true as const,
+    };
+    if (!result) return phase === "settled" ? undefined : heading;
     const evidence = nativeCodemodeEvidence(result.details);
     const calls = evidence.kind === "available" ? evidence.calls : [];
     const complete = evidence.kind === "available" && evidence.complete;
@@ -149,15 +162,18 @@ export const nativeCodemodeSummary =
       }),
     );
     const summary = {
-      subject: "",
-      showTiming: true as const,
-      showShortTiming: true as const,
+      ...heading,
       counters:
-        evidence.kind === "unavailable"
+        evidence.kind === "unavailable" || (complete && calls.length === 0 && intent?.discoveryOnly)
           ? []
           : [
               complete
-                ? countLabel(calls.length, "call")
+                ? countLabel(
+                    calls.length,
+                    intent && calls.every((call) => !nativeModelCalls.has(call.name))
+                      ? "tool call"
+                      : "call",
+                  )
                 : `${countLabel(calls.length, "call")} listed`,
             ],
       children,
