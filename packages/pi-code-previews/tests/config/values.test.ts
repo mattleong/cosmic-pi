@@ -26,7 +26,7 @@ const disabledFlags = {
   lsResultPreview: false,
 } as const;
 
-test("settings normalization and reset preserve defaults", () => {
+test("settings normalization keeps defaults for invalid values", () => {
   const normalized = settingsFrom({
     ...disabledFlags,
     readCollapsedLines: -1,
@@ -34,17 +34,13 @@ test("settings normalization and reset preserve defaults", () => {
     toolCallCollapsedStyle: "compact",
     tools: ["bash", "not-a-tool", "write", "bash"],
   });
-  // Disabled previews keep every tool renderer; invalid values keep their defaults.
+  // Invalid values, including an array with an unknown tool, keep their defaults.
   assert.deepEqual(normalized, {
     ...defaultCodePreviewSettings,
     ...disabledFlags,
     toolCallBackground: "off",
     toolCallCollapsedStyle: "compact",
   });
-  assert.deepEqual(
-    updateSetting(normalized, "resetToDefaults", "reset now"),
-    defaultCodePreviewSettings,
-  );
 });
 
 test("settings normalization falls back to accumulated settings for invalid overrides", () => {
@@ -130,28 +126,18 @@ test("valid tool arrays are deduplicated and invalid arrays use the complete fal
   assert.deepEqual(settingsFrom({ tools: ["grep", "unknown"] }, fallback).tools, ["write"]);
 });
 
-test("disabled preview settings keep corresponding tool renderers enabled", () => {
+test("turning a preview off and on again leaves the saved tool selection unchanged", () => {
   const normalized = settingsFrom(
-    {
-      readContentPreview: false,
-      writeContentPreview: false,
-      editDiffPreview: false,
-      bashResultPreview: false,
-      grepResultPreview: false,
-      findResultPreview: false,
-      lsResultPreview: false,
-      tools: [],
-    },
+    { readContentPreview: false, tools: ["grep"] },
     defaultCodePreviewSettings,
   );
-  assert.deepEqual(normalized.tools, ["bash", "read", "write", "edit", "grep", "find", "ls"]);
-
-  const withoutGrep = updateSetting(
-    { ...normalized, tools: normalized.tools.filter((tool) => tool !== "grep") },
-    "tool:grep",
-    "off",
-  );
-  assert.ok(withoutGrep.tools.includes("grep"));
+  assert.deepEqual(normalized.tools, ["grep"]);
+  const off = updateSetting(normalized, "readContentPreview", "off");
+  assert.deepEqual(updateSetting(off, "readContentPreview", "on").tools, ["grep"]);
+  // Turning a tool off sticks even while its preview setting keeps it rendered.
+  assert.deepEqual(updateSetting({ ...off, tools: ["grep", "read"] }, "tool:read", "off").tools, [
+    "grep",
+  ]);
 });
 
 test("compact style edits leave background, timing, preview limits, and tool selection alone", () => {
@@ -166,10 +152,6 @@ test("compact style edits leave background, timing, preview limits, and tool sel
   assert.deepEqual(compact, { ...current, toolCallCollapsedStyle: "compact" });
   assert.deepEqual(updateSetting(compact, "toolCallCollapsedStyle", "invalid"), compact);
   assert.deepEqual(updateSetting(compact, "toolCallCollapsedStyle", "preview"), current);
-  assert.deepEqual(
-    updateSetting(compact, "resetToDefaults", "reset now"),
-    defaultCodePreviewSettings,
-  );
 });
 
 test("individual tool toggles update configured previews", () => {

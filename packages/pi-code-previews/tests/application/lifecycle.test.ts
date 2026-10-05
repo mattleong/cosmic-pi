@@ -26,7 +26,7 @@ import {
 } from "../../src/application/lifecycle";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
-import { setCodePreviewSettings } from "../../src/config/state";
+import { setCodePreviewSettings, setCodePreviewSettingsProblems } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { registerWritePreviewTool } from "../../src/tools/renderers/registration";
 import { effectTest, settle, step } from "../support/effect-test";
@@ -199,6 +199,7 @@ const settings = { ...defaultCodePreviewSettings, syntaxHighlighting: false, too
 afterEach(() => {
   clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
+  setCodePreviewSettingsProblems([]);
 });
 
 function harness(options: HarnessOptions = {}) {
@@ -589,6 +590,21 @@ effectTest("hosts without renderer resolvers load idle and warn at session start
 
   assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
   assert.equal(h.notifications.length, 1);
+});
+
+effectTest("settings a load ignored are reported when the session starts", function* () {
+  const h = yield* registered({
+    load: () =>
+      Effect.sync(() => {
+        setCodePreviewSettingsProblems([
+          { path: "/agent/code-previews.json", fields: ["readCollapsedLines"] },
+        ]);
+        return settings;
+      }),
+  });
+  yield* step(() => start(h));
+  assert.equal(h.notifications.length, 1);
+  yield* step(() => shutdown(h));
 });
 
 effectTest("project trust fails closed unless the callback returns literal true", function* () {

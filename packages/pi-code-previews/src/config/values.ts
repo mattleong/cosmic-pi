@@ -8,14 +8,13 @@ import {
   parseToolToggleId,
   type CodePreviewToolName,
 } from "../tools/names";
-import { formatToolsSettingValue, getEffectiveCodePreviewTools } from "../tools/policy";
-import { defaultCodePreviewSettings } from "./defaults";
+import { formatToolsSettingValue } from "../tools/policy";
 import {
   CodePreviewSettingsSchema,
   type CodePreviewEditableSettingId,
   type CodePreviewSettings,
 } from "./schema";
-import { cloneCodePreviewSettings, codePreviewSettings } from "./state";
+import { cloneCodePreviewSettings } from "./state";
 
 export const ON_OFF_VALUES = ["on", "off"] as const;
 export type OnOffValue = (typeof ON_OFF_VALUES)[number];
@@ -44,7 +43,7 @@ export function formatSettingValue(
 
 export function normalizeSettingsWithDiagnostics<DataInput>(
   data: DataInput,
-  fallback: CodePreviewSettings = codePreviewSettings,
+  fallback: CodePreviewSettings,
 ): NormalizedCodePreviewSettings {
   const decoded = decodeTolerantFields(data, CodePreviewSettingsSchema.fields, {
     path: "settings",
@@ -52,11 +51,9 @@ export function normalizeSettingsWithDiagnostics<DataInput>(
   });
   const next = cloneCodePreviewSettings(fallback);
   Object.assign(next, decoded.value);
-  next.tools = decoded.value.tools ? [...new Set(decoded.value.tools)] : [...fallback.tools];
-  return {
-    settings: withRequiredToolRenderers(next),
-    diagnostics: decoded.diagnostics,
-  };
+  const tools = new Set(decoded.value.tools ?? fallback.tools);
+  next.tools = ALL_CODE_PREVIEW_TOOLS.filter((tool) => tools.has(tool));
+  return { settings: next, diagnostics: decoded.diagnostics };
 }
 
 function parseAndApplyUiSetting<K extends keyof CodePreviewSettings>(
@@ -87,9 +84,6 @@ export function updateSetting(
   id: string,
   value: string,
 ): CodePreviewSettings {
-  if (id === "resetToDefaults" && value === "reset now")
-    return cloneCodePreviewSettings(defaultCodePreviewSettings);
-
   const next = cloneCodePreviewSettings(current);
   if (Object.hasOwn(CodePreviewSettingsSchema.fields, id)) {
     // SAFETY: The own-property check narrows id to a field in the authoritative settings schema.
@@ -99,14 +93,7 @@ export function updateSetting(
     const tool = parseToolToggleId(id);
     if (tool) next.tools = updateToolToggle(current.tools, tool, value);
   }
-  return withRequiredToolRenderers(next);
-}
-
-function withRequiredToolRenderers(settings: CodePreviewSettings): CodePreviewSettings {
-  return {
-    ...settings,
-    tools: getEffectiveCodePreviewTools(settings.tools, settings),
-  };
+  return next;
 }
 
 function updateToolToggle(

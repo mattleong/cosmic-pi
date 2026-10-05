@@ -4,7 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { runCodePreviewSessionEffect } from "../application/capability";
-import { codePreviewPerformanceConfig } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/state";
 import { resolvePreviewPath } from "../paths/resolve";
 import { formatBytes } from "pi-cosmic-core";
 

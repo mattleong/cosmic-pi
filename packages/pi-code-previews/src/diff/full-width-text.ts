@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { codePreviewPerformanceConfig } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/state";
 import { wrapAnsiToWidth } from "../shared/terminal-text";
 import { createDiffBackgroundResolver, diffLineBg } from "./background";
 import { DIFF_ADD_MARKER, DIFF_REMOVE_MARKER } from "./parse";

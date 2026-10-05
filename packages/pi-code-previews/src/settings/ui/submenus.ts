@@ -34,11 +34,16 @@ export class ToolPreviewSettingsSubmenu extends Container {
   private readonly selectedTools: Set<CodePreviewToolName>;
   private readonly settingsList: SettingsList;
 
-  constructor(currentValue: string, done: (selectedValue?: string) => void, theme?: Theme) {
+  constructor(
+    currentValue: string,
+    done: (selectedValue?: string) => void,
+    theme?: Theme,
+    required: ReadonlySet<CodePreviewToolName> = new Set(),
+  ) {
     super();
     this.selectedTools = parseCodePreviewTools(currentValue) ?? new Set(ALL_CODE_PREVIEW_TOOLS);
     this.settingsList = new SettingsList(
-      createToolToggleItems(this.selectedTools, getCodePreviewToolStatuses()),
+      createToolToggleItems(this.selectedTools, getCodePreviewToolStatuses(), required),
       ALL_CODE_PREVIEW_TOOLS.length + 2,
       theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
       (id, value) => {
@@ -76,6 +81,7 @@ export class ToolPreviewSettingsSubmenu extends Container {
 function createToolToggleItems(
   enabledTools: Set<CodePreviewToolName>,
   statuses: Map<CodePreviewToolName, CodePreviewToolStatus>,
+  required: ReadonlySet<CodePreviewToolName>,
 ): SettingItem[] {
   return ALL_CODE_PREVIEW_TOOLS.map((tool) => {
     const status = statuses.get(tool);
@@ -89,8 +95,9 @@ function createToolToggleItems(
       };
     }
 
-    const description =
-      status?.state === "installed"
+    const description = required.has(tool)
+      ? "Stays on while this tool's preview setting is off."
+      : status?.state === "installed"
         ? "Preview renderer available."
         : status?.state === "registration-error"
           ? "Write hook registration failed; retry with /reload."

@@ -1,6 +1,6 @@
 import { bundledLanguages } from "shiki";
 import { nodeBasename, nodeExtname } from "../boundary/node";
-import { codePreviewPerformanceConfig } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/state";
 
 const EXACT_BASENAMES = new Map<string, string>([
   ["dockerfile", "dockerfile"],

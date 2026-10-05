@@ -56,10 +56,13 @@ currency. The service holds a private complete baseline/loaded Ref. Atomic docum
 private replacement and projection publication share commit; idle saves rehydrate under the same
 permit without intermediate publication. Flush is a global barrier.
 
-Schema-derived tolerant decoding preserves valid siblings. Environment defaults, global nested
-`codePreview`, trusted-project nested settings, then flat global overrides determine values.
-Untrusted projects are ignored. Locked latest-document saves touch only edited known overrides
-and preserve unknown fields. `env.ts` publishes only performance/tool-selection projections.
+Schema-derived tolerant decoding preserves valid siblings. Built-in defaults, global nested
+`codePreview`, trusted-project nested settings, then flat global overrides determine values;
+there are no environment overrides, and performance budgets are fixed. Untrusted projects are
+ignored. Locked latest-document saves touch only edited known overrides, preserve unknown fields
+and skip unchanged documents. An override is dropped only when both the project and global
+baselines already yield its value; reset removes every known override. Loads publish ignored
+files and invalid fields, which session start and health report.
 The settings controller uses Cosmic UI's shared command and owned settings surfaces; pure menus
 live in `settings/ui/`. Panel drafts roll back only the latest failed edit. Syntax initialization
 failure after a successful theme save cannot roll back persistence. Health is an owned overlay,

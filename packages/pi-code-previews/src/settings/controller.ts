@@ -16,16 +16,15 @@ import {
   managerSettingsTheme,
   createSettingsListSurface,
 } from "pi-cosmic-ui/manager/settings-surface";
-import type { LoadSettingsOptions } from "../config/document-store";
+import { hasCodePreviewSessionCapability } from "../application/capability";
 import type { CodePreviewEditableSettingId, CodePreviewSettings } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import {
   formatSettingsSaveError,
   getSettingsPath,
-  queueSettingsSave as persistOrdinarySettings,
+  type LoadSettingsOptions,
 } from "../config/store";
 import { formatSettingValue, updateSetting } from "../config/values";
-import { initializeShiki as initializePanelSyntax } from "../syntax/shiki";
 import { createCodePreviewSettingsModel, persistSettingsChange } from "./panel";
 import { SETTING_ITEM_DEFINITIONS, type SettingItemDefinition } from "./ui/registry";
 
@@ -44,7 +43,9 @@ const SCRIPTED_SETTINGS = Object.entries(SETTING_ITEM_DEFINITIONS).flatMap(
         ],
 );
 
-const config = (): CodePreviewSettings => codePreviewSettings;
+/** Settings are known only once a session has loaded them; before that, edits would guess. */
+const config = (): CodePreviewSettings | undefined =>
+  hasCodePreviewSessionCapability() ? codePreviewSettings : undefined;
 
 const loadOptions = (ctx: ExtensionCommandContext): LoadSettingsOptions => ({
   projectCwd: ctx.cwd,
@@ -69,14 +70,17 @@ export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
       "Native MCP calls use this appearance; manage servers through /mcp.",
     ],
     config,
-    status: (ctx) =>
-      [
+    status: (ctx) => {
+      const current = config();
+      if (!current) return "Code Previews settings aren't available right now";
+      return [
         "Code Previews settings",
         ...SCRIPTED_SETTINGS.map(
-          (setting) => `  ${setting.id} = ${formatSettingValue(config(), setting.id)}`,
+          (setting) => `  ${setting.id} = ${formatSettingValue(current, setting.id)}`,
         ),
         `Settings file: ${formatDisplayPath(getSettingsPath(), ctx.cwd)}`,
-      ].join("\n"),
+      ].join("\n");
+    },
     apply: (ctx, id, value) => {
       const previousTheme = codePreviewSettings.shikiTheme;
       const next = updateSetting(codePreviewSettings, id, value);
@@ -101,10 +105,6 @@ export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
             notify: (message, level) => notifyAtHostBoundary(ctx, message, level),
             done: () => finish(undefined),
             loadOptions: loadOptions(ctx),
-            effects: {
-              queueSave: persistOrdinarySettings,
-              initializeSyntax: initializePanelSyntax,
-            },
           });
           const created = createSettingsListSurface({
             header: new Text(theme.fg("accent", theme.bold("Code Previews settings")), 1, 1),

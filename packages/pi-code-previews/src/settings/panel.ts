@@ -1,14 +1,15 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { constVoid } from "effect/Function";
-import type { LoadSettingsOptions } from "../config/document-store";
 import type { CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
 import {
   flushSettingsSaveQueue,
   formatSettingsSaveError,
+  queueSettingsReset,
   queueSettingsSave,
+  type LoadSettingsOptions,
 } from "../config/store";
 import { initializeShiki } from "../syntax/shiki";
 import { createSettingsCategoryItems, isSettingsGroupItemId } from "./ui/index";
@@ -26,11 +27,13 @@ export interface SettingsPanelSaveEffects {
     settings: CodePreviewSettings,
     options: LoadSettingsOptions,
   ) => Promise<void>;
+  readonly queueReset: (options: LoadSettingsOptions) => Promise<void>;
   readonly initializeSyntax: (theme: CodePreviewSettings["shikiTheme"]) => Promise<void>;
 }
 
 const liveSettingsPanelSaveEffects: SettingsPanelSaveEffects = {
   queueSave: queueSettingsSave,
+  queueReset: queueSettingsReset,
   initializeSyntax: initializeShiki,
 };
 
@@ -58,7 +61,7 @@ export function createCodePreviewSettingsModel({
   done,
   loadOptions,
   theme,
-  effects,
+  effects = liveSettingsPanelSaveEffects,
 }: SettingsListControllerOptions): CodePreviewSettingsModel {
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
@@ -76,24 +79,35 @@ export function createCodePreviewSettingsModel({
       return;
     }
     const previousTheme = draftSettings.shikiTheme;
-    const resetRequested = id === "resetToDefaults";
-    const next = updateSetting(draftSettings, id, value);
     const changeRevision = ++revision;
-    draftSettings = next;
-    sync(list);
-    void persistSettingsChange(next, previousTheme, loadOptions, effects)
-      .then(() => {
-        if (resetRequested) notify("Code preview settings restored to defaults", "info");
-      })
-      .catch((error) => {
-        // Only the latest failed edit rolls the panel draft back. Older saves may fail while a
-        // newer serialized save is still able to publish the complete draft.
+    let saved: Promise<void>;
+    if (id === "resetToDefaults") {
+      // The restored values come from the settings files, so the draft follows the publication.
+      sync(list);
+      saved = effects.queueReset(loadOptions).then(() => {
         if (revision === changeRevision) {
           draftSettings = cloneCodePreviewSettings(codePreviewSettings);
           sync(list);
         }
-        notify(formatSettingsSaveError(error), "warning");
+        if (codePreviewSettings.shikiTheme !== previousTheme)
+          void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
+        notify("Code preview settings restored to defaults", "info");
       });
+    } else {
+      const next = updateSetting(draftSettings, id, value);
+      draftSettings = next;
+      sync(list);
+      saved = persistSettingsChange(next, previousTheme, loadOptions, effects);
+    }
+    void saved.catch((error) => {
+      // Only the latest failed edit rolls the panel draft back. Older saves may fail while a
+      // newer serialized save is still able to publish the complete draft.
+      if (revision === changeRevision) {
+        draftSettings = cloneCodePreviewSettings(codePreviewSettings);
+        sync(list);
+      }
+      notify(formatSettingsSaveError(error), "warning");
+    });
   };
   const routeBoundChange = (id: string, value: string): void => {
     if (activeList) handleSettingChange(activeList, id, value);

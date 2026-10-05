@@ -1,4 +1,4 @@
-import { failureMessage } from "pi-cosmic-core";
+import { failureMessage, formatDisplayPath } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -9,12 +9,12 @@ import {
 import { nodeJoin } from "../boundary/node";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { makeSettingsAdmission, type SettingsAdmission } from "./coordinator";
-import type { LoadSettingsOptions } from "./document-store";
+import type { LoadSettingsOptions, SettingsLoadProblem } from "./document-store";
 import type { CodePreviewSettings } from "./schema";
 import { CodePreviewSettingsService } from "./service";
 import { cloneCodePreviewSettings } from "./state";
 
-export type { LoadSettingsOptions } from "./document-store";
+export type { LoadSettingsOptions, SettingsLoadProblem } from "./document-store";
 /** Effect settings persistence service — preferred session door. */
 export { CodePreviewSettingsService, type CodePreviewSettingsServiceContract } from "./service";
 
@@ -92,6 +92,15 @@ export function queueSettingsSave(
   );
 }
 
+/** Remove the flat overrides so `settings.json` and built-in values apply again. */
+export function queueSettingsReset(loadOptions: LoadSettingsOptions = {}): Promise<void> {
+  const admission = makeSettingsAdmission();
+  const options = hasCodePreviewSessionCapability() ? {} : { rehydrate: loadOptions };
+  return runSettingsEffect(
+    CodePreviewSettingsService.use((service) => service.reset(admission, options)),
+  );
+}
+
 export function flushSettingsSaveQueue(): Promise<void> {
   return runSettingsEffect(CodePreviewSettingsService.use((service) => service.flush));
 }
@@ -102,4 +111,12 @@ export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
       ? failureMessage(error.message, "unknown error")
       : "unknown error";
   return `Couldn't save code preview settings: ${message}`;
+}
+
+/** What a load ignored, for notifications and health: the file, then the fields or the reason. */
+export function describeSettingsProblem(problem: SettingsLoadProblem, cwd: string): string {
+  const file = formatDisplayPath(problem.path, cwd);
+  return problem.fields
+    ? `Code Previews ignored invalid settings in ${file}: ${problem.fields.join(", ")}`
+    : `Code Previews couldn't read its settings in ${file}`;
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
+import { setCodePreviewSettings } from "../../src/config/state";
 import { updateSetting } from "../../src/config/values";
 import { SettingsList } from "@earendil-works/pi-tui";
 import { createCodePreviewSettingsModel, persistSettingsChange } from "../../src/settings/panel";
@@ -20,6 +21,7 @@ effectTest("collapsed style edits persist without reinitializing syntax", functi
           saved.push(next);
           return Promise.resolve();
         },
+        queueReset: () => Promise.reject(new Error("unexpected reset")),
         initializeSyntax: () => {
           initializations++;
           return Promise.resolve();
@@ -58,6 +60,7 @@ effectTest(
           {},
           {
             queueSave: () => Promise.resolve(),
+            queueReset: () => Promise.resolve(),
             initializeSyntax: () => {
               initializations++;
               return Promise.reject(rejection);
@@ -78,8 +81,25 @@ effectTest(
   },
 );
 
-effectTest("restoring defaults waits for a second press", function* () {
+const plainListTheme = {
+  label: (text: string) => text,
+  value: (text: string) => text,
+  description: (text: string) => text,
+  cursor: ">",
+  hint: (text: string) => text,
+};
+const listFor = (model: ReturnType<typeof createCodePreviewSettingsModel>) =>
+  new SettingsList(
+    model.items,
+    10,
+    plainListTheme,
+    () => undefined,
+    () => undefined,
+  );
+
+effectTest("restoring defaults waits for a second press and saves no values", function* () {
   const saved: CodePreviewSettings[] = [];
+  let resets = 0;
   const model = createCodePreviewSettingsModel({
     notify: () => undefined,
     done: () => undefined,
@@ -89,26 +109,63 @@ effectTest("restoring defaults waits for a second press", function* () {
         saved.push(next);
         return Promise.resolve();
       },
+      queueReset: () => {
+        resets++;
+        return Promise.resolve();
+      },
       initializeSyntax: () => Promise.resolve(),
     },
   });
-  const list = new SettingsList(
-    model.items,
-    10,
-    {
-      label: (text) => text,
-      value: (text) => text,
-      description: (text) => text,
-      cursor: ">",
-      hint: (text) => text,
-    },
-    () => undefined,
-    () => undefined,
-  );
+  const list = listFor(model);
   model.onChange("resetToDefaults", "press Enter to reset", list);
   yield* step(eventLoopTurn);
-  assert.equal(saved.length, 0);
+  assert.equal(resets, 0);
   model.onChange("resetToDefaults", "reset now", list);
   yield* step(eventLoopTurn);
-  assert.equal(saved.length, 1);
+  assert.equal(resets, 1);
+  // Restoring removes overrides; it never writes the built-in values over settings.json.
+  assert.deepEqual(saved, []);
 });
+
+effectTest(
+  "only the latest failed edit rolls the panel back to the published settings",
+  function* () {
+    setCodePreviewSettings(defaultCodePreviewSettings);
+    const pending: Array<{ next: CodePreviewSettings; fail: () => void; pass: () => void }> = [];
+    const warnings: string[] = [];
+    const model = createCodePreviewSettingsModel({
+      notify: (message, level) => {
+        if (level === "warning") warnings.push(message);
+      },
+      done: () => undefined,
+      loadOptions: {},
+      effects: {
+        queueSave: (next) =>
+          new Promise<void>((resolve, reject) =>
+            pending.push({ next, pass: resolve, fail: () => reject(new Error("disk full")) }),
+          ),
+        queueReset: () => Promise.resolve(),
+        initializeSyntax: () => Promise.resolve(),
+      },
+    });
+    const list = listFor(model);
+    model.onChange("readCollapsedLines", "20", list);
+    model.onChange("readCollapsedLines", "40", list);
+    // An older failure leaves the newer draft in place.
+    pending[0]!.fail();
+    yield* step(eventLoopTurn);
+    model.onChange("readLineNumbers", "off", list);
+    assert.equal(pending[2]!.next.readCollapsedLines, 40);
+    // The latest failure restores what was actually published.
+    pending[1]!.pass();
+    pending[2]!.fail();
+    yield* step(eventLoopTurn);
+    model.onChange("pathIcons", "off", list);
+    assert.equal(
+      pending[3]!.next.readCollapsedLines,
+      defaultCodePreviewSettings.readCollapsedLines,
+    );
+    assert.equal(pending[3]!.next.readLineNumbers, defaultCodePreviewSettings.readLineNumbers);
+    assert.equal(warnings.length, 2);
+  },
+);

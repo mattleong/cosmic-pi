@@ -1,4 +1,4 @@
-import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "./names";
+import type { CodePreviewToolName } from "./names";
 import { requiresBashResultPolicy, type ShellResultPreviewSettings } from "./shell-result-policy";
 
 interface RequiredToolSettings extends ShellResultPreviewSettings {
@@ -24,12 +24,4 @@ export function getEffectiveCodePreviewToolSet(
   if (!settings.lsResultPreview) enabled.add("ls");
   if (requiresBashResultPolicy(settings)) enabled.add("bash");
   return enabled;
-}
-
-export function getEffectiveCodePreviewTools(
-  configuredTools: Iterable<CodePreviewToolName>,
-  settings: RequiredToolSettings,
-): CodePreviewToolName[] {
-  const enabled = getEffectiveCodePreviewToolSet(configuredTools, settings);
-  return ALL_CODE_PREVIEW_TOOLS.filter((tool) => enabled.has(tool));
 }

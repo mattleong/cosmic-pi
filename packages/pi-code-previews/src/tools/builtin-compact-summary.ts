@@ -1,7 +1,7 @@
 import * as Predicate from "effect/Predicate";
 import { writeResultDetail } from "./builtin-result-detail";
 import { codePreviewSettings } from "../config/state";
-import { codePreviewPerformanceConfig } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/state";
 import { getObjectValue } from "../shared/helpers";
 import { getCodePreviewBeforeWrite, isKnownNewWrite } from "../write/preview-execution";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";

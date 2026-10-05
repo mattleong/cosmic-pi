@@ -118,12 +118,12 @@ When `PI_CODING_AGENT_DIR` is not set, this defaults to:
 
 Settings apply in this order, from lowest to highest priority:
 
-1. Built-in defaults, then `CODE_PREVIEW_*` environment defaults.
+1. Built-in defaults.
 2. The nested `codePreview` object in `$PI_CODING_AGENT_DIR/settings.json`.
 3. The nested `codePreview` object in the trusted project's `.pi/settings.json`.
 4. Flat overrides in `$PI_CODING_AGENT_DIR/code-previews.json`.
 
-Untrusted project settings are ignored. Invalid fields retain the preceding value without discarding valid siblings. The settings panel saves only edited overrides through the existing settings store; it does not copy a project's other defaults into global settings. `CODE_PREVIEW_TOOLS` is a separate process-level tool-selection override.
+Untrusted project settings are ignored. Invalid fields retain the preceding value without discarding valid siblings. The settings panel saves only edited overrides through the existing settings store; it does not copy a project's other defaults into global settings. A choice in the panel applies globally: the panel removes an override only when every project would then inherit the chosen value. **Restore defaults** removes the panel's overrides, so values from `settings.json` and the built-in defaults apply again. A settings file that can't be read, or that has invalid fields, is reported when a session starts and in `/code-previews health`.
 
 ### Compact collapsed calls
 
@@ -135,7 +135,7 @@ Set this in `code-previews.json`, or under `codePreview` in a trusted project's 
 }
 ```
 
-You can also choose **Collapsed tool calls** under **Appearance** in `/code-previews settings`, or start Pi with `CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE=compact`. The default is `preview`, which keeps the existing presentation. The shell captures this setting at wrapping or presentation-owner readiness; changes require `/reload`.
+You can also choose **Collapsed tool calls** under **Appearance** in `/code-previews settings`. The default is `preview`, which keeps the existing presentation. The shell captures this setting at wrapping or presentation-owner readiness; changes require `/reload`.
 
 In compact mode, ordinary collapsed calls use one extension-rendered text row while arguments arrive, during execution, and after settlement. The row prioritizes the status glyph, tool name and optional action, then the target subject and whole counter tokens. Counters are alternatives in priority order: the first that fits is selected, so a provider can offer a shorter fallback such as `3 failed` for narrow rows; without counters, the first nonempty metadata item is selected. Counters can use the remaining terminal cells while preserving up to 12 subject cells. Long subjects yield space to whole progress counters before those counters are dropped. Long subjects use grapheme-safe middle elision to retain both ends. There is at most one routine detail. When no counter or metadata is present, enabled timing appears for bash or calls lasting at least ten seconds. A cooperative provider can set `showTiming: true` to show measured timing beside its routine detail; the default one-second eligibility threshold still applies. Native Code Mode separately opts into `showShortTiming` for its parent shell and child summaries. Counts take priority when both cannot fit. Compact rows omit the expand hint. Optional fields disappear before the identity is clipped at very narrow widths. Counters are never partially displayed. Status uses shared icons instead of words. The running icon animates even when `toolCallTiming` is off; it stops after settlement or session shutdown. With timing off, expansion pauses the hidden icon's animation and collapsing resumes it. Pending calls have no execution duration, and restored calls do not gain a fabricated duration.
 
@@ -170,46 +170,13 @@ You can set defaults in `.pi/settings.json`:
 }
 ```
 
-### Environment variables
-
-Optional defaults can be set before pi starts:
-
-```bash
-CODE_PREVIEW_THEME=github-dark
-CODE_PREVIEW_DIFF_INTENSITY=subtle # subtle, medium, or off
-CODE_PREVIEW_READ_LINES=20
-CODE_PREVIEW_READ_CONTENT=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_READ_LINE_NUMBERS=true # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_WRITE_CONTENT=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_WRITE_LINES=20
-CODE_PREVIEW_EDIT_DIFF=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_EDIT_LINES=120 # or all
-CODE_PREVIEW_WORD_EMPHASIS=all # all, smart, or off
-CODE_PREVIEW_TOOL_CALL_BACKGROUND=border # on, off, border, true/false, yes/no, or 1/0
-CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE=compact # preview or compact; default preview
-CODE_PREVIEW_TOOL_CALL_TIMING=true # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_GREP_LINES=40
-CODE_PREVIEW_GREP_RESULTS=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_FIND_RESULTS=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_LS_RESULTS=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_BASH_RESULTS=false # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_BASH_WARNINGS=true # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_PATH_LIST_LINES=40
-CODE_PREVIEW_SYNTAX=true # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_SECRET_WARNINGS=true # true/false, on/off, yes/no, or 1/0
-CODE_PREVIEW_PATH_ICONS=unicode # unicode, nerd, or off
-CODE_PREVIEW_TOOLS=write,edit,grep # comma/space list, all, or none
-```
-
-`CODE_PREVIEW_TOOLS` overrides `codePreview.tools` for the current pi process.
-
 The extension owns one scoped Effect runtime per Pi session. Repeated starts replace and dispose the previous runtime; syntax initialization, timing fibers, settings I/O, and preview writes are interrupted or finalized on session shutdown. One process-local coordinator serializes settings work across live and one-shot runtimes. Monotonic admissions prevent an older result from replacing a newer successful publication, while failed or cancelled work advances no publication currency. Settings use same-directory atomic replacement and global flush waits for work from every runtime. Preview writes retain Pi's direct-write semantics so symlinks, hard links, open descriptors, file modes, and inode identity behave like the built-in write tool.
 
-In `preview` style, when content/result/diff previews are disabled, collapsed successful output or code previews are hidden while the tool call stays visible; use pi's expand shortcut to view them on demand. `CODE_PREVIEW_WRITE_CONTENT=false` hides collapsed write content and write diffs, and `CODE_PREVIEW_EDIT_DIFF=false` hides collapsed proposed/applied edit diffs. `CODE_PREVIEW_BASH_RESULTS=false` applies to all successful `bash` output, while grep/find/ls result toggles also hide matching `bash` commands that start with `grep`, `find`, or `ls`.
+In `preview` style, when content/result/diff previews are disabled, collapsed successful output or code previews are hidden while the tool call stays visible; use pi's expand shortcut to view them on demand. `writeContentPreview: false` hides collapsed write content and write diffs, and `editDiffPreview: false` hides collapsed proposed/applied edit diffs. `bashResultPreview: false` applies to all successful `bash` output, while grep/find/ls result toggles also hide matching `bash` commands that start with `grep`, `find`, or `ls`.
 
-For expanded calls and noncompact fallbacks, `CODE_PREVIEW_TOOL_CALL_BACKGROUND=off` removes the colored background from Code Previews presentations. `CODE_PREVIEW_TOOL_CALL_BACKGROUND=border` replaces the background with a border-only frame. This setting changes the tool render shell, so it takes effect after `/reload`.
+For expanded calls and noncompact fallbacks, `toolCallBackground: "off"` removes the colored background from Code Previews presentations. `toolCallBackground: "border"` replaces the background with a border-only frame. This setting changes the tool render shell, so it takes effect after `/reload`.
 
-`CODE_PREVIEW_TOOL_CALL_TIMING=false` hides tool durations, including measured durations in nested compact call trees. When enabled, most tools show durations only after one second. Native Code Mode also displays measured subsecond program and child durations. Measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
+`toolCallTiming: false` hides tool durations, including measured durations in nested compact call trees. When enabled, most tools show durations only after one second. Native Code Mode also displays measured subsecond program and child durations. Measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
 
 ## Extension author integration
 

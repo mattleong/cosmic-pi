@@ -3,13 +3,11 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
-import { CodePreviewEnvironmentService } from "../config/env";
 import { CodePreviewSettingsService } from "../config/service";
 
 const oneShotSettingsLayer = () =>
   Layer.merge(
     CodePreviewSettingsService.layer.pipe(
-      Layer.provideMerge(CodePreviewEnvironmentService.layerFrom(process.env)),
       Layer.provideMerge(AgentDirectory.layerFromHost(getAgentDir)),
       Layer.provide(nodeFilePlatformLayer),
     ),

@@ -85,7 +85,6 @@ const loadPreviewSettings = (project: string, trusted?: boolean) =>
 
 const originalPiCodingAgentDir = processEnv.PI_CODING_AGENT_DIR;
 const originalHome = processEnv.HOME;
-const originalCollapsedStyle = processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
 const originalCwd = process.cwd();
 
 afterEach(() => {
@@ -93,9 +92,6 @@ afterEach(() => {
   else processEnv.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
   if (originalHome === undefined) delete processEnv.HOME;
   else processEnv.HOME = originalHome;
-  if (originalCollapsedStyle === undefined)
-    delete processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
-  else processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE = originalCollapsedStyle;
   process.chdir(originalCwd);
   clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
@@ -133,7 +129,6 @@ test.each(nestedSettingsCases)(
 
 effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_DIR", function* () {
   const { agentDir } = yield* settingsRoots("pi-code-previews-settings-");
-  delete processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
 
   yield* saveSettingsToDisk({
     ...defaultCodePreviewSettings,
@@ -238,42 +233,38 @@ effectTest("loadSettingsFromDisk merges only current locations in precedence ord
   assert.equal(loaded?.bashResultPreview, defaultCodePreviewSettings.bashResultPreview);
 });
 
-effectTest(
-  "compact style follows environment, trusted baselines, and global overrides",
-  function* () {
-    const { agentDir, project } = yield* settingsRoots("pi-code-previews-compact-precedence-");
-    processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE = "compact";
+effectTest("compact style follows defaults, trusted baselines, and global overrides", function* () {
+  const { agentDir, project } = yield* settingsRoots("pi-code-previews-compact-precedence-");
 
-    const environment = yield* loadPreviewSettings(project);
-    assert.equal(environment.toolCallCollapsedStyle, "compact");
+  const defaults = yield* loadPreviewSettings(project);
+  assert.equal(defaults.toolCallCollapsedStyle, "preview");
 
-    yield* writeJson(join(agentDir, "settings.json"), {
-      codePreview: { toolCallCollapsedStyle: "preview" },
-    });
-    const global = yield* loadPreviewSettings(project);
-    assert.equal(global.toolCallCollapsedStyle, "preview");
+  yield* writeJson(join(agentDir, "settings.json"), {
+    codePreview: { toolCallCollapsedStyle: "preview" },
+  });
+  const global = yield* loadPreviewSettings(project);
+  assert.equal(global.toolCallCollapsedStyle, "preview");
 
-    yield* writeJson(join(project, ".pi", "settings.json"), {
-      codePreview: { toolCallCollapsedStyle: "compact" },
-    });
-    const untrusted = yield* loadPreviewSettings(project);
-    assert.equal(untrusted.toolCallCollapsedStyle, "preview");
-    const trusted = yield* loadPreviewSettings(project, true);
-    assert.equal(trusted.toolCallCollapsedStyle, "compact");
+  yield* writeJson(join(project, ".pi", "settings.json"), {
+    codePreview: { toolCallCollapsedStyle: "compact" },
+  });
+  const untrusted = yield* loadPreviewSettings(project);
+  assert.equal(untrusted.toolCallCollapsedStyle, "preview");
+  const trusted = yield* loadPreviewSettings(project, true);
+  assert.equal(trusted.toolCallCollapsedStyle, "compact");
 
-    yield* writeJson(join(agentDir, "code-previews.json"), { toolCallCollapsedStyle: "preview" });
-    const override = yield* loadPreviewSettings(project, true);
-    assert.equal(override.toolCallCollapsedStyle, "preview");
+  yield* writeJson(join(agentDir, "code-previews.json"), { toolCallCollapsedStyle: "preview" });
+  const override = yield* loadPreviewSettings(project, true);
+  assert.equal(override.toolCallCollapsedStyle, "preview");
 
-    yield* writeJson(join(agentDir, "code-previews.json"), {
-      toolCallCollapsedStyle: "invalid",
-      readCollapsedLines: 29,
-    });
-    const recovered = yield* loadPreviewSettings(project, true);
-    assert.equal(recovered.toolCallCollapsedStyle, "compact");
-    assert.equal(recovered.readCollapsedLines, 29);
-  },
-);
+  yield* writeJson(join(agentDir, "code-previews.json"), {
+    toolCallCollapsedStyle: "invalid",
+    readCollapsedLines: 29,
+  });
+  const recovered = yield* loadPreviewSettings(project, true);
+  assert.equal(recovered.toolCallCollapsedStyle, "compact");
+  assert.equal(recovered.readCollapsedLines, 29);
+});
 
 const globalOverrideCases = [
   {
@@ -456,7 +447,6 @@ effectTest(
 
 effectTest("loadCodePreviewSettings resets to defaults when no settings files exist", function* () {
   const { project } = yield* settingsRoots("pi-code-previews-no-settings-");
-  delete processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
     readCollapsedLines: 77,

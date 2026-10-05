@@ -4,9 +4,9 @@ import { notifyAtHostBoundary, type ExtensionSubcommand } from "pi-cosmic-core";
 import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
-import { codePreviewSettings } from "../config/state";
+import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";
 import { formatOnOff } from "../config/values";
-import { getSettingsPath } from "../config/store";
+import { describeSettingsProblem, getSettingsPath } from "../config/store";
 import { getShikiStatus } from "../syntax/render";
 import { formatEnabledCodePreviewTools } from "../tools/selection";
 import {
@@ -28,7 +28,7 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Shiki initialized: ${status.initialized ? "yes" : "no"}`,
       `Shiki theme: ${codePreviewSettings.shikiTheme}`,
       `Syntax highlighting: ${formatOnOff(codePreviewSettings.syntaxHighlighting)}`,
-      `Tool call background: ${codePreviewSettings.toolCallBackground}`,
+      `Tool call background: ${codePreviewSettings.toolCallBackground} · changes require /reload`,
       `Configured collapsed style: ${codePreviewSettings.toolCallCollapsedStyle} · changes require /reload`,
       `Tool call timing: ${formatOnOff(codePreviewSettings.toolCallTiming)}`,
       `Read content preview: ${formatOnOff(codePreviewSettings.readContentPreview)}`,
@@ -39,7 +39,7 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Ls result preview: ${formatOnOff(codePreviewSettings.lsResultPreview)}`,
       `Bash result preview: ${formatOnOff(codePreviewSettings.bashResultPreview)}`,
       `Word-level diff emphasis: ${codePreviewSettings.wordEmphasis}`,
-      `Configured tools: ${formatEnabledCodePreviewTools()}`,
+      `Configured tools: ${formatEnabledCodePreviewTools()} · changes require /reload`,
       `Available renderers: ${formatCodePreviewToolsWithState("installed")}`,
       `Native MCP rendering: ${isNativeMcpRendererAvailable() ? "available" : "unavailable"}`,
       `Write hook errors: ${formatCodePreviewToolsWithState("registration-error")}`,
@@ -54,6 +54,7 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Max highlight chars: ${status.maxHighlightChars}`,
       `Path icons: ${codePreviewSettings.pathIcons}`,
       `Settings file: ${getSettingsPath()}`,
+      ...codePreviewSettingsProblems.map((problem) => describeSettingsProblem(problem, ctx.cwd)),
     ];
     if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
       if (ctx.hasUI) notifyAtHostBoundary(ctx, lines.join("\n"), "info");

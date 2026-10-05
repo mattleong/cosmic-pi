@@ -9,7 +9,7 @@ import {
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
-import { CodePreviewEnvironmentService } from "./env";
+import { defaultCodePreviewSettings } from "./defaults";
 import { CODE_PREVIEW_SETTING_KEYS, CodePreviewSettingsSchema } from "./schema";
 import { cloneCodePreviewSettings } from "./state";
 import type { CodePreviewSettings } from "./schema";
@@ -17,8 +17,23 @@ import { normalizeSettingsWithDiagnostics } from "./values";
 import type * as Path from "effect/Path";
 
 export type SettingsSaveContext = {
+  /** Defaults plus the agent-directory `settings.json`: what every project inherits. */
+  readonly globalBaseline: CodePreviewSettings;
+  /** The global baseline plus a trusted project's `settings.json`. */
   readonly baseline: CodePreviewSettings;
   readonly loaded: CodePreviewSettings;
+};
+
+/** A settings file that couldn't be read, or whose invalid fields were ignored. */
+export type SettingsLoadProblem = {
+  readonly path: string;
+  /** Ignored invalid fields; absent when the whole file was ignored. */
+  readonly fields?: readonly string[];
+};
+
+export type SettingsLoad = {
+  readonly context: SettingsSaveContext;
+  readonly problems: readonly SettingsLoadProblem[];
 };
 
 export type LoadSettingsOptions = {
@@ -30,7 +45,6 @@ export type SettingsDocumentDependencies = {
   readonly path: Path.Path;
   readonly agentDir: string;
   readonly documents: JsonDocumentStore["Service"];
-  readonly environment: CodePreviewEnvironmentService["Service"];
 };
 
 const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
@@ -38,6 +52,7 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
   settingsPath: string,
   extract: (document: JsonObject) => JsonObject,
   fallback: CodePreviewSettings,
+  problems: SettingsLoadProblem[],
 ) {
   const document = yield* deps.documents
     .readObject(settingsPath)
@@ -45,7 +60,10 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
       Effect.catchTag("JsonDocumentError", () =>
         Effect.logWarning(
           "Failed to load settings for code previews; ignoring that document.",
-        ).pipe(Effect.as(undefined)),
+        ).pipe(
+          Effect.andThen(Effect.sync(() => problems.push({ path: settingsPath }))),
+          Effect.as(undefined),
+        ),
       ),
     );
   if (!document) return undefined;
@@ -54,6 +72,10 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
   if (normalized.diagnostics.length > 0) {
     const paths = normalized.diagnostics.map((diagnostic) => diagnostic.path).join(", ");
     yield* Effect.logWarning(`Ignored invalid code preview setting fields: ${paths}.`);
+    const fields = normalized.diagnostics.flatMap(({ path }) =>
+      path.startsWith("settings.") ? [path.slice("settings.".length)] : [],
+    );
+    problems.push(fields.length > 0 ? { path: settingsPath, fields } : { path: settingsPath });
   }
   return normalized.settings;
 });
@@ -64,39 +86,36 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
  */
 export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.loadSaveContext")(
   function* (deps: SettingsDocumentDependencies, options: LoadSettingsOptions = {}) {
-    const { path, agentDir, environment } = deps;
+    const { path, agentDir } = deps;
     const settingsPath = path.join(agentDir, "code-previews.json");
     const projectCwd = options.projectCwd ?? process.cwd();
-    let effective = cloneCodePreviewSettings(environment.defaults);
-    const baselinePaths = [
+    const problems: SettingsLoadProblem[] = [];
+    const layer = (current: CodePreviewSettings, file: string) =>
+      loadSettingsFile(deps, file, nestedCodePreviewSettings, current, problems).pipe(
+        Effect.map((next) => next ?? current),
+      );
+    const globalBaseline = yield* layer(
+      cloneCodePreviewSettings(defaultCodePreviewSettings),
       path.join(agentDir, "settings.json"),
-      ...(options.projectTrusted ? [path.join(projectCwd, ".pi", "settings.json")] : []),
-    ];
-    for (const candidate of baselinePaths) {
-      const next = yield* loadSettingsFile(deps, candidate, nestedCodePreviewSettings, effective);
-      if (next) effective = next;
-    }
-    const baseline = cloneCodePreviewSettings(effective);
-    const globalSettings = yield* loadSettingsFile(deps, settingsPath, identity, effective);
-    if (globalSettings) effective = globalSettings;
+    );
+    const baseline = options.projectTrusted
+      ? yield* layer(globalBaseline, path.join(projectCwd, ".pi", "settings.json"))
+      : globalBaseline;
+    const loaded =
+      (yield* loadSettingsFile(deps, settingsPath, identity, baseline, problems)) ?? baseline;
     return {
-      baseline,
-      loaded: cloneCodePreviewSettings(effective),
-    } satisfies SettingsSaveContext;
+      context: {
+        globalBaseline: cloneCodePreviewSettings(globalBaseline),
+        baseline: cloneCodePreviewSettings(baseline),
+        loaded: cloneCodePreviewSettings(loaded),
+      },
+      problems,
+    } satisfies SettingsLoad;
   },
 );
 
-export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState")(function* (
-  deps: SettingsDocumentDependencies,
-  settings: CodePreviewSettings,
-  context: SettingsSaveContext,
-  afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
-) {
-  const { path, agentDir, documents } = deps;
-  const settingsPath = path.join(agentDir, "code-previews.json");
-  const committedSettings = yield* Schema.decodeUnknownEffect(CodePreviewSettingsSchema)(
-    settings,
-  ).pipe(
+const decodeCommittedSettings = (settings: CodePreviewSettings, settingsPath: string) =>
+  Schema.decodeUnknownEffect(CodePreviewSettingsSchema)(settings).pipe(
     Effect.map(
       (decoded): CodePreviewSettings => ({
         ...decoded,
@@ -112,18 +131,23 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
         }),
     ),
   );
-  return yield* documents.modifyObject(settingsPath, (latest) =>
+
+/** One locked replacement of the flat document; an unchanged document is not rewritten. */
+const modifySettingsDocument = (
+  deps: SettingsDocumentDependencies,
+  settingsPath: string,
+  change: (latest: JsonObject) => { document: JsonObject; context: SettingsSaveContext },
+  afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
+) =>
+  deps.documents.modifyObject(settingsPath, (latest) =>
     Effect.try({
       try: () => {
-        const document = settingsDocument(committedSettings, context, latest);
-        const nextContext = {
-          baseline: cloneCodePreviewSettings(context.baseline),
-          loaded: cloneCodePreviewSettings(committedSettings),
-        } satisfies SettingsSaveContext;
+        const { document, context } = change(latest);
         return {
-          value: nextContext,
+          value: context,
           document,
-          afterCommit: afterCommit(nextContext),
+          write: JSON.stringify(document) !== JSON.stringify(latest),
+          afterCommit: afterCommit(context),
         } satisfies JsonDocumentModification<SettingsSaveContext>;
       },
       catch: () =>
@@ -133,6 +157,54 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
           message: "Unable to update code preview settings.",
         }),
     }),
+  );
+
+export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState")(function* (
+  deps: SettingsDocumentDependencies,
+  settings: CodePreviewSettings,
+  context: SettingsSaveContext,
+  afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
+) {
+  const settingsPath = deps.path.join(deps.agentDir, "code-previews.json");
+  const committedSettings = yield* decodeCommittedSettings(settings, settingsPath);
+  return yield* modifySettingsDocument(
+    deps,
+    settingsPath,
+    (latest) => ({
+      document: settingsDocument(committedSettings, context, latest),
+      context: {
+        globalBaseline: cloneCodePreviewSettings(context.globalBaseline),
+        baseline: cloneCodePreviewSettings(context.baseline),
+        loaded: cloneCodePreviewSettings(committedSettings),
+      },
+    }),
+    afterCommit,
+  );
+});
+
+/** Restore removes every known flat override, so `settings.json` values apply again. */
+export const resetSettingsStateEffect = Effect.fn("CodePreviewSettings.resetState")(function* (
+  deps: SettingsDocumentDependencies,
+  context: SettingsSaveContext,
+  afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
+) {
+  const settingsPath = deps.path.join(deps.agentDir, "code-previews.json");
+  return yield* modifySettingsDocument(
+    deps,
+    settingsPath,
+    (latest) => {
+      const document = { ...latest };
+      for (const key of CODE_PREVIEW_SETTING_KEYS) delete document[key];
+      return {
+        document,
+        context: {
+          globalBaseline: cloneCodePreviewSettings(context.globalBaseline),
+          baseline: cloneCodePreviewSettings(context.baseline),
+          loaded: cloneCodePreviewSettings(context.baseline),
+        },
+      };
+    },
+    afterCommit,
   );
 });
 
@@ -152,7 +224,13 @@ function settingsDocument(
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
     if (Equal.equals(value, context.loaded[key])) continue;
-    if (Equal.equals(value, context.baseline[key])) delete document[key];
+    // The flat file is global: dropping an override must leave this project and every project
+    // that only inherits the global baseline on the chosen value.
+    if (
+      Equal.equals(value, context.baseline[key]) &&
+      Equal.equals(value, context.globalBaseline[key])
+    )
+      delete document[key];
     else document[key] = value;
   }
   return document;

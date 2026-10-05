@@ -2,7 +2,7 @@ import { diffLines } from "diff";
 import * as Predicate from "effect/Predicate";
 import { getObjectValue } from "../shared/helpers";
 import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
-import { codePreviewPerformanceConfig } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/state";
 import { getEditPreviewOperations } from "./data/args";
 import { isTruncated } from "./data/results";
 import { countLabel } from "pi-cosmic-core";

@@ -19,8 +19,8 @@ import {
 import { registerCodePreviewsCommand } from "../commands/register";
 import { makeSettingsAdmission, type SettingsAdmission } from "../config/coordinator";
 import type { CodePreviewSettings } from "../config/schema";
-import { CodePreviewSettingsService } from "../config/store";
-import { codePreviewSettings } from "../config/state";
+import { CodePreviewSettingsService, describeSettingsProblem } from "../config/store";
+import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";
 import { CodePreviewSyntaxService } from "../syntax/service";
 import {
   clearCodePreviewSessionCapability,
@@ -49,6 +49,7 @@ type SessionInput = {
   capability?: CodePreviewSessionCapability;
   readonly signal?: AbortSignal;
   readonly notifyFailure: () => void;
+  readonly warn: (message: string) => void;
 };
 
 function retirePresentation(input: SessionInput): void {
@@ -164,6 +165,9 @@ export function codePreviewsWithDependencies(
       installCodePreviewSessionCapability(capability);
       // No cold row sees settings or a scheduler until trusted loading and registration succeed.
       input.presentation.publish(input.cwd, getEnabledCodePreviewTools(), scheduler);
+      // A typo must not silently reset settings to their defaults.
+      for (const problem of codePreviewSettingsProblems)
+        input.warn(describeSettingsProblem(problem, input.cwd));
       if (codePreviewSettings.syntaxHighlighting)
         slot.fork(dependencies.initializeSyntax(codePreviewSettings.shikiTheme), input.signal);
     },
@@ -204,6 +208,7 @@ export function codePreviewsWithDependencies(
       settingsAdmission: makeSettingsAdmission(),
       presentation,
       notifyFailure,
+      warn: (message) => notifyAtHostBoundary(ctx, message, "warning"),
     };
     const input: SessionInput = capturedHost.signal
       ? { ...base, signal: capturedHost.signal }

@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { bundledThemesInfo } from "shiki";
 import type { ShikiHighlighter } from "../boundary/shiki";
 import { hashString } from "../shared/helpers";
-import { codePreviewPerformanceConfig } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/state";
 import { codePreviewSettings } from "../config/state";
 import { expandPreviewTabs } from "../shared/helpers";
 import { escapeControlChars, replaceSgrSequences } from "../shared/terminal-text";

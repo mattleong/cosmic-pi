@@ -9,6 +9,7 @@ import { getSettingsPath } from "../../config/store";
 import type { CodePreviewSettings } from "../../config/schema";
 import { formatOnOff, formatSettingValue } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
+import { getEffectiveCodePreviewToolSet } from "../../tools/policy";
 import { ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {
   SETTING_ITEM_DEFINITIONS,
@@ -142,8 +143,16 @@ export function createSettingsCategoryItems(
           : current.tools.length === ALL_CODE_PREVIEW_TOOLS.length
             ? "all tools"
             : `${current.tools.length}/${ALL_CODE_PREVIEW_TOOLS.length} tools`,
-      submenu: (_currentValue, done) =>
-        new ToolPreviewSettingsSubmenu(formatSettingValue(getCurrent(), "tools"), done, theme),
+      submenu: (_currentValue, done) => {
+        const settings = getCurrent();
+        return new ToolPreviewSettingsSubmenu(
+          formatSettingValue(settings, "tools"),
+          done,
+          theme,
+          // Tools whose preview setting is off still render, to hide that preview.
+          getEffectiveCodePreviewToolSet([], settings),
+        );
+      },
     },
     groupItem(SETTINGS_CATEGORY_GROUPS[2]),
     groupItem(SETTINGS_CATEGORY_GROUPS[3]),

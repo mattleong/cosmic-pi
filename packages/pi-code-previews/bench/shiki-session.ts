@@ -2,7 +2,6 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Predicate from "effect/Predicate";
 import { ShikiAdapter } from "../src/boundary/shiki";
 import {
   clearCodePreviewSessionCapability,
@@ -10,38 +9,10 @@ import {
   type CodePreviewSessionCapability,
 } from "../src/application/capability";
 import { previewScheduleEffect } from "../src/application/scheduler";
-import { CodePreviewEnvironmentService } from "../src/config/env";
 import { CodePreviewSyntaxService } from "../src/syntax/service";
 
-/**
- * Snapshot of the current environment for benchmark-scoped environment layers.
- * Reading through `Object.entries` keeps the snapshot explicit and validated.
- */
-function environmentSnapshot(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(process.env).flatMap(([key, value]) =>
-      Predicate.isString(value) ? [[key, value]] : [],
-    ),
-  );
-}
-
-export function startBenchmarkShikiSession(
-  theme: string,
-  environmentOptions: {
-    /** Values used only when the ambient environment does not define them. */
-    defaults?: Readonly<Record<string, string>>;
-    /** Values forced over the ambient environment. */
-    overrides?: Readonly<Record<string, string>>;
-  } = {},
-): Promise<() => Promise<void>> {
-  const layer = Layer.merge(
-    CodePreviewSyntaxService.layer.pipe(Layer.provide(ShikiAdapter.layer)),
-    CodePreviewEnvironmentService.layerFrom({
-      ...environmentOptions.defaults,
-      ...environmentSnapshot(),
-      ...environmentOptions.overrides,
-    }),
-  );
+export function startBenchmarkShikiSession(theme: string): Promise<() => Promise<void>> {
+  const layer = CodePreviewSyntaxService.layer.pipe(Layer.provide(ShikiAdapter.layer));
   const runtime = ManagedRuntime.make(layer);
   return runtime
     .runPromise(CodePreviewSyntaxService.use((service) => service.initialize(theme)))

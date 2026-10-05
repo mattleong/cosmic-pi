@@ -1,4 +1,4 @@
-import { codePreviewPerformanceConfig } from "../../../config/env";
+import { codePreviewPerformanceConfig } from "../../../config/state";
 import { getSecretWarnings } from "../../../warnings/secrets";
 import { codePreviewSettings } from "../../../config/state";
 

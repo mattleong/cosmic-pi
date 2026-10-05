@@ -16,7 +16,12 @@ import {
   runBench,
 } from "./helpers";
 
-const { codePreviewSettings, setCodePreviewSettings } = await import("../src/config/state");
+const {
+  codePreviewPerformanceConfig,
+  codePreviewSettings,
+  setCodePreviewPerformanceConfig,
+  setCodePreviewSettings,
+} = await import("../src/config/state");
 const { createEditPreviewTool } = await import("../src/tools/renderers/edit");
 const { startBenchmarkShikiSession } = await import("./shiki-session");
 
@@ -30,6 +35,7 @@ type RenderContext = ToolRenderContext<EditBenchmarkState, EditToolInput>;
 type ToolResult = AgentToolResult<EditToolDetails | undefined>;
 
 const previousSettings = { ...codePreviewSettings };
+const previousPerformance = codePreviewPerformanceConfig;
 const theme = benchTheme();
 // The retained self shell also draws native-like preview backgrounds.
 theme.bg = (key, text) => `${theme.getBgAnsi(key)}${text}\x1b[49m`;
@@ -41,12 +47,12 @@ setCodePreviewSettings({
   syntaxHighlighting: true,
   toolCallBackground: "off",
   toolCallTiming: false,
+  tools: ["edit"],
   wordEmphasis: "smart",
 });
-const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme, {
-  defaults: { CODE_PREVIEW_ASYNC_RENDER_CHARS: "100000000" },
-  overrides: { CODE_PREVIEW_TOOLS: "edit" },
-});
+// Render synchronously so each sample measures the whole preview.
+setCodePreviewPerformanceConfig({ ...codePreviewPerformanceConfig, asyncRenderChars: 100_000_000 });
+const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme);
 
 try {
   printBenchHeader("edit renderer end-to-end");
@@ -165,6 +171,7 @@ try {
   if (sink === Number.MIN_SAFE_INTEGER) benchLog("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
+  setCodePreviewPerformanceConfig(previousPerformance);
   await stopShiki();
 }
 

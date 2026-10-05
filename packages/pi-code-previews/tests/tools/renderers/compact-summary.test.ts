@@ -12,10 +12,10 @@ import type {
 import { defaultCodePreviewSettings } from "../../../src/config/defaults";
 import {
   codePreviewPerformanceConfig,
-  codePreviewToolsEnvironmentValue,
-  publishCodePreviewEnvironmentProjection,
-} from "../../../src/config/env";
-import { codePreviewSettings, setCodePreviewSettings } from "../../../src/config/state";
+  codePreviewSettings,
+  setCodePreviewPerformanceConfig,
+  setCodePreviewSettings,
+} from "../../../src/config/state";
 import { createBuiltinCompactSummary } from "../../../src/tools/builtin-compact-summary";
 import type { BuiltinCompactTool } from "../../../src/tools/builtin-subject";
 import type { CompactPhase, CompactSummary } from "../../../src/tools/compact-summary";
@@ -35,7 +35,6 @@ import {
 } from "../../support/render";
 
 const originalPerformance = codePreviewPerformanceConfig;
-const originalToolsEnvironment = codePreviewToolsEnvironmentValue;
 const secret = "-----BEGIN PRIVATE KEY-----";
 type Args = Partial<
   ReadToolInput & BashToolInput & WriteToolInput & EditToolInput & GrepToolInput
@@ -58,9 +57,7 @@ beforeEach(() =>
     secretWarnings: true,
   }),
 );
-afterEach(() =>
-  publishCodePreviewEnvironmentProjection(originalPerformance, originalToolsEnvironment),
-);
+afterEach(() => setCodePreviewPerformanceConfig(originalPerformance));
 
 function summary(
   tool: BuiltinCompactTool,
@@ -216,10 +213,7 @@ describe("issues independent of hidden preview bodies", () => {
   });
 
   test("the smallest secret scan budget cannot expand into a whole-input scan", () => {
-    publishCodePreviewEnvironmentProjection(
-      { ...codePreviewPerformanceConfig, secretScanChars: 1 },
-      originalToolsEnvironment,
-    );
+    setCodePreviewPerformanceConfig({ ...codePreviewPerformanceConfig, secretScanChars: 1 });
     expect(codes(summary("write", { content: "x".repeat(1000) + secret }))).toEqual([]);
   });
 
