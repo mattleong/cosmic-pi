@@ -15,6 +15,7 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewRenderers } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { shouldHideShellResultByCommand } from "../shell-result-policy";
+import { splitShellNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
@@ -63,7 +64,9 @@ export function createBashPreviewTool(cwd: string, session?: CodePreviewRenderer
         const output = trimSingleTrailingNewline(getTextContent(result.content));
         const lines = output ? output.split("\n") : [];
         // The shell's issue line states a failed command's closing status; show only its output.
-        const rawLines = renderContext.isError ? withoutShellStatus(lines) : lines;
+        const { lines: rawLines, notice } = splitShellNotice(
+          renderContext.isError ? withoutShellStatus(lines) : lines,
+        );
         const limit = expanded ? rawLines.length : 8;
         const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
           chunk.map((line) =>
@@ -73,7 +76,7 @@ export function createBashPreviewTool(cwd: string, session?: CodePreviewRenderer
         let text = preview.lines.length ? preview.lines.join("\n") : theme.fg("muted", "No output");
         if (preview.hidden > 0)
           text += showingFooter(theme, preview.shown, rawLines.length, "output lines");
-        return new Text(text, 0, 0);
+        return withAgentNotes(new Text(text, 0, 0), theme, expanded ? notice : undefined);
       },
     },
   );

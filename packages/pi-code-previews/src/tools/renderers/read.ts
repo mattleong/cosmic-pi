@@ -3,7 +3,7 @@ import * as Predicate from "effect/Predicate";
 
 import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
 import { metadata } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
@@ -16,6 +16,7 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewRenderers } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderContentPreview } from "./shared/content-preview";
+import { agentNotesSection, oversizedReadNotice } from "./shared/output-notice";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
@@ -31,7 +32,8 @@ export function createReadPreviewTool(cwd: string, session?: CodePreviewRenderer
         const lang = resolvePreviewLanguage({ path, piLanguage: getLanguageFromPath(path) });
         let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
         if (Predicate.isNumber(args.offset) || Predicate.isNumber(args.limit)) {
-          const start = Predicate.isNumber(args.offset) ? args.offset : 1;
+          // The same first line Pi reads and the gutter numbers, including for offset 0.
+          const start = getReadStartLine(args);
           const end = Predicate.isNumber(args.limit) ? start + args.limit - 1 : undefined;
           text += theme.fg("warning", `:${start}${end ? `-${end}` : ""}`);
         }
@@ -65,6 +67,12 @@ export function createReadPreviewTool(cwd: string, session?: CodePreviewRenderer
 
         if (!expanded && !codePreviewSettings.readContentPreview)
           return renderHiddenPreviewExpandHint(renderContext.state, theme);
+
+        // An oversized first line returns only the agent's recovery instruction, which the
+        // issue line already reports. It is never numbered as file content.
+        const oversized = oversizedReadNotice(result.details, firstText);
+        if (oversized !== undefined)
+          return expanded && oversized ? agentNotesSection(theme, oversized) : new Container();
 
         // Continuation and truncation notices are issues above the body.
         const { content } =

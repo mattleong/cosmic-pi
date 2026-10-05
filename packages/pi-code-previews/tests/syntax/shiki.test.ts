@@ -62,6 +62,12 @@ const makeAnsiColorProbe = () => {
   return { color, conversions: () => conversions };
 };
 
+/** Renders like Pi's host, which renders again on every invalidation. */
+const hostRender = (code: string, lang: string) => {
+  const render = (): void => void renderWithShiki(code, lang, render);
+  return render;
+};
+
 describe("session syntax service", () => {
   beforeEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
@@ -336,6 +342,74 @@ describe("session syntax service", () => {
         }),
       ),
     );
+  });
+
+  it.effect("remembers a failed initialization instead of retrying on every render", () => {
+    const captured = makeCapturedLogger();
+    let creates = 0;
+    const layer = syntaxLayer(() =>
+      Effect.suspend(() => {
+        creates++;
+        return Effect.fail(
+          new ShikiBoundaryError({ operation: "initialize", message: "expected failure" }),
+        );
+      }),
+    );
+    const rerender = hostRender("const a = 1;", "typescript");
+    return CodePreviewSyntaxService.use((service) =>
+      Effect.gen(function* () {
+        rerender();
+        for (let step = 0; step < 50; step++) yield* Effect.yieldNow;
+        assert.equal(creates, 1);
+        const settled = getShikiStatus().statusVersion;
+        yield* service.initialize(codePreviewSettings.shikiTheme);
+        assert.equal(creates, 2);
+        assert.equal(getShikiStatus().statusVersion, settled);
+        assert.equal(renderWithShiki("const a = 1;", "typescript", rerender), undefined);
+        for (let step = 0; step < 20; step++) yield* Effect.yieldNow;
+        assert.equal(creates, 2);
+      }),
+    ).pipe(
+      // Renderer requests run on the service's own fibers, so the logger is built beneath it.
+      provideBuiltLayer(layer.pipe(Layer.provideMerge(captured.layer))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          const warnings = captured.entries.filter((entry) =>
+            JSON.stringify(entry).includes("Shiki failed to initialize"),
+          );
+          assert.equal(warnings.length, 1);
+        }),
+      ),
+    );
+  });
+
+  it.effect("renders a failed grammar plainly without loading it again", () => {
+    let loads = 0;
+    const layer = syntaxLayer(
+      () => Effect.succeed(highlighter()),
+      () =>
+        Effect.suspend(() => {
+          loads++;
+          return Effect.fail(
+            new ShikiBoundaryError({ operation: "language", message: "expected failure" }),
+          );
+        }),
+    );
+    const rerender = hostRender("fn main() {}", "rust");
+    return CodePreviewSyntaxService.use((service) =>
+      Effect.gen(function* () {
+        yield* service.initialize(codePreviewSettings.shikiTheme);
+        rerender();
+        for (let step = 0; step < 50; step++) yield* Effect.yieldNow;
+        assert.equal(loads, 1);
+        const settled = getShikiStatus().statusVersion;
+        assert.equal(renderWithShiki("fn main() {}", "rust", rerender), undefined);
+        assert.ok(renderWithShiki("const a = 1;", "typescript"));
+        for (let step = 0; step < 20; step++) yield* Effect.yieldNow;
+        assert.equal(loads, 1);
+        assert.equal(getShikiStatus().statusVersion, settled);
+      }),
+    ).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("interrupted initialization clears its flight and permits retry", () => {

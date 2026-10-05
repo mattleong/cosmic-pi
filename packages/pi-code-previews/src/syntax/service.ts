@@ -39,6 +39,9 @@ type SyntaxState = {
   readonly initialization: InitializationFlight | undefined;
   readonly loadedLanguages: ReadonlySet<string>;
   readonly pendingLanguages: ReadonlySet<string>;
+  /** Themes and grammars that failed this session; renderer requests never retry them. */
+  readonly failedThemes: ReadonlySet<string>;
+  readonly failedLanguages: ReadonlySet<string>;
   readonly statusVersion: number;
 };
 type InitializeDecision =
@@ -61,6 +64,8 @@ const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
     theme: current.theme,
     highlighter: current.highlighter,
     loadedLanguages: Object.freeze([...current.loadedLanguages]),
+    failedThemes: Object.freeze([...current.failedThemes]),
+    failedLanguages: Object.freeze([...current.failedLanguages]),
     status: Object.freeze({
       initialized: current.highlighter !== undefined,
       loadedLanguages: current.loadedLanguages.size,
@@ -68,6 +73,13 @@ const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
       statusVersion: current.statusVersion,
     }),
   });
+
+const withoutEntry = (entries: ReadonlySet<string>, entry: string): ReadonlySet<string> => {
+  if (!entries.has(entry)) return entries;
+  const remaining = new Set(entries);
+  remaining.delete(entry);
+  return remaining;
+};
 
 /** Clears only this highlighter's render cache before requesting third-party disposal. */
 const releaseHighlighter = (highlighter: ShikiHighlighter | undefined): Effect.Effect<void> => {
@@ -93,6 +105,8 @@ export class CodePreviewSyntaxService extends Context.Service<
         initialization: undefined,
         loadedLanguages: new Set(),
         pendingLanguages: new Set(),
+        failedThemes: new Set(),
+        failedLanguages: new Set(),
         statusVersion: 0,
       };
       const state = yield* SynchronizedRef.make(initial);
@@ -194,14 +208,34 @@ export class CodePreviewSyntaxService extends Context.Service<
                   : current,
               ] as const),
             );
+            // A failed theme is remembered for the session so renderers stop requesting it. Only
+            // the first failure publishes a new status version and warns; explicit retries stay quiet.
+            const recordFailure = modify((current) => {
+              const owned = current.initialization === flight;
+              const repeated = current.failedThemes.has(theme);
+              if (repeated && !owned) return Effect.succeed([false, current] as const);
+              return Effect.succeed([
+                !repeated,
+                {
+                  ...current,
+                  initialization: owned ? undefined : current.initialization,
+                  failedThemes: repeated
+                    ? current.failedThemes
+                    : new Set(current.failedThemes).add(theme),
+                  statusVersion: repeated ? current.statusVersion : current.statusVersion + 1,
+                },
+              ] as const);
+            });
             return yield* restore(adapter.create(theme, PRELOADED_SHIKI_LANGUAGES)).pipe(
               Effect.matchEffect({
                 onFailure: () =>
-                  clearFlight.pipe(
-                    Effect.andThen(
-                      Effect.logWarning(
-                        "Shiki failed to initialize; code previews will use plain text.",
-                      ),
+                  recordFailure.pipe(
+                    Effect.flatMap((firstFailure) =>
+                      firstFailure
+                        ? Effect.logWarning(
+                            "Shiki failed to initialize; code previews will use plain text.",
+                          )
+                        : Effect.void,
                     ),
                   ),
                 onSuccess: (next) =>
@@ -222,6 +256,7 @@ export class CodePreviewSyntaxService extends Context.Service<
                             initialization: undefined,
                             loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
                             pendingLanguages: new Set(),
+                            failedThemes: withoutEntry(current.failedThemes, theme),
                             statusVersion: current.statusVersion + 1,
                           },
                         ] as const),
@@ -250,7 +285,8 @@ export class CodePreviewSyntaxService extends Context.Service<
         const decision = yield* modifyPure<LanguageDecision>((current) => {
           if (current.loadedLanguages.has(language) || !current.highlighter)
             return [undefined, current] as const;
-          if (current.pendingLanguages.has(language)) return [undefined, current] as const;
+          if (current.pendingLanguages.has(language) || current.failedLanguages.has(language))
+            return [undefined, current] as const;
           const pending = new Set(current.pendingLanguages);
           pending.add(language);
           return [
@@ -281,12 +317,17 @@ export class CodePreviewSyntaxService extends Context.Service<
               const loaded = succeeded
                 ? new Set(current.loadedLanguages).add(language)
                 : current.loadedLanguages;
+              // A grammar that failed stays plain for the session instead of being requested again.
+              const failed = succeeded
+                ? current.failedLanguages
+                : new Set(current.failedLanguages).add(language);
               return [
                 undefined,
                 {
                   ...current,
                   loadedLanguages: loaded,
                   pendingLanguages: pending,
+                  failedLanguages: failed,
                   statusVersion: current.statusVersion + 1,
                 },
               ] as const;
@@ -295,8 +336,16 @@ export class CodePreviewSyntaxService extends Context.Service<
         );
       });
 
+      // Renderer requests skip a theme that already failed; explicit initialization still retries.
+      const requestInitialize = (theme: string): Effect.Effect<void> =>
+        SynchronizedRef.get(state).pipe(
+          Effect.flatMap((current) =>
+            current.failedThemes.has(theme) ? Effect.void : initialize(theme),
+          ),
+        );
+
       const ingress = yield* makeSyntaxIngress(owner, {
-        initialize,
+        initialize: requestInitialize,
         language: requestLanguage,
       });
 

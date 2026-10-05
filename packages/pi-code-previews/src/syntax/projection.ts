@@ -24,6 +24,9 @@ export type CodePreviewSyntaxSnapshot = Readonly<{
   theme: string | undefined;
   highlighter: ShikiHighlighter | undefined;
   loadedLanguages: readonly string[];
+  /** Session failures that renderers show as plain text instead of requesting again. */
+  failedThemes: readonly string[];
+  failedLanguages: readonly string[];
   status: ShikiProjectionStatus;
 }>;
 

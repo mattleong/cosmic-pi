@@ -20,8 +20,14 @@ import { codePreviewSettings } from "../../../config/state";
 import { renderHighlightedText } from "../../../syntax/render";
 import { resolvePreviewLanguage } from "../../../syntax/language";
 import { renderContentPreview } from "./content-preview";
+import {
+  oversizedReadNotice,
+  splitListingNotice,
+  splitShellNotice,
+  withAgentNotes,
+} from "./output-notice";
 import { renderGrepOutputLines } from "../../grep-render";
-import { createPathListChunkRenderer } from "../../path-list-render";
+import { createPathListRenderer } from "../../path-list-render";
 import { FullWidthDiffText } from "../../../diff/full-width-text";
 import { createSimpleDiff } from "../../../diff/structured";
 import { summarizeDiff } from "../../../diff/summary";
@@ -94,18 +100,40 @@ export function builtinExpandedContent(
           "Error",
           new Text(theme.fg("error", escapeControlChars(getTextContent(result.content))), 0, 0),
         );
-      return expandedSection(
+      return withAgentNotes(
+        expandedSection(
+          theme,
+          undefined,
+          builtinResultBody(tool, cwd, result, theme, {
+            args: context.args,
+            state: context.state,
+            toolCallId: context.toolCallId,
+            invalidate: context.invalidate,
+          }),
+        ),
         theme,
-        undefined,
-        builtinResultBody(tool, cwd, result, theme, {
-          args: context.args,
-          state: context.state,
-          toolCallId: context.toolCallId,
-          invalidate: context.invalidate,
-        }),
+        splitAgentNotice(tool, result).notice,
       );
     },
   };
+}
+
+/**
+ * Output without the recovery text Pi appends for the agent. Expansion keeps that text under its
+ * own label rather than drawing it as file content or as an output line.
+ */
+function splitAgentNotice(tool: BuiltinCompactTool, result: AgentToolResult<unknown>) {
+  const output = getTextContent(result.content);
+  if (tool === "read") {
+    const notice = oversizedReadNotice(result.details, output);
+    return { output: notice === undefined ? output : "", notice };
+  }
+  if (tool !== "bash" && tool !== "grep" && tool !== "find" && tool !== "ls")
+    return { output, notice: undefined };
+  const split = (tool === "bash" ? splitShellNotice : splitListingNotice)(output.split("\n"));
+  return split.notice === undefined
+    ? { output, notice: undefined }
+    : { output: split.lines.join("\n"), notice: split.notice };
 }
 
 function builtinResultBody(
@@ -124,6 +152,8 @@ function builtinResultBody(
     // Images remain Pi-owned, including mixed image/text results.
     if (result.content.some((part: { type: string }) => part.type === "image"))
       return new Text(escapeControlChars(output), 0, 0);
+    // An oversized first line returns only the agent's recovery instruction, never content.
+    if (oversizedReadNotice(result.details, output) !== undefined) return new Container();
     // A host continuation notice is an issue above the body, not a numbered file line. Only
     // truncated or limited reads carry one; otherwise a matching line is file content.
     const paged =
@@ -168,11 +198,13 @@ function builtinResultBody(
     if (output) body.addChild(rawResult(output, theme));
     return body;
   }
+  // Pi's trailing notice for the agent follows the body under its own label.
+  const shown = splitAgentNotice(tool, result).output;
   const pattern = getObjectValue(context.args, "pattern");
   if (tool === "grep")
     return new Text(
       renderGrepOutputLines(
-        output,
+        shown,
         theme,
         {
           pattern: Predicate.isString(pattern) ? pattern : "",
@@ -185,16 +217,12 @@ function builtinResultBody(
       0,
     );
   if (tool === "find" || tool === "ls") {
-    const lines = output.split("\n");
-    return new Text(
-      createPathListChunkRenderer(lines, cwd, theme, {
-        iconMode: codePreviewSettings.pathIcons,
-      })(lines).join("\n"),
-      0,
-      0,
-    );
+    const pathList = createPathListRenderer(shown.split("\n"), cwd, theme, {
+      iconMode: codePreviewSettings.pathIcons,
+    });
+    return new Text(pathList.renderChunk(pathList.lines).join("\n"), 0, 0);
   }
-  return new Text(escapeControlChars(output), 0, 0);
+  return new Text(escapeControlChars(shown), 0, 0);
 }
 
 /** Options the heading does not already show, as short labels. */

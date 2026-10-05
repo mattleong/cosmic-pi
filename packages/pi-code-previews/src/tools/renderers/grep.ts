@@ -18,6 +18,7 @@ import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewRenderers } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
+import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
@@ -61,7 +62,7 @@ export function createGrepPreviewTool(cwd: string, session?: CodePreviewRenderer
         const pattern = Predicate.isString(renderContext.args?.pattern)
           ? renderContext.args.pattern
           : "";
-        const rawLines = output.split("\n");
+        const { lines: rawLines, notice } = splitListingNotice(output.split("\n"));
         const limit = expanded ? rawLines.length : codePreviewSettings.grepCollapsedLines;
         const skipHighlight = shouldSkipHighlight(output);
         const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
@@ -82,7 +83,7 @@ export function createGrepPreviewTool(cwd: string, session?: CodePreviewRenderer
           text += showingFooter(theme, preview.shown, rawLines.length, "grep output lines");
         if (skipHighlight)
           text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
-        return new Text(text, 0, 0);
+        return withAgentNotes(new Text(text, 0, 0), theme, expanded ? notice : undefined);
       },
     },
   );

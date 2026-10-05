@@ -16,3 +16,26 @@ test("getBashWarnings detects destructive command categories", () => {
   }
   assert.equal(getBashWarnings("echo hi").length, 0);
 });
+
+test("getBashWarnings flags option tokens and absolute system paths, not lookalike operands", () => {
+  for (const command of [
+    "rm -rf dir",
+    "rm -fr dir",
+    "rm -r -f dir",
+    "rm --recursive --force dir",
+    "/bin/rm -Rf dir",
+    "echo 127.0.0.1 > /etc/hosts",
+    "printf x >> '/usr/local/etc/app.conf'",
+  ])
+    assert.equal(getBashWarnings(command).length, 1, command);
+  for (const command of [
+    "rm notes-rf.md",
+    "rm -r build",
+    "rm build-r.log",
+    "make > bin/build.log",
+    "echo x > var.txt",
+    "echo x > ./etc/app.conf",
+    "rm tmp.txt\ngrep -r needle .",
+  ])
+    assert.deepEqual(getBashWarnings(command), [], command);
+});

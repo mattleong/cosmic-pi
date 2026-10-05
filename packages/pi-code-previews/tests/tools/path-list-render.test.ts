@@ -45,6 +45,22 @@ test("collapsed tree chunks do not repeat directory headings after the hidden-li
   assert.match(rendered, /Showing 7 of 12 paths/);
 });
 
+test("tree output draws each path under its own folder whatever the input order", () => {
+  const lines = renderCollapsed(
+    ["src/a.ts", "tests/b.ts", "src/c.ts", "src/lib/d.ts", "tests/e.ts"].join("\n"),
+  ).split("\n");
+  const position = (line: string) => lines.indexOf(line);
+
+  assert.equal(lines.filter((line) => line === "src/").length, 1);
+  assert.equal(lines.filter((line) => line === "tests/").length, 1);
+  for (const file of ["  a.ts", "  c.ts", "    d.ts"]) {
+    assert.ok(position(file) > position("src/"), file);
+    assert.ok(position(file) < position("tests/"), file);
+  }
+  assert.ok(position("  b.ts") > position("tests/"));
+  assert.ok(position("  e.ts") > position("tests/"));
+});
+
 test("collapsed flat lists retain linear paths and hidden-lines markers", () => {
   const rendered = renderCollapsed(
     Array.from({ length: 12 }, (_, index) => `file-${index}.ts`).join("\n"),

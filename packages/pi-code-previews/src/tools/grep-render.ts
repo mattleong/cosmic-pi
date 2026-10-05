@@ -54,21 +54,19 @@ export function renderGrepOutputLines(
   return rendered;
 }
 
-export function parseGrepOutputLine(line: string): ParsedGrepOutputLine | undefined {
-  return (
-    parsedGrepMatch(line.match(/^(.+):(\d+):\s(.*)$/), "match") ??
-    parsedGrepMatch(line.match(/^(.+)-(\d+)-\s(.*)$/), "context")
-  );
-}
+/**
+ * Pi writes `path:N: text` for matches and `path-N- text` for context. The earliest separator
+ * wins, so separators quoted inside the line text never extend the path or change its kind.
+ */
+const GREP_OUTPUT_LINE = /^(.+?)(?::(\d+):|-(\d+)-)\s(.*)$/s;
 
-function parsedGrepMatch(
-  match: RegExpMatchArray | null,
-  kind: ParsedGrepOutputLine["kind"],
-): ParsedGrepOutputLine | undefined {
+export function parseGrepOutputLine(line: string): ParsedGrepOutputLine | undefined {
+  const match = GREP_OUTPUT_LINE.exec(line);
   if (!match) return undefined;
-  const [, path, lineNumber, code] = match;
+  const [, path, matchLine, contextLine, code] = match;
+  const lineNumber = matchLine ?? contextLine;
   if (path === undefined || lineNumber === undefined || code === undefined) return undefined;
-  return { path, lineNumber, code, kind };
+  return { path, lineNumber, code, kind: matchLine === undefined ? "context" : "match" };
 }
 
 function renderGrepParsedLine(

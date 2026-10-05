@@ -5,7 +5,11 @@ import { hashString } from "../shared/helpers";
 import { codePreviewPerformanceConfig } from "../config/state";
 import { codePreviewSettings } from "../config/state";
 import { expandPreviewTabs } from "../shared/helpers";
-import { escapeControlChars, replaceSgrSequences } from "../shared/terminal-text";
+import {
+  escapeControlChars,
+  escapeLineControlChars,
+  replaceSgrSequences,
+} from "../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "./language";
 import {
   requestSyntaxInitialize,
@@ -69,12 +73,15 @@ export function renderWithShiki(
   if (!lang || !codePreviewSettings.syntaxHighlighting || shouldSkipHighlight(code))
     return undefined;
   const snapshot = syntaxProjection();
-  if (!snapshot?.highlighter || snapshot.theme !== codePreviewSettings.shikiTheme) {
-    requestSyntaxInitialize(codePreviewSettings.shikiTheme, invalidate);
+  const theme = codePreviewSettings.shikiTheme;
+  if (!snapshot?.highlighter || snapshot.theme !== theme) {
+    // A failed theme stays plain; requesting it again would loop through invalidation.
+    if (!snapshot?.failedThemes.includes(theme)) requestSyntaxInitialize(theme, invalidate);
     return undefined;
   }
-  claimRenderCache(snapshot.highlighter, snapshot.theme);
   const language = normalizePreviewLanguageAlias(lang);
+  if (snapshot.failedLanguages.includes(language)) return undefined;
+  claimRenderCache(snapshot.highlighter, snapshot.theme);
   const key = `${snapshot.theme}\0${language}\0${code.length}\0${hashString(code)}`;
   const cached = renderCache.get(key);
   if (cached && cached.source === code) {
@@ -191,5 +198,5 @@ function ansiFg(hex: string): string {
 export function plainHighlightedText(text: string, theme: Theme): string[] {
   return expandPreviewTabs(text)
     .split("\n")
-    .map((line) => theme.fg("toolOutput", escapeControlChars(line)));
+    .map((line) => theme.fg("toolOutput", escapeLineControlChars(line)));
 }

@@ -95,7 +95,9 @@ so closing cannot pop an unrelated stacked surface.
   SHA matching; missing aliases remain conservative and renderer caches reject foreign ownership.
 - Syntax and write services own authoritative state and publish immutable synchronous projections.
   Syntax acquisition/loading and request ingress are bounded and scoped; stale finalization cannot
-  clear newer highlighter caches. Write previews retain Pi's direct-write semantics and use bounded
+  clear newer highlighter caches. Failed themes and grammars are remembered for the session and
+  render as plain text; renderer requests never retry them, while an explicit theme initialization
+  may. Write previews retain Pi's direct-write semantics and use bounded
   before-write evidence without destructive renderer lookup. Shared projection tokens prevent
   stale session cleanup from clearing replacement state.
 - `diff/`, `paths/`, `warnings/` and builtin projectors own deterministic bounded policy.

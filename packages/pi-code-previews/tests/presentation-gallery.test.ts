@@ -666,6 +666,48 @@ const scenarios: ReadonlyArray<
     result: text("src/\ntests/\npackage.json"),
   },
   {
+    tool: "grep",
+    title: "grep match limit with agent notes",
+    args: { pattern: "TODO", path: "/project/src", limit: 2 },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "a.ts:3: // TODO fix the retry\nb.ts:9: // TODO remove after launch\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
+        },
+      ],
+      details: { matchLimitReached: 2 },
+    },
+  },
+  {
+    tool: "bash",
+    title: "bash truncated output with agent notes",
+    args: { command: "cat build.log" },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "step 49\nstep 50\n\n[Showing lines 49-50 of 50. Full output: /tmp/pi-bash-1.log]",
+        },
+      ],
+      details: { truncation: { truncated: true }, fullOutputPath: "/tmp/pi-bash-1.log" },
+    },
+  },
+  {
+    tool: "read",
+    title: "read oversized first line",
+    args: { path: "/project/dist/app.js", offset: 40 },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "[Line 40 is 61.2KB, exceeds 50.0KB limit. Use bash: sed -n '40p' /project/dist/app.js | head -c 51200]",
+        },
+      ],
+      details: { truncation: { truncated: true, firstLineExceedsLimit: true } },
+    },
+  },
+  {
     tool: "bash",
     title: "bash test failure",
     args: { command: "pnpm test" },

@@ -27,6 +27,14 @@ export function escapeControlChars(text: string): string {
   return out;
 }
 
+/**
+ * One line of file text for plain display. A CRLF ending's carriage return is dropped, as Shiki
+ * and Pi drop it, so plain and highlighted previews match; a carriage return elsewhere is shown.
+ */
+export function escapeLineControlChars(line: string): string {
+  return escapeControlChars(line.endsWith("\r") ? line.slice(0, -1) : line);
+}
+
 const PRINTABLE_ASCII_RE = /^[ -~]*$/;
 
 /**

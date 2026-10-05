@@ -60,6 +60,8 @@ test("syntax highlighter status changes replace the cached diff preview", () => 
         theme: codePreviewSettings.shikiTheme,
         highlighter: undefined,
         loadedLanguages: ["typescript"],
+        failedThemes: [],
+        failedLanguages: [],
         status: { initialized: true, loadedLanguages: 1, pendingLanguages: 0, statusVersion: 1 },
       }),
   );

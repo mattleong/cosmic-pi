@@ -14,6 +14,8 @@ const snapshot = (theme: string): CodePreviewSyntaxSnapshot => ({
   theme,
   highlighter: undefined,
   loadedLanguages: [],
+  failedThemes: [],
+  failedLanguages: [],
   status: {
     initialized: false,
     loadedLanguages: 0,

@@ -7,7 +7,7 @@ import {
 } from "../../../preview/format";
 import { renderHighlightedText } from "../../../syntax/render";
 import { expandPreviewTabs } from "../../../shared/helpers";
-import { escapeControlChars } from "../../../shared/terminal-text";
+import { escapeLineControlChars } from "../../../shared/terminal-text";
 
 export function renderHighlightedPreviewText(
   text: string,
@@ -26,7 +26,7 @@ export function renderHighlightedPreviewText(
     return chunk.map((entry, index) => {
       const line =
         highlighted[index] ??
-        theme.fg("toolOutput", escapeControlChars(normalizedChunk[index] ?? ""));
+        theme.fg("toolOutput", escapeLineControlChars(normalizedChunk[index] ?? ""));
       if (firstLine === undefined) return line;
       const lineNumber = String(firstLine + entry.index).padStart(width, " ");
       return `${theme.fg("dim", `${lineNumber} │ `)}${line}`;
