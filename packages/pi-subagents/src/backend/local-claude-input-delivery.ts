@@ -10,6 +10,9 @@ import type { SteeringDeliveryState } from "../run/model.ts";
 import { claudeUserFrame } from "./local-claude-protocol.ts";
 
 const CALLER_WAIT = "10 seconds";
+// Fail closed if a start's replay never arrives, but allow for slow starts under load, such as a
+// workflow launching many Claude agents at once.
+const START_REPLAY_DEADLINE = "60 seconds";
 // Absolute from native-send ownership, never extended by inbound activity.
 const STEERING_ACK_WATCHDOG = "5 minutes";
 
@@ -176,7 +179,7 @@ export const makeLocalClaudeInputDelivery = (
           Effect.andThen(publish(input, "pending")),
           Effect.andThen(nativeSend),
           Effect.andThen(Deferred.await(input.acknowledgement)),
-          Effect.timeout(operation === "steer" ? STEERING_ACK_WATCHDOG : CALLER_WAIT),
+          Effect.timeout(operation === "steer" ? STEERING_ACK_WATCHDOG : START_REPLAY_DEADLINE),
           Effect.catchTag("TimeoutError", () =>
             Effect.gen(function* () {
               if (pending !== input || closedError())
@@ -196,7 +199,7 @@ export const makeLocalClaudeInputDelivery = (
                   `${operation}_outcome_uncertain`,
                   operation === "steer"
                     ? "Claude guidance native replay remained unconfirmed at the absolute five-minute acknowledgement watchdog. The backend is closing; delivery and incorporation remain unknown. Do not resend or retry this run."
-                    : "Claude stream input was sent but native replay confirmation did not arrive within ten seconds; the backend is closing to prevent ambiguous retry correlation.",
+                    : "Claude stream input was sent but native replay confirmation did not arrive within 60 seconds; the backend is closing to prevent ambiguous retry correlation.",
                 ),
                 operation === "steer" ? "steering-watchdog" : "replay-deadline",
               );

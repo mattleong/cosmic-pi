@@ -215,7 +215,7 @@ describe("Claude input delivery ownership", () => {
   );
 
   for (const operation of ["initialize", "start"] as const)
-    it.effect(`${operation} replay deadline remains fail-closed at ten seconds`, () =>
+    it.effect(`${operation} replay deadline stays fail-closed, at sixty seconds`, () =>
       Effect.gen(function* () {
         const sent = yield* Deferred.make<void>();
         const terminated = yield* Deferred.make<void>();
@@ -229,7 +229,10 @@ describe("Claude input delivery ownership", () => {
         );
         const caller = yield* Effect.forkChild(inputs.send("Input", 1, operation));
         yield* Deferred.await(sent);
-        yield* TestClock.adjust("10 seconds");
+        // A slow start isn't failed early.
+        yield* TestClock.adjust("59 seconds");
+        expect(yield* Deferred.isDone(terminated)).toBe(false);
+        yield* TestClock.adjust("1 second");
         yield* Deferred.await(terminated);
         expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true);
         expect(inputs.failure?.code).toBe(`${operation}_outcome_uncertain`);
