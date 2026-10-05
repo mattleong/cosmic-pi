@@ -9,7 +9,7 @@ import {
   applyPresentationSettings,
   createToolPresentationHarness,
 } from "../../testing";
-import { selectNativeMcpRenderers } from "../../src/application/native-mcp-renderers";
+import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import type {
   CodePreviewRendererPresentation,
   PreviewToolInfo,
@@ -66,8 +66,7 @@ for (const style of ["preview", "compact"] as const)
   for (const background of ["off", "on", "border"] as const)
     test(`${style}/${background} keeps the collapsed native call and shows expanded arguments once`, () => {
       settings(style, background);
-      const renderers = selectNativeMcpRenderers(name, metadata(), true, native, session());
-      assert.ok(renderers);
+      const renderers = createNativeMcpRenderers(name, metadata(), native, session());
       assert.equal(renderers.renderShell, "self");
       const h = createToolPresentationHarness(renderers);
       const args = { query: "EXACT_ARGUMENT", nested: { retained: [1, true] } };
@@ -113,8 +112,7 @@ for (const style of ["preview", "compact"] as const)
           return text;
         },
       };
-      const renderers = selectNativeMcpRenderers(name, metadata(), true, cachedNative, session());
-      assert.ok(renderers);
+      const renderers = createNativeMcpRenderers(name, metadata(), cachedNative, session());
       const h = createToolPresentationHarness(renderers);
       for (const frame of h.cycle(
         { query: "EXACT_INPUT_RETAINED" },
@@ -138,8 +136,7 @@ test("MCP rows use the session's captured appearance after settings change", () 
       mode: "off",
       collapsedStyle: capturedStyle,
     };
-    const renderers = selectNativeMcpRenderers(name, metadata(), true, native, captured);
-    assert.ok(renderers);
+    const renderers = createNativeMcpRenderers(name, metadata(), native, captured);
     const h = createToolPresentationHarness(renderers);
     h.call({ query: "retained" });
     const text = stripAnsi(h.render(200).join("\n"));
@@ -150,10 +147,9 @@ test("MCP rows use the session's captured appearance after settings change", () 
 
 test("native call failure still preserves exact expanded input", () => {
   settings("compact");
-  const renderers = selectNativeMcpRenderers(
+  const renderers = createNativeMcpRenderers(
     name,
     metadata(),
-    true,
     {
       renderCall: () => {
         throw new Error("Native style unavailable");
@@ -161,41 +157,9 @@ test("native call failure still preserves exact expanded input", () => {
     },
     session(),
   );
-  assert.ok(renderers);
   const h = createToolPresentationHarness(renderers);
   h.call({ query: "EXACT_INPUT_AFTER_NATIVE_FAILURE" }, { expanded: true });
   assert.ok(stripAnsi(h.render(200).join("\n")).includes("EXACT_INPUT_AFTER_NATIVE_FAILURE"));
-});
-
-test("foreign winners, lookalikes, unrelated names and missing historical manager proof decline", () => {
-  const downstream = Object.freeze(native);
-  for (const path of [
-    "<inline:foreign>",
-    "builtin:mcp-lookalike",
-    "some/builtin:mcp",
-    "builtin:mcp/extra",
-  ])
-    assert.equal(
-      selectNativeMcpRenderers(name, metadata(path), true, downstream, session()),
-      undefined,
-    );
-  assert.equal(
-    selectNativeMcpRenderers("read", metadata(), true, downstream, session()),
-    undefined,
-  );
-  assert.equal(selectNativeMcpRenderers("mcp", undefined, true, downstream, session()), undefined);
-  assert.equal(selectNativeMcpRenderers(name, undefined, false, downstream, session()), undefined);
-  assert.equal(
-    selectNativeMcpRenderers(
-      name,
-      { ...metadata(), name: "mcp__other__lookup" },
-      true,
-      downstream,
-      session(),
-    ),
-    undefined,
-  );
-  assert.equal(downstream.renderCall, native.renderCall);
 });
 
 test("historical missing-before-connect presentation stays conservative, then follows catalog and hidden withdrawal", () => {
@@ -205,8 +169,7 @@ test("historical missing-before-connect presentation stays conservative, then fo
     metadata("builtin:mcp", "codemode"),
     metadata("builtin:mcp", "hidden"),
   ]) {
-    const renderers = selectNativeMcpRenderers(name, metadataState, true, native, session());
-    assert.ok(renderers);
+    const renderers = createNativeMcpRenderers(name, metadataState, native, session());
     const h = createToolPresentationHarness(renderers);
     h.call({ query: "retained" });
     assert.ok(stripAnsi(h.render(200).join("\n")).includes(name));
@@ -242,13 +205,11 @@ test("renderer-only downstream never needs labels, schemas or execution fields",
     },
   );
   settings("preview");
-  for (const tool of [metadata(), metadata("<inline:foreign>")]) {
-    const renderers =
-      selectNativeMcpRenderers(name, tool, true, downstream, session()) ?? downstream;
-    const h = createToolPresentationHarness(renderers);
-    h.call({});
-    assert.ok(stripAnsi(h.render(100).join("\n")).includes("FOREIGN_WINNER"));
-  }
+  const h = createToolPresentationHarness(
+    createNativeMcpRenderers(name, metadata(), downstream, session()),
+  );
+  h.call({});
+  assert.ok(stripAnsi(h.render(100).join("\n")).includes("FOREIGN_WINNER"));
 });
 
 test("retired scheduling admission never borrows the replacement owner", () => {
@@ -258,14 +219,7 @@ test("retired scheduling admission never borrows the replacement owner", () => {
   let live = true;
   const ownedSchedule: CodePreviewRendererPresentation["scheduleAnimation"] = (interval, tick) =>
     live ? origin.schedule(interval, tick) : undefined;
-  const renderers = selectNativeMcpRenderers(
-    name,
-    metadata(),
-    true,
-    native,
-    session(ownedSchedule),
-  );
-  assert.ok(renderers);
+  const renderers = createNativeMcpRenderers(name, metadata(), native, session(ownedSchedule));
   const update = {
     content: [{ type: "text" as const, text: "Indexing" }],
     details: { server: "team-docs", tool: "find.page" },
@@ -276,14 +230,12 @@ test("retired scheduling admission never borrows the replacement owner", () => {
   liveOrigin.render(100);
   assert.ok(origin.scheduled > 0);
   live = false;
-  const replacementRenderers = selectNativeMcpRenderers(
+  const replacementRenderers = createNativeMcpRenderers(
     name,
     metadata(),
-    true,
     native,
     session(replacement.schedule),
   );
-  assert.ok(replacementRenderers);
   const liveReplacement = createToolPresentationHarness(replacementRenderers);
   liveReplacement.call({}, { executionStarted: true });
   liveReplacement.result(update, { isPartial: true });

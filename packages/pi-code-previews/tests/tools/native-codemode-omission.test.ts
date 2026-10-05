@@ -21,7 +21,7 @@ for (const style of ["compact", "preview"] as const)
       toolCallCollapsedStyle: style,
     });
     const h = createToolPresentationHarness(
-      createNativeCodemodeRenderers("/project", () => undefined),
+      createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
     );
     const args = { code: "// PROGRAM_RETAINED" };
     const result = {

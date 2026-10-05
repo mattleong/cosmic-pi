@@ -25,7 +25,8 @@ import { toolExpandHint } from "pi-cosmic-ui/tool";
 const styleNativeMcp = (
   definition: ToolDefinition<any, any, any>,
   schedule = animationSchedulerProbe().schedule,
-) => createNativeMcpRenderers(definition.name, definition, undefined, schedule);
+) =>
+  createNativeMcpRenderers(definition.name, definition, undefined, { scheduleAnimation: schedule });
 
 type NativeDefinition = ToolDefinition<any, any, any>;
 type ResourceTool = "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource";

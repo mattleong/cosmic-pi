@@ -78,6 +78,40 @@ it("requires exact native sources and a unique builtin MCP manager for missing h
   assert.equal(resolver("codemode", () => downstream)?.renderShell, "self");
 });
 
+it("claims registered MCP definitions only from the exact builtin MCP source", () => {
+  const name = "mcp__team_docs__find_page";
+  let tools: ToolInfo[] = [];
+  let commands = [manager];
+  const pi = extensionApiFixture({ getAllTools: () => tools, getCommands: () => commands });
+  for (const ready of [false, true]) {
+    const owner = new CodePreviewPresentationOwner();
+    if (ready) owner.publish("/project", new Set(), scheduler);
+    const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+    const claims = (toolName: string) =>
+      resolver(toolName, () => downstream)?.renderCall !== downstream.renderCall;
+    for (const [source, path] of [
+      ["foreign", "builtin:mcp"],
+      ["foreign", "<inline:foreign>"],
+      ["builtin", "builtin:mcp-lookalike"],
+      ["builtin", "some/builtin:mcp"],
+      ["builtin", "builtin:mcp/extra"],
+    ] as const) {
+      tools = [{ ...info(name), sourceInfo: { ...info(name).sourceInfo, source, path } }];
+      assert.equal(claims(name), false, `${source} ${path}`);
+    }
+    tools = [info("mcp", "builtin:mcp")];
+    assert.equal(claims("mcp"), false, "the retired gateway name is never claimed");
+    tools = [];
+    commands = [];
+    assert.equal(claims(name), false, "missing history needs a proven manager");
+    commands = [manager];
+    assert.equal(claims(name), true);
+    tools = [info(name, "builtin:mcp")];
+    assert.equal(claims(name), true);
+    owner.retire();
+  }
+});
+
 it("only exact native MCP aliases leave Pi's own presentation", () => {
   const pi = extensionApiFixture({ getAllTools: () => [], getCommands: () => [manager] });
   const owner = new CodePreviewPresentationOwner();

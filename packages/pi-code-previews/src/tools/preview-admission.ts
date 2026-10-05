@@ -20,7 +20,7 @@ export function isBuiltinTool(
 }
 
 /** A write hook installed earlier, proven by this extension's unique command anchor source. */
-export function isOwnedWritePreviewTool(
+function isOwnedWritePreviewTool(
   tool: PreviewToolInfo | undefined,
   source: SourceInfo | undefined,
 ): boolean {
@@ -54,5 +54,7 @@ export function admitsPreviewSource(
         isOwnedWritePreviewTool(tool, host.previewSource))
     );
   if (name === "codemode") return isBuiltinTool(tool);
+  // Registered MCP definitions need exact builtin MCP ownership. Historical calls may precede
+  // server connection; only an independently proven builtin manager admits their facade.
   return isNativeMcpName(name) && (tool ? isBuiltinTool(tool, "mcp") : host.nativeManager);
 }

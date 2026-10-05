@@ -14,28 +14,6 @@ const builtinNames: ReadonlySet<string> = new Set([
   "find",
   "ls",
 ]);
-const mcpActions = new Map([
-  ["tools.call", "call"],
-  ["tools.describe", "describe"],
-  ["tools.search", "search tools"],
-  ["tools.list", "list tools"],
-  ["resources.read", "read resource"],
-  ["resources.list", "list resources"],
-  ["resources.templates", "list templates"],
-  ["resources.subscribe", "subscribe"],
-  ["resources.unsubscribe", "unsubscribe"],
-  ["prompts.get", "get prompt"],
-  ["prompts.list", "list prompts"],
-  ["result.read", "read"],
-  ["status", "status"],
-  ["connect", "connect"],
-  ["disconnect", "disconnect"],
-  ["refresh", "refresh"],
-  ["server.instructions", "instructions"],
-  ["completion.complete", "complete"],
-  ["events.read", "read events"],
-  ["resources.subscriptions", "subscriptions"],
-]);
 
 /** Argument/name-only targets; never inspect results, foreign definitions, or provider state. */
 export function nativeCodemodeCallSubject(
@@ -67,7 +45,6 @@ export function nativeCodemodeCallSubject(
       action: resourceAction,
       subject: nativeMcpResourceSubject(name, text("server"), text("uri")),
     };
-  const action = preview.partialFields.has("action") ? "" : text("action");
   if (builtinNames.has(name)) {
     if (preview.complete) {
       // SAFETY: The name allowlist is exactly the shared projector's builtin union.
@@ -100,6 +77,7 @@ export function nativeCodemodeCallSubject(
     return { subject: path };
   }
   if (name === "background_task") {
+    const action = preview.partialFields.has("action") ? "" : text("action");
     let subject = "";
     if (action === "start") subject = text("name") || text("command");
     else if (action === "wait") {
@@ -110,19 +88,6 @@ export function nativeCodemodeCallSubject(
       subject = text("state");
     const projected: Pick<CompactChild, "subject" | "action"> = { subject };
     if (action) projected.action = action.replaceAll("_", " ");
-    return projected;
-  }
-  if (name === "mcp") {
-    const server = text("server");
-    const target = text("tool") || text("prompt") || text("uri");
-    const query = action === "tools.search" ? text("query") : "";
-    const subject =
-      action === "result.read"
-        ? "saved output"
-        : [server, target, query && `"${query}"`].filter(Boolean).join(" / ");
-    const projected: Pick<CompactChild, "subject" | "action"> = { subject };
-    const actionLabel = mcpActions.get(action);
-    if (actionLabel !== undefined) projected.action = actionLabel;
     return projected;
   }
   return { subject: "" };

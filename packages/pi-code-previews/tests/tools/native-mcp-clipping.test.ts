@@ -12,12 +12,9 @@ const setPresentation = (settings: Parameters<typeof applyPresentationSettings>[
 };
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 const styleNativeMcp = (definition: ToolDefinition<any, any, any>) =>
-  createNativeMcpRenderers(
-    definition.name,
-    definition,
-    undefined,
-    animationSchedulerProbe().schedule,
-  );
+  createNativeMcpRenderers(definition.name, definition, undefined, {
+    scheduleAnimation: animationSchedulerProbe().schedule,
+  });
 import type { NativeMcpEvidence } from "../../src/tools/native-mcp-summary";
 import { stripAnsi } from "pi-cosmic-core";
 

@@ -1,5 +1,5 @@
-import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -11,15 +11,21 @@ import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { renderNativeCodemodeProgram } from "./native-codemode-source";
 import { escapeControlChars } from "../shared/terminal-text";
 import { renderHighlightedText } from "../syntax/render";
-import type { CompactAnimationScheduler } from "./compact-summary";
-import { withCodePreviewRenderers, type CodePreviewShellOptions } from "./cooperative-tools";
+import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
+import type { CompactSummary } from "./compact-summary";
+import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
+import type { ToolRenderContext } from "./renderers/shared/types";
 import {
   nativeCodemodeChildren,
   nativeCodemodeHeader,
   nativeCodemodeSummary,
 } from "./native-codemode-summary";
-import { nativeCodemodeEvidence, nativeEvidenceCoverage } from "./native-codemode-evidence";
+import {
+  nativeCodemodeEvidence,
+  nativeEvidenceCoverage,
+  type NativeCallEvidence,
+} from "./native-codemode-evidence";
 import { safeContent } from "./native-safe-content";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 
@@ -42,11 +48,55 @@ const renderSource: NonNullable<ToolRenderers["renderCall"]> = (args, theme, con
   );
 };
 
-/** Presentation only; the lifecycle admits the current public builtin codemode source. */
+/**
+ * Expanded Calls rows, laid out once per width rather than on every frame for up to 256 calls.
+ * A new result builds a new list, and invalidation (such as a theme change) clears the rows.
+ * Only pending and running rows animate, so only they make the rows depend on the frame.
+ */
+function renderCallList(
+  children: NonNullable<CompactSummary["children"]>,
+  evidence: NativeCallEvidence,
+  theme: Theme,
+  context: ToolRenderContext<any, any>,
+): Component {
+  const animated = children.entries.some(
+    (child) => child.status === "pending" || child.status === "running",
+  );
+  const coverage =
+    evidence.kind === "unavailable" || !evidence.complete
+      ? nativeEvidenceCoverage(evidence)
+      : undefined;
+  let cached: { readonly key: string; readonly rows: string[] } | undefined;
+  return {
+    render(width) {
+      const animationFrame = animated ? getCodePreviewAnimationFrame(context) : 0;
+      const timingEnabled = codePreviewSettings.toolCallTiming;
+      const key = `${width}:${animationFrame}:${timingEnabled}`;
+      if (cached?.key === key) return cached.rows;
+      const rows = renderCompactChildren(children, theme, width, {
+        all: true,
+        layout: "flat",
+        animationFrame,
+        timingEnabled,
+      });
+      if (coverage) rows.push(...new Text(theme.fg("muted", coverage), 0, 0).render(width));
+      cached = { key, rows };
+      return rows;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
+}
+
+/**
+ * Presentation only; the lifecycle admits the current public builtin codemode source. The owning
+ * session supplies the scheduler.
+ */
 export function createNativeCodemodeRenderers(
   cwd: string,
-  scheduleAnimation: CompactAnimationScheduler,
-  appearance: Pick<CodePreviewShellOptions, "selfShell" | "mode" | "collapsedStyle"> = {},
+  appearance: Pick<CodePreviewRendererAppearance, "scheduleAnimation"> &
+    Partial<CodePreviewRendererAppearance>,
 ): ToolRenderers {
   const summary = nativeCodemodeSummary(cwd);
   const previewStyle =
@@ -69,24 +119,7 @@ export function createNativeCodemodeRenderers(
       );
       if (children.entries.length || evidence.kind === "unavailable" || !evidence.complete)
         body.addChild(
-          expandedSection(theme, "Calls", {
-            render(width) {
-              const rows = renderCompactChildren(children, theme, width, {
-                all: true,
-                layout: "flat",
-                animationFrame: getCodePreviewAnimationFrame(context),
-                timingEnabled: codePreviewSettings.toolCallTiming,
-              });
-              if (evidence.kind === "unavailable" || !evidence.complete)
-                rows.push(
-                  ...new Text(theme.fg("muted", nativeEvidenceCoverage(evidence)), 0, 0).render(
-                    width,
-                  ),
-                );
-              return rows;
-            },
-            invalidate() {},
-          }),
+          expandedSection(theme, "Calls", renderCallList(children, evidence, theme, context)),
         );
       if (
         previewStyle &&
@@ -201,7 +234,6 @@ export function createNativeCodemodeRenderers(
       compactSummary: summary,
       animateProgress: true,
       showShortTiming: true,
-      scheduleAnimation,
       expandedContent: { renderCall: renderSource, renderResult: renderOutput },
     },
   );

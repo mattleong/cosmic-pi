@@ -25,7 +25,6 @@ import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers, type CodePreviewShellOptions } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import type { CompactAnimationScheduler } from "./compact-summary";
 import type { ToolRenderContext } from "./renderers/shared/types";
 import {
   nativeMcpEvidence,
@@ -174,15 +173,16 @@ function renderOutputPreview(
   return safeContent(() => preview(theme), preview(unstyled));
 }
 
-/** Presentation only. Pi keeps its manager, execution, schemas, exposure and permissions. */
+/**
+ * Presentation only, for a source `admitsPreviewSource` already admitted. Pi keeps its manager,
+ * execution, schemas, exposure and permissions. The owning session supplies the scheduler.
+ */
 export function createNativeMcpRenderers(
   name: string,
   tool: Pick<PreviewToolInfo, "namespace"> | undefined,
   downstream: ToolRenderers | undefined,
-  scheduleAnimation: CompactAnimationScheduler,
-  appearance: Partial<
-    Pick<CodePreviewRendererAppearance, "selfShell" | "mode" | "collapsedStyle">
-  > = {},
+  appearance: Pick<CodePreviewRendererAppearance, "scheduleAnimation"> &
+    Partial<CodePreviewRendererAppearance>,
 ): ToolRenderers {
   const identity = nativeMcpIdentity(name, tool);
   // Without an exact public remote identity, a collapsed call keeps the entire native call
@@ -288,7 +288,7 @@ export function createNativeMcpRenderers(
     displayName: DISPLAY_NAME,
     compactSummary: nativeMcpSummary(identity),
     animateProgress: true,
-    scheduleAnimation,
+    scheduleAnimation: appearance.scheduleAnimation,
     expandedContent: {
       renderCall: (args, theme) => renderArguments(args, theme),
       renderResult: renderExpandedOutput,

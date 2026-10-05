@@ -9,7 +9,7 @@ import {
   renderContextFixture,
 } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import { compactStatus } from "../../src/tools/compact-summary";
@@ -149,7 +149,7 @@ test("saved output cannot hide script failures, child failures, or incomplete ca
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} keeps recoverable clipping expanded-only without changing output`, () => {
     settings(style);
-    const tool = createNativeCodemodeRenderers("/project", noSchedule);
+    const tool = createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule });
     const value = output("completed", [call()], { fullOutputPath: "/tmp/RECOVERABLE_OUTPUT" });
     value.content[1] = { type: "text", text: truncatedOutput };
     const before = structuredClone(value);
@@ -212,7 +212,7 @@ for (const style of ["compact", "preview"] as const)
   test(`native ${style} shows an uncaught nested failure once and expansion keeps the script error`, () => {
     settings(style);
     const harness = createToolPresentationHarness(
-      createNativeCodemodeRenderers("/project", noSchedule),
+      createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule }),
     );
     for (const frame of harness.cycle(
       { code: "await tools.read({path: 'missing.ts'});" },
@@ -235,7 +235,7 @@ test("native rendering reads the animation frame without invoking renderer state
     },
   });
   const harness = createToolPresentationHarness(
-    createNativeCodemodeRenderers("/project", noSchedule),
+    createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule }),
     { state },
   );
   const frames = harness.cycle(
@@ -246,6 +246,37 @@ test("native rendering reads the animation frame without invoking renderer state
   assert.ok(frames.every((frame) => stripAnsi(frame.text).includes("a.ts")));
   assert.equal(invoked, false);
 });
+
+for (const style of ["compact", "preview"] as const)
+  test(`native ${style} expanded calls follow spinner frames, the timing setting and newer results`, () => {
+    settings(style);
+    const state = { codePreviewAnimationFrame: 0 };
+    const h = createToolPresentationHarness(
+      createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule }),
+      { state },
+    );
+    const callRow = (path: string) =>
+      stripAnsi(h.render(100).join("\n"))
+        .split("\n")
+        .find((line) => line.includes(path));
+    const args = { code: "await readSources();" };
+    const live = { executionStarted: true, isPartial: true, expanded: true };
+    h.call(args, live);
+    h.result({ content: [], details: { calls: [call("running")] } }, live);
+    const firstFrame = callRow("a.ts");
+    assert.ok(firstFrame);
+    state.codePreviewAnimationFrame = 1;
+    assert.notEqual(callRow("a.ts"), firstFrame, "a running call's spinner advances");
+
+    const settled = { executionStarted: true, isPartial: false, expanded: true };
+    const second = call("ok", { args: '{"path":"/project/b.ts"}', durationMs: 2500 });
+    h.call(args, settled);
+    h.result(output("completed", [call("ok"), second]), settled);
+    const untimed = callRow("b.ts");
+    assert.ok(untimed, "a newer result lists its new call");
+    setCodePreviewSettings({ ...codePreviewSettings, toolCallTiming: true });
+    assert.notEqual(callRow("b.ts"), untimed, "the timing setting applies without a new result");
+  });
 
 test("projection sanitizes bounded attention/targets without changing raw native details", () => {
   const secret = "sk-verysecretvalue123456";
@@ -290,7 +321,7 @@ for (const style of ["compact", "preview"] as const)
   for (const mode of ["off", "on", "border"] as const)
     test(`native ${style}/${mode} expansion preserves source, errors, images, spill paths and malformed history`, () => {
       settings(style, mode);
-      const tool = createNativeCodemodeRenderers("/project", noSchedule);
+      const tool = createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule });
       const source = Array.from({ length: 20 }, (_, index) => `text('SOURCE_${index}');`).join(
         "\n",
       );
@@ -342,7 +373,7 @@ test("expanded native source/output survive hostile theme construction and drawi
       return text;
     },
   });
-  const tool = createNativeCodemodeRenderers("/project", noSchedule);
+  const tool = createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule });
   const h = createToolPresentationHarness(tool, { theme: badTheme });
   h.call({ code: "// SOURCE_COMPLETE\nreturn 1;" }, { expanded: true });
   h.result(output(), { expanded: true });
@@ -355,7 +386,7 @@ test("native renderers use the injected animation owner and stop at settlement",
   settings();
   const probe = animationSchedulerProbe();
   const h = createToolPresentationHarness(
-    createNativeCodemodeRenderers("/project", probe.schedule),
+    createNativeCodemodeRenderers("/project", { scheduleAnimation: probe.schedule }),
   );
   h.call({ code: "return 1" }, { executionStarted: true });
   h.result({ content: [], details: { calls: [call("running")] } }, { isPartial: true });

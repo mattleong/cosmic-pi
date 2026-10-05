@@ -52,7 +52,7 @@ for (const width of [16, 60, 100])
           })
         : plainTheme;
       const h = createToolPresentationHarness(
-        createNativeCodemodeRenderers("/project", () => undefined),
+        createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
         { theme },
       );
       h.call({ code: source });
@@ -74,7 +74,7 @@ for (const style of ["compact", "preview"] as const)
             settings(style, timing, background);
             const probe = animationSchedulerProbe();
             const h = createToolPresentationHarness(
-              createNativeCodemodeRenderers("/project", probe.schedule),
+              createNativeCodemodeRenderers("/project", { scheduleAnimation: probe.schedule }),
             );
             h.call({ code: "// SOURCE_RETAINED" }, { expanded });
             assert.equal(probe.scheduled, 0);
@@ -114,7 +114,7 @@ for (const style of ["compact", "preview"] as const)
             let now = 1000;
             vi.spyOn(Date, "now").mockImplementation(() => now);
             const h = createToolPresentationHarness(
-              createNativeCodemodeRenderers("/project", () => undefined),
+              createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
             );
             const args = { code: "await Promise.allSettled(checks);" };
             h.call(args, { executionStarted: true, isPartial: true, expanded });
@@ -173,7 +173,7 @@ for (const style of ["compact", "preview"] as const)
       settings(style, true, background);
       for (const durationMs of [undefined, -1, NaN, Infinity, "250", 0]) {
         const h = createToolPresentationHarness(
-          createNativeCodemodeRenderers("/project", () => undefined),
+          createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
         );
         const args = { code: "// SOURCE_RETAINED" };
         h.call(args, { executionStarted: false, isPartial: true });
@@ -218,7 +218,7 @@ for (const style of ["compact", "preview"] as const)
     const before = structuredClone(result);
     for (const unknownHeader of [false, true]) {
       const h = createToolPresentationHarness(
-        createNativeCodemodeRenderers("/project", () => undefined),
+        createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
       );
       const rendered = unknownHeader
         ? {

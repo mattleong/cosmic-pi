@@ -94,22 +94,7 @@ test("incomplete numbers and missing fields do not invent read ranges or default
     assert.equal(subject(tool, { payload: "x".repeat(300) }).subject, "");
 });
 
-test("MCP and background calls show only their observed argument action and target", () => {
-  const payload = { text: "x".repeat(300) };
-  const mcp = subject("mcp", {
-    action: "tools.call",
-    server: "docs",
-    tool: "lookup",
-    arguments: payload,
-  });
-  assert.equal(mcp.action, "call");
-  assert.equal(mcp.subject, "docs / lookup");
-  assert.equal(
-    subject("mcp", { server: "docs", arguments: payload, tool: "hidden" }).subject,
-    "docs",
-  );
-  assert.equal(subject("mcp", { arguments: payload, server: "hidden" }).subject, "");
-  assert.equal(subject("mcp", { server: "docs" }).action, undefined);
+test("background calls show only their observed argument action and target", () => {
   assert.equal(
     subject("background_task", { action: "start", name: "Verify previews", command: "pnpm test" })
       .subject,
@@ -173,14 +158,6 @@ test("quoted credential names and truncated URI userinfo remain redacted", () =>
   }
   const benign = nativeArgumentPreview(receipt({ command: "curl https://host:3000/path" }));
   assert.equal(benign?.values.command, "curl https://host:3000/path");
-});
-
-test("unknown MCP actions cannot resolve inherited properties", () => {
-  for (const action of ["toString", "constructor", "__proto__"]) {
-    const projected = subject("mcp", { action, server: "docs" });
-    assert.equal(projected.action, undefined);
-    assert.equal(projected.subject, "docs");
-  }
 });
 
 test("subject recovery leaves native receipts unchanged and never reads plausible guest output", () => {

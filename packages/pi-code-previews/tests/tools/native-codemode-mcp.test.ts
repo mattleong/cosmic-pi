@@ -189,7 +189,9 @@ for (const style of ["compact", "preview"] as const)
       toolCallCollapsedStyle: style,
       toolCallBackground: "off",
     });
-    const styled = createNativeCodemodeRenderers("/project", () => undefined);
+    const styled = createNativeCodemodeRenderers("/project", {
+      scheduleAnimation: () => undefined,
+    });
     const name = "mcp__docs__lookup_1234abcd";
     const result = completed([
       {

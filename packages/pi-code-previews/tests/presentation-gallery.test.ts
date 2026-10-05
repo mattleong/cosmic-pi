@@ -309,7 +309,7 @@ const scenarios: ReadonlyArray<
     tool: "codemode",
     title: "native targets survive truncated argument previews",
     args: {
-      code: "await tools.edit({path: 'src/file.ts', edits: [{oldText: largeText, newText: 'new'}]});\nawait tools.bash({command: longCommand});\nawait tools.background_task({action: 'start', name: 'Verify previews', command: longCommand});\nawait tools.mcp({action: 'tools.call', server: 'docs', tool: 'lookup', arguments: largeInput});",
+      code: "await tools.edit({path: 'src/file.ts', edits: [{oldText: largeText, newText: 'new'}]});\nawait tools.bash({command: longCommand});\nawait tools.background_task({action: 'start', name: 'Verify previews', command: longCommand});\nawait tools.mcp__docs__lookup({query: largeInput});",
     },
     result: nativeResult("completed", [
       nativeArgumentCall("edit", {
@@ -322,12 +322,7 @@ const scenarios: ReadonlyArray<
         name: "Verify previews",
         command: "pnpm validate; ".repeat(40),
       }),
-      nativeArgumentCall("mcp", {
-        action: "tools.call",
-        server: "docs",
-        tool: "lookup",
-        arguments: { text: "x".repeat(400) },
-      }),
+      nativeArgumentCall("mcp__docs__lookup", { query: "x".repeat(400) }),
     ]),
   },
   {

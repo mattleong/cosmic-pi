@@ -13,7 +13,7 @@ export function nativeMcpArgumentText<Args>(args: Args, key: string): string {
   }, "");
 }
 
-export interface NativeMcpHeading {
+interface NativeMcpHeading {
   readonly action: string;
   readonly subject: string;
 }

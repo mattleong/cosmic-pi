@@ -389,7 +389,7 @@ try {
     "pi-code-previews/index.ts",
     "pi-code-previews/src/extension.ts",
     "pi-code-previews/src/application/tool-renderers.ts",
-    "pi-code-previews/src/application/native-mcp-renderers.ts",
+    "pi-code-previews/src/tools/preview-admission.ts",
     "pi-code-previews/src/tools/native-mcp-render.ts",
   ]) {
     await readFile(join(temporaryDirectory, "node_modules", source));

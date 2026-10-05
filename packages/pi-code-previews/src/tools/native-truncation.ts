@@ -10,7 +10,7 @@ const UNSAVED_FOOTER = "\n\n[Could not save the full output: ";
  * Pi's native middle truncation, shared by codemode and MCP: a header, the kept start and end
  * of the text, then a footer saying where the full text was saved or why it couldn't be.
  */
-export type NativeTruncatedOutput =
+type NativeTruncatedOutput =
   | { readonly body: string; readonly footer: "saved" | "unknown" }
   | { readonly body: string; readonly footer: "unsaved"; readonly reason: string };
 

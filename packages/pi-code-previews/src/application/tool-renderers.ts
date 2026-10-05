@@ -15,6 +15,7 @@ import {
 } from "../tools/preview-admission";
 import { createBuiltinPreviewRenderers } from "../tools/renderers/registration";
 import { createNativeCodemodeRenderers } from "../tools/native-codemode-render";
+import { createNativeMcpRenderers } from "../tools/native-mcp-render";
 import {
   resetCodePreviewToolStatuses,
   setCodePreviewToolStatus,
@@ -23,7 +24,6 @@ import {
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import type { CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewRendererSession } from "./renderer-contract";
-import { selectNativeMcpRenderers } from "./native-mcp-renderers";
 import { retainedCodePreviewRenderers, type RetainedRendererOwner } from "./renderer-row";
 
 /** Only renderer fields from next() are retained; never treat it as an execution definition. */
@@ -94,6 +94,10 @@ export class CodePreviewPresentationOwner implements RetainedRendererOwner {
   }
 }
 
+/**
+ * Source admission happens once, here. Declining leaves downstream untouched; no execution
+ * definition or manager is registered for presentation.
+ */
 function select(
   name: string,
   downstream: ToolRenderers | undefined,
@@ -107,15 +111,10 @@ function select(
   if (isCorePreviewName(name)) return createBuiltinPreviewRenderers(name, presentation);
   if (name === "codemode")
     return session.enabledTools?.includes("codemode")
-      ? createNativeCodemodeRenderers(session.cwd, session.scheduleAnimation, presentation)
+      ? createNativeCodemodeRenderers(session.cwd, presentation)
       : undefined;
-  return selectNativeMcpRenderers(
-    name,
-    host.tools.get(name),
-    host.nativeManager,
-    downstream,
-    presentation,
-  );
+  // Every remaining admitted name is a native MCP tool or resource.
+  return createNativeMcpRenderers(name, host.tools.get(name), downstream, presentation);
 }
 
 /** One resolver registration per extension factory, not per session. */
