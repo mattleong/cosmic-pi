@@ -16,7 +16,6 @@ const extensionPackages = [
   "pi-directory-models",
   "pi-background-task",
   "pi-subagents",
-  "pi-mcp-previews",
 ];
 const packageNames = ["pi-cosmic-core", ...extensionPackages];
 const manifests = new Map();
@@ -189,30 +188,30 @@ try {
     const previews = await load("pi-code-previews");
     if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
     if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
-    if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");
+    if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function" || typeof previews.withCodePreviewRenderers !== "function") throw new Error("missing code-preview public exports");
+    const previewTesting = await load("pi-code-previews/testing");
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");
     if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
     if (typeof manager.renderResponsiveManagerFooter !== "function") throw new Error("missing Cosmic UI manager export");
     if (typeof fastModels.supportsFastModel !== "function") throw new Error("missing OpenAI fast-model export");
 
-    // Exercise the installed adapter through Pi's public SDK, not private package sources or
-    // mocked native definitions. No prompt/model call is made, and only our stdio fixture exists.
-    // Use Pi's native module instance: its loader gives extensions these same public factories,
-    // whose schema identities native MCP uses for discovery and readiness checks.
+    // Load packed Code Previews beside independently owned builtin MCP through Pi's public SDK.
+    // No production manager factory is intercepted or replaced. No prompt/model call is made,
+    // and the real local stdio fixture is the only configured server.
     const Pi = await import("@earendil-works/pi-coding-agent");
     const { fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai");
     const agentDir = process.env.PI_CODING_AGENT_DIR;
     if (Pi.getAgentDir() !== agentDir) throw new Error("Packed smoke must use its disposable agent directory.");
     const cwd = join(process.cwd(), "mcp-project");
-    const mcpRoot = await realpath(join(process.cwd(), "node_modules/pi-mcp-previews"));
-    const mcpManifest = JSON.parse(await readFile(join(mcpRoot, "package.json"), "utf8"));
+    const previewRoot = await realpath(join(process.cwd(), "node_modules/pi-code-previews"));
+    const previewManifest = JSON.parse(await readFile(join(previewRoot, "package.json"), "utf8"));
     let nativeCodemode;
     // Capture only the fresh definition produced by our own public native factory; never retrieve
     // a foreign loaded definition. Codemode is model-only, so it cannot nest itself through executeTool.
     const nativeFactory = Pi.createCodemodeExtension({ models: false });
     const resourceLoader = new Pi.DefaultResourceLoader({
       cwd, agentDir,
-      additionalExtensionPaths: [join(mcpRoot, mcpManifest.pi.extensions[0])],
+      additionalExtensionPaths: [join(previewRoot, previewManifest.pi.extensions[0])],
       noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       extensionFactories: [
         { name: "codemode", builtin: true, replaceable: true, factory: (pi) => nativeFactory({
@@ -223,7 +222,14 @@ try {
     });
     await resourceLoader.reload();
     const loaded = resourceLoader.getExtensions();
-    if (loaded.errors.length !== 0) throw new Error("Packed MCP previews failed to load: " + JSON.stringify(loaded.errors));
+    if (loaded.errors.length !== 0) throw new Error("Packed Code Previews failed to load: " + JSON.stringify(loaded.errors));
+    const previewExtension = loaded.extensions.find((extension) => extension.path.startsWith(previewRoot));
+    if (previewExtension?.toolRenderers?.length !== 1 ||
+        [...previewExtension.tools.keys()].some((name) => name !== "write") ||
+        previewExtension.commands.has("mcp") ||
+        !loaded.extensions.some((extension) => extension.path === "builtin:mcp")) {
+      throw new Error("Packed Code Previews must register one renderer resolver beside independent native MCP.");
+    }
     const settingsManager = Pi.SettingsManager.create(cwd, agentDir);
     const modelRuntime = await Pi.ModelRuntime.create({
       authPath: join(agentDir, "auth.json"), modelsPath: null,
@@ -244,7 +250,10 @@ try {
       // the active set. SDK startup alone does not await non-direct servers.
       const managerCommand = session.extensionRunner.getRegisteredCommands()
         .find((command) => command.invocationName === "mcp");
-      if (!managerCommand) throw new Error("Packed native MCP manager is unavailable.");
+      if (managerCommand?.sourceInfo?.source !== "builtin" ||
+          managerCommand.sourceInfo.path !== "builtin:mcp") {
+        throw new Error("Packed native MCP manager is not independently builtin-owned.");
+      }
       await managerCommand.handler("", session.extensionRunner.createCommandContext());
       const signal = AbortSignal.timeout(30_000);
       const input = {
@@ -276,11 +285,30 @@ try {
       }
       const definitions = session.getAllTools();
       const echo = definitions.find((tool) => tool.name === "mcp__fixture__echo");
-      // The owned source must be the installed adapter, not the replaceable builtin manager.
-      if (!echo?.sourceInfo?.path || !echo.sourceInfo.path.startsWith(mcpRoot)) {
-        throw new Error("Native fixture tool was not registered by the packed MCP previews adapter.");
+      if (echo?.sourceInfo?.source !== "builtin" || echo.sourceInfo.path !== "builtin:mcp") {
+        throw new Error("Native fixture execution was not independently builtin-owned.");
       }
-      if (errors.length !== 0) throw new Error("Packed MCP lifecycle errors: " + JSON.stringify(errors));
+      const standalone = await context.executeTool("mcp__fixture__echo", {text:"standalone packed MCP"});
+      const renderers = session.extensionRunner.resolveToolRenderers("mcp__fixture__echo", () => undefined);
+      if (standalone.isError || !renderers || renderers.renderShell !== "self") {
+        throw new Error("Packed standalone native MCP presentation is unavailable.");
+      }
+      const snapshot = JSON.stringify(standalone.result);
+      const nativeImage = standalone.result.content.find((block) => block.type === "image");
+      const presentation = previewTesting.createToolPresentationHarness(renderers, {cwd, width:200});
+      presentation.call({text:"standalone packed MCP"}, {expanded:true});
+      presentation.result(standalone.result, {expanded:true, showImages:false});
+      if (!presentation.render().join("\n").includes("standalone packed MCP") ||
+          JSON.stringify(standalone.result) !== snapshot ||
+          standalone.result.content.find((block) => block.type === "image") !== nativeImage ||
+          nativeImage?.data !== image.data) {
+        throw new Error("Packed native MCP rendering changed output or native image evidence.");
+      }
+      const programRenderers = session.extensionRunner.resolveToolRenderers("codemode", () => undefined);
+      if (!programRenderers || programRenderers.renderShell !== "self") {
+        throw new Error("Packed native codemode renderer is unavailable after MCP activation.");
+      }
+      if (errors.length !== 0) throw new Error("Packed Code Previews/native MCP lifecycle errors: " + JSON.stringify(errors));
     } finally {
       // SDK embeddings own shutdown emission; dispose alone removes listeners.
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
@@ -354,18 +382,17 @@ try {
     "pi-cosmic-core/src/runtime/runtime.ts",
     "pi-code-previews/index.ts",
     "pi-code-previews/src/extension.ts",
-    "pi-mcp-previews/index.ts",
-    "pi-mcp-previews/src/extension.ts",
-    "pi-mcp-previews/src/boundary/host-native-mcp.ts",
+    "pi-code-previews/src/application/tool-renderers.ts",
+    "pi-code-previews/src/application/native-mcp-renderers.ts",
+    "pi-code-previews/src/tools/native-mcp-render.ts",
   ]) {
     await readFile(join(temporaryDirectory, "node_modules", source));
   }
   // Tests and build tooling remain repository-only. No source-hosted package may regain a
   // generated dist dependency.
   for (const excluded of [
-    "pi-mcp-previews/dist",
-    "pi-mcp-previews/tests",
-    "pi-mcp-previews/tsconfig.json",
+    "pi-code-previews/tests",
+    "pi-code-previews/tsconfig.json",
     "pi-cosmic-core/dist",
     "pi-cosmic-core/tsdown.config.ts",
     "pi-code-previews/dist",
@@ -416,19 +443,19 @@ try {
       }
     }
     if (
-      packageName === "pi-mcp-previews" &&
+      packageName === "pi-code-previews" &&
       (packedManifest.private === true ||
         packedManifest.exports?.["."] !== "./index.ts" ||
         packedManifest.pi?.extensions?.length !== 1 ||
         packedManifest.pi.extensions[0] !== sourceManifest.pi.extensions[0] ||
         !packedManifest.pi.extensions[0].endsWith(".ts"))
     ) {
-      throw new Error("Packed pi-mcp-previews must be a public source-only Pi extension.");
+      throw new Error("Packed pi-code-previews must be a public source-only Pi extension.");
     }
   }
 
   console.log(
-    "Packed TypeScript source and dependencies resolve through Jiti in a clean consumer; native Pi MCP tools/resources execute with unchanged results and confirmed fixture cleanup.",
+    "Packed TypeScript source resolves through Jiti in a clean consumer; Code Previews renders independently builtin-owned native MCP/codemode with unchanged execution, results, images, and confirmed fixture cleanup.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

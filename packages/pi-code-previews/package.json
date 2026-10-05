@@ -1,7 +1,7 @@
 {
   "name": "pi-code-previews",
   "version": "0.2.0",
-  "description": "Syntax-highlighted previews for pi tool calls.",
+  "description": "Builtin, native codemode/MCP previews and a reusable Pi tool-rendering shell.",
   "keywords": [
     "code-preview",
     "coding-agent",

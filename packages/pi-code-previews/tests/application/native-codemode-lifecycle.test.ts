@@ -1,6 +1,12 @@
-// Lifecycle fixture owns Promise callbacks and mirrors the public visible registry only.
+// Lifecycle fixture models only public metadata and renderer resolution, never native execution.
 import assert from "node:assert/strict";
-import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  ToolInfo,
+  ToolRenderers,
+  ToolRendererResolver,
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -15,12 +21,11 @@ import { afterEach } from "vitest";
 import { animationSchedulerProbe, createToolPresentationHarness } from "../../testing";
 import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
 import { CodePreviewSchedulerService } from "../../src/application/scheduler";
-import type { NativeCodemodeDefinition } from "../../src/boundary/host-native-codemode";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
-import { registerToolRenderers } from "../../src/tools/renderers/registration";
+import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
 
 const preview = {
@@ -37,46 +42,58 @@ const builtin = {
   scope: "temporary",
   origin: "top-level",
 } as const;
-const owned = {
-  source: "previews",
-  path: "/owner.ts",
+const foreign = {
+  source: "other",
+  path: "/foreign.ts",
   scope: "user",
   origin: "top-level",
 } as const;
-const other = { ...owned, source: "other", path: "/foreign.ts" };
-const info = (
-  parameters = opaqueFixture({}),
-  sourceInfo: ToolInfo["sourceInfo"] = builtin,
-): ToolInfo => ({
+const info = (sourceInfo: ToolInfo["sourceInfo"] = builtin): ToolInfo => ({
   name: "codemode",
   description: "native",
-  parameters,
+  parameters: opaqueFixture({}),
   exposure: "model-only",
   sourceInfo,
 });
+const downstream: ToolRenderers = {
+  renderCall: () => new Text("NATIVE_CALL_RETAINED", 0, 0),
+  renderResult: (result) =>
+    new Text(
+      result.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n"),
+      0,
+      0,
+    ),
+};
+const running = {
+  content: [],
+  details: {
+    calls: [{ id: "private/1", name: "read", args: '{"path":"a.ts"}', status: "running" }],
+  },
+};
 type Handler = (event: Readonly<Record<never, never>>, ctx: ExtensionContext) => Promise<void>;
 function fixture(
   load: (attempt: number) => Effect.Effect<CodePreviewSettings> = () => Effect.succeed(preview),
 ) {
   const handlers = new Map<string, Handler>();
-  const registrations: NativeCodemodeDefinition[] = [];
+  const resolvers: ToolRendererResolver[] = [];
   const probe = animationSchedulerProbe();
   let active = ["codemode"];
-  let visible = info();
+  let visible: ToolInfo | undefined = info();
   let attempt = 0;
   const pi = extensionApiFixture({
     on: (name: string, handler: Handler) => handlers.set(name, handler),
-    getAllTools: () => [visible],
-    getActiveTools: () => active,
-    getCommands: () => [{ name: "code-previews", source: "extension", sourceInfo: owned }],
-    getSettings: () => ({}),
-    appendEntry() {},
+    registerToolRenderer: (resolver: ToolRendererResolver) => resolvers.push(resolver),
+    getAllTools: () => (visible ? [visible] : []),
+    getActiveTools: () => [...active],
+    getCommands: () => [],
+    registerTool() {
+      throw new Error("presentation must not register execution definitions");
+    },
     setActiveTools() {
       throw new Error("active names are not renderer policy");
-    },
-    registerTool(tool: NativeCodemodeDefinition) {
-      registrations.push(tool);
-      visible = info(opaqueFixture(tool.parameters), owned);
     },
   });
   const ctx = extensionContextFixture({
@@ -100,18 +117,25 @@ function fixture(
     loadSettings: () =>
       load(attempt++).pipe(Effect.tap((value) => Effect.sync(() => setCodePreviewSettings(value)))),
     initializeSyntax: () => Effect.void,
-    registerRenderers: (api, cwd, options) =>
-      registerToolRenderers(api, cwd, { ...options, toolOptions: {} }),
+    registerRenderers: () => undefined,
   });
   return {
-    registrations,
     probe,
     registered,
+    resolvers,
     active: (value: string[]) => {
       active = value;
     },
-    foreign: () => {
-      visible = info(opaqueFixture(visible.parameters), other);
+    activeNames: () => [...active],
+    visible: (value: ToolInfo | undefined) => {
+      visible = value;
+    },
+    resolve: (name = "codemode", base = downstream) => {
+      const next = (index: number): ToolRenderers | undefined => {
+        const resolver = resolvers[index];
+        return resolver ? resolver(name, () => next(index + 1)) : base;
+      };
+      return next(0)!;
     },
     start: () => handlers.get("session_start")!({}, ctx),
     shutdown: () => handlers.get("session_shutdown")!({}, ctx),
@@ -119,8 +143,74 @@ function fixture(
 }
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
-for (const change of ["late-activation", "foreign-owner"] as const)
-  it.effect(`native admission is frozen before async settings: ${change}`, () =>
+for (const scenario of ["builtin", "inactive", "missing", "foreign", "wrong-builtin-path"] as const)
+  it.effect(
+    `native renderer admission respects current ${scenario} metadata without changing selection`,
+    () =>
+      Effect.gen(function* () {
+        const h = fixture();
+        yield* step(() => h.registered);
+        yield* Effect.addFinalizer(() => step(() => h.shutdown()));
+        if (scenario === "inactive") h.active([]);
+        if (scenario === "missing") h.visible(undefined);
+        if (scenario === "foreign") h.visible(info(foreign));
+        if (scenario === "wrong-builtin-path")
+          h.visible(info({ ...builtin, path: "builtin:unrelated" }));
+        const active = h.activeNames();
+        yield* step(() => h.start());
+        assert.deepEqual(h.activeNames(), active);
+        const selected = h.resolve();
+        const admitted = scenario === "builtin" || scenario === "inactive";
+        assert.equal(
+          getCodePreviewToolStatuses().get("codemode")?.state,
+          admitted ? "installed" : scenario === "missing" ? "unavailable" : "skipped-conflict",
+        );
+        const row = createToolPresentationHarness(selected);
+        row.call({ code: "// PROGRAM_RETAINED" }, { expanded: true });
+        const text = row.render(100).join("\n");
+        assert.equal(text.includes("PROGRAM_RETAINED"), admitted);
+        assert.equal(text.includes("NATIVE_CALL_RETAINED"), !admitted);
+        if (!admitted) assert.equal(selected.renderCall, downstream.renderCall);
+      }),
+  );
+
+it.effect(
+  "native replay keeps its fixed shell and adopts ready presentation through one stable resolver",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const h = fixture((attempt) =>
+        attempt === 0
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(preview),
+            )
+          : Effect.succeed(preview),
+      );
+      yield* step(() => h.registered);
+      yield* Effect.addFinalizer(() => step(() => h.shutdown()));
+      const retained = h.resolve();
+      assert.equal(retained.renderShell, "self");
+      const row = createToolPresentationHarness(retained);
+      row.call({ code: "// PROGRAM_RETAINED" }, { expanded: true });
+      assert.ok(row.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+      const startup = h.start();
+      yield* Deferred.await(entered);
+      assert.ok(row.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+      yield* Deferred.succeed(release, undefined);
+      yield* step(() => startup);
+      assert.ok(row.render(100).join("\n").includes("PROGRAM_RETAINED"));
+      assert.equal(retained.renderShell, "self");
+      yield* step(() => h.start());
+      assert.equal(h.resolvers.length, 1);
+      assert.deepEqual(h.activeNames(), ["codemode"]);
+    }),
+);
+
+it.effect(
+  "foreign native ownership appearing during settings I/O retains downstream rendering",
+  () =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -132,18 +222,38 @@ for (const change of ["late-activation", "foreign-owner"] as const)
       );
       yield* step(() => h.registered);
       yield* Effect.addFinalizer(() => step(() => h.shutdown()));
-      if (change === "late-activation") h.active([]);
+      const cold = createToolPresentationHarness(h.resolve());
+      cold.call({ code: "// PROGRAM_RETAINED" }, { expanded: true });
       const startup = h.start();
       yield* Deferred.await(entered);
-      if (change === "late-activation") h.active(["codemode"]);
-      else h.foreign();
+      h.visible(info(foreign));
       yield* Deferred.succeed(release, undefined);
       yield* step(() => startup);
-      assert.equal(h.registrations.length, 0);
+      assert.ok(cold.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+      assert.equal(h.resolve().renderCall, downstream.renderCall);
+      assert.equal(getCodePreviewToolStatuses().get("codemode")?.state, "skipped-conflict");
     }),
-  );
+);
 
-it.effect("cancelled native startup cannot publish after a replacement", () =>
+it.effect(
+  "native resolver rechecks current sources and never styles missing or unrelated tools",
+  () =>
+    Effect.gen(function* () {
+      const h = fixture();
+      yield* step(() => h.registered);
+      yield* Effect.addFinalizer(() => step(() => h.shutdown()));
+      yield* step(() => h.start());
+      assert.equal(h.resolve("unrelated").renderCall, downstream.renderCall);
+      h.visible(undefined);
+      assert.equal(h.resolve().renderCall, downstream.renderCall);
+      h.visible(info(foreign));
+      assert.equal(h.resolve().renderCall, downstream.renderCall);
+      h.visible(info());
+      assert.equal(h.resolve().renderShell, "self");
+    }),
+);
+
+it.effect("cancelled native startup cannot publish into a retained row after replacement", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
     const h = fixture((attempt) =>
@@ -153,61 +263,50 @@ it.effect("cancelled native startup cannot publish after a replacement", () =>
     );
     yield* step(() => h.registered);
     yield* Effect.addFinalizer(() => step(() => h.shutdown()));
+    const cold = createToolPresentationHarness(h.resolve());
+    cold.call({ code: "// STALE_PROGRAM" }, { expanded: true });
     const stale = h.start();
     yield* Deferred.await(entered);
-    h.active([]);
     yield* step(() => h.start());
     yield* step(() => stale);
-    assert.equal(h.registrations.length, 0);
-    h.active(["codemode"]);
-    yield* step(() => h.start());
-    assert.equal(h.registrations.length, 1);
+    assert.ok(cold.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+    const current = createToolPresentationHarness(h.resolve());
+    current.call({ code: "// CURRENT_PROGRAM" }, { expanded: true });
+    assert.ok(current.render(100).join("\n").includes("CURRENT_PROGRAM"));
+    assert.equal(h.resolvers.length, 1);
   }),
 );
 
 for (const style of ["compact", "preview"] as const)
   for (const expanded of [false, true])
-    for (const ending of ["disabled", "inactive", "shutdown", "failed-reload"] as const)
+    for (const ending of ["disabled", "replacement", "shutdown", "failed-reload"] as const)
       it.effect(
-        `native ${style}/${expanded}/${ending} retires renderer animation authority without disabling execution`,
+        `native ${style}/${expanded}/${ending} retires animation without replacing execution`,
         () =>
           Effect.gen(function* () {
             const h = fixture((attempt) =>
               ending === "failed-reload" && attempt > 0
                 ? Effect.die("settings unavailable")
-                : Effect.succeed(
-                    ending === "disabled" && attempt > 0
-                      ? { ...preview, tools: [], toolCallCollapsedStyle: style }
-                      : { ...preview, toolCallCollapsedStyle: style },
-                  ),
+                : Effect.succeed({
+                    ...preview,
+                    tools: ending === "disabled" && attempt > 0 ? [] : ["codemode"],
+                    toolCallCollapsedStyle: style,
+                  }),
             );
             yield* step(() => h.registered);
             yield* Effect.addFinalizer(() => step(() => h.shutdown()));
             yield* step(() => h.start());
-            const old = h.registrations[0];
-            assert.ok(old);
-            const oldRender = createToolPresentationHarness(old);
-            oldRender.call({ code: "return 1;" }, { executionStarted: true, expanded });
-            const running = {
-              content: [],
-              details: {
-                calls: [
-                  { id: "private/1", name: "read", args: '{"path":"a.ts"}', status: "running" },
-                ],
-              },
-            };
-            oldRender.result(running, { isPartial: true, expanded });
-            oldRender.render();
+            const old = h.resolve();
+            const row = createToolPresentationHarness(old);
+            row.call({ code: "return 1;" }, { executionStarted: true, expanded });
+            row.result(running, { isPartial: true, expanded });
+            row.render();
             const scheduled = h.probe.scheduled;
             assert.ok(scheduled > 0);
             if (ending === "shutdown") yield* step(() => h.shutdown());
-            else {
-              if (ending === "inactive") h.active([]);
-              yield* step(() => h.start());
-            }
-            // A retained callback cannot repaint through a replacement owner's scheduler.
+            else yield* step(() => h.start());
             let invalidations = 0;
-            oldRender.call(
+            row.call(
               { code: "return 2;" },
               {
                 executionStarted: true,
@@ -217,7 +316,7 @@ for (const style of ["compact", "preview"] as const)
                 },
               },
             );
-            oldRender.render();
+            row.render();
             h.probe.tick();
             assert.equal(h.probe.scheduled, scheduled);
             assert.equal(invalidations, 0);
@@ -226,12 +325,9 @@ for (const style of ["compact", "preview"] as const)
             retired.result(running, { isPartial: true, expanded });
             retired.render();
             assert.equal(h.probe.scheduled, scheduled);
-            if (ending === "disabled" || ending === "inactive") {
-              const fresh = h.registrations[1];
-              assert.ok(fresh);
-              assert.notEqual(fresh.execute, old.execute);
-              assert.equal(fresh.defaultActive, false);
-              assert.equal(fresh.renderShell, undefined);
-            }
+            assert.deepEqual(h.activeNames(), ["codemode"]);
+            assert.equal(h.resolvers.length, 1);
+            if (ending === "disabled" || ending === "shutdown" || ending === "failed-reload")
+              assert.equal(h.resolve().renderCall, downstream.renderCall);
           }),
       );

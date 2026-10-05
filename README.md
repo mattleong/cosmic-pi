@@ -8,18 +8,18 @@ A pnpm workspace for Pi extensions.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool and full-screen `/tasks` manager.
-- [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
+- [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted builtin previews, native codemode/MCP presentation, and a reusable tool shell.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
 - [`pi-herdr-btw`](packages/pi-herdr-btw) — deterministic reusable blank Pi side sessions in user-owned panes in the current Herdr tab.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for workflows, subagents, and tasks.
-- [`pi-mcp-previews`](packages/pi-mcp-previews) — always-on previews for native Pi MCP tools and resources; Pi owns configuration, authentication, and execution.
 - [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication, dynamic JavaScript workflows, and a `/subagents` fleet UI.
 
 ## Requirements
 
 - Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`
 - pnpm 10.33.0 (declared in `packageManager`)
+- Pi 1.0.1 or later for Code Previews; tested with Pi 1.0.2
 
 ## Install
 
@@ -31,7 +31,6 @@ pi install npm:pi-better-openai
 pi install npm:pi-better-xai
 pi install npm:pi-background-task
 pi install npm:pi-code-previews
-pi install npm:pi-mcp-previews
 pi install npm:pi-cosmic-ui
 pi install npm:pi-directory-models
 pi install npm:pi-subagents
@@ -46,9 +45,11 @@ pnpm install
 pi install "$PWD/packages/pi-herdr-btw"
 ```
 
-Native MCP previews are enabled whenever `pi-mcp-previews` is installed; there is no toggle. Keep `pi-code-previews` for built-in previews, the reusable tool shell, and eligible native `codemode` styling. Pi's native MCP configuration lives in `~/.pi/agent/mcp.json` or trusted project `.pi/mcp.json`; use native `/mcp` for connections and sign-in. Native `codemode` is activated by MCP's default `codemode` exposure, not by forcing all tools active.
+Code Previews includes standalone native MCP previews with no separate startup toggle. It uses Pi's public renderer resolver rather than owning or replacing native execution or the `/mcp` manager. Builtin tools and native `codemode` follow the preview-tools selection; write alone retains a real before-write snapshot hook. Pi's native MCP configuration lives in `~/.pi/agent/mcp.json` or trusted project `.pi/mcp.json`; use native `/mcp` for connections and sign-in. Native `codemode` can be activated later by MCP's default `codemode` exposure without a presentation reload or forcing all tools active.
 
-Upgrading from the retired `pi-mcp` or `pi-code-mode` extensions? Follow the [manual migration guide](docs/migrations/native-mcp-codemode.md). There is intentionally no compatibility layer or automatic credential migration.
+If standalone `pi-mcp-previews` was previously installed, remove it manually from every scope (`pi remove npm:pi-mcp-previews`, adding `-l` for a project-local install), or use `pi remove` with the exact local source shown by `pi list`. Then reload. This restores the independent builtin manager; no user configuration or credentials are migrated automatically.
+
+Upgrading from the retired `pi-mcp`, `pi-code-mode`, or standalone `pi-mcp-previews` extensions? Follow the [manual migration guide](docs/migrations/native-mcp-codemode.md). There is intentionally no compatibility layer or automatic credential migration.
 
 ## Development
 
@@ -68,11 +69,10 @@ pnpm --filter pi-code-previews test
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
 pnpm --filter pi-herdr-btw test
-pnpm --filter pi-mcp-previews test
 pnpm --filter pi-subagents test
 ```
 
-`pnpm pack:smoke` checks packed TypeScript source and dependency resolution in a clean consumer, including native Pi MCP execution against a local fixture with isolated agent state and no provider authentication.
+`pnpm pack:smoke` checks packed TypeScript source and dependency resolution in a clean consumer, including Code Previews beside independently builtin-owned native MCP/codemode, real local MCP tool/resource execution, unchanged images, and confirmed fixture cleanup with isolated agent state and no provider authentication.
 
 ## Try the local packages with pi
 
@@ -83,7 +83,6 @@ pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models
 pi -e ./packages/pi-herdr-btw
-pi -e ./packages/pi-mcp-previews
 pi -e ./packages/pi-subagents
 ```
 
@@ -91,7 +90,7 @@ To add a package to project-local Pi settings, use `pi install -l` with its loca
 
 ## Releases
 
-All workspace packages use the synchronized version `0.2.0`, including public `pi-mcp-previews`. The public packages are published together; private `pi-herdr-btw` remains local-only. Set the next version from the repository root:
+All workspace packages use the synchronized version `0.2.0`. The public packages are published together; private `pi-herdr-btw` remains local-only. Set the next version from the repository root:
 
 ```bash
 pnpm version:set 0.2.1

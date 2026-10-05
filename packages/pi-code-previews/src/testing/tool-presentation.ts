@@ -3,13 +3,15 @@ import type {
   ExtensionAPI,
   Theme,
   ToolDefinition,
+  ToolRenderers,
+  ToolRendererResolver,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import type { CodePreviewSettings } from "../config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
-import type { AdaptableToolDefinition } from "../tools/renderer-adapter";
+import type { AdaptableToolDefinition, AdaptableToolRenderers } from "../tools/renderer-adapter";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 
 type RenderContext = ToolRenderContext<any, any>;
@@ -62,11 +64,15 @@ type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 /** Registers through a render-only extension API; commands are accepted and ignored. */
 export function captureRegistrations(register: (pi: ExtensionAPI) => void) {
   const tools: ToolDefinition<any, any, any>[] = [];
+  const toolRenderers: ToolRendererResolver[] = [];
   const messageRenderers = new Map<string, MessageRenderer>();
   register(
     extensionApiFixture({
       registerTool: (tool: ToolDefinition<any, any, any>) => {
         tools.push(tool);
+      },
+      registerToolRenderer: (resolver: ToolRendererResolver) => {
+        toolRenderers.push(resolver);
       },
       registerMessageRenderer: (customType: string, render: MessageRenderer) => {
         messageRenderers.set(customType, render);
@@ -74,7 +80,14 @@ export function captureRegistrations(register: (pi: ExtensionAPI) => void) {
       registerCommand: () => undefined,
     }),
   );
-  return { tools, messageRenderers };
+  const resolveToolRenderers = (name: string, base?: ToolRenderers): ToolRenderers | undefined => {
+    const resolve = (index: number): ToolRenderers | undefined =>
+      index < toolRenderers.length
+        ? toolRenderers[index]!(name, () => resolve(index + 1))
+        : (base ?? tools.find((tool) => tool.name === name));
+    return resolve(0);
+  };
+  return { tools, messageRenderers, toolRenderers, resolveToolRenderers };
 }
 
 export interface PresentationCycleOptions {
@@ -103,7 +116,7 @@ export interface ToolPresentationHarness {
 
 /** Drives the registered render callbacks, never execute; independent of any test runner. */
 export function createToolPresentationHarness(
-  tool: AdaptableToolDefinition,
+  tool: Pick<AdaptableToolRenderers, "renderShell" | "renderCall" | "renderResult">,
   options: { theme?: Theme; width?: number; state?: object; cwd?: string } = {},
 ): ToolPresentationHarness {
   const theme = options.theme ?? plainTheme;

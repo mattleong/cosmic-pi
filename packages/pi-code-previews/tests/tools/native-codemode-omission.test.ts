@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
-import { captureFreshNativeCodemode } from "../../src/boundary/host-native-codemode";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { styleNativeCodemode } from "../../src/tools/native-codemode-render";
+import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import { compactStatus } from "../../src/tools/compact-summary";
 import { stripAnsi } from "../support/render";
@@ -22,11 +20,8 @@ for (const style of ["compact", "preview"] as const)
       toolCallBackground: "off",
       toolCallCollapsedStyle: style,
     });
-    const native = captureFreshNativeCodemode(
-      extensionApiFixture({ getSettings: () => ({}), getAllTools: () => [], appendEntry() {} }),
-    )!;
     const h = createToolPresentationHarness(
-      styleNativeCodemode(native, () => undefined, "/project"),
+      createNativeCodemodeRenderers("/project", () => undefined),
     );
     const args = { code: "// PROGRAM_RETAINED" };
     const result = {

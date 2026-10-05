@@ -33,8 +33,8 @@ export function installCodePreviewSessionCapability(
   activeCapability = capability;
 }
 
-export function clearCodePreviewSessionCapability(): void {
-  activeCapability = undefined;
+export function clearCodePreviewSessionCapability(expected?: CodePreviewSessionCapability): void {
+  if (!expected || activeCapability === expected) activeCapability = undefined;
 }
 
 /** Capture before entering any foreign queue. Never resolve a delayed call through the live slot. */

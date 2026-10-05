@@ -71,6 +71,23 @@ it("captures tool and message renderer registrations and ignores commands", () =
   expect(messageRenderers.get("example-message")).toBe(renderMessage);
 });
 
+it("resolves renderer-only registrations in order without registering or executing tools", () => {
+  const native = { renderCall: () => new Text("native", 0, 0) };
+  const styled = { renderCall: () => new Text("styled", 0, 0) };
+  const captured = captureRegistrations((pi) => {
+    pi.registerToolRenderer((_name, next) => next());
+    pi.registerToolRenderer((name, next) => (name === "late-tool" ? styled : next()));
+  });
+  expect(captured.tools).toEqual([]);
+  const resolved = captured.resolveToolRenderers("late-tool", native);
+  expect(resolved).toBe(styled);
+  expect(captured.resolveToolRenderers("other", native)).toBe(native);
+  expect(captured.resolveToolRenderers("missing")).toBeUndefined();
+  const harness = createToolPresentationHarness(resolved!);
+  harness.call({});
+  expect(harness.render().join("\n")).toContain("styled");
+});
+
 it("cycles expansion states with per-state overrides and opt-in invalidation", () => {
   let calls = 0;
   const harness = createToolPresentationHarness(readTool(() => (calls += 1)));

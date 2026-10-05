@@ -10,7 +10,11 @@ export { codePreviews as default } from "./src/extension";
 export { loadCodePreviewSettings } from "./src/config/store";
 
 /** Decorate a package-owned tool, capturing the current visual shell mode at wrapping time. */
-export { withCodePreviewShell, type CodePreviewShellOptions } from "./src/tools/cooperative-tools";
+export {
+  withCodePreviewShell,
+  withCodePreviewRenderers,
+  type CodePreviewShellOptions,
+} from "./src/tools/cooperative-tools";
 
 /** Compose into the registering extension's session Layer, then pass schedule to its shell. */
 export {

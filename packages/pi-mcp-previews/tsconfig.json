@@ -1,5 +1,0 @@
-{
-  "extends": "../../tsconfig.effect.json",
-  "compilerOptions": { "module": "ESNext", "moduleResolution": "Bundler" },
-  "include": ["index.ts", "src/**/*.ts", "tests/**/*.ts"]
-}

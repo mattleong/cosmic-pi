@@ -10,7 +10,6 @@ const packages = [
   "pi-code-previews",
   "pi-cosmic-ui",
   "pi-subagents",
-  "pi-mcp-previews",
   "pi-background-task",
   "pi-ask-user",
   "pi-better-openai",

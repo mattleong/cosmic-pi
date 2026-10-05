@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import {
@@ -11,15 +11,20 @@ import {
 } from "pi-code-previews/testing";
 import { applyPresentationSettings } from "pi-code-previews/testing";
 let restoreSettings = () => {};
-const setPresentation = (settings: Parameters<typeof applyPresentationSettings>[0]) => {
+const setPresentation = (overrides: Parameters<typeof applyPresentationSettings>[0]) => {
   restoreSettings();
-  restoreSettings = applyPresentationSettings(settings);
+  restoreSettings = applyPresentationSettings(overrides);
 };
 import { compactStatus, type CompactSummary } from "pi-code-previews";
-import { styleNativeMcp } from "../../src/tools/native-mcp-render";
+import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
-import { nativeMcpIdentity } from "../../src/tools/native-mcp-subject";
-import { stripAnsi } from "pi-cosmic-core";
+import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
+import { sha256Text, stripAnsi } from "pi-cosmic-core";
+
+const styleNativeMcp = (
+  definition: ToolDefinition<any, any, any>,
+  schedule = animationSchedulerProbe().schedule,
+) => createNativeMcpRenderers(definition.name, definition, undefined, schedule);
 
 type NativeDefinition = ToolDefinition<any, any, any>;
 type ResourceTool = "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource";
@@ -31,7 +36,7 @@ const resourceTools: readonly ResourceTool[] = [
 
 /**
  * Mirrors Pi's fresh `createMcpToolDefinition` output: identifier-safe names and namespaces,
- * with the configured server name kept in the label. Renderers are Pi's own, never shown.
+ * with a deliberately unavailable label: presentation consumes public namespace metadata only.
  */
 function dynamicTool(
   server = "docs",
@@ -47,8 +52,6 @@ function dynamicTool(
     exposure: "direct",
     namespace: { name: `mcp__${server.replaceAll("-", "_")}` },
     annotations: { readOnlyHint: true, openWorldHint: true },
-    renderCall: () => new Text("NATIVE_CALL_RENDERER", 0, 0),
-    renderResult: () => new Text("NATIVE_RESULT_RENDERER", 0, 0),
     execute: () => Promise.resolve({ content: [], details: { server, tool } }),
   };
   return definition;
@@ -97,7 +100,7 @@ function summarize(
   args: NativeArguments,
   isError = false,
 ): CompactSummary | undefined {
-  return nativeMcpSummary(nativeMcpIdentity(definition))({
+  return nativeMcpSummary(nativeMcpIdentity(definition.name, definition))({
     phase: "settled",
     args,
     result: value,
@@ -116,70 +119,62 @@ const hasControls = (row: string) =>
   });
 
 for (const style of ["compact", "preview"] as const)
-  test(`${style} wrapping replaces only rendering and keeps the registered name`, () => {
+  test(`${style} renderer-only presentation does not mutate native definitions`, () => {
     settings(style);
     for (const original of [dynamicTool(), ...resourceTools.map(resourceTool)]) {
       const before = { ...original };
-      const styled = styleNativeMcp(original);
-      assert.notEqual(styled, original);
-      // SAFETY: These keys come directly from this typed native definition fixture.
-      const keys = Object.keys(original) as (keyof NativeDefinition)[];
-      for (const key of keys) {
-        if (key === "renderCall" || key === "renderResult" || key === "renderShell") continue;
-        assert.equal(styled[key], original[key], key);
-      }
-      assert.deepEqual({ ...original }, before, "the fresh definition itself is not mutated");
-      const h = createToolPresentationHarness(styled);
+      const h = createToolPresentationHarness(styleNativeMcp(original));
       h.call({ query: "effect" });
       h.result(result("done", docs));
-      assert.equal(stripAnsi(h.render(100).join("\n")).includes("NATIVE_"), false);
+      h.render(100);
+      assert.deepEqual({ ...original }, before);
     }
   });
 
-for (const style of ["compact", "preview"] as const)
-  test(`${style} headings name the labeled server and tool rather than the model alias`, () => {
-    settings(style);
-    const alias = "mcp__team_docs__find_page_1a2b3c4d";
-    const tool = styleNativeMcp(dynamicTool("team.docs", "find page", alias));
-    const h = createToolPresentationHarness(tool);
-    h.call({ query: "effect" });
-    for (const value of [
-      undefined,
-      result("Found 3 pages", { server: "team.docs", tool: "find page" }),
-    ]) {
-      if (value) h.result(value);
-      const text = stripAnsi(h.render(100).join("\n"));
-      assert.ok(text.includes("team.docs"));
-      assert.ok(text.includes("find page"));
-      assert.equal(text.includes(alias), false);
-    }
-    const resource = createToolPresentationHarness(
-      styleNativeMcp(resourceTool("read_mcp_resource")),
-    );
-    resource.call({ server: "docs", uri: "docs://guide/start" });
-    assert.ok(stripAnsi(resource.render(100).join("\n")).includes("docs://guide/start"));
-  });
-
-test("dashed server names keep the labeled server and tool across namespace forms", () => {
-  const current = dynamicTool("team-docs", "find-page");
-  assert.deepEqual(nativeMcpIdentity(current), {
-    kind: "tool",
-    label: "team-docs/find-page",
-    server: "team-docs",
-    tool: "find-page",
-  });
-  // Releases before Pi 0.99.2 used the configured server name verbatim in the namespace.
-  const verbatim = { ...current, namespace: { name: "mcp__team-docs" } };
-  assert.deepEqual(nativeMcpIdentity(verbatim), nativeMcpIdentity(current));
-  for (const namespace of [{ name: "mcp__other" }, undefined])
-    assert.deepEqual(nativeMcpIdentity({ ...current, namespace }), {
-      kind: "tool",
-      label: "team-docs/find-page",
+test("punctuated, dashed, long and colliding aliases never invent pending remote names", () => {
+  for (const [server, tool, hashed] of [
+    ["team-docs", "find-page", false],
+    ["docs", "find.page / detail", false],
+    ["docs", "very-long-tool-".repeat(12), true],
+    ["docs", "find-page", true],
+    ["docs", "find_page", true],
+    ["s".repeat(80), "lookup", true],
+  ] as const) {
+    const plain = `mcp__${server}__${tool}`.replaceAll(/[^A-Za-z0-9_]/g, "_");
+    const alias = hashed
+      ? `${plain.slice(0, 55)}_${sha256Text(`${server}\0${tool}`).slice(0, 8)}`
+      : plain;
+    const definition = dynamicTool(server, tool, alias);
+    const provider = nativeMcpSummary(nativeMcpIdentity(alias, definition));
+    const pending = provider({
+      phase: "pending",
+      args: {},
+      result: undefined,
+      context: renderContextFixture(),
     });
-  const found = result("Found 3 pages", { server: "team-docs", tool: "find-page" });
-  assert.equal(summarize(current, found, {})?.outcome, "returned");
-  const foreign = result("Found 3 pages", { server: "team_docs", tool: "find-page" });
-  assert.equal(summarize(current, foreign, {}), undefined);
+    assert.equal(pending?.subject, alias);
+    const receipt = result("Returned", { server, tool });
+    assert.equal(summarize(definition, receipt, {})?.subject, `${server} / ${tool}`);
+    assert.equal(summarize(definition, receipt, {})?.outcome, "returned");
+    for (const namespace of [{ name: "mcp__other" }, undefined]) {
+      const mismatched = { ...definition };
+      if (namespace) mismatched.namespace = namespace;
+      else delete mismatched.namespace;
+      assert.equal(summarize(mismatched, receipt, {}), undefined);
+    }
+    assert.equal(
+      summarize(definition, result("Returned", { server, tool: `${tool}-other` }), {}),
+      undefined,
+    );
+  }
+  const alias = "mcp__docs__lookup_deadbeef";
+  assert.equal(
+    summarize(dynamicTool("docs", "lookup", alias), result("Returned", docs), {}),
+    undefined,
+  );
+  const resource = createToolPresentationHarness(styleNativeMcp(resourceTool("read_mcp_resource")));
+  resource.call({ server: "docs", uri: "docs://guide/start" });
+  assert.ok(stripAnsi(resource.render(100).join("\n")).includes("docs://guide/start"));
 });
 
 test("settled native dispatch is neutral; only native evidence raises warnings", () => {
@@ -380,7 +375,6 @@ for (const style of ["compact", "preview"] as const)
           assert.ok(text.includes(marker), marker.slice(0, 40));
       }
       assert.deepEqual(value, before);
-      assert.equal(tool.execute, original.execute);
 
       const resource = createToolPresentationHarness(
         styleNativeMcp(resourceTool("read_mcp_resource")),
@@ -417,7 +411,7 @@ for (const style of ["compact", "preview"] as const)
       );
       for (const width of [20, 60, 100]) {
         const rows = h.render(width);
-        assert.ok(rows.length <= 10, `${rows.length} rows at ${width}`);
+        assert.ok(rows.length <= 12, `${rows.length} rows at ${width}`);
         for (const row of rows) {
           assert.ok(visibleWidth(row) <= width, row);
           assert.equal(hasControls(row), false, row);

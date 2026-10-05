@@ -1,16 +1,18 @@
 # Migrate to native Pi MCP and codemode
 
-Cosmic Pi `0.2.0` retires `pi-mcp` and `pi-code-mode`. Pi now owns MCP configuration, authentication, connections, execution, tool exposure, and native `codemode`. There is intentionally no compatibility layer.
+Cosmic Pi `0.2.0` retires `pi-mcp`, `pi-code-mode`, and the standalone `pi-mcp-previews` package. Code Previews includes builtin/native codemode/MCP presentation through the public renderer-only API; it requires Pi **1.0.1 or later**, tested with **1.0.2**. Pi now owns MCP configuration, authentication, connections, execution, tool exposure, and native `codemode`. There is intentionally no compatibility layer.
 
 ## Replace the extensions
 
 1. Uninstall the old extensions from every scope where they were installed. Use `pi remove npm:pi-code-mode` for the published extension, or `pi remove /absolute/path/to/packages/pi-code-mode` and `pi remove /absolute/path/to/packages/pi-mcp` for local installs. Add `-l` for project-local installations. Remove any remaining explicit old extension paths from Pi settings.
-2. Install the public presentation adapter: `pi install npm:pi-mcp-previews`. For a workspace checkout with dependencies installed, use `pi install "$PWD/packages/pi-mcp-previews"` instead. Use `-l` if project-local installation is intended.
-3. Keep or install `pi-code-previews` for the generic tool shell, built-in previews, and eligible native `codemode` styling. It no longer manages standalone MCP previews.
+2. If standalone `pi-mcp-previews` was installed, **remove it manually from every scope**: `pi remove npm:pi-mcp-previews`, or `pi remove /absolute/path/to/packages/pi-mcp-previews` for a local install. Add `-l` for project-local installations. Use `pi list` to find the exact source and remove any remaining explicit extension paths yourself. The old adapter replaces `/mcp`; leaving it installed prevents the independent builtin manager from owning native MCP.
+3. Upgrade Pi to at least 1.0.1 (the workspace tests 1.0.2). Keep or install `pi-code-previews` with `pi install npm:pi-code-previews`, or `pi install "$PWD/packages/pi-code-previews"` for a checkout with dependencies installed. Add `-l` only for project-local installation. It now includes the generic shell, builtin previews, native codemode, and standalone native MCP presentation.
 4. Remove obsolete `-builtin:mcp` exclusions that previously disabled native MCP for the custom gateway. Remove custom `-builtin:codemode` exclusions if they were only there for the retired extension. Preserve deliberate user restrictions; do not enable every tool or replace your allowlist indiscriminately.
 5. Run `/reload` or restart Pi after changing installation or configuration.
 
-`pi-mcp-previews` is always on while installed, with no enable/disable setting. The former Code Previews `nativeMcpPreviews` preference is obsolete and is not a migration or disable control; remove it manually if desired. Remove it and reload to restore the native MCP renderer. Its composed public `createMcpExtension()` factory supplies native `/mcp`; Pi omits the replaceable builtin manager, so there is still only one manager. Native behavior and configuration stay with Pi.
+Code Previews registers one stable `pi.registerToolRenderer` resolver at factory loading. It neither composes nor intercepts native codemode/MCP factories, registers their execution definitions, replaces `/mcp`, nor changes tool selection/exposure or permission gates. Write alone retains a genuine before-write snapshot hook under Pi's mutation queue. Extension-owned questionnaire/task/subagent/image tools retain their normal executable registrations.
+
+Standalone MCP presentation has no startup toggle and follows Code Previews' appearance settings. The former `nativeMcpPreviews` preference remains inert unknown data, preserved by ordinary saves; remove it manually if desired. The builtin/codemode preview-tools list changes presentation only, and later native MCP activation no longer needs a presentation reload. No package-removal, configuration, or credential migration happens automatically.
 
 ## Manually migrate server definitions
 

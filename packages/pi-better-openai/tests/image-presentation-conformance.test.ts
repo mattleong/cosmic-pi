@@ -1,8 +1,11 @@
 import { Box, Container, Image, type Component } from "@earendil-works/pi-tui";
+import type { CompactAnimationScheduler } from "pi-code-previews";
 import {
+  animationSchedulerProbe,
   applyPresentationSettings,
   captureRegistrations,
   createToolPresentationHarness,
+  probeAnimationOwnership,
 } from "pi-code-previews/testing";
 import { registerExtensionCommand } from "pi-cosmic-core";
 import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
@@ -13,6 +16,7 @@ import { registerOpenAIImage } from "../src/image/register.ts";
 import { imageResultText } from "../src/image/result-text.ts";
 
 const styles = ["compact", "preview"] as const;
+const backgrounds = ["on", "off", "border"] as const;
 const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 const details = {
   id: "image-identity",
@@ -26,8 +30,16 @@ const details = {
   outputFormat: "png" as const,
 };
 const text = (value: string) => ({ type: "text" as const, text: value });
-function register(style: (typeof styles)[number]) {
-  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false });
+function register(
+  style: (typeof styles)[number],
+  background: (typeof backgrounds)[number] = "on",
+  scheduleAnimation?: CompactAnimationScheduler,
+) {
+  applyPresentationSettings({
+    toolCallCollapsedStyle: style,
+    toolCallBackground: background,
+    toolCallTiming: false,
+  });
   const { tools, messageRenderers } = captureRegistrations((pi) =>
     registerOpenAIImage(
       pi,
@@ -38,6 +50,7 @@ function register(style: (typeof styles)[number]) {
       () => {
         throw new Error("Rendering must not update context");
       },
+      scheduleAnimation,
     ),
   );
   return { tool: tools[0]!, message: messageRenderers.get("openai-image")! };
@@ -55,23 +68,42 @@ const rows = (lines: readonly string[]) =>
 afterEach(applyPresentationSettings({}));
 
 describe("registered image presentation", () => {
-  it.each(styles)("leaves image-only and text/image attachments with Pi in %s mode", (style) => {
-    const { tool } = register(style);
-    for (const content of [[image], [text("Original output"), image]]) {
-      const result = { details, content };
-      const before = structuredClone(result);
-      const harness = createToolPresentationHarness(tool, { theme, width: 180 });
-      for (const { expanded, text } of harness.cycle({ prompt: details.prompt }, result)) {
-        if (expanded) {
-          expect(text).toContain("PROMPT_END");
-          expect(text).toContain(details.revisedPrompt);
-          expect(text).toContain("saved image.png");
+  it.each(styles.flatMap((style) => backgrounds.map((background) => ({ style, background }))))(
+    "leaves image-only and text/image attachments with Pi in $style/$background mode",
+    ({ style, background }) => {
+      const { tool } = register(style, background);
+      for (const content of [[image], [text("Original output"), image]]) {
+        const result = { details, content };
+        const before = structuredClone(result);
+        const harness = createToolPresentationHarness(tool, { theme, width: 180 });
+        for (const { expanded, text } of harness.cycle({ prompt: details.prompt }, result)) {
+          if (expanded) {
+            expect(text).toContain("PROMPT_END");
+            expect(text).toContain(details.revisedPrompt);
+            expect(text).toContain("saved image.png");
+          }
+          expect(text).not.toContain(image.data);
+          expect(result.content.find((part) => part.type === "image")).toBe(image);
         }
-        expect(text).not.toContain(image.data);
+        expect(result).toEqual(before);
       }
-      expect(result).toEqual(before);
-    }
-  });
+    },
+  );
+
+  it.each(backgrounds)(
+    "uses the registering owner's scheduler and releases it after settlement in %s mode",
+    (background) => {
+      const scheduler = animationSchedulerProbe();
+      const { tool } = register("compact", background, scheduler.schedule);
+      const [report] = probeAnimationOwnership([tool], scheduler, {
+        args: () => ({ prompt: details.prompt }),
+        result: () => ({ details, content: [image] }),
+      });
+      expect(report?.scheduled).toBeGreaterThan(0);
+      expect(report?.invalidated).toBe(true);
+      expect(report?.stops).toBeGreaterThan(0);
+    },
+  );
 
   it.each(styles)(
     "shows a failure's first line collapsed and its raw text with the whole request expanded in %s mode",

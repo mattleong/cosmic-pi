@@ -12,6 +12,7 @@ import { formatEnabledCodePreviewTools } from "../tools/selection";
 import {
   formatCodePreviewToolsWithState,
   formatSkippedCodePreviewToolLines,
+  isNativeMcpRendererAvailable,
 } from "../tools/status";
 
 /** `/code-previews health`: renderer health and the settings in effect. */
@@ -39,14 +40,14 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Bash result preview: ${formatOnOff(codePreviewSettings.bashResultPreview)}`,
       `Word-level diff emphasis: ${codePreviewSettings.wordEmphasis}`,
       `Configured tools: ${formatEnabledCodePreviewTools()}`,
-      `Installed previews: ${formatCodePreviewToolsWithState("installed")}`,
-      `Registration errors: ${formatCodePreviewToolsWithState("registration-error")}`,
+      `Available renderers: ${formatCodePreviewToolsWithState("installed")}`,
+      `Native MCP rendering: ${isNativeMcpRendererAvailable() ? "available" : "unavailable"}`,
+      `Write hook errors: ${formatCodePreviewToolsWithState("registration-error")}`,
       `Skipped previews: ${skippedLines.length ? "" : "none"}`,
       ...skippedLines,
       `Disabled by config: ${formatCodePreviewToolsWithState("disabled-by-config")}`,
-      `Inactive native tools: ${formatCodePreviewToolsWithState("not-active")}`,
-      `Unavailable native tools: ${formatCodePreviewToolsWithState("unavailable")}`,
-      ...(pendingTools === "none" ? [] : [`Pending registration: ${pendingTools}`]),
+      `Unavailable tools: ${formatCodePreviewToolsWithState("unavailable")}`,
+      ...(pendingTools === "none" ? [] : [`Pending renderers: ${pendingTools}`]),
       `Cache: ${status.cacheSize}/${status.cacheLimit}`,
       `Loaded languages: ${status.loadedLanguages}`,
       `Pending languages: ${status.pendingLanguages}`,

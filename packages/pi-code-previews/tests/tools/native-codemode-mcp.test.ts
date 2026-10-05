@@ -2,12 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "vitest";
 import type * as Schema from "effect/Schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
-import { captureFreshNativeCodemode } from "../../src/boundary/host-native-codemode";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { nativeArgumentPreview } from "../../src/tools/native-codemode-args";
-import { styleNativeCodemode } from "../../src/tools/native-codemode-render";
+import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
 import { nativeCodemodeCallSubject } from "../../src/tools/native-codemode-subject";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import {
@@ -191,12 +189,7 @@ for (const style of ["compact", "preview"] as const)
       toolCallCollapsedStyle: style,
       toolCallBackground: "off",
     });
-    const native = captureFreshNativeCodemode(
-      extensionApiFixture({ getSettings: () => ({}), getAllTools: () => [], appendEntry() {} }),
-    )!;
-    const styled = styleNativeCodemode(native, () => undefined, "/project");
-    assert.equal(styled.execute, native.execute);
-    assert.equal(styled.parameters, native.parameters);
+    const styled = createNativeCodemodeRenderers("/project", () => undefined);
     const name = "mcp__docs__lookup_1234abcd";
     const result = completed([
       {

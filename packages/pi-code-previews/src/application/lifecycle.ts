@@ -25,33 +25,39 @@ import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
   rejectInactiveCodePreviewSession,
+  type CodePreviewSessionCapability,
 } from "./capability";
 import { CodePreviewSchedulerService, type CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewToolName } from "../tools/names";
-import { registerToolRenderers } from "../tools/renderers/registration";
-import {
-  nativeCodemodeRegistration,
-  type NativeCodemodeSnapshot,
-} from "../tools/native-codemode-registration";
+import { registerWritePreviewTool } from "../tools/renderers/registration";
 import { getEnabledCodePreviewTools } from "../tools/selection";
+import { capturePreviewHostTools } from "../boundary/host-tool-renderers";
+import {
+  CodePreviewPresentationOwner,
+  createCodePreviewRendererResolver,
+  publishPreviewToolStatuses,
+} from "./tool-renderers";
+
 export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
 
 type SessionInput = {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly settingsAdmission: SettingsAdmission;
-  readonly nativeCodemode: NativeCodemodeSnapshot;
-  readonly presentation: { live: boolean };
+  readonly presentation: CodePreviewPresentationOwner;
+  capability?: CodePreviewSessionCapability;
   readonly signal?: AbortSignal;
   readonly notifyFailure: () => void;
 };
 
+function retirePresentation(input: SessionInput): void {
+  input.presentation.retire();
+  if (input.capability) clearCodePreviewSessionCapability(input.capability);
+}
+
 class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePreviewRendererRegistrationError>()(
   "CodePreviewRendererRegistrationError",
-  {
-    operation: Schema.Literals(["register-renderers"]),
-    message: Schema.String,
-  },
+  { operation: Schema.Literals(["register-renderers"]), message: Schema.String },
 ) {}
 
 function registerRenderersAtHostBoundary(register: () => void) {
@@ -76,7 +82,8 @@ export interface CodePreviewExtensionDependencies {
     theme: string,
   ) => Effect.Effect<void, never, CodePreviewSyntaxService>;
   readonly registerCommands: typeof registerCodePreviewsCommand;
-  readonly registerRenderers: typeof registerToolRenderers;
+  /** Execution registration is limited to write's real before-write hook. */
+  readonly registerRenderers: typeof registerWritePreviewTool;
 }
 
 const defaultDependencies: CodePreviewExtensionDependencies = {
@@ -91,44 +98,34 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
     ),
   initializeSyntax: (theme) => CodePreviewSyntaxService.use((service) => service.initialize(theme)),
   registerCommands: registerCodePreviewsCommand,
-  registerRenderers: registerToolRenderers,
+  registerRenderers: registerWritePreviewTool,
 };
 
-/** Pi registration; `dependencies` is the seam for lifecycle/finalizer tests. */
+/** Pi registration; dependencies are the seam for lifecycle/finalizer tests. */
 export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
   dependencies: CodePreviewExtensionDependencies = defaultDependencies,
 ): Promise<void> {
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
-  const nativeCodemode = nativeCodemodeRegistration();
+  // Transcript replay may precede session_start. Those rows belong to the first startup only.
+  let presentation = new CodePreviewPresentationOwner();
+  let started = false;
+  pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
   dependencies.registerCommands(pi);
 
   const startup = (input: SessionInput) =>
     Effect.gen(function* () {
       yield* dependencies.loadSettings(input.settingsAdmission, input.cwd, input.projectTrusted);
       const scheduler = yield* CodePreviewSchedulerService;
-      yield* registerRenderersAtHostBoundary(() =>
-        dependencies.registerRenderers(pi, input.cwd, {
+      yield* registerRenderersAtHostBoundary(() => {
+        publishPreviewToolStatuses(
+          capturePreviewHostTools(pi),
+          getEnabledCodePreviewTools(),
           ownedTools,
-          installedTools,
-          projectTrusted: input.projectTrusted,
-        }),
-      );
-      yield* registerRenderersAtHostBoundary(() =>
-        nativeCodemode.register(
-          pi,
-          input.nativeCodemode,
-          getEnabledCodePreviewTools().has("codemode"),
-          (interval, tick) =>
-            input.presentation.live
-              ? scheduler.schedule(interval, () => {
-                  if (input.presentation.live) tick();
-                })
-              : undefined,
-          input.cwd,
-        ),
-      );
+        );
+        dependencies.registerRenderers(pi, input.cwd, { ownedTools, installedTools });
+      });
       return scheduler;
     });
   const slot = makePiSessionRuntimeSlot<
@@ -141,24 +138,30 @@ export function codePreviewsWithDependencies(
     makeRuntime: () => dependencies.makeRuntime(pi),
     startup,
     onActivated: (input, token, scheduler) => {
-      installCodePreviewSessionCapability({
+      const capability: CodePreviewSessionCapability = {
         run: (effect, signal) =>
           slot.isCurrent(token)
             ? slot.run(effect, signal)
             : rejectInactiveCodePreviewSession("run"),
-        defer: scheduler.defer,
-        schedule: scheduler.schedule,
-      });
+        defer: (task) =>
+          input.presentation.live
+            ? scheduler.defer(() => {
+                if (input.presentation.live) task();
+              })
+            : () => undefined,
+        schedule: (interval, tick) =>
+          input.presentation.scheduleAnimation(interval, tick) ?? (() => undefined),
+      };
+      input.capability = capability;
+      installCodePreviewSessionCapability(capability);
+      // No cold row sees settings or a scheduler until trusted loading and registration succeed.
+      input.presentation.publish(input.cwd, getEnabledCodePreviewTools(), scheduler);
       if (codePreviewSettings.syntaxHighlighting)
         slot.fork(dependencies.initializeSyntax(codePreviewSettings.shikiTheme), input.signal);
     },
-    onDeactivated: (input) => {
-      input.presentation.live = false;
-      clearCodePreviewSessionCapability();
-    },
+    onDeactivated: retirePresentation,
     onStartFailure: (input) => {
-      input.presentation.live = false;
-      clearCodePreviewSessionCapability();
+      retirePresentation(input);
       input.notifyFailure();
     },
   });
@@ -167,42 +170,41 @@ export function codePreviewsWithDependencies(
     const notifyFailure = () =>
       notifyAtHostBoundary(ctx, "Code Previews couldn't start", "warning");
     const capturedHost = captureSessionHost(ctx);
+    const projectTrusted = isProjectTrusted(ctx);
     if (capturedHost["_tag"] === "Unavailable") {
+      presentation.retire();
+      notifyFailure();
+      return slot.shutdown().then(() => undefined);
+    }
+    // Admission queries public metadata synchronously, before any settings I/O.
+    try {
+      capturePreviewHostTools(pi);
+    } catch {
+      presentation.retire();
       notifyFailure();
       return slot.shutdown().then(() => undefined);
     }
     if (capturedHost.aborted) notifyFailure();
-    const projectTrusted = isProjectTrusted(ctx);
-    const settingsAdmission = makeSettingsAdmission();
-    let nativeSnapshot: NativeCodemodeSnapshot;
-    try {
-      nativeSnapshot = nativeCodemode.capture(pi);
-    } catch {
-      notifyFailure();
-      return slot.shutdown().then(() => undefined);
+    if (started || !presentation.live) {
+      presentation.retire();
+      presentation = new CodePreviewPresentationOwner();
     }
+    started = true;
+    const base: SessionInput = {
+      cwd: capturedHost.cwd,
+      projectTrusted,
+      settingsAdmission: makeSettingsAdmission(),
+      presentation,
+      notifyFailure,
+    };
     const input: SessionInput = capturedHost.signal
-      ? {
-          cwd: capturedHost.cwd,
-          projectTrusted,
-          settingsAdmission,
-          nativeCodemode: nativeSnapshot,
-          presentation: { live: true },
-          signal: capturedHost.signal,
-          notifyFailure,
-        }
-      : {
-          cwd: capturedHost.cwd,
-          projectTrusted,
-          settingsAdmission,
-          nativeCodemode: nativeSnapshot,
-          presentation: { live: true },
-          notifyFailure,
-        };
+      ? { ...base, signal: capturedHost.signal }
+      : base;
     return slot.start(input, capturedHost.signal).then(() => undefined);
   });
-
-  pi.on("session_shutdown", () => slot.shutdown());
-
+  pi.on("session_shutdown", () => {
+    presentation.retire();
+    return slot.shutdown();
+  });
   return Promise.resolve();
 }

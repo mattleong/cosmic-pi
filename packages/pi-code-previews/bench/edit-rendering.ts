@@ -3,10 +3,8 @@ import type {
   AgentToolResult,
   EditToolDetails,
   EditToolInput,
-  Theme,
-  createEditToolDefinition,
+  ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
 import type { ToolRenderContext } from "../src/tools/renderers/shared/types";
 import {
   benchLog,
@@ -19,25 +17,13 @@ import {
 } from "./helpers";
 
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/config/state");
-const { registerToolRenderers } = await import("../src/tools/renderers/registration");
+const { createEditPreviewTool } = await import("../src/tools/renderers/edit");
 const { startBenchmarkShikiSession } = await import("./shiki-session");
 
 const WIDTH = 120;
 let sink = 0;
 
-type NativeEditDefinition = ReturnType<typeof createEditToolDefinition>;
-type EditBenchmarkState = Parameters<NonNullable<NativeEditDefinition["renderCall"]>>[2]["state"];
-
-type Renderer = {
-  name: string;
-  renderCall?: (args: EditToolInput, theme: Theme, context: RenderContext) => Component;
-  renderResult?: (
-    result: ToolResult,
-    options: { expanded: boolean; isPartial: boolean },
-    theme: Theme,
-    context: RenderContext,
-  ) => Component;
-};
+type EditBenchmarkState = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2]["state"];
 
 type RenderContext = ToolRenderContext<EditBenchmarkState, EditToolInput>;
 
@@ -45,6 +31,8 @@ type ToolResult = AgentToolResult<EditToolDetails | undefined>;
 
 const previousSettings = { ...codePreviewSettings };
 const theme = benchTheme();
+// The retained self shell also draws native-like preview backgrounds.
+theme.bg = (key, text) => `${theme.getBgAnsi(key)}${text}\x1b[49m`;
 
 setCodePreviewSettings({
   ...codePreviewSettings,
@@ -62,7 +50,7 @@ const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiThem
 
 try {
   printBenchHeader("edit renderer end-to-end");
-  const edit = findRenderer(registerRenderers(), "edit");
+  const edit = createEditPreviewTool("/tmp/project");
   const results = [];
 
   for (const benchCase of makeCallCases()) {
@@ -130,7 +118,7 @@ try {
       toolCallBackground: mode,
       toolCallTiming: false,
     });
-    const shellEdit = findRenderer(registerRenderers(), "edit");
+    const shellEdit = createEditPreviewTool("/tmp/project");
     const state: EditBenchmarkState = {};
     results.push(
       runBench("single edit shell adapter", "renderCall+component", mode, () => {
@@ -149,7 +137,7 @@ try {
     toolCallBackground: "off",
     toolCallTiming: true,
   });
-  const timingEdit = findRenderer(registerRenderers(), "edit");
+  const timingEdit = createEditPreviewTool("/tmp/project");
   const timingState: EditBenchmarkState = {};
   const timingContext = {
     ...callContext(shellArgs, false, timingState),
@@ -178,28 +166,6 @@ try {
 } finally {
   setCodePreviewSettings(previousSettings);
   await stopShiki();
-}
-
-function registerRenderers(): Renderer[] {
-  const registered: Renderer[] = [];
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  registerToolRenderers(
-    {
-      getAllTools: () => [],
-      registerTool: <Tool>(tool: Tool) => {
-        // SAFETY: The benchmark captures the renderer definition registered by this package.
-        registered.push(tool as Tool & Renderer);
-      },
-    } as never,
-    "/tmp/project",
-  );
-  return registered;
-}
-
-function findRenderer(renderers: Renderer[], name: string): Renderer {
-  const renderer = renderers.find((candidate) => candidate.name === name);
-  if (!renderer?.renderCall || !renderer.renderResult) throw new Error(`Missing ${name} renderer`);
-  return renderer;
 }
 
 function callContext(

@@ -4,7 +4,6 @@ import { formatToolsSettingValue } from "./policy";
 
 export type CodePreviewToolStatus =
   | { state: "pending" }
-  | { state: "not-active" }
   | { state: "unavailable" }
   | { state: "installed" }
   | { state: "disabled-by-config" }
@@ -12,6 +11,15 @@ export type CodePreviewToolStatus =
   | { state: "registration-error" };
 
 const toolStatuses = new Map<CodePreviewToolName, CodePreviewToolStatus>();
+let nativeMcpRendererAvailable = false;
+
+export function setNativeMcpRendererAvailable(available: boolean): void {
+  nativeMcpRendererAvailable = available;
+}
+
+export function isNativeMcpRendererAvailable(): boolean {
+  return nativeMcpRendererAvailable;
+}
 
 resetCodePreviewToolStatuses(new Set());
 

@@ -5,7 +5,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import type { AdaptableToolDefinition, CodePreviewToolRenderers } from "../../renderer-adapter";
+import type { CodePreviewRendererCallbacks } from "../../renderer-adapter";
 import type { BuiltinCompactTool } from "../../builtin-subject";
 import { getObjectValue } from "../../../shared/helpers";
 import { escapeControlChars } from "../../../shared/terminal-text";
@@ -37,10 +37,10 @@ import { normalizeShellCommandWhitespace } from "../../shell-command";
 import type { RendererState, ToolRenderContext } from "./types";
 
 /** Detailed content only. The shared shell owns headings, outcome, and attention. */
-export function builtinExpandedContent<T extends AdaptableToolDefinition>(
+export function builtinExpandedContent(
   tool: BuiltinCompactTool,
   cwd: string,
-): Pick<CodePreviewToolRenderers<T>, "renderCall" | "renderResult"> {
+): NonNullable<CodePreviewRendererCallbacks["expandedContent"]> {
   return {
     renderCall(args, theme, context) {
       const path = getPathArg(args);

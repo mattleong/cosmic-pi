@@ -10,13 +10,11 @@ import {
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
 } from "pi-cosmic-core";
-import {
-  getBoundedTextContent,
-  type CompactIssue,
-  type CompactSummary,
-  type CompactSummaryProvider,
-} from "pi-code-previews";
-import { nativeMcpHeading, type NativeMcpIdentity } from "./native-mcp-subject";
+import { getBoundedTextContent } from "./data/results";
+import type { CompactIssue } from "./compact-issues";
+import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
+import { nativeMcpReceiptMatches, type NativeMcpIdentity } from "./native-mcp-identity";
+import { nativeMcpArgumentText, nativeMcpHeading } from "./native-mcp-subject";
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Evidence = Schema.Struct({
@@ -47,12 +45,16 @@ export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence 
   }, undefined);
 }
 
-/** Evidence belongs to this definition: its own resource tool, or its labeled server and tool. */
-function belongsTo(identity: NativeMcpIdentity, evidence: NativeMcpEvidence): boolean {
-  if (identity.kind === "resource") return evidence.tool === identity.name;
-  return identity.server !== undefined && identity.tool !== undefined
-    ? evidence.server === identity.server && evidence.tool === identity.tool
-    : `${evidence.server}/${evidence.tool}` === identity.label;
+/** Receipts must match the alias/namespace, or a resource tool and its observed server. */
+function belongsTo<Args>(
+  identity: NativeMcpIdentity,
+  evidence: NativeMcpEvidence,
+  args: Args,
+): boolean {
+  return (
+    nativeMcpReceiptMatches(identity, evidence) &&
+    (identity.kind !== "resource" || evidence.server === nativeMcpArgumentText(args, "server"))
+  );
 }
 
 const ListingFailure = Schema.Struct({ server: Schema.String, error: Schema.String });
@@ -91,16 +93,21 @@ interface NativeMcpListing {
 function nativeMcpListing(
   name: "list_mcp_resources" | "list_mcp_resource_templates",
   result: AgentToolResult<unknown>,
+  server: string,
 ): NativeMcpListing | undefined {
   const [part, ...rest] = result.content;
   if (rest.length > 0 || part?.type !== "text" || part.text.length > MAX_LISTING_TEXT)
     return undefined;
   if (name === "list_mcp_resources") {
     const listing = decodeUnknownOrUndefined(ResourceListing, part.text);
-    return listing && listingEvidence(listing.resources.length, listing);
+    return listing && (listing.server ?? "") === server
+      ? listingEvidence(listing.resources.length, listing)
+      : undefined;
   }
   const listing = decodeUnknownOrUndefined(TemplateListing, part.text);
-  return listing && listingEvidence(listing.resourceTemplates.length, listing);
+  return listing && (listing.server ?? "") === server
+    ? listingEvidence(listing.resourceTemplates.length, listing)
+    : undefined;
 }
 
 function listingEvidence(
@@ -141,15 +148,16 @@ const TRUNCATED =
 const SAVE_FAILED = "\n\n[Could not save the full output: ";
 
 /** Only an owned, recognized, recoverable envelope may replace the raw collapsed preview. */
-export function nativeMcpHasRecoverableClipping(
+export function nativeMcpHasRecoverableClipping<Args>(
   identity: NativeMcpIdentity,
   result: AgentToolResult<unknown>,
+  args: Args,
 ): boolean {
   const evidence = nativeMcpEvidence(result.details);
   const first = result.content[0];
   return Boolean(
     evidence?.fullOutputPath &&
-    belongsTo(identity, evidence) &&
+    belongsTo(identity, evidence, args) &&
     first?.type === "text" &&
     TRUNCATED.test(first.text) &&
     !first.text.includes(SAVE_FAILED) &&
@@ -169,7 +177,7 @@ function outputIssues(
     code: "mcp-output-truncated",
     message: "Output is truncated",
   };
-  if (evidence.fullOutputPath)
+  if (evidence.fullOutputPath && !envelope?.includes(SAVE_FAILED))
     return [
       {
         ...truncated,
@@ -240,14 +248,15 @@ export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined):
 export const nativeMcpSummary =
   (identity: NativeMcpIdentity): CompactSummaryProvider<any, any, any> =>
   ({ phase, args, result, context }) => {
-    const heading = { ...nativeMcpHeading(identity, args), showTiming: true as const };
+    const pending = { ...nativeMcpHeading(identity, args), showTiming: true as const };
     if (phase !== "settled") {
       const progress = nativeMcpProgress(result);
-      return progress ? { ...heading, metadata: [progress] } : heading;
+      return progress ? { ...pending, metadata: [progress] } : pending;
     }
     if (!result) return undefined;
     const evidence = nativeMcpEvidence(result.details);
-    const owned = evidence && belongsTo(identity, evidence) ? evidence : undefined;
+    const owned = evidence && belongsTo(identity, evidence, args) ? evidence : undefined;
+    const heading = { ...nativeMcpHeading(identity, args, owned), showTiming: true as const };
     const output = owned ? outputIssues(result, owned) : [];
     if (context.isError)
       return { ...heading, outcome: "error", issues: [errorIssue(identity, result), ...output] };
@@ -255,7 +264,7 @@ export const nativeMcpSummary =
     const summary: CompactSummary = { ...heading, outcome: "returned", issues: output };
     if (identity.kind === "tool" || identity.name === "read_mcp_resource")
       return output.length > 0 ? summary : { ...summary, counters: contentCounters(result) };
-    const listing = nativeMcpListing(identity.name, result);
+    const listing = nativeMcpListing(identity.name, result, owned.server);
     const noun = identity.name === "list_mcp_resources" ? "resource" : "template";
     if (!listing)
       // A truncated or replaced aggregate listing can hide the servers that failed.

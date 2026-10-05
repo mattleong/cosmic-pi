@@ -4,32 +4,41 @@
 
 Code Previews owns syntax-highlighted previews, structured diffs, safer write/edit presentation,
 appearance settings, and the cooperative tool shell. It registers `/code-previews health` and
-`/code-previews settings`, plus `session_start` and `session_shutdown`. Its visible tool surface is
-seven core builtin replacements and eligible fresh-native `codemode` styling. It never changes
-Pi's active tool names.
+`/code-previews settings`, plus `session_start` and `session_shutdown`. One factory-time public
+`pi.registerToolRenderer` resolver presents seven core builtins, native `codemode`, and standalone
+native MCP tools/resources. Pi 1.0.1 is the minimum; the workspace tests against 1.0.2.
 
-Standalone native MCP tools/resources and the native `/mcp` manager belong to the separate,
-always-on `pi-mcp-previews` package. Code Previews neither composes that manager nor publishes its
-status. There is no MCP startup setting; old unknown fields remain inert on disk.
+Pi independently owns native codemode/MCP execution and the `/mcp` manager. Code Previews neither
+composes nor intercepts their factories, registers their execution definitions, nor changes tool
+selection/exposure or permissions. Write alone retains a real before-write snapshot hook.
+Standalone MCP presentation has no startup toggle; old unknown settings fields remain inert on
+disk. The former standalone `pi-mcp-previews` package is retired and must be removed manually.
 
 ## Lifecycle and boundaries
 
 - `src/extension.ts` is the thin entrypoint; `application/lifecycle.ts` coordinates one shared
-  core session-runtime slot, trusted settings loading, renderer installation, syntax initialization,
-  replacement, and shutdown. Capture host context and native codemode eligibility before I/O.
+  core session-runtime slot, trusted settings loading, renderer readiness, syntax initialization,
+  replacement, and shutdown. Factory loading registers one resolver; session starts never add more.
 - `src/layer.ts` composes private settings, syntax, write, and scheduler dependencies. The final
   Layer retains the Node file platform for effects run through the session capability.
 - `application/capability.ts` is the synchronous runtime/defer/schedule bridge. Its run callback
   checks the captured slot token. Deactivation clears the capability and revokes native animation.
   `application/scheduler.ts` scopes deferred and cadence callbacks in a FiberSet; disposal awaits
   remaining fibers. Cooperative extensions can compose its public Layer into their own runtime.
-- Core renderer planning constructs all definitions before mutation. Attempted ownership and
-  successful installation are separate; individual registration failures preserve later installs
-  and permit retry after mutate-then-refresh failures. Discovery failures stop startup.
-- `boundary/host-native-codemode.ts` uses only Pi's public factory to capture a fresh owned
-  definition. Registration checks unique public command source and schema identity before and
-  after mutation; foreign, missing, inactive, or conflicting tools are not taken over. Execution,
-  native schema, hooks, grammar, store callbacks, output and images remain unchanged.
+- `boundary/host-tool-renderers.ts` reads exact public builtin source metadata and retains only
+  public renderer fields from `next()`. Foreign tools fall through unchanged. Core/native
+  codemode presentation follows preview selection, not active-at-start status. Native MCP
+  definitions require builtin MCP ownership; missing historical aliases require the independently
+  proven unique builtin `/mcp` manager. Nothing is introduced or activated for presentation.
+- `application/tool-renderers.ts` publishes an originating presentation owner only after trusted
+  settings and startup succeed. `renderer-row.ts` retains cold replay call/result slots under a
+  fixed self shell, then adopts that owner's first-ready appearance and reconstructs complete
+  arguments/results. Old rows retain their appearance and cannot borrow replacement schedulers.
+- `tools/renderers/registration.ts` registers only write's execution hook after exact builtin or
+  proven prior ownership admission. It preserves activation through `defaultActive`, separates
+  attempted ownership from successful installation, and permits retry after mutate-then-refresh
+  failures. Discovery failures stop startup; a bounded write registration error keeps rendering
+  and the current runtime available.
 
 ## Settings and durable publication
 
@@ -56,8 +65,10 @@ so closing cannot pop an unrelated stacked surface.
 ## Presentation and feature state
 
 - `tools/cooperative-tools.ts` and the builtin factories share one renderer adapter. Shell mode
-  and collapsed style are captured at wrapping; timing remains live. Definitions preserve
-  execution, results and images. Consumer packages use only the root public API.
+  and collapsed style are captured at wrapping; timing remains live. The root renderer-only
+  `withCodePreviewRenderers` accepts no execution/schema; `withCodePreviewShell` preserves an
+  extension-owned execution definition. `selfShell: true` retains fixed self framing in every
+  appearance mode, including a native-like combined background in preview/on.
 - `tools/compact-summary.ts` and bounded schemas define semantic summaries; malformed or absent
   evidence gets conservative generic presentation, never inferred success. `compact-issues.ts`
   merges human messages with expanded-only diagnostics. Preview and compact styles share issues.
@@ -73,6 +84,9 @@ so closing cannot pop an unrelated stacked surface.
   expansion keeps Program, Calls and Output. Saved-output recovery is informational; missing
   recovery remains a warning. Rendering never reads spill files. Parent and child measured
   subsecond timing obeys settings; retired callbacks cannot use replacement schedulers.
+- `tools/native-mcp-render.ts` presents arguments, native output, images and recovery without
+  reading retained artifacts. Identity uses exact native metadata, bounded receipts and forward
+  SHA matching; missing aliases remain conservative and renderer caches reject foreign ownership.
 - Syntax and write services own authoritative state and publish immutable synchronous projections.
   Syntax acquisition/loading and request ingress are bounded and scoped; stale finalization cannot
   clear newer highlighter caches. Write previews retain Pi's direct-write semantics and use bounded
@@ -86,4 +100,5 @@ Follow the [tool presentation standard](../../docs/architecture/tool-presentatio
 The public `testing.ts` harness exercises actual registered callbacks without execution, including
 expansion, fallback, animation ownership and native images. Package tests protect lifecycle,
 persistence, cancellation and conservative evidence; the env-gated gallery retains builtin and
-native codemode scenarios, including nested MCP children.
+native codemode and standalone MCP scenarios. SDK and packed-consumer checks keep builtin native
+execution independent and prove real fixture execution, images and cleanup.

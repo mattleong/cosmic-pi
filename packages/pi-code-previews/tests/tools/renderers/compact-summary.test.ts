@@ -7,6 +7,7 @@ import type {
   WriteToolInput,
   EditToolInput,
   GrepToolInput,
+  ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { defaultCodePreviewSettings } from "../../../src/config/defaults";
 import {
@@ -24,9 +25,8 @@ import { createBashPreviewTool } from "../../../src/tools/renderers/bash";
 import { createGrepPreviewTool } from "../../../src/tools/renderers/grep";
 import { createFindPreviewTool } from "../../../src/tools/renderers/find";
 import { createLsPreviewTool } from "../../../src/tools/renderers/ls";
-import { createWritePreviewTool } from "../../../src/tools/renderers/write";
+import { createWritePreviewRenderers as createWritePreviewTool } from "../../../src/tools/renderers/write";
 import { createEditPreviewTool } from "../../../src/tools/renderers/edit";
-import type { AdaptableToolDefinition } from "../../../src/tools/renderer-adapter";
 import {
   plainTheme as theme,
   previewBodiesDisabled,
@@ -510,7 +510,7 @@ describe("write and edit diff limitations", () => {
 
 /** Renders both slots from one context so toggles share the retained shell state. */
 function renderText(
-  tool: AdaptableToolDefinition,
+  tool: ToolRenderers,
   output: AgentToolResult<unknown>,
   ctx: ToolRenderContext<object, unknown>,
   width = 100,
@@ -602,7 +602,6 @@ describe("builtin factory compact integration", () => {
   test("quiet write size guards preserve the original expanded skip reason and result", () => {
     const tool = createWritePreviewTool("/project");
     const ctx = context();
-    // The wrapped host write type still declares undefined details; execution adds this snapshot.
     const output = result<undefined>("applied");
     Object.assign(output, {
       details: {

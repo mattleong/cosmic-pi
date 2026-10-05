@@ -1,4 +1,4 @@
-import type { NativeCodemodeDefinition } from "../boundary/host-native-codemode";
+import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
@@ -12,7 +12,7 @@ import { renderNativeCodemodeProgram } from "./native-codemode-source";
 import { escapeControlChars } from "../shared/terminal-text";
 import { renderHighlightedText } from "../syntax/render";
 import type { CompactAnimationScheduler } from "./compact-summary";
-import { withCodePreviewShell } from "./cooperative-tools";
+import { withCodePreviewRenderers, type CodePreviewShellOptions } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
 import {
   nativeCodemodeChildren,
@@ -59,20 +59,19 @@ function safeContent(
   };
 }
 
-/** Only accepts the fresh definition captured from our local public native factory adapter. */
-export function styleNativeCodemode(
-  fresh: NativeCodemodeDefinition,
-  scheduleAnimation: CompactAnimationScheduler,
+/** Presentation only; the lifecycle admits the current public builtin codemode source. */
+export function createNativeCodemodeRenderers(
   cwd: string,
-): NativeCodemodeDefinition {
+  scheduleAnimation: CompactAnimationScheduler,
+  selfShell = true,
+  appearance: Pick<CodePreviewShellOptions, "mode" | "collapsedStyle"> = {},
+): ToolRenderers {
   const summary = nativeCodemodeSummary(cwd);
-  const previewStyle = codePreviewSettings.toolCallCollapsedStyle === "preview";
-  const renderSource: NonNullable<NativeCodemodeDefinition["renderCall"]> = (
-    args,
-    theme,
-    context,
-  ) => {
-    const source = Predicate.isString(args.code) ? args.code : "";
+  const previewStyle =
+    (appearance.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) === "preview";
+  const renderSource: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+    const source =
+      Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
     return safeContent(
       () =>
         expandedSection(
@@ -88,7 +87,7 @@ export function styleNativeCodemode(
     );
   };
 
-  const renderOutput: NonNullable<NativeCodemodeDefinition["renderResult"]> = (
+  const renderOutput: NonNullable<ToolRenderers["renderResult"]> = (
     result,
     _options,
     theme,
@@ -168,11 +167,12 @@ export function styleNativeCodemode(
     }, raw);
   };
 
-  return withCodePreviewShell(
+  return withCodePreviewRenderers(
+    { name: "codemode" },
     {
-      ...fresh,
       renderCall(args, theme, context) {
-        const source = Predicate.isString(args.code) ? args.code : "";
+        const source =
+          Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
         const program = renderNativeCodemodeProgram(source, theme, context);
         const fallback = new Container();
         fallback.addChild(new Text("codemode", 0, 0));
@@ -236,7 +236,8 @@ export function styleNativeCodemode(
       },
     },
     {
-      preserveSelfShell: false,
+      ...appearance,
+      selfShell,
       compactSummary: summary,
       animateProgress: true,
       showShortTiming: true,

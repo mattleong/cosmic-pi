@@ -1,22 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { formatDuration } from "pi-cosmic-core";
-import { extensionApiFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { animationSchedulerProbe, createToolPresentationHarness } from "../../testing";
-import { captureFreshNativeCodemode } from "../../src/boundary/host-native-codemode";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { styleNativeCodemode } from "../../src/tools/native-codemode-render";
+import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
 import { stripAnsi } from "../support/render";
 
-const fresh = () =>
-  captureFreshNativeCodemode(
-    extensionApiFixture({
-      getSettings: () => ({}),
-      getAllTools: () => [],
-      appendEntry() {},
-    }),
-  )!;
 const settings = (
   style: "compact" | "preview",
   timing = false,
@@ -61,7 +52,7 @@ for (const width of [16, 60, 100])
           })
         : plainTheme;
       const h = createToolPresentationHarness(
-        styleNativeCodemode(fresh(), () => undefined, "/project"),
+        createNativeCodemodeRenderers("/project", () => undefined),
         { theme },
       );
       h.call({ code: source });
@@ -83,7 +74,7 @@ for (const style of ["compact", "preview"] as const)
             settings(style, timing, background);
             const probe = animationSchedulerProbe();
             const h = createToolPresentationHarness(
-              styleNativeCodemode(fresh(), probe.schedule, "/project"),
+              createNativeCodemodeRenderers("/project", probe.schedule),
             );
             h.call({ code: "// SOURCE_RETAINED" }, { expanded });
             assert.equal(probe.scheduled, 0);
@@ -123,7 +114,7 @@ for (const style of ["compact", "preview"] as const)
             let now = 1000;
             vi.spyOn(Date, "now").mockImplementation(() => now);
             const h = createToolPresentationHarness(
-              styleNativeCodemode(fresh(), () => undefined, "/project"),
+              createNativeCodemodeRenderers("/project", () => undefined),
             );
             const args = { code: "await Promise.allSettled(checks);" };
             h.call(args, { executionStarted: true, isPartial: true, expanded });
@@ -182,7 +173,7 @@ for (const style of ["compact", "preview"] as const)
       settings(style, true, background);
       for (const durationMs of [undefined, -1, NaN, Infinity, "250", 0]) {
         const h = createToolPresentationHarness(
-          styleNativeCodemode(fresh(), () => undefined, "/project"),
+          createNativeCodemodeRenderers("/project", () => undefined),
         );
         const args = { code: "// SOURCE_RETAINED" };
         h.call(args, { executionStarted: false, isPartial: true });
@@ -227,7 +218,7 @@ for (const style of ["compact", "preview"] as const)
     const before = structuredClone(result);
     for (const unknownHeader of [false, true]) {
       const h = createToolPresentationHarness(
-        styleNativeCodemode(fresh(), () => undefined, "/project"),
+        createNativeCodemodeRenderers("/project", () => undefined),
       );
       const rendered = unknownHeader
         ? {

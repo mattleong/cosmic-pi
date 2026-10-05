@@ -1,6 +1,7 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { createCompactToolShell, type CompactShellOptions } from "./compact-shell";
+import { withSelfBackground } from "./self-background";
 import { recordPreviewResult, renderWithPreviewIssues } from "./preview-issues";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import {
@@ -18,7 +19,7 @@ import {
   unwrapTimingComponent,
   withLastComponent,
 } from "./tool-timing";
-import { type ToolCallBackgroundMode } from "../config/schema";
+import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 
@@ -43,13 +44,15 @@ export function createCodePreviewToolShell(
   mode: ToolCallBackgroundMode = codePreviewSettings.toolCallBackground,
   compact?: CompactShellOptions,
   scheduleAnimation: CompactAnimationScheduler | undefined = compact?.scheduleAnimation,
+  selfShell = false,
+  collapsedStyle: ToolCallCollapsedStyle = codePreviewSettings.toolCallCollapsedStyle,
 ): CodePreviewToolShell {
-  if (compact && codePreviewSettings.toolCallCollapsedStyle === "compact")
+  if (compact && collapsedStyle === "compact")
     return createCompactToolShell(mode, { ...compact, scheduleAnimation });
   const summary = compact?.compactSummary;
   const animateProgress = compact?.animateProgress ?? false;
   const showShortTiming = compact?.showShortTiming ?? false;
-  return {
+  const shell: CodePreviewToolShell = {
     renderShell: mode === "on" ? "default" : "self",
     renderCall: (context, theme, render) =>
       renderCodePreviewCall(
@@ -74,6 +77,7 @@ export function createCodePreviewToolShell(
       );
     },
   };
+  return selfShell && shell.renderShell === "default" ? withSelfBackground(shell) : shell;
 }
 
 function renderCodePreviewCall<TState, TArgs>(

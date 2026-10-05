@@ -3,14 +3,21 @@ import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
+import { animationSchedulerProbe, createToolPresentationHarness } from "pi-code-previews/testing";
 import { applyPresentationSettings } from "pi-code-previews/testing";
 let restoreSettings = () => {};
 const setPresentation = (settings: Parameters<typeof applyPresentationSettings>[0]) => {
   restoreSettings();
   restoreSettings = applyPresentationSettings(settings);
 };
-import { styleNativeMcp } from "../../src/tools/native-mcp-render";
+import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
+const styleNativeMcp = (definition: ToolDefinition<any, any, any>) =>
+  createNativeMcpRenderers(
+    definition.name,
+    definition,
+    undefined,
+    animationSchedulerProbe().schedule,
+  );
 import type { NativeMcpEvidence } from "../../src/tools/native-mcp-summary";
 import { stripAnsi } from "pi-cosmic-core";
 
@@ -66,8 +73,6 @@ for (const style of ["compact", "preview"] as const)
       for (const theme of themes) {
         const original = definition();
         const tool = styleNativeMcp(original);
-        assert.equal(tool.execute, original.execute);
-        assert.equal(tool.parameters, original.parameters);
         const h = createToolPresentationHarness(tool, { theme });
         const result: AgentToolResult<unknown> = {
           ...value(),
@@ -184,6 +189,52 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
     h.call({});
     h.result(value(text));
     assert.ok(stripAnsi(h.render(160).join("\n")).includes(text));
+  }
+});
+
+test("metadata-only saved output remains accessible under theme fallback", () => {
+  settings("preview");
+  const theme: Theme = opaqueFixture({
+    ...plainTheme,
+    fg() {
+      throw new Error("Theme unavailable");
+    },
+  });
+  const h = createToolPresentationHarness(styleNativeMcp(definition()), { theme });
+  h.call({ query: "ARGUMENT_RETAINED" }, { expanded: true });
+  h.result(
+    value("NATIVE_OUTPUT_RETAINED", { server: "other", tool: "lookup", fullOutputPath: path }),
+    { expanded: true },
+  );
+  const text = stripAnsi(h.render(200).join("\n"));
+  assert.ok(text.includes("NATIVE_OUTPUT_RETAINED"));
+  assert.ok(text.includes(path));
+});
+
+test("namespace and observed resource-server mismatches cannot hide native clipping", () => {
+  settings("preview");
+  for (const namespace of [{ name: "mcp__other" }, undefined]) {
+    const original = definition();
+    if (namespace) original.namespace = namespace;
+    else delete original.namespace;
+    const h = createToolPresentationHarness(styleNativeMcp(original));
+    h.call({});
+    h.result(value());
+    assert.ok(stripAnsi(h.render(160).join("\n")).includes("Warning: truncated output"));
+  }
+  for (const name of ["read_mcp_resource", "list_mcp_resources", "list_mcp_resource_templates"]) {
+    const resource = { ...definition(), name, label: name };
+    const h = createToolPresentationHarness(styleNativeMcp(resource));
+    h.call({ server: "other", uri: "docs://retained" });
+    h.result(value(output, { server: "docs", tool: name, fullOutputPath: path }));
+    assert.ok(stripAnsi(h.render(160).join("\n")).includes("Warning: truncated output"));
+    h.call({ server: "other", uri: "docs://retained" }, { expanded: true });
+    h.result(value(output, { server: "docs", tool: name, fullOutputPath: path }), {
+      expanded: true,
+    });
+    const expanded = stripAnsi(h.render(200).join("\n"));
+    assert.ok(expanded.includes("docs://retained"));
+    assert.ok(expanded.includes(path));
   }
 });
 

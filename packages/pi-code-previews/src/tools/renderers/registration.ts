@@ -1,78 +1,95 @@
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { getBuiltinToolOptions, type BuiltinToolOptions } from "../builtin-options";
+import type { ExtensionAPI, SourceInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { CodePreviewRendererSession } from "../../application/renderer-contract";
 import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../names";
 import { getEnabledCodePreviewTools } from "../selection";
-import { resetCodePreviewToolStatuses, setCodePreviewToolStatus } from "../status";
+import { setCodePreviewToolStatus } from "../status";
 import { createBashPreviewTool } from "./bash";
 import { createEditPreviewTool } from "./edit";
 import { createFindPreviewTool } from "./find";
 import { createGrepPreviewTool } from "./grep";
 import { createLsPreviewTool } from "./ls";
 import { createReadPreviewTool } from "./read";
-import { createWritePreviewTool } from "./write";
+import { createWritePreviewRenderers, createWritePreviewTool } from "./write";
 
-export interface RegisterToolRenderersOptions {
-  ownedTools?: Set<CodePreviewToolName>;
-  installedTools?: Set<CodePreviewToolName>;
-  toolOptions?: BuiltinToolOptions;
-  projectTrusted?: boolean;
+const RENDERER_FACTORIES = {
+  bash: createBashPreviewTool,
+  read: createReadPreviewTool,
+  write: createWritePreviewRenderers,
+  edit: createEditPreviewTool,
+  grep: createGrepPreviewTool,
+  find: createFindPreviewTool,
+  ls: createLsPreviewTool,
+} satisfies Record<
+  (typeof CORE_CODE_PREVIEW_TOOLS)[number],
+  (cwd: string, session: CodePreviewRendererSession) => ToolRenderers
+>;
+
+/** Construct presentation only; lifecycle owns public source admission and routing. */
+export function createBuiltinPreviewRenderers(
+  name: string,
+  session: CodePreviewRendererSession,
+): ToolRenderers | undefined {
+  const coreName = CORE_CODE_PREVIEW_TOOLS.find((candidate) => candidate === name);
+  if (!coreName) return undefined;
+  const enabled = session.enabledTools
+    ? session.enabledTools.includes(coreName)
+    : getEnabledCodePreviewTools().has(coreName);
+  if (!enabled) return undefined;
+  return RENDERER_FACTORIES[coreName](session.cwd, session);
 }
 
-type AnyToolDefinition = ToolDefinition<any, any, any>;
-type ToolDefinitionFactory = (cwd: string, options: BuiltinToolOptions) => AnyToolDefinition;
+function sameSource(left: SourceInfo, right: SourceInfo): boolean {
+  return (
+    left.source === right.source &&
+    left.path === right.path &&
+    left.scope === right.scope &&
+    left.origin === right.origin
+  );
+}
 
-const TOOL_DEFINITION_FACTORIES = {
-  bash: (cwd, options) => createBashPreviewTool(cwd, options.bash),
-  read: (cwd, options) => createReadPreviewTool(cwd, options.read),
-  write: (cwd) => createWritePreviewTool(cwd),
-  edit: (cwd) => createEditPreviewTool(cwd),
-  grep: (cwd) => createGrepPreviewTool(cwd),
-  find: (cwd) => createFindPreviewTool(cwd),
-  ls: (cwd) => createLsPreviewTool(cwd),
-} satisfies Record<(typeof CORE_CODE_PREVIEW_TOOLS)[number], ToolDefinitionFactory>;
-
-type PlannedTool = {
-  readonly name: CodePreviewToolName;
-  readonly definition: AnyToolDefinition;
-};
-
-export function registerToolRenderers(
+/** Write alone needs an execution hook to capture before-state under Pi's mutation queue. */
+export function registerWritePreviewTool(
   pi: ExtensionAPI,
   cwd: string,
-  options: RegisterToolRenderersOptions = {},
+  options: {
+    ownedTools?: Set<CodePreviewToolName>;
+    installedTools?: Set<CodePreviewToolName>;
+  } = {},
 ): void {
-  const enabledTools = getEnabledCodePreviewTools();
-  resetCodePreviewToolStatuses(enabledTools);
-  const existingTools = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
-  const toolOptions =
-    options.toolOptions ?? getBuiltinToolOptions(cwd, options.projectTrusted ?? false);
-  const plan: PlannedTool[] = [];
-
-  for (const name of CORE_CODE_PREVIEW_TOOLS) {
-    if (!enabledTools.has(name)) continue;
-    if (options.installedTools?.has(name)) {
-      setCodePreviewToolStatus(name, { state: "installed" });
-      continue;
+  if (!getEnabledCodePreviewTools().has("write")) return;
+  try {
+    const candidates = pi.getAllTools().filter((tool) => tool.name === "write");
+    const existing = candidates.length === 1 ? candidates[0] : undefined;
+    if (!existing) {
+      setCodePreviewToolStatus("write", { state: "unavailable" });
+      return;
     }
-
-    const existing = existingTools.get(name);
-    if (existing && existing.sourceInfo.source !== "builtin" && !options.ownedTools?.has(name)) {
-      setCodePreviewToolStatus(name, { state: "skipped-conflict", owner: existing.sourceInfo });
-      continue;
+    const native =
+      existing.sourceInfo.source === "builtin" && existing.sourceInfo.path === "builtin:write";
+    let priorOwn = false;
+    if (!native && options.ownedTools?.has("write")) {
+      const anchors = pi
+        .getCommands()
+        .filter((command) => command.name === "code-previews" && command.source === "extension");
+      const source = anchors.length === 1 ? anchors[0]?.sourceInfo : undefined;
+      priorOwn = !!source && source.source !== "builtin" && sameSource(source, existing.sourceInfo);
     }
-
-    plan.push({ name, definition: TOOL_DEFINITION_FACTORIES[name](cwd, toolOptions) });
-  }
-
-  for (const { name, definition } of plan) {
-    try {
-      options.ownedTools?.add(name);
-      pi.registerTool(definition);
-    } catch {
-      setCodePreviewToolStatus(name, { state: "registration-error" });
-      continue;
+    if (!native && !priorOwn) {
+      setCodePreviewToolStatus("write", { state: "skipped-conflict", owner: existing.sourceInfo });
+      return;
     }
-    options.installedTools?.add(name);
-    setCodePreviewToolStatus(name, { state: "installed" });
+    if (options.installedTools?.has("write")) {
+      setCodePreviewToolStatus("write", { state: "installed" });
+      return;
+    }
+    const active = pi.getActiveTools().includes("write");
+    const definition = createWritePreviewTool(cwd);
+    // Capture attempted ownership before mutation: refresh can throw after Pi stores the hook.
+    options.ownedTools?.add("write");
+    pi.registerTool({ ...definition, defaultActive: active });
+    options.installedTools?.add("write");
+    setCodePreviewToolStatus("write", { state: "installed" });
+  } catch {
+    setCodePreviewToolStatus("write", { state: "registration-error" });
   }
 }

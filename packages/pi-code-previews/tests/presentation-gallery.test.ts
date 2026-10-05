@@ -1,9 +1,10 @@
 import type * as Schema from "effect/Schema";
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
+import type { AgentToolResult, ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
+  captureRegistrations,
   galleryDirectory,
   galleryFrames,
   writeGallerySection,
@@ -13,9 +14,10 @@ import {
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
-import { registerToolRenderers } from "../src/tools/renderers/registration";
-import { captureFreshNativeCodemode } from "../src/boundary/host-native-codemode";
-import { styleNativeCodemode } from "../src/tools/native-codemode-render";
+import {
+  CodePreviewPresentationOwner,
+  createCodePreviewRendererResolver,
+} from "../src/application/tool-renderers";
 
 /** Registered builtin renderers in one collapsed style. */
 function registered(style: "compact" | "preview") {
@@ -25,23 +27,48 @@ function registered(style: "compact" | "preview") {
     toolCallCollapsedStyle: style,
     toolCallTiming: false,
   });
-  const tools = new Map<string, ToolDefinition>();
-  registerToolRenderers(
-    extensionApiFixture({
-      getAllTools: () => [],
-      registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-    }),
-    "/project",
-    { toolOptions: {} },
+  const names = [
+    ...ALL_CODE_PREVIEW_TOOLS,
+    "mcp__docs__lookup",
+    "read_mcp_resource",
+    "list_mcp_resources",
+    "list_mcp_resource_templates",
+  ];
+  const metadata: ToolInfo[] = names.map((name) => {
+    const tool: ToolInfo = {
+      name,
+      description: name,
+      parameters: opaqueFixture({ type: "object" }),
+      exposure: "direct",
+      sourceInfo: {
+        source: "builtin",
+        path:
+          name.startsWith("mcp__") || name.endsWith("mcp_resource") || name.startsWith("list_mcp_")
+            ? "builtin:mcp"
+            : `builtin:${name}`,
+        scope: "temporary",
+        origin: "top-level",
+      },
+    };
+    if (name === "mcp__docs__lookup") tool.namespace = { name: "mcp__docs" };
+    return tool;
+  });
+  const owner = new CodePreviewPresentationOwner();
+  owner.publish("/project", new Set(ALL_CODE_PREVIEW_TOOLS), {
+    defer: () => () => undefined,
+    schedule: () => () => undefined,
+  });
+  const captured = captureRegistrations((registration) => {
+    const pi = extensionApiFixture({
+      ...registration,
+      getAllTools: () => metadata,
+      getCommands: () => [],
+    });
+    pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => owner, new Set()));
+  });
+  return new Map<string, ToolRenderers>(
+    names.map((name) => [name, captured.resolveToolRenderers(name)!]),
   );
-  const fresh = captureFreshNativeCodemode(
-    extensionApiFixture({ getSettings: () => ({}), getAllTools: () => [], appendEntry() {} }),
-  )!;
-  tools.set(
-    "codemode",
-    styleNativeCodemode(fresh, () => undefined, "/project"),
-  );
-  return tools;
 }
 
 const text = (value: string): AgentToolResult<unknown> => ({
@@ -399,6 +426,128 @@ const scenarios: ReadonlyArray<
       [],
       "Warning: truncated output (original token count: 20)\nTotal output lines: 1\n\nhead…tail\n\n[Could not save the full output: No such directory]",
     ),
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP pending tool",
+    args: { query: "Getting started" },
+    phase: "pending",
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP progress",
+    args: { query: "Getting started" },
+    phase: "running",
+    result: {
+      content: [{ type: "text", text: "Searching documentation" }],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP neutral returned output",
+    args: { query: "Getting started" },
+    result: {
+      content: [{ type: "text", text: "Guide\nInstallation\nUsage" }],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP error and recovery",
+    args: { query: "Getting started" },
+    isError: true,
+    result: {
+      content: [
+        { type: "text", text: "Lookup failed\nRetry with another query; retained recovery detail" },
+      ],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP saved clipping",
+    args: {},
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n[Full output: /tmp/mcp-output.txt]",
+        },
+      ],
+      details: { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-output.txt" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP unsaved clipping",
+    args: {},
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n[Could not save the full output: ENOSPC]",
+        },
+      ],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP unclassified native result",
+    args: { query: "Raw output" },
+    result: {
+      content: [{ type: "text", text: "Unclassified output retained in full" }],
+      details: undefined,
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP native image",
+    args: {},
+    result: {
+      content: [
+        { type: "text", text: "Image retained by Pi" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "read_mcp_resource",
+    title: "MCP read resource",
+    args: { server: "docs", uri: "docs://guide" },
+    result: {
+      content: [{ type: "text", text: "Resource contents" }],
+      details: { server: "docs", tool: "read_mcp_resource" },
+    },
+  },
+  {
+    tool: "list_mcp_resources",
+    title: "MCP resource pagination and partial server failure",
+    args: {},
+    result: {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            resources: [{ server: "docs", uri: "docs://guide", name: "Guide" }],
+            nextCursor: "next",
+            errors: [{ server: "offline", error: "Connection unavailable\nDiagnostic evidence" }],
+          }),
+        },
+      ],
+      details: { server: "", tool: "list_mcp_resources" },
+    },
+  },
+  {
+    tool: "list_mcp_resource_templates",
+    title: "MCP empty template listing",
+    args: { server: "docs" },
+    result: {
+      content: [{ type: "text", text: '{"resourceTemplates":[]}' }],
+      details: { server: "docs", tool: "list_mcp_resource_templates" },
+    },
   },
   {
     tool: "bash",

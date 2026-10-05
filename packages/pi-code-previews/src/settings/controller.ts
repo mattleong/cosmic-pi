@@ -51,7 +51,7 @@ const loadOptions = (ctx: ExtensionCommandContext): LoadSettingsOptions => ({
   projectTrusted: isProjectTrusted(ctx),
 });
 
-/** Ordinary preview settings; MCP manager ownership belongs to pi-mcp-previews. */
+/** Preview appearance includes native MCP; Pi retains server management through /mcp. */
 export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
   return settingsSubcommand<CodePreviewSettings>({
     root: "code-previews",
@@ -66,6 +66,7 @@ export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
     notes: (ctx) => [
       `Settings are saved in ${formatDisplayPath(getSettingsPath(), ctx.cwd)}.`,
       "Tool call appearance and preview tools take effect after /reload.",
+      "Native MCP calls use this appearance; manage servers through /mcp.",
     ],
     config,
     status: (ctx) =>

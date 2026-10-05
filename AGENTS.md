@@ -8,15 +8,14 @@ This is a pnpm workspace. Shared configuration lives at the root; package source
 - `packages/pi-background-task/`: session-scoped background tasks.
 - `packages/pi-better-openai/`: Better OpenAI extension.
 - `packages/pi-better-xai/`: Better xAI subscription usage.
-- `packages/pi-code-previews/`: code previews and the cooperative tool-rendering shell.
+- `packages/pi-code-previews/`: builtin, native codemode, and native MCP presentation plus the cooperative tool-rendering shell.
 - `packages/pi-cosmic-core/`: shared Effect runtime and platform code.
 - `packages/pi-cosmic-ui/`: shared UI components and responsive footer.
 - `packages/pi-directory-models/`: per-directory model and thinking-level preferences.
 - `packages/pi-herdr-btw/`: reusable Herdr BTW side sessions.
-- `packages/pi-mcp-previews/`: always-on presentation for freshly composed native Pi MCP definitions; Pi owns configuration, authentication, and runtime.
 - `packages/pi-subagents/`: session-scoped background subagents.
 
-Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode` and `pi-mcp` packages have no compatibility layer.
+Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. Code Previews requires Pi 1.0.1 or later and is tested with 1.0.2. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.
 
 ## Package layout
 
@@ -59,9 +58,11 @@ ARCHITECTURE.md
 
 ## Tool rendering
 
-Workspace-owned visible tools use `withCodePreviewShell` and list `pi-code-previews` as a runtime dependency. Follow `docs/architecture/tool-presentation.md` for compact policy, the issue model, content-only expansion, and conservative fallback. Exercise actual registered definitions with `pi-code-previews/testing`; preserve input, output, recovery, and native images through expansion. Headless tools and non-tool command/settings interfaces do not need the shell.
+Workspace-owned visible tools use `withCodePreviewShell` and list `pi-code-previews` as a runtime dependency. Follow `docs/architecture/tool-presentation.md` for compact policy, the issue model, content-only expansion, and conservative fallback. Exercise actual registered definitions or renderer-only callbacks with `pi-code-previews/testing`; preserve input, output, recovery, and native images through expansion. Headless tools and non-tool command/settings interfaces do not need the shell.
 
 When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`. The wrapper captures its shell mode at registration time. Wrap only tools owned by the extension, never another extension's tools. Report every error and warning as a `CompactIssue`: a short human-facing `message`, shown collapsed and expanded, plus optional expanded-only `detail` for agent-directed recovery and diagnostics. Messages follow the style rules in the presentation standard and never contain agent procedures or internal IDs; an unclassified failure may use `failureMessage`, and other text `firstLineMessage`. Check producer messages with `issueMessageStyleProblems` from `pi-code-previews/testing`. Keep full agent-facing evidence and expanded details unchanged. To review wording and layout, run `pnpm presentation:gallery`, which renders each package's env-gated `tests/presentation-gallery.test.ts` scenarios into the gitignored `presentation-gallery.txt`; add a scenario there when you add a visible state.
+
+Code Previews registers one stable `pi.registerToolRenderer` resolver during factory loading for builtin/native presentation. Read only public renderer fields from `next()`, never an execution definition. Exact public builtin source metadata controls admission; unknown historical MCP names require the independent native manager. Do not compose or intercept native codemode/MCP factories, replace `/mcp`, change tool selection/exposure, or register execution definitions just for presentation. The sole exception is write's actual before-write snapshot hook, which preserves Pi's mutation queue and activation. Extension-owned user/task/subagent/image tools keep their normal executable registrations and use `withCodePreviewShell`; renderer-only integrations use `withCodePreviewRenderers`.
 
 ## Testing policy
 

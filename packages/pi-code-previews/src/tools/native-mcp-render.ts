@@ -1,7 +1,7 @@
 import type {
   AgentToolResult,
   Theme,
-  ToolDefinition,
+  ToolRenderers,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
@@ -14,30 +14,31 @@ import {
   toolRunningLine,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import {
-  compactPlainText,
-  expandedSection,
-  previewIssuesSlot,
-  getCodePreviewAnimationFrame,
-  escapeControlChars,
-  withCodePreviewShell,
-  getFallbackResultText,
-  type CompactAnimationScheduler,
-} from "pi-code-previews";
+import type { CodePreviewRendererSession, PreviewToolInfo } from "../application/renderer-contract";
+import { compactPlainText } from "../preview/compact-row";
+import { expandedSection } from "../preview/expanded-section";
+import { previewIssuesSlot } from "../preview/preview-issues";
+import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
+import { escapeControlChars } from "../shared/terminal-text";
+import { withCodePreviewRenderers, type CodePreviewShellOptions } from "./cooperative-tools";
+import { getFallbackResultText } from "./data/results";
+import type { CompactAnimationScheduler } from "./compact-summary";
+import type { ToolRenderContext } from "./renderers/shared/types";
 import {
   nativeMcpEvidence,
   nativeMcpHasRecoverableClipping,
   nativeMcpProgress,
   nativeMcpSummary,
 } from "./native-mcp-summary";
-import { nativeMcpHeading, nativeMcpIdentity } from "./native-mcp-subject";
+import { nativeMcpHeading } from "./native-mcp-subject";
+import { nativeMcpIdentity } from "./native-mcp-identity";
 
 /** Heading name for every native MCP row. The registered tool name stays unchanged. */
 const DISPLAY_NAME = "mcp";
 const PREVIEW_LINES = 5;
 const ARGUMENT_PREVIEW_CHARS = 1000;
 
-type Context = Parameters<NonNullable<ToolDefinition<any, any, any>["renderCall"]>>[2];
+type Context = ToolRenderContext<any, any>;
 
 /** Content survives a host theme that fails while building or drawing it. */
 function safeContent(build: () => Component, raw: string, maxRows?: number): Component {
@@ -124,9 +125,11 @@ function renderOutput(
   context: Context,
 ): Component {
   const raw = getFallbackResultText(result.content, context.showImages);
+  const saved = nativeMcpEvidence(result.details)?.fullOutputPath;
+  const recovery =
+    saved && !raw.includes(saved) ? `Saved output\n${sanitizeDiagnosticContent(saved)}` : "";
   return safeContent(() => {
     const body = new Container();
-    const saved = nativeMcpEvidence(result.details)?.fullOutputPath;
     if (saved && !raw.includes(saved))
       body.addChild(
         expandedSection(
@@ -144,7 +147,7 @@ function renderOutput(
         ),
       );
     return body;
-  }, raw);
+  }, [recovery, raw].filter(Boolean).join("\n"));
 }
 
 /** The latest progress message, or the shared running line, animated by the shell's owner. */
@@ -203,22 +206,49 @@ function renderOutputPreview(
   );
 }
 
-/**
- * Decorate one fresh native MCP definition: a dynamic `mcp__…` tool or one of the
- * `list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource` tools. Rendering
- * only: the copy keeps every other property, including `execute`, schemas, annotations,
- * exposure, namespace, and results. Load trusted settings first; the shell captures its mode.
- */
-export function styleNativeMcp(
-  definition: ToolDefinition<any, any, any>,
-  scheduleAnimation?: CompactAnimationScheduler | undefined,
-): ToolDefinition<any, any, any> {
-  const identity = nativeMcpIdentity(definition);
-  const renderCall: NonNullable<ToolDefinition<any, any, any>["renderCall"]> = (
-    args,
-    theme,
-    context,
-  ) => {
+/** Presentation only. Pi keeps its manager, execution, schemas, exposure and permissions. */
+export function createNativeMcpRenderers(
+  name: string,
+  tool: Pick<PreviewToolInfo, "namespace"> | undefined,
+  downstream: ToolRenderers | undefined,
+  scheduleAnimation: CompactAnimationScheduler,
+  selfShell: boolean = true,
+  appearance: Pick<CodePreviewRendererSession, "mode" | "collapsedStyle"> = {},
+): ToolRenderers {
+  const identity = nativeMcpIdentity(name, tool);
+  // Without an exact public remote identity, keep the entire native call (including its label
+  // and any additional content). next() is only a renderer set, never a tool definition.
+  const nativeCall = identity.kind === "tool" ? downstream?.renderCall : undefined;
+  // The native callback updates its own prior Text, never a combined shell or Container.
+  const nativeComponents = new WeakMap<Component, Component>();
+  const nativeContext = (context: Context): Context => ({
+    ...context,
+    lastComponent: context.lastComponent ? nativeComponents.get(context.lastComponent) : undefined,
+  });
+  const expandedCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+    let nativeBody: Component | undefined;
+    const component = safeContent(
+      () => {
+        const body = new Container();
+        if (nativeCall) {
+          nativeBody = nativeCall(args, theme, nativeContext(context));
+          body.addChild(nativeBody);
+        }
+        body.addChild(renderArguments(args, theme));
+        return body;
+      },
+      `${name}\n${argumentsJson(args, 2)}`,
+    );
+    if (nativeBody) nativeComponents.set(component, nativeBody);
+    return component;
+  };
+  const renderCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+    if (nativeCall) {
+      if (context.expanded) return expandedCall(args, theme, context);
+      const body = nativeCall(args, theme, nativeContext(context));
+      nativeComponents.set(body, body);
+      return body;
+    }
     const { action, subject } = nativeMcpHeading(identity, args);
     const subtitle = [action, subject].filter(Boolean).join(" ");
     const json = identity.kind === "tool" && !context.expanded ? argumentsJson(args) : "";
@@ -245,7 +275,7 @@ export function styleNativeMcp(
       context.expanded ? undefined : 2,
     );
   };
-  const renderResult: NonNullable<ToolDefinition<any, any, any>["renderResult"]> = (
+  const renderResult: NonNullable<ToolRenderers["renderResult"]> = (
     result,
     options,
     theme,
@@ -253,7 +283,7 @@ export function styleNativeMcp(
   ) => {
     if (options.expanded) return renderOutput(result, options, theme, context);
     if (options.isPartial) return renderProgress(result, theme, context);
-    if (!context.isError && nativeMcpHasRecoverableClipping(identity, result))
+    if (!context.isError && nativeMcpHasRecoverableClipping(identity, result, context.args))
       return safeContent(
         () => new Text(renderExpansionAffordance("output", false, theme), 0, 0),
         "Output · expand",
@@ -261,18 +291,16 @@ export function styleNativeMcp(
       );
     return renderOutputPreview(result, theme, context);
   };
-  return withCodePreviewShell(
-    { ...definition, renderCall, renderResult },
-    {
-      preserveSelfShell: false,
-      displayName: DISPLAY_NAME,
-      compactSummary: nativeMcpSummary(identity),
-      animateProgress: true,
-      scheduleAnimation,
-      expandedContent: {
-        renderCall: (args, theme) => renderArguments(args, theme),
-        renderResult: renderOutput,
-      },
-    },
-  );
+  const options: CodePreviewShellOptions = {
+    selfShell,
+    preserveSelfShell: false,
+    displayName: DISPLAY_NAME,
+    compactSummary: nativeMcpSummary(identity),
+    animateProgress: true,
+    scheduleAnimation,
+    expandedContent: { renderCall: expandedCall, renderResult: renderOutput },
+  };
+  if (appearance.mode !== undefined) options.mode = appearance.mode;
+  if (appearance.collapsedStyle !== undefined) options.collapsedStyle = appearance.collapsedStyle;
+  return withCodePreviewRenderers({ name }, { renderCall, renderResult }, options);
 }

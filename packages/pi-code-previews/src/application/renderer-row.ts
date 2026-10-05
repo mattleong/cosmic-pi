@@ -1,0 +1,210 @@
+import type {
+  AgentToolResult,
+  Theme,
+  ToolRenderers,
+  ToolRenderResultOptions,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { withSelfBackground } from "../preview/self-background";
+import { getFallbackResultText } from "../tools/data/results";
+import { escapeControlChars } from "../shared/terminal-text";
+import type { RendererArguments, ToolRenderContext } from "../tools/renderers/shared/types";
+
+export interface RetainedRendererOwner {
+  readonly ready: boolean;
+  readonly live: boolean;
+  subscribe(refresh: () => void): void;
+}
+
+/** Cold rows preserve downstream content with the same framing Pi would otherwise provide. */
+function nativeBackground(name: string, downstream: ToolRenderers | undefined): ToolRenderers {
+  const call: NonNullable<ToolRenderers["renderCall"]> =
+    downstream?.renderCall ??
+    ((args, theme) =>
+      new Text(
+        `${theme.fg("toolTitle", theme.bold(name))}\n${JSON.stringify(args, null, 2)}`,
+        0,
+        0,
+      ));
+  const result: NonNullable<ToolRenderers["renderResult"]> =
+    downstream?.renderResult ??
+    ((value, _options, theme, context) => {
+      const output = getFallbackResultText(value.content, context.showImages);
+      return output
+        ? new Text(theme.fg("toolOutput", escapeControlChars(output)), 0, 0)
+        : new Container();
+    });
+  if (downstream?.renderShell === "self")
+    return { renderShell: "self", renderCall: call, renderResult: result };
+  const slots = new WeakMap<object, { call?: Component; result?: Component }>();
+  const state = (context: ToolRenderContext) => {
+    let current = slots.get(context.state);
+    if (!current) {
+      current = {};
+      slots.set(context.state, current);
+    }
+    return current;
+  };
+  const shell = withSelfBackground({
+    renderShell: "default",
+    renderCall: (context, _theme, render) => render(context),
+    renderResult: (context, _theme, render) => render(context),
+  });
+  return {
+    renderShell: "self",
+    renderCall: (args, theme, context) =>
+      shell.renderCall(context, theme, (current) => {
+        const cache = state(current);
+        cache.call = call(args, theme, { ...current, lastComponent: cache.call });
+        return cache.call;
+      }),
+    renderResult: (value, options, theme, context) =>
+      shell.renderResult(
+        context,
+        theme,
+        (current) => {
+          const cache = state(current);
+          cache.result = result(value, options, theme, { ...current, lastComponent: cache.result });
+          return cache.result;
+        },
+        value,
+      ),
+  };
+}
+
+class RetainedRendererRow {
+  private renderers: ToolRenderers;
+  private adopted = false;
+  private state: ToolRenderContext["state"];
+  private call: Component | undefined;
+  private result: Component | undefined;
+  private args: RendererArguments;
+  private theme: Theme | undefined;
+  private context: ToolRenderContext | undefined;
+  private value: AgentToolResult<unknown> | undefined;
+  private options: ToolRenderResultOptions | undefined;
+  private dirty = true;
+
+  readonly callSlot = this.slot("call");
+  readonly resultSlot = this.slot("result");
+
+  private readonly owner: RetainedRendererOwner;
+  private readonly select: () => ToolRenderers | undefined;
+
+  constructor(
+    owner: RetainedRendererOwner,
+    fallback: ToolRenderers,
+    select: () => ToolRenderers | undefined,
+  ) {
+    this.owner = owner;
+    this.select = select;
+    this.renderers = fallback;
+    owner.subscribe(() => {
+      this.dirty = true;
+      // Capture this owner's first-ready shell even if the host defers its next draw.
+      try {
+        this.refresh();
+      } finally {
+        this.context?.invalidate();
+      }
+    });
+  }
+
+  updateCall(args: RendererArguments, theme: Theme, context: ToolRenderContext): Component {
+    this.args = args;
+    this.theme = theme;
+    this.context = context;
+    this.dirty = true;
+    this.refresh();
+    return this.callSlot;
+  }
+
+  updateResult(
+    value: AgentToolResult<unknown>,
+    options: ToolRenderResultOptions,
+    theme: Theme,
+    context: ToolRenderContext,
+  ): Component {
+    this.args = context.args;
+    this.value = value;
+    this.options = options;
+    this.theme = theme;
+    this.context = context;
+    this.dirty = true;
+    this.refresh();
+    return this.resultSlot;
+  }
+
+  private refresh(): void {
+    if (!this.context || !this.theme) return;
+    this.state ??= { ...this.context.state };
+    if (!this.adopted && this.owner.ready && this.owner.live) {
+      this.adopted = true;
+      const selected = this.select();
+      if (selected) {
+        this.renderers = selected;
+        // New internal slots don't inherit downstream caches; preserve public initial state.
+        this.state = { ...this.context.state };
+        this.call = undefined;
+        this.result = undefined;
+      }
+      this.dirty = true;
+    }
+    if (!this.dirty) return;
+    this.dirty = false;
+    const context = { ...this.context, state: this.state };
+    const call = this.renderers.renderCall;
+    const result = this.renderers.renderResult;
+    // Always build call first, then refeed retained output: combined shells own both slots.
+    if (call) this.call = call(this.args, this.theme, { ...context, lastComponent: this.call });
+    if (result && this.value && this.options)
+      this.result = result(
+        this.value,
+        { ...this.options, expanded: context.expanded, isPartial: context.isPartial },
+        this.theme,
+        { ...context, lastComponent: this.result },
+      );
+  }
+
+  private slot(slot: "call" | "result"): Component {
+    return {
+      render: (width) => {
+        this.refresh();
+        return this[slot]?.render(width) ?? [];
+      },
+      handleMouse: (event: TuiMouseEvent) => {
+        this.refresh();
+        return this[slot]?.handleMouse?.(event);
+      },
+      invalidate: () => {
+        this[slot]?.invalidate();
+        this.dirty = true;
+      },
+    };
+  }
+}
+
+/** Pi retains this facade once, including renderShell, before session_start during replay. */
+export function retainedCodePreviewRenderers(
+  name: string,
+  downstream: ToolRenderers | undefined,
+  owner: RetainedRendererOwner,
+  select: () => ToolRenderers | undefined,
+): ToolRenderers {
+  const rows = new WeakMap<object, RetainedRendererRow>();
+  const fallback = nativeBackground(name, downstream);
+  const row = (context: ToolRenderContext) => {
+    let current = rows.get(context.state);
+    if (!current) {
+      current = new RetainedRendererRow(owner, fallback, select);
+      rows.set(context.state, current);
+    }
+    return current;
+  };
+  return {
+    renderShell: "self",
+    renderCall: (args, theme, context) => row(context).updateCall(args, theme, context),
+    renderResult: (value, options, theme, context) =>
+      row(context).updateResult(value, options, theme, context),
+  };
+}

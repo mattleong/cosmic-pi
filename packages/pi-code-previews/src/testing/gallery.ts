@@ -8,7 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer, stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
-import type { AdaptableToolDefinition } from "../tools/renderer-adapter";
+import type { AdaptableToolRenderers } from "../tools/renderer-adapter";
 import { createToolPresentationHarness } from "./tool-presentation";
 
 /**
@@ -41,7 +41,7 @@ export const GALLERY_VIEWS: readonly GalleryView[] = [
 
 /** One scenario through a registered tool, each view in a fresh harness. */
 export function galleryFrames(
-  tool: AdaptableToolDefinition,
+  tool: Pick<AdaptableToolRenderers, "renderShell" | "renderCall" | "renderResult">,
   scenario: GalleryScenario,
   views: readonly GalleryView[] = GALLERY_VIEWS,
 ): string[] {

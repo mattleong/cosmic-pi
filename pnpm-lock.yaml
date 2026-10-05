@@ -7,17 +7,17 @@ settings:
 catalogs:
   default:
     '@earendil-works/pi-ai':
-      specifier: 1.0.0
-      version: 1.0.0
+      specifier: 1.0.2
+      version: 1.0.2
     '@earendil-works/pi-codemode':
-      specifier: 1.0.0
-      version: 1.0.0
+      specifier: 1.0.2
+      version: 1.0.2
     '@earendil-works/pi-coding-agent':
-      specifier: 1.0.0
-      version: 1.0.0
+      specifier: 1.0.2
+      version: 1.0.2
     '@earendil-works/pi-tui':
-      specifier: 1.0.0
-      version: 1.0.0
+      specifier: 1.0.2
+      version: 1.0.2
     '@effect/platform-node':
       specifier: 4.0.0
       version: 4.0.0
@@ -95,13 +95,13 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -138,13 +138,13 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -184,13 +184,13 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -221,10 +221,10 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -261,10 +261,10 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
@@ -301,7 +301,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -329,10 +329,10 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -360,7 +360,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -388,50 +388,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
-      '@types/node':
-        specifier: 'catalog:'
-        version: 22.19.21
-      oxfmt:
-        specifier: 'catalog:'
-        version: 0.47.0
-      oxlint:
-        specifier: 'catalog:'
-        version: 1.78.0
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
-
-  packages/pi-mcp-previews:
-    dependencies:
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.0
-      pi-code-previews:
-        specifier: workspace:*
-        version: link:../pi-code-previews
-      pi-cosmic-core:
-        specifier: workspace:*
-        version: link:../pi-cosmic-core
-      pi-cosmic-ui:
-        specifier: workspace:*
-        version: link:../pi-cosmic-ui
-    devDependencies:
-      '@earendil-works/pi-ai':
-        specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
-      '@earendil-works/pi-coding-agent':
-        specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
-      '@earendil-works/pi-tui':
-        specifier: 'catalog:'
-        version: 1.0.0
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -452,7 +409,7 @@ importers:
     dependencies:
       '@earendil-works/pi-codemode':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
@@ -483,13 +440,13 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
+        version: 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-tui':
         specifier: 'catalog:'
-        version: 1.0.0
+        version: 1.0.2
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
@@ -511,8 +468,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.124.0':
-    resolution: {integrity: sha512-cN5O8i9UVxHeOQAzj/XjshWXG8KiibJDw9OGpH2Z/eR3n/RBxdoLxDJOcfqAJWvjaMDFfHTBADU04hWRJVkDyA==}
+  '@anthropic-ai/sdk@0.129.0':
+    resolution: {integrity: sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -604,38 +561,38 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@earendil-works/chord@1.0.0':
-    resolution: {integrity: sha512-BIfWfrByM0pKq6tfKYXuwx0ed2CvaqIM3EDA7Dps+fP+d3CiPWdlHi1cDsJC05llqKJoRz5//G0hz0yQwwjISQ==}
+  '@earendil-works/chord@1.0.2':
+    resolution: {integrity: sha512-eUXGZjigyEQsFiT/oBJUOaCrzYZRmqf8AgLrlbyuS4u02hjSVhLYRi3xqk1o4UERCgRfjRegqwj/oucawIR7YQ==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-agent-core@1.0.0':
-    resolution: {integrity: sha512-bHFONjtEBDqiV+g1DmmtkSlfAaqHELr+XO+6I5Nah4gswwZrLJO4yZB/JjsnlI4AKWTayBLfgS6DCbeBBz9e2Q==}
+  '@earendil-works/pi-agent-core@1.0.2':
+    resolution: {integrity: sha512-VRfewY1R5mbedJzlm01PxdCmqU8QrSXjXXhV50bp6rvVuT8YYQv1inTXRY4YzssmGAYpkC2rXipJKP5BpBFXew==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-ai@1.0.0':
-    resolution: {integrity: sha512-3/W1vdDaVtpeMd23ElvJC12HLA5yS/BGqqcXF+0SK082dN7cbgNcCwguTBRBC258Ke8SzSvUW1B75iAf8w8IxA==}
-    engines: {node: '>=22.19.0'}
-    hasBin: true
-
-  '@earendil-works/pi-codemode@1.0.0':
-    resolution: {integrity: sha512-LPpFI4+T9NzDnhBDs15izWAolaoM8xnwqdziRd6Zx8BQeoEPvzefD2vMMzSyF0rOtq34TfQqkZ0ki16f6cGdMg==}
-    engines: {node: '>=22.19.0'}
-
-  '@earendil-works/pi-coding-agent@1.0.0':
-    resolution: {integrity: sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw==}
+  '@earendil-works/pi-ai@1.0.2':
+    resolution: {integrity: sha512-JP59xGlSAQ/HhQ6EHN5qmneBlWfDyu6FPPryAvAaSo8A38ubAsEpS9YisCM5Jbbns0srrDffLZonE0OXorHI5A==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@earendil-works/pi-mcp@1.0.0':
-    resolution: {integrity: sha512-rYra0aF5iPmJd+fsB+VBuqxWNABGJ3Iiyhg0CqIc/91ta2n7IvQmCp0Cac/YkUTNnvRsVZnjgAiBkRi6+ouWuw==}
+  '@earendil-works/pi-codemode@1.0.2':
+    resolution: {integrity: sha512-tvfDSVz984ra/4y/hIFmYGpP5ojC+C6/ey+DNbjTzfJvbXviW4JYTXwVcm33KAceI0xcOuE+P1yRGLtQgis0/w==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-telemetry@1.0.0':
-    resolution: {integrity: sha512-WjNBj5TYIiPZFQEz2WlULcDwPLaKwIlmsKjVeYM+LJSbnSp38kWsHUJysIDGnu23IcLbKoPtywsvYfUJCeZePA==}
+  '@earendil-works/pi-coding-agent@1.0.2':
+    resolution: {integrity: sha512-3ZdIghMSELMGV3sKi5iASOb1Jwb696fLjmNu0aezaqDxTLLWWoRpqBYkGxJ1CgAMCbtfqXWEF0lcRrlVXmiEGQ==}
+    engines: {node: '>=22.19.0'}
+    hasBin: true
+
+  '@earendil-works/pi-mcp@1.0.2':
+    resolution: {integrity: sha512-ED3+q41xLQkxzdadZIQy68SLYcqCJbve8iGbGkZoWjPJ9OZCPHTKcof24fjMO1LfnbIl1uMfhRBueS6IfdiCbQ==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-tui@1.0.0':
-    resolution: {integrity: sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw==}
+  '@earendil-works/pi-telemetry@1.0.2':
+    resolution: {integrity: sha512-Ev5h9TE8nEXHCfRKhWj0qpUFhQgVqNteS95vsM2KNGRGm533vOO2ruDPaEwImBKPMBKXy4omz3D6V2cm41gLOQ==}
+    engines: {node: '>=22.19.0'}
+
+  '@earendil-works/pi-tui@1.0.2':
+    resolution: {integrity: sha512-ElfzjnckohEjzHK5Q5iOpqLpQ1YbM/c/XmjBdPVR5k4uoorQPnny5BtT+rvC0cAjVVCUOHWAWppust7FAaEsOQ==}
     engines: {node: '>=22.19.0'}
 
   '@effect/platform-node-shared@4.0.0':
@@ -2891,7 +2848,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.124.0(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.129.0(zod@4.4.3)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
@@ -3082,13 +3039,13 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@earendil-works/chord@1.0.0':
+  '@earendil-works/chord@1.0.2':
     dependencies:
       esbuild: 0.28.2
 
-  '@earendil-works/pi-agent-core@1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)':
+  '@earendil-works/pi-agent-core@1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/pi-ai': 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)
+      '@earendil-works/pi-ai': 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)
       typebox: 1.3.27
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -3103,9 +3060,9 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-agent-core@1.0.0(undici@8.10.2)':
+  '@earendil-works/pi-agent-core@1.0.2(undici@8.10.2)':
     dependencies:
-      '@earendil-works/pi-ai': 1.0.0(undici@8.10.2)
+      '@earendil-works/pi-ai': 1.0.2(undici@8.10.2)
       typebox: 1.3.27
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -3120,11 +3077,11 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)':
+  '@earendil-works/pi-ai@1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)':
     dependencies:
-      '@anthropic-ai/sdk': 0.124.0(zod@4.4.3)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
-      '@earendil-works/pi-telemetry': 1.0.0
+      '@earendil-works/pi-telemetry': 1.0.2
       '@google/genai': 2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
@@ -3145,11 +3102,11 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)':
+  '@earendil-works/pi-ai@1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)':
     dependencies:
-      '@anthropic-ai/sdk': 0.124.0(zod@4.4.3)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
-      '@earendil-works/pi-telemetry': 1.0.0
+      '@earendil-works/pi-telemetry': 1.0.2
       '@google/genai': 2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
@@ -3170,11 +3127,11 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@1.0.0(undici@8.10.2)':
+  '@earendil-works/pi-ai@1.0.2(undici@8.10.2)':
     dependencies:
-      '@anthropic-ai/sdk': 0.124.0(zod@4.4.3)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
-      '@earendil-works/pi-telemetry': 1.0.0
+      '@earendil-works/pi-telemetry': 1.0.2
       '@google/genai': 2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
@@ -3195,19 +3152,20 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-codemode@1.0.0':
+  '@earendil-works/pi-codemode@1.0.2':
     dependencies:
       quickjs-wasi: 3.6.2
 
-  '@earendil-works/pi-coding-agent@1.0.0':
+  '@earendil-works/pi-coding-agent@1.0.2':
     dependencies:
-      '@earendil-works/chord': 1.0.0
-      '@earendil-works/pi-agent-core': 1.0.0(undici@8.10.2)
-      '@earendil-works/pi-ai': 1.0.0(undici@8.10.2)
-      '@earendil-works/pi-codemode': 1.0.0
-      '@earendil-works/pi-mcp': 1.0.0
-      '@earendil-works/pi-tui': 1.0.0
+      '@earendil-works/chord': 1.0.2
+      '@earendil-works/pi-agent-core': 1.0.2(undici@8.10.2)
+      '@earendil-works/pi-ai': 1.0.2(undici@8.10.2)
+      '@earendil-works/pi-codemode': 1.0.2
+      '@earendil-works/pi-mcp': 1.0.2
+      '@earendil-works/pi-tui': 1.0.2
       '@silvia-odwyer/photon-node': 0.3.4
+      brace-expansion: 5.0.12
       chalk: 6.0.0
       cross-spawn: 7.0.6
       diff: 8.0.4
@@ -3235,15 +3193,16 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-coding-agent@1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)':
+  '@earendil-works/pi-coding-agent@1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/chord': 1.0.0
-      '@earendil-works/pi-agent-core': 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)
-      '@earendil-works/pi-ai': 1.0.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)
-      '@earendil-works/pi-codemode': 1.0.0
-      '@earendil-works/pi-mcp': 1.0.0
-      '@earendil-works/pi-tui': 1.0.0
+      '@earendil-works/chord': 1.0.2
+      '@earendil-works/pi-agent-core': 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)
+      '@earendil-works/pi-ai': 1.0.2(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.22.0)(zod@4.4.3)
+      '@earendil-works/pi-codemode': 1.0.2
+      '@earendil-works/pi-mcp': 1.0.2
+      '@earendil-works/pi-tui': 1.0.2
       '@silvia-odwyer/photon-node': 0.3.4
+      brace-expansion: 5.0.12
       chalk: 6.0.0
       cross-spawn: 7.0.6
       diff: 8.0.4
@@ -3271,13 +3230,13 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-mcp@1.0.0':
+  '@earendil-works/pi-mcp@1.0.2':
     dependencies:
       cross-spawn: 7.0.6
 
-  '@earendil-works/pi-telemetry@1.0.0': {}
+  '@earendil-works/pi-telemetry@1.0.2': {}
 
-  '@earendil-works/pi-tui@1.0.0':
+  '@earendil-works/pi-tui@1.0.2':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.11

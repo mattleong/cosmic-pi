@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, test } from "vitest";
-import type { ToolDefinition, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderers, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { createToolPresentationHarness } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { registerToolRenderers } from "../../src/tools/renderers/registration";
+import { createBuiltinPreviewRenderers } from "../../src/tools/renderers/registration";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../src/tools/names";
 import { previewBodiesDisabled, stripAnsi } from "../support/render";
 
@@ -67,12 +66,15 @@ function registered(
     toolCallTiming: false,
     ...previewBodiesDisabled,
   });
-  const tools = new Map<string, ToolDefinition>();
-  const api = extensionApiFixture({
-    getAllTools: () => [],
-    registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-  });
-  registerToolRenderers(api, "/project", { toolOptions: {} });
+  const tools = new Map<string, ToolRenderers>();
+  for (const name of ALL_CODE_PREVIEW_TOOLS) {
+    const renderers = createBuiltinPreviewRenderers(name, {
+      cwd: "/project",
+      selfShell: true,
+      scheduleAnimation: () => () => undefined,
+    });
+    if (renderers) tools.set(name, renderers);
+  }
   return tools;
 }
 function result(...texts: string[]): AgentToolResult<unknown> {

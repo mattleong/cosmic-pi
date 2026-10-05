@@ -10,22 +10,26 @@ import { afterEach, test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../../src/tools/names";
-import { registerToolRenderers } from "../../src/tools/renderers/registration";
+import {
+  createBuiltinPreviewRenderers,
+  registerWritePreviewTool,
+} from "../../src/tools/renderers/registration";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 
 const builtinSource: SourceInfo = {
-  path: "builtin",
+  path: "builtin:write",
   source: "builtin",
   scope: "temporary",
   origin: "top-level",
 };
-
 const extensionSource: SourceInfo = {
-  path: "/extensions/owner.ts",
-  source: "owner",
+  path: "/extensions/code-previews.ts",
+  source: "code-previews",
   scope: "user",
   origin: "top-level",
 };
+const foreignSource: SourceInfo = { ...extensionSource, path: "/extensions/foreign.ts" };
+const anchor = { name: "code-previews", source: "extension" as const, sourceInfo: extensionSource };
 
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
@@ -38,138 +42,178 @@ function toolInfo(name: string, sourceInfo: SourceInfo = builtinSource): ToolInf
     sourceInfo,
   };
 }
-
-function piFixture(
-  options: {
-    getAllTools?: () => ToolInfo[];
-    registerTool?: (tool: ToolDefinition) => void;
-  } = {},
-): ExtensionAPI {
+function piFixture(options: Partial<ExtensionAPI> = {}): ExtensionAPI {
   return extensionApiFixture({
-    getAllTools:
-      options.getAllTools ?? (() => CORE_CODE_PREVIEW_TOOLS.map((tool) => toolInfo(tool))),
-    registerTool: options.registerTool ?? (() => undefined),
-    getActiveTools: () => {
-      throw new Error("active tool API called");
-    },
+    getAllTools: () => [toolInfo("write")],
+    getCommands: () => [anchor],
+    getActiveTools: () => [...CORE_CODE_PREVIEW_TOOLS],
+    registerTool: () => undefined,
     setActiveTools: () => {
-      throw new Error("active tool API called");
+      throw new Error("active tools must not be changed");
     },
+    ...options,
   });
 }
-
 function enableOnly(...tools: CodePreviewToolName[]): void {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: [...tools] });
 }
 
-test("registration leaves active tool names untouched and never calls active-tool APIs", () => {
-  enableOnly("bash", "read");
+test("all enabled core presentations are renderer-only and only write installs an execution hook", () => {
+  enableOnly(...CORE_CODE_PREVIEW_TOOLS);
   const installed: string[] = [];
   const pi = piFixture({ registerTool: (tool) => installed.push(tool.name) });
-
-  registerToolRenderers(pi, "/project", { toolOptions: {} });
-
-  assert.deepEqual(installed, ["bash", "read"]);
+  for (const name of CORE_CODE_PREVIEW_TOOLS) {
+    const renderers = createBuiltinPreviewRenderers(name, {
+      cwd: "/project",
+      selfShell: true,
+      scheduleAnimation: () => () => undefined,
+    });
+    assert.ok(renderers);
+    assert.equal("execute" in renderers, false);
+    assert.equal("parameters" in renderers, false);
+  }
+  registerWritePreviewTool(pi, "/project");
+  assert.deepEqual(installed, ["write"]);
 });
 
-const setupFailure = () => {
-  throw new Error("setup failure");
-};
+test("disabled and unrelated names neither create presentations nor register write", () => {
+  enableOnly("read");
+  const pi = piFixture({ registerTool: () => assert.fail("unexpected hook") });
+  registerWritePreviewTool(pi, "/project");
+  for (const name of ["write", "echo", "toString"])
+    assert.equal(
+      createBuiltinPreviewRenderers(name, {
+        cwd: "/project",
+        selfShell: true,
+        scheduleAnimation: () => () => undefined,
+      }),
+      undefined,
+    );
+});
+
+test.each([false, true])("write registration preserves active selection: %s", (active) => {
+  enableOnly("write");
+  const definitions: ToolDefinition<any, any, any>[] = [];
+  registerWritePreviewTool(
+    piFixture({
+      getActiveTools: () => (active ? ["write"] : ["read"]),
+      registerTool: (tool) => definitions.push(tool),
+    }),
+    "/project",
+  );
+  assert.equal(definitions.length, 1);
+  assert.equal(definitions[0]?.defaultActive, active);
+});
 
 test.each([
-  ["later definition construction", Object.defineProperty({}, "read", { get: setupFailure }), {}],
-  ["mandatory tool discovery", {}, { getAllTools: setupFailure }],
-] as const)("%s failures escape before the first registration mutation", (_, toolOptions, api) => {
-  enableOnly("bash", "read");
-  let mutations = 0;
-  const pi = piFixture({ ...api, registerTool: () => mutations++ });
-  assert.throws(() => registerToolRenderers(pi, "/project", { toolOptions }), /setup failure/);
-  assert.equal(mutations, 0);
-});
-
-test("a registration failure is bounded, later tools continue, and retry installs only failures", () => {
-  enableOnly(...CORE_CODE_PREVIEW_TOOLS);
-  const attempts: string[] = [];
-  const installedTools = new Set<CodePreviewToolName>();
-  let failRead = true;
-  const pi = piFixture({
-    registerTool: (tool) => {
-      attempts.push(tool.name);
-      if (tool.name === "read" && failRead) throw new Error("raw private registration failure");
-    },
-  });
-
-  assert.doesNotThrow(() =>
-    registerToolRenderers(pi, "/project", { installedTools, toolOptions: {} }),
-  );
-  assert.deepEqual(attempts, [...CORE_CODE_PREVIEW_TOOLS]);
-  assert.deepEqual(
-    [...installedTools],
-    CORE_CODE_PREVIEW_TOOLS.filter((tool) => tool !== "read"),
-  );
-  assert.deepEqual(getCodePreviewToolStatuses().get("read"), { state: "registration-error" });
-  assert.equal(
-    JSON.stringify([...getCodePreviewToolStatuses().values()]).includes("raw private"),
-    false,
-  );
-
-  failRead = false;
-  attempts.length = 0;
-  registerToolRenderers(pi, "/project", { installedTools, toolOptions: {} });
-
-  assert.deepEqual(attempts, ["read"]);
-  assert.deepEqual(installedTools, new Set(CORE_CODE_PREVIEW_TOOLS));
-  for (const tool of CORE_CODE_PREVIEW_TOOLS)
-    assert.deepEqual(getCodePreviewToolStatuses().get(tool), { state: "installed" });
-});
-
-test("a mutate-then-refresh failure remains owned and retries successfully", () => {
-  enableOnly("read");
+  ["absent", []],
+  ["foreign", [toolInfo("write", foreignSource)]],
+  ["wrong builtin source", [toolInfo("write", { ...builtinSource, path: "builtin:other" })]],
+  ["ambiguous", [toolInfo("write"), toolInfo("write", foreignSource)]],
+] as const)("%s write stays unchanged", (_, tools) => {
+  enableOnly("write");
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
-  const visible = new Map<string, ToolInfo>([["read", toolInfo("read")]]);
-  let attempts = 0;
+  registerWritePreviewTool(
+    piFixture({
+      getAllTools: () => [...tools],
+      registerTool: () => assert.fail("unexpected registration"),
+    }),
+    "/project",
+    { ownedTools, installedTools },
+  );
+  assert.equal(ownedTools.size, 0);
+  assert.equal(installedTools.size, 0);
+});
+
+test.each(["discovery", "active selection", "registration"])(
+  "%s failure is bounded and retryable",
+  (boundary) => {
+    enableOnly("write");
+    let failing = true;
+    const installedTools = new Set<CodePreviewToolName>();
+    const fail = () => {
+      if (failing) throw new Error("raw private failure");
+    };
+    const pi = piFixture({
+      getAllTools: () => {
+        if (boundary === "discovery") fail();
+        return [toolInfo("write")];
+      },
+      getActiveTools: () => {
+        if (boundary === "active selection") fail();
+        return ["write"];
+      },
+      registerTool: () => {
+        if (boundary === "registration") fail();
+      },
+    });
+    registerWritePreviewTool(pi, "/project", { installedTools });
+    assert.equal(installedTools.size, 0);
+    assert.deepEqual(getCodePreviewToolStatuses().get("write"), { state: "registration-error" });
+    failing = false;
+    registerWritePreviewTool(pi, "/project", { installedTools });
+    assert.deepEqual(installedTools, new Set(["write"]));
+  },
+);
+
+test("mutate-then-refresh failure stays owned and retries without reinstalling a settled hook", () => {
+  enableOnly("write");
+  const ownedTools = new Set<CodePreviewToolName>();
+  const installedTools = new Set<CodePreviewToolName>();
+  let visible = toolInfo("write");
   let failRefresh = true;
+  let mutations = 0;
   const pi = piFixture({
-    getAllTools: () => [...visible.values()],
+    getAllTools: () => [visible],
     registerTool: (tool) => {
-      attempts++;
-      // Pi mutates the extension registry before refreshing the visible tool registry.
-      visible.set(tool.name, toolInfo(tool.name, extensionSource));
+      mutations++;
+      visible = toolInfo(tool.name, extensionSource);
       if (failRefresh) throw new Error("refresh failed after mutation");
     },
   });
-
-  registerToolRenderers(pi, "/project", { ownedTools, installedTools, toolOptions: {} });
-  assert.equal(attempts, 1);
-  assert.deepEqual(ownedTools, new Set(["read"]));
+  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
+  assert.deepEqual(ownedTools, new Set(["write"]));
   assert.equal(installedTools.size, 0);
-  assert.deepEqual(getCodePreviewToolStatuses().get("read"), {
-    state: "registration-error",
-  });
-
   failRefresh = false;
-  registerToolRenderers(pi, "/project", { ownedTools, installedTools, toolOptions: {} });
-  assert.equal(attempts, 2);
-  assert.deepEqual(installedTools, new Set(["read"]));
-  assert.deepEqual(getCodePreviewToolStatuses().get("read"), { state: "installed" });
-});
-
-test("registration skips conflicts without constructing or tracking them", () => {
-  enableOnly("grep");
-  const installedTools = new Set<CodePreviewToolName>();
-  let mutations = 0;
-  const pi = piFixture({
-    getAllTools: () => [toolInfo("grep", extensionSource)],
-    registerTool: () => mutations++,
-  });
-
-  registerToolRenderers(pi, "/project", { installedTools, toolOptions: {} });
-
-  assert.equal(mutations, 0);
-  assert.equal(installedTools.size, 0);
-  assert.deepEqual(getCodePreviewToolStatuses().get("grep"), {
+  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
+  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
+  assert.equal(mutations, 2);
+  assert.deepEqual(installedTools, new Set(["write"]));
+  // Even settled prior ownership cannot authorize a later foreign replacement.
+  visible = toolInfo("write", foreignSource);
+  registerWritePreviewTool(pi, "/project", { ownedTools, installedTools });
+  assert.equal(mutations, 2);
+  assert.deepEqual(getCodePreviewToolStatuses().get("write"), {
     state: "skipped-conflict",
-    owner: extensionSource,
+    owner: foreignSource,
   });
 });
+
+test.each(["foreign replacement", "missing anchor", "ambiguous anchor", "metadata failure"])(
+  "prior ownership declines %s",
+  (scenario) => {
+    enableOnly("write");
+    const ownedTools = new Set<CodePreviewToolName>(["write"]);
+    const installedTools = new Set<CodePreviewToolName>();
+    registerWritePreviewTool(
+      piFixture({
+        getAllTools: () => [
+          toolInfo("write", scenario === "foreign replacement" ? foreignSource : extensionSource),
+        ],
+        getCommands: () => {
+          if (scenario === "metadata failure") throw new Error("metadata unavailable");
+          return scenario === "missing anchor"
+            ? []
+            : scenario === "ambiguous anchor"
+              ? [anchor, anchor]
+              : [anchor];
+        },
+        registerTool: () => assert.fail("prior membership is not ownership proof"),
+      }),
+      "/project",
+      { ownedTools, installedTools },
+    );
+    assert.equal(installedTools.size, 0);
+  },
+);

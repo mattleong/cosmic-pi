@@ -62,10 +62,11 @@ jobs:
         run: |
           set -euo pipefail
           # Publish shared public runtime dependencies before the extension packages that
-          # depend on them (including public pi-mcp-previews), then every other
+          # depend on them, then every other
           # top-level package exactly once. Only private pi-herdr-btw is skipped.
           package_dirs=(packages/pi-cosmic-core packages/pi-cosmic-ui packages/pi-code-previews)
           for package_dir in packages/*; do
+            [ -f "$package_dir/package.json" ] || continue
             already_listed=false
             for ordered_dir in "${package_dirs[@]}"; do
               if [ "$package_dir" = "$ordered_dir" ]; then

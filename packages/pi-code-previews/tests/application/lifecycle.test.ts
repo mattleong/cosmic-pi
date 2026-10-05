@@ -4,6 +4,7 @@ import {
   withFileMutationQueue,
   type ToolDefinition,
   type ToolInfo,
+  type ToolRendererResolver,
 } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
@@ -27,7 +28,7 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
-import { registerToolRenderers } from "../../src/tools/renderers/registration";
+import { registerWritePreviewTool } from "../../src/tools/renderers/registration";
 import { effectTest, settle, step } from "../support/effect-test";
 import {
   executeWriteWithPreview,
@@ -209,7 +210,9 @@ function harness(options: HarnessOptions = {}) {
   const syntaxThemes: string[] = [];
   const probe = makeLifecycleProbe("runtime-acquired", "runtime-released");
   let loadCalls = 0;
+  const resolvers: ToolRendererResolver[] = [];
   const pi = extensionApiFixture({
+    registerToolRenderer: (resolver: ToolRendererResolver) => resolvers.push(resolver),
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     getAllTools: () => [],
     getActiveTools: () => [],
@@ -219,7 +222,7 @@ function harness(options: HarnessOptions = {}) {
     registerCommands: () => undefined,
     registerRenderers: options.realRenderers
       ? (rendererPi, cwd, rendererOptions) =>
-          registerToolRenderers(rendererPi, cwd, { ...rendererOptions, toolOptions: {} })
+          registerWritePreviewTool(rendererPi, cwd, rendererOptions)
       : () => {
           startupEvents.push("renderers");
         },
@@ -275,6 +278,7 @@ function harness(options: HarnessOptions = {}) {
     notifications,
     startupEvents,
     syntaxThemes,
+    resolvers,
     probe,
     counts: () => ({
       acquisitions: probe.acquired(),
@@ -318,7 +322,7 @@ function builtinToolInfo(name: string): ToolInfo {
     parameters: opaqueFixture({}),
     exposure: "direct",
     sourceInfo: {
-      path: "builtin",
+      path: `builtin:${name}`,
       source: "builtin",
       scope: "temporary",
       origin: "top-level",
@@ -459,7 +463,7 @@ effectTest(
   },
 );
 
-effectTest("partial renderer registration keeps the session runtime live", function* () {
+effectTest("a failed write hook keeps presentation and the session runtime live", function* () {
   const partialSettings = {
     ...settings,
     tools: ["bash", "read", "write"],
@@ -470,54 +474,71 @@ effectTest("partial renderer registration keeps the session runtime live", funct
     getAllTools: () => ["bash", "read", "write"].map(builtinToolInfo),
     registerTool: (tool: ToolDefinition) => {
       attempts.push(tool.name);
-      if (tool.name === "read") throw new Error("host mutation failed");
+      if (tool.name === "write") throw new Error("host mutation failed");
     },
   });
   yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
 
   yield* step(() => start(h));
 
-  assert.deepEqual(attempts, ["bash", "read", "write"]);
+  assert.deepEqual(attempts, ["write"]);
+  assert.equal(h.resolvers.length, 1);
   assert.equal(hasCodePreviewSessionCapability(), true);
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 0, loads: 1 });
   assert.deepEqual(h.notifications, []);
   yield* step(() => shutdown(h));
 });
 
-effectTest("lifecycle retries a tool left visible by mutate-then-refresh failure", function* () {
-  const retrySettings = {
-    ...settings,
-    tools: ["read"],
-  } satisfies CodePreviewSettings;
-  const h = harness({ load: () => Effect.succeed(retrySettings), realRenderers: true });
-  let visible = builtinToolInfo("read");
-  let attempts = 0;
-  Object.assign(h.pi, {
-    getAllTools: () => [visible],
-    registerTool: (tool: ToolDefinition) => {
-      attempts++;
-      visible = {
-        ...builtinToolInfo(tool.name),
-        sourceInfo: {
-          path: "/extensions/pi-code-previews.ts",
-          source: "pi-code-previews",
-          scope: "user",
-          origin: "top-level",
+effectTest(
+  "lifecycle retries a write hook left visible by mutate-then-refresh failure",
+  function* () {
+    const retrySettings = {
+      ...settings,
+      tools: ["write"],
+    } satisfies CodePreviewSettings;
+    const h = harness({ load: () => Effect.succeed(retrySettings), realRenderers: true });
+    let visible = builtinToolInfo("write");
+    let attempts = 0;
+    Object.assign(h.pi, {
+      getAllTools: () => [visible],
+      getCommands: () => [
+        {
+          name: "code-previews",
+          source: "extension",
+          sourceInfo: {
+            path: "/extensions/pi-code-previews.ts",
+            source: "pi-code-previews",
+            scope: "user",
+            origin: "top-level",
+          },
         },
-      };
-      if (attempts === 1) throw new Error("refresh failed after registry mutation");
-    },
-  });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+      ],
+      registerTool: (tool: ToolDefinition) => {
+        attempts++;
+        visible = {
+          ...builtinToolInfo(tool.name),
+          sourceInfo: {
+            path: "/extensions/pi-code-previews.ts",
+            source: "pi-code-previews",
+            scope: "user",
+            origin: "top-level",
+          },
+        };
+        if (attempts === 1) throw new Error("refresh failed after registry mutation");
+      },
+    });
+    yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
 
-  yield* step(() => start(h));
-  yield* step(() => start(h));
+    yield* step(() => start(h));
+    yield* step(() => start(h));
 
-  assert.equal(attempts, 2);
-  assert.equal(hasCodePreviewSessionCapability(), true);
-  assert.deepEqual(h.counts(), { acquisitions: 2, releases: 1, loads: 2 });
-  yield* step(() => shutdown(h));
-});
+    assert.equal(attempts, 2);
+    assert.equal(h.resolvers.length, 1);
+    assert.equal(hasCodePreviewSessionCapability(), true);
+    assert.deepEqual(h.counts(), { acquisitions: 2, releases: 1, loads: 2 });
+    yield* step(() => shutdown(h));
+  },
+);
 
 effectTest(
   "getAllTools admission failure reaches lifecycle handling before settings I/O",
