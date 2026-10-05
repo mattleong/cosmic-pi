@@ -46,22 +46,25 @@ const settings = (style: "preview" | "compact", background: "off" | "on" | "bord
   });
 };
 
+/** Like Pi's own MCP call: its label, then the arguments as key/value lines. */
 const native: ToolRenderers = {
-  renderCall: (_args, _theme, context) => {
+  renderCall: (args, _theme, context) => {
     const body = new Container();
-    body.addChild(new Text("team-docs / find.page", 0, 0));
+    body.addChild(new Text("NATIVE_LABEL", 0, 0));
     body.addChild(new Text("NATIVE_EXTRA_CALL_CONTENT", 0, 0));
     body.addChild(
       new Text(context.expanded ? "NATIVE_EXPANDED_CALL_CONTENT" : "NATIVE_PENDING_CONTENT", 0, 0),
     );
+    body.addChild(new Text(JSON.stringify(args), 0, 0));
     return body;
   },
   renderResult: () => new Text("Native result", 0, 0),
 };
+const occurrences = (text: string, marker: string) => text.split(marker).length - 1;
 
 for (const style of ["preview", "compact"] as const)
   for (const background of ["off", "on", "border"] as const)
-    test(`${style}/${background} keeps complete downstream native calls and exact expanded arguments`, () => {
+    test(`${style}/${background} keeps the collapsed native call and shows expanded arguments once`, () => {
       settings(style, background);
       const renderers = selectNativeMcpRenderers(name, metadata(), true, native, session());
       assert.ok(renderers);
@@ -71,7 +74,7 @@ for (const style of ["preview", "compact"] as const)
       h.call(args);
       const pending = stripAnsi(h.render(200).join("\n"));
       if (style === "preview") {
-        assert.ok(pending.includes("team-docs / find.page"));
+        assert.ok(pending.includes("NATIVE_LABEL"));
         assert.ok(pending.includes("NATIVE_EXTRA_CALL_CONTENT"));
         assert.ok(pending.includes("NATIVE_PENDING_CONTENT"));
       } else assert.ok(pending.includes(name), "compact pending identity retains the raw alias");
@@ -84,14 +87,17 @@ for (const style of ["preview", "compact"] as const)
         { expanded: true },
       );
       const expanded = stripAnsi(h.render(200).join("\n"));
+      for (const marker of ["EXACT_ARGUMENT", '"retained"', "COMPLETE_OUTPUT"])
+        assert.ok(expanded.includes(marker), marker);
+      assert.equal(occurrences(expanded, "EXACT_ARGUMENT"), 1, "arguments appear once");
+      // One shared heading names the confirmed remote tool; the native call adds no second one.
+      assert.ok(expanded.includes("find.page"));
       for (const marker of [
+        "NATIVE_LABEL",
         "NATIVE_EXTRA_CALL_CONTENT",
         "NATIVE_EXPANDED_CALL_CONTENT",
-        "EXACT_ARGUMENT",
-        '"retained"',
-        "COMPLETE_OUTPUT",
       ])
-        assert.ok(expanded.includes(marker), marker);
+        assert.equal(expanded.includes(marker), false, marker);
     });
 
 for (const style of ["preview", "compact"] as const)
@@ -119,10 +125,8 @@ for (const style of ["preview", "compact"] as const)
         { invalidate: "after" },
       )) {
         const text = stripAnsi(frame.text);
-        if (frame.expanded) {
-          assert.ok(text.includes("NATIVE_EXPANDED_RETAINED"));
-          assert.ok(text.includes("EXACT_INPUT_RETAINED"));
-        } else if (style === "preview") assert.ok(text.includes("NATIVE_PENDING_RETAINED"));
+        if (frame.expanded) assert.ok(text.includes("EXACT_INPUT_RETAINED"));
+        else if (style === "preview") assert.ok(text.includes("NATIVE_PENDING_RETAINED"));
       }
     });
 

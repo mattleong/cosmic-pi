@@ -1,5 +1,5 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -7,7 +7,7 @@ import { codePreviewSettings } from "../config/state";
 import { expandedSection } from "../preview/expanded-section";
 import { renderCompactChildren } from "../preview/compact-children";
 import { previewIssuesSlot } from "../preview/preview-issues";
-import { timingState } from "../preview/tool-timing";
+import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { renderNativeCodemodeProgram } from "./native-codemode-source";
 import { escapeControlChars } from "../shared/terminal-text";
 import { renderHighlightedText } from "../syntax/render";
@@ -20,44 +20,27 @@ import {
   nativeCodemodeSummary,
 } from "./native-codemode-summary";
 import { nativeCodemodeEvidence, nativeEvidenceCoverage } from "./native-codemode-evidence";
+import { safeContent } from "./native-safe-content";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 
-/** Source and output survive even if a host theme/highlighter fails during construction/draw. */
-function safeContent(
-  build: () => Component,
-  raw: string,
-  fallback: Component = new Text(escapeControlChars(raw), 0, 0),
-): Component {
-  let body: Component;
-  try {
-    body = build();
-  } catch {
-    return fallback;
-  }
-  let failed = false;
-  return {
-    render(width) {
-      if (!failed) {
-        try {
-          return body.render(width);
-        } catch {
-          failed = true;
-        }
-      }
-      return fallback.render(width);
-    },
-    invalidate() {
-      if (!failed) {
-        try {
-          body.invalidate();
-        } catch {
-          failed = true;
-        }
-      }
-      fallback.invalidate();
-    },
-  };
-}
+/** The complete program, highlighted, for the expanded view. */
+const renderSource: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+  const source =
+    Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
+  return safeContent(
+    () =>
+      expandedSection(
+        theme,
+        "Program",
+        new Text(
+          renderHighlightedText(source, "javascript", theme, context.invalidate).join("\n"),
+          0,
+          0,
+        ),
+      ),
+    source,
+  );
+};
 
 /** Presentation only; the lifecycle admits the current public builtin codemode source. */
 export function createNativeCodemodeRenderers(
@@ -68,23 +51,6 @@ export function createNativeCodemodeRenderers(
   const summary = nativeCodemodeSummary(cwd);
   const previewStyle =
     (appearance.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) === "preview";
-  const renderSource: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-    const source =
-      Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
-    return safeContent(
-      () =>
-        expandedSection(
-          theme,
-          "Program",
-          new Text(
-            renderHighlightedText(source, "javascript", theme, context.invalidate).join("\n"),
-            0,
-            0,
-          ),
-        ),
-      source,
-    );
-  };
 
   const renderOutput: NonNullable<ToolRenderers["renderResult"]> = (
     result,
@@ -108,7 +74,7 @@ export function createNativeCodemodeRenderers(
               const rows = renderCompactChildren(children, theme, width, {
                 all: true,
                 layout: "flat",
-                animationFrame: timingState(context).codePreviewAnimationFrame ?? 0,
+                animationFrame: getCodePreviewAnimationFrame(context),
                 timingEnabled: codePreviewSettings.toolCallTiming,
               });
               if (evidence.kind === "unavailable" || !evidence.complete)
@@ -130,7 +96,7 @@ export function createNativeCodemodeRenderers(
         body.addChild({
           render(width) {
             return new Text(
-              toolRunningLine(theme, timingState(context).codePreviewAnimationFrame ?? 0),
+              toolRunningLine(theme, getCodePreviewAnimationFrame(context)),
               0,
               0,
             ).render(width);
@@ -176,17 +142,13 @@ export function createNativeCodemodeRenderers(
         const fallback = new Container();
         fallback.addChild(new Text("codemode", 0, 0));
         fallback.addChild(program);
-        return safeContent(
-          () => {
-            const body = new Container();
-            body.addChild(new Text(renderToolHeader({ title: "codemode" }, theme), 0, 0));
-            body.addChild(previewIssuesSlot(context));
-            body.addChild(program);
-            return body;
-          },
-          `codemode\n${source}`,
-          fallback,
-        );
+        return safeContent(() => {
+          const body = new Container();
+          body.addChild(new Text(renderToolHeader({ title: "codemode" }, theme), 0, 0));
+          body.addChild(previewIssuesSlot(context));
+          body.addChild(program);
+          return body;
+        }, fallback);
       },
       renderResult(result, options, theme, context) {
         if (options.expanded) return renderOutput(result, options, theme, context);
@@ -204,7 +166,7 @@ export function createNativeCodemodeRenderers(
         return safeContent(
           () => ({
             render(width) {
-              const animationFrame = timingState(context).codePreviewAnimationFrame ?? 0;
+              const animationFrame = getCodePreviewAnimationFrame(context);
               const rows = renderCompactChildren(projected.children, theme, width, {
                 animationFrame,
                 timingEnabled: codePreviewSettings.toolCallTiming,

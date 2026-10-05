@@ -18,11 +18,14 @@ import {
 } from "./native-codemode-evidence";
 import type { CompactIssue } from "./compact-issues";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { selectCompactChildren } from "../preview/compact-children";
 import { nativeArgumentPreview, safeNativeArgumentText } from "./native-codemode-args";
 import { nativeCodemodeCallSubject } from "./native-codemode-subject";
+import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
 
 /** Native model rows record only the `provider/id` they resolved, never prompts or image data. */
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
+const SCRIPT_ERROR = "Script error:\n";
 
 function issue(code: string, text: string): CompactIssue {
   const detail = sanitizeDiagnosticContent(text);
@@ -128,11 +131,7 @@ export const nativeCodemodeSummary =
     // Native truncation replaces all text output with one envelope, even when its spill fails.
     // Recognizing this conservative warning never promotes guest output to an execution outcome.
     const truncatedEnvelope =
-      !!header &&
-      output?.type === "text" &&
-      /^Warning: truncated output \(original token count: \d+\)\nTotal output lines: \d+\n\n/.test(
-        output.text,
-      );
+      header && output?.type === "text" ? parseNativeTruncatedOutput(output.text) : undefined;
     const issues: CompactIssue[] = [];
     if (!complete)
       issues.push({
@@ -143,29 +142,12 @@ export const nativeCodemodeSummary =
             ? "Call details are incomplete"
             : "Call details are unavailable",
       });
-    if (evidence.fullOutputPath || truncatedEnvelope) {
-      const truncated: CompactIssue = {
-        code: "native-output-truncated",
-        severity: evidence.fullOutputPath ? "info" : "warning",
-        message: "Script output is truncated",
-      };
-      issues.push(
-        evidence.fullOutputPath
-          ? { ...truncated, detail: sanitizeDiagnosticContent(evidence.fullOutputPath) }
-          : truncated,
-      );
-      if (!evidence.fullOutputPath && output?.type === "text") {
-        const footer = "\n\n[Could not save the full output: ";
-        const index = output.text.lastIndexOf(footer);
-        if (index >= 0 && output.text.endsWith("]"))
-          issues.push({
-            code: "native-output-save-failed",
-            severity: "warning",
-            message: "Full script output could not be saved",
-            detail: sanitizeDiagnosticContent(output.text.slice(index + footer.length, -1)),
-          });
-      }
-    }
+    issues.push(
+      ...nativeTruncationIssues(truncatedEnvelope, evidence.fullOutputPath, {
+        code: "native",
+        subject: "Script output",
+      }),
+    );
     const summary = {
       subject: "",
       showTiming: true as const,
@@ -187,24 +169,25 @@ export const nativeCodemodeSummary =
     if (failed) {
       // Native details do not expose a typed stop reason. Even a final native error block
       // can contain a guest-controlled Error.name/stack, so text cannot prove cancellation.
+      // Pi appends its error block after all guest output; only its own notes, such as one
+      // about generated images the script never showed, may follow.
       const diagnostic =
         evidence.fullOutputPath || truncatedEnvelope
           ? undefined
-          : result.content.findLast((part) => part.type === "text");
-      const text =
-        diagnostic?.type === "text" && diagnostic.text.startsWith("Script error:\n")
-          ? diagnostic.text.slice("Script error:\n".length)
-          : "";
-      return {
-        ...summary,
-        outcome: "error",
-        issues: [
-          {
-            ...issue("native-script-error", text || "The script failed"),
-          },
-          ...issues,
-        ],
-      };
+          : result.content.findLast(
+              (part) => part.type === "text" && part.text.startsWith(SCRIPT_ERROR),
+            );
+      const text = diagnostic?.type === "text" ? diagnostic.text.slice(SCRIPT_ERROR.length) : "";
+      const failure = issue("native-script-error", text || "The script failed");
+      // When a visible call stopped the program, its row already says why.
+      const explained = selectCompactChildren(children).entries.some(
+        (entry) =>
+          entry.status === "error" &&
+          entry.issues?.some(
+            (cause) => cause.code === "native-child-error" && cause.message === failure.message,
+          ),
+      );
+      return { ...summary, outcome: "error", issues: explained ? issues : [failure, ...issues] };
     }
     // An error flag contradicting the completion header is not successful native execution.
     if (context.isError || result.isError)

@@ -1,5 +1,7 @@
 import type * as Schema from "effect/Schema";
 import type { AgentToolResult, ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
 import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -67,9 +69,31 @@ function registered(style: "compact" | "preview") {
     pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => owner, new Set()));
   });
   return new Map<string, ToolRenderers>(
-    names.map((name) => [name, captured.resolveToolRenderers(name)!]),
+    names.map((name) => [
+      name,
+      captured.resolveToolRenderers(
+        name,
+        name === "mcp__docs__lookup" ? nativeMcpCall : undefined,
+      )!,
+    ]),
   );
 }
+
+/** The shape of Pi's own MCP call: its `server/tool` label, then the arguments. */
+const nativeMcpCall: ToolRenderers = {
+  renderCall: (args, _theme, context) => {
+    const fields = Object.entries(Predicate.isObject(args) ? args : {});
+    const entries = fields.map(([key, value]) => `${key}=${JSON.stringify(value)}`);
+    const lines = fields.map(([key, value]) => `  ${key}: ${String(value)}`);
+    return new Text(
+      context.expanded
+        ? ["docs/lookup", ...lines].join("\n")
+        : ["docs/lookup", ...entries].join(" "),
+      0,
+      0,
+    );
+  },
+};
 
 const text = (value: string): AgentToolResult<unknown> => ({
   content: [{ type: "text", text: value }],
@@ -380,6 +404,17 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
+    title: "native uncaught nested failure stopped the program",
+    args: { code: "text(await tools.read({path: 'source.ts'}));" },
+    isError: true,
+    result: nativeResult(
+      "failed",
+      [nativeCall("error", "ENOENT: no such file or directory, open '/project/source.ts'")],
+      "Script error:\nError: ENOENT: no such file or directory, open '/project/source.ts'\n\nTool calls made before the failure (they are not undone): read (error)",
+    ),
+  },
+  {
+    tool: "codemode",
     title: "native completed script leaves cancelled child uncertain",
     args: { code: "tools.read({path: 'source.ts'}); return 1;" },
     result: nativeResult("completed", [nativeCall("cancelled")], "1"),
@@ -472,7 +507,7 @@ const scenarios: ReadonlyArray<
       content: [
         {
           type: "text",
-          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n[Full output: /tmp/mcp-output.txt]",
+          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n\n[Full output: /tmp/mcp-output.txt (read it with offset/limit)]",
         },
       ],
       details: { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-output.txt" },
@@ -486,7 +521,38 @@ const scenarios: ReadonlyArray<
       content: [
         {
           type: "text",
-          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n[Could not save the full output: ENOSPC]",
+          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n\n[Could not save the full output: ENOSPC]",
+        },
+      ],
+      details: { server: "docs", tool: "lookup" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP long error inside Pi's truncation envelope",
+    args: { query: "Getting started" },
+    isError: true,
+    result: {
+      content: [
+        {
+          type: "text",
+          text: `Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nIndex docs-main has no page for that query\n${"diagnostic\n".repeat(3)}…8000 tokens truncated…\n\n[Full output: /tmp/mcp-error.txt (read it with offset/limit)]`,
+        },
+      ],
+      details: { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-error.txt" },
+    },
+  },
+  {
+    tool: "mcp__docs__lookup",
+    title: "MCP long single-line output",
+    args: { query: "Getting started" },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            items: Array.from({ length: 80 }, (_, id) => ({ id, title: `Item ${id}` })),
+          }),
         },
       ],
       details: { server: "docs", tool: "lookup" },

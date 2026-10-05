@@ -119,7 +119,7 @@ test("recoverable native output does not raise attention; missing recovery remai
     const clipping = summary.issues?.find((entry) => entry.code === "native-output-truncated");
     assert.equal(clipping?.severity, saved ? "info" : "warning");
     assert.equal(compactStatus("settled", summary), saved ? "success" : "warning");
-    assert.equal(clipping?.detail, saved ? path : undefined);
+    assert.equal(clipping?.detail?.includes("/tmp/RECOVERABLE_OUTPUT") ?? false, saved);
     assert.deepEqual(value, before);
   }
 });
@@ -171,6 +171,81 @@ for (const style of ["compact", "preview"] as const)
     }
     assert.deepEqual(value, before);
   });
+
+const missing = "ENOENT: no such file or directory, open '/project/missing.ts'";
+/** Pi's result when a script awaits a failing nested call without catching it. */
+const uncaught = (calls: unknown[], notes: string[] = []): AgentToolResult<unknown> => ({
+  content: [
+    { type: "text", text: "Script failed\nWall time 0.1 seconds\nOutput:\n" },
+    {
+      type: "text",
+      text: `Script error:\nError: ${missing}\n\nTool calls made before the failure (they are not undone): read (error)`,
+    },
+    ...notes.map((text) => ({ type: "text" as const, text })),
+  ],
+  details: { calls },
+});
+const stoppedBy = (error: string) =>
+  call("error", { args: '{"path":"/project/missing.ts"}', error });
+
+test("a visible call that stopped its program explains the failure once", () => {
+  const scriptError = (value: AgentToolResult<unknown>) =>
+    projection(value, true)?.issues?.find((entry) => entry.code === "native-script-error");
+  const explained = projection(uncaught([stoppedBy(missing)]), true)!;
+  assert.equal(explained.outcome, "error");
+  assert.equal(compactStatus("settled", explained), "error");
+  assert.equal(scriptError(uncaught([stoppedBy(missing)])), undefined);
+  // A different cause, or one hidden behind five later failures, keeps the program's own line.
+  assert.ok(scriptError(uncaught([stoppedBy("Permission denied")]))?.message.includes("ENOENT"));
+  const hidden = [
+    stoppedBy(missing),
+    ...Array.from({ length: 5 }, (_, index) => stoppedBy(`Other failure ${index}`)),
+  ];
+  assert.ok(scriptError(uncaught(hidden))?.message.includes("ENOENT"));
+  // Pi's note about generated images the script never showed follows its error block.
+  const note =
+    "Note: models.generateImages() returned 1 image that the script did not show. Show each image block of result.output with image(block).";
+  assert.ok(scriptError(uncaught([], [note]))?.message.includes("ENOENT"));
+});
+
+for (const style of ["compact", "preview"] as const)
+  test(`native ${style} shows an uncaught nested failure once and expansion keeps the script error`, () => {
+    settings(style);
+    const harness = createToolPresentationHarness(
+      createNativeCodemodeRenderers("/project", noSchedule),
+    );
+    for (const frame of harness.cycle(
+      { code: "await tools.read({path: 'missing.ts'});" },
+      uncaught([stoppedBy(missing)]),
+      { overrides: () => ({ isError: true }) },
+    )) {
+      const text = stripAnsi(frame.text);
+      if (frame.expanded) assert.ok(text.includes("Tool calls made before the failure"));
+      else assert.equal(text.split("ENOENT").length - 1, 1, text);
+    }
+  });
+
+test("native rendering reads the animation frame without invoking renderer state accessors", () => {
+  settings("preview");
+  let invoked = false;
+  const state = Object.defineProperty({}, "codePreviewAnimationFrame", {
+    get() {
+      invoked = true;
+      return 3;
+    },
+  });
+  const harness = createToolPresentationHarness(
+    createNativeCodemodeRenderers("/project", noSchedule),
+    { state },
+  );
+  const frames = harness.cycle(
+    { code: "await tools.read({path: 'a.ts'});" },
+    { content: [], details: { calls: [call("running")] } },
+    { overrides: () => ({ executionStarted: true, isPartial: true }) },
+  );
+  assert.ok(frames.every((frame) => stripAnsi(frame.text).includes("a.ts")));
+  assert.equal(invoked, false);
+});
 
 test("projection sanitizes bounded attention/targets without changing raw native details", () => {
   const secret = "sk-verysecretvalue123456";

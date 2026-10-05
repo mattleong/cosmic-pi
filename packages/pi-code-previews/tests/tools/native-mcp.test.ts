@@ -20,6 +20,7 @@ import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { sha256Text, stripAnsi } from "pi-cosmic-core";
+import { toolExpandHint } from "pi-cosmic-ui/tool";
 
 const styleNativeMcp = (
   definition: ToolDefinition<any, any, any>,
@@ -334,6 +335,54 @@ test("errors are short human issues while expansion keeps full native text and r
     );
     for (const frame of frames.filter((entry) => entry.expanded))
       assert.ok(stripAnsi(frame.text).includes("Run /mcp to sign in."), style);
+  }
+});
+
+test("a long error reads its own first line inside Pi's truncation envelope", () => {
+  const envelope =
+    "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
+  const body = `Index docs-main has no page for that query\n${"diagnostic\n".repeat(40)}`;
+  for (const [footer, details] of [
+    [
+      "[Full output: /tmp/pi-mcp-error.txt (read it with offset/limit)]",
+      { ...docs, fullOutputPath: "/tmp/pi-mcp-error.txt" },
+    ],
+    ["[Could not save the full output: ENOSPC: disk full]", docs],
+  ] as const) {
+    const summary = summarize(
+      dynamicTool(),
+      result(`${envelope}${body}\n\n${footer}`, details),
+      {},
+      true,
+    );
+    const error = summary?.issues?.find((issue) => issue.code === "mcp-error");
+    assert.ok(error);
+    assert.ok(error.message.includes("Index docs-main has no page"), error.message);
+    assert.deepEqual(
+      issueMessageStyleProblems(error.message, { forbidden: ["truncated output", "token count"] }),
+      [],
+    );
+  }
+});
+
+test("preview wraps long single-line output and signals what expansion shows", () => {
+  settings("preview");
+  const json = JSON.stringify({
+    items: Array.from({ length: 80 }, (_, id) => ({ id, title: `Item ${id}` })),
+  });
+  for (const [text, hidden] of [
+    [json, true],
+    ["Short output", false],
+  ] as const) {
+    const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()));
+    h.call({ query: "items" });
+    h.result(result(text, docs));
+    for (const width of [40, 80, 120]) {
+      const rows = h.render(width);
+      assert.ok(rows.every((row) => visibleWidth(row) <= width));
+      assert.equal(stripAnsi(rows.join("\n")).includes(toolExpandHint()), hidden, `${width}`);
+      assert.ok(rows.length <= 10, `${rows.length} rows at ${width}`);
+    }
   }
 });
 

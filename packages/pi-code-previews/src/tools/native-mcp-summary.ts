@@ -15,6 +15,7 @@ import type { CompactIssue } from "./compact-issues";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
 import { nativeMcpReceiptMatches, type NativeMcpIdentity } from "./native-mcp-identity";
 import { nativeMcpArgumentText, nativeMcpHeading } from "./native-mcp-subject";
+import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Evidence = Schema.Struct({
@@ -45,16 +46,21 @@ export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence 
   }, undefined);
 }
 
-/** Receipts must match the alias/namespace, or a resource tool and its observed server. */
-function belongsTo<Args>(
+/**
+ * The result's native receipt, only when it matches the alias/namespace, or a resource tool and
+ * its observed server.
+ */
+export function nativeMcpReceipt<Args>(
   identity: NativeMcpIdentity,
-  evidence: NativeMcpEvidence,
+  result: AgentToolResult<unknown>,
   args: Args,
-): boolean {
-  return (
+): NativeMcpEvidence | undefined {
+  const evidence = nativeMcpEvidence(result.details);
+  return evidence &&
     nativeMcpReceiptMatches(identity, evidence) &&
     (identity.kind !== "resource" || evidence.server === nativeMcpArgumentText(args, "server"))
-  );
+    ? evidence
+    : undefined;
 }
 
 const ListingFailure = Schema.Struct({ server: Schema.String, error: Schema.String });
@@ -143,24 +149,17 @@ function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   return issues;
 }
 
-const TRUNCATED =
-  /^Warning: truncated output \(original token count: \d+\)\nTotal output lines: \d+\n\n/;
-const SAVE_FAILED = "\n\n[Could not save the full output: ";
-
 /** Only an owned, recognized, recoverable envelope may replace the raw collapsed preview. */
 export function nativeMcpHasRecoverableClipping<Args>(
   identity: NativeMcpIdentity,
   result: AgentToolResult<unknown>,
   args: Args,
 ): boolean {
-  const evidence = nativeMcpEvidence(result.details);
   const first = result.content[0];
   return Boolean(
-    evidence?.fullOutputPath &&
-    belongsTo(identity, evidence, args) &&
+    nativeMcpReceipt(identity, result, args)?.fullOutputPath &&
     first?.type === "text" &&
-    TRUNCATED.test(first.text) &&
-    !first.text.includes(SAVE_FAILED) &&
+    parseNativeTruncatedOutput(first.text)?.footer === "saved" &&
     !result.content.slice(1).some((part) => part.type === "text"),
   );
 }
@@ -171,40 +170,24 @@ function outputIssues(
   evidence: NativeMcpEvidence,
 ): CompactIssue[] {
   const first = result.content[0];
-  const envelope = first?.type === "text" && TRUNCATED.test(first.text) ? first.text : undefined;
-  const truncated: CompactIssue = {
-    severity: "warning",
-    code: "mcp-output-truncated",
-    message: "Output is truncated",
-  };
-  if (evidence.fullOutputPath && !envelope?.includes(SAVE_FAILED))
-    return [
-      {
-        ...truncated,
-        severity: "info",
-        detail: `Full output saved to ${sanitizeDiagnosticContent(evidence.fullOutputPath)}`,
-      },
-    ];
-  if (envelope === undefined) return [];
-  const index = envelope.lastIndexOf(SAVE_FAILED);
-  if (index < 0 || !envelope.endsWith("]")) return [truncated];
-  return [
-    truncated,
-    {
-      severity: "warning",
-      code: "mcp-output-save-failed",
-      message: "Full output couldn't be saved",
-      detail: sanitizeDiagnosticContent(envelope.slice(index + SAVE_FAILED.length, -1)),
-    },
-  ];
+  const envelope = first?.type === "text" ? parseNativeTruncatedOutput(first.text) : undefined;
+  return nativeTruncationIssues(envelope, evidence.fullOutputPath, {
+    code: "mcp",
+    subject: "Output",
+  });
 }
 
 const MAX_ERROR_TEXT = 8192;
 
-/** The failure's own first line; text that opens with agent guidance stays in the output. */
+/**
+ * The failure's own first line, read inside Pi's truncation envelope when the error was long.
+ * Text that opens with agent guidance stays in the output.
+ */
 function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown>): CompactIssue {
   const text = result.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .flatMap((part) =>
+      part.type === "text" ? [parseNativeTruncatedOutput(part.text)?.body ?? part.text] : [],
+    )
     .join("\n")
     .slice(0, MAX_ERROR_TEXT);
   const fallback =
@@ -254,8 +237,7 @@ export const nativeMcpSummary =
       return progress ? { ...pending, metadata: [progress] } : pending;
     }
     if (!result) return undefined;
-    const evidence = nativeMcpEvidence(result.details);
-    const owned = evidence && belongsTo(identity, evidence, args) ? evidence : undefined;
+    const owned = nativeMcpReceipt(identity, result, args);
     const heading = { ...nativeMcpHeading(identity, args, owned), showTiming: true as const };
     const output = owned ? outputIssues(result, owned) : [];
     if (context.isError)

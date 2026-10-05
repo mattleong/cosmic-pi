@@ -4,7 +4,7 @@ import type {
   ToolRenderers,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { countLabel, invokeHostCallback, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -31,10 +31,13 @@ import {
   nativeMcpEvidence,
   nativeMcpHasRecoverableClipping,
   nativeMcpProgress,
+  nativeMcpReceipt,
   nativeMcpSummary,
+  type NativeMcpEvidence,
 } from "./native-mcp-summary";
 import { nativeMcpHeading } from "./native-mcp-subject";
 import { nativeMcpIdentity } from "./native-mcp-identity";
+import { plainRows, safeContent } from "./native-safe-content";
 
 /** Heading name for every native MCP row. The registered tool name stays unchanged. */
 const DISPLAY_NAME = "mcp";
@@ -42,51 +45,7 @@ const PREVIEW_LINES = 5;
 const ARGUMENT_PREVIEW_CHARS = 1000;
 
 type Context = ToolRenderContext<any, any>;
-
-/** Content survives a host theme that fails while building or drawing it. */
-function safeContent(build: () => Component, raw: string, maxRows?: number): Component {
-  const plain = escapeControlChars(raw);
-  const fallback: Component =
-    maxRows === undefined
-      ? new Text(plain, 0, 0)
-      : {
-          render: (width) =>
-            plain
-              .split("\n")
-              .slice(0, maxRows)
-              .map((line) => clipToWidth(line, width)),
-          invalidate() {},
-        };
-  let body: Component;
-  try {
-    body = build();
-  } catch {
-    return fallback;
-  }
-  let failed = false;
-  return {
-    render(width) {
-      if (!failed) {
-        try {
-          return body.render(width);
-        } catch {
-          failed = true;
-        }
-      }
-      return fallback.render(width);
-    },
-    invalidate() {
-      if (!failed) {
-        try {
-          body.invalidate();
-        } catch {
-          failed = true;
-        }
-      }
-      fallback.invalidate();
-    },
-  };
-}
+const unstyled: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
 /** Exact arguments as JSON; empty when there are none. JSON escapes control characters. */
 function argumentsJson<Args>(args: Args, space?: number): string {
@@ -171,12 +130,14 @@ function renderProgress(
       },
       invalidate() {},
     }),
-    progress || "Running…",
-    1,
+    plainRows(progress || "Running…", 1),
   );
 }
 
-/** At most five clipped output lines, then how many more expansion shows. */
+/**
+ * At most five output rows wrapped at the render width, since MCP results are often one long
+ * JSON line, then how many more rows expansion shows.
+ */
 function renderOutputPreview(
   result: AgentToolResult<unknown>,
   theme: Theme,
@@ -185,28 +146,32 @@ function renderOutputPreview(
   const raw = getFallbackResultText(result.content, context.showImages).trim();
   if (!raw) return new Container();
   const lines = compactPlainText(raw).split("\n");
-  const shown = lines.slice(0, PREVIEW_LINES);
-  const hidden = lines.length - shown.length;
   const color = context.isError ? "error" : "toolOutput";
-  return safeContent(
-    () => ({
+  const preview = (style: Pick<Theme, "fg">): Component => {
+    let wrapped: { readonly width: number; readonly rows: readonly string[] } | undefined;
+    return {
       render(width) {
-        const rows = shown.map((line) => clipToWidth(theme.fg(color, line), width));
+        if (width <= 0) return [];
+        if (wrapped?.width !== width)
+          wrapped = { width, rows: lines.flatMap((line) => wrapTextWithAnsi(line, width)) };
+        const rows = wrapped.rows.slice(0, PREVIEW_LINES).map((row) => style.fg(color, row));
+        const hidden = wrapped.rows.length - rows.length;
         if (hidden > 0)
           rows.push(
             clipToWidth(
-              renderExpansionAffordance(countLabel(hidden, "more line"), false, theme),
+              renderExpansionAffordance(countLabel(hidden, "more line"), false, style),
               width,
               "",
             ),
           );
         return rows;
       },
-      invalidate() {},
-    }),
-    [...shown, ...(hidden > 0 ? [countLabel(hidden, "more line")] : [])].join("\n"),
-    PREVIEW_LINES + 1,
-  );
+      invalidate() {
+        wrapped = undefined;
+      },
+    };
+  };
+  return safeContent(() => preview(theme), preview(unstyled));
 }
 
 /** Presentation only. Pi keeps its manager, execution, schemas, exposure and permissions. */
@@ -220,50 +185,67 @@ export function createNativeMcpRenderers(
   > = {},
 ): ToolRenderers {
   const identity = nativeMcpIdentity(name, tool);
-  // Without an exact public remote identity, keep the entire native call (including its label
-  // and any additional content). next() is only a renderer set, never a tool definition.
+  // Without an exact public remote identity, a collapsed call keeps the entire native call
+  // (including its label and any additional content). next() is only a renderer set, never a
+  // tool definition. Expanded calls show the shared heading and each argument once.
   const nativeCall = identity.kind === "tool" ? downstream?.renderCall : undefined;
-  // The native callback updates its own prior Text, never a combined shell or Container.
-  const nativeComponents = new WeakMap<Component, Component>();
-  const nativeContext = (context: Context): Context => ({
-    ...context,
-    lastComponent: context.lastComponent ? nativeComponents.get(context.lastComponent) : undefined,
-  });
-  const expandedCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-    let nativeBody: Component | undefined;
-    const component = safeContent(
-      () => {
-        const body = new Container();
-        if (nativeCall) {
-          nativeBody = nativeCall(args, theme, nativeContext(context));
-          body.addChild(nativeBody);
+  // The native callback updates its own prior component, never one of ours.
+  const nativeComponents = new WeakSet<Component>();
+  // Pi builds the call before its result but draws both afterwards, so the heading reads the
+  // row's latest matching receipt when drawn, naming the server and tool as compact rows do.
+  const receipts = new WeakMap<object, NativeMcpEvidence>();
+  const recordReceipt = (result: AgentToolResult<unknown>, context: Context): void => {
+    const receipt = nativeMcpReceipt(identity, result, context.args);
+    if (receipt && Predicate.isObject(context.state)) receipts.set(context.state, receipt);
+  };
+  const subtitle = (context: Context): string => {
+    const receipt = Predicate.isObject(context.state) ? receipts.get(context.state) : undefined;
+    const { action, subject } = nativeMcpHeading(identity, context.args, receipt);
+    return [action, subject].filter(Boolean).join(" ");
+  };
+  /** Drawn plain if the host theme fails, so the issue lines placed beneath it stay visible. */
+  const heading = (theme: Theme, context: Context): Component => {
+    const text = new Text("", 0, 0);
+    return {
+      render(width) {
+        const current = subtitle(context);
+        try {
+          text.setText(renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme));
+        } catch {
+          text.setText(escapeControlChars(`${DISPLAY_NAME} ${current}`));
         }
-        body.addChild(renderArguments(args, theme));
-        return body;
+        return text.render(width);
       },
-      `${name}\n${argumentsJson(args, 2)}`,
-    );
-    if (nativeBody) nativeComponents.set(component, nativeBody);
-    return component;
+      invalidate() {
+        text.invalidate();
+      },
+    };
   };
   const renderCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-    if (nativeCall) {
-      if (context.expanded) return expandedCall(args, theme, context);
-      const body = nativeCall(args, theme, nativeContext(context));
-      nativeComponents.set(body, body);
+    if (nativeCall && !context.expanded) {
+      const lastComponent =
+        context.lastComponent && nativeComponents.has(context.lastComponent)
+          ? context.lastComponent
+          : undefined;
+      const body = nativeCall(args, theme, { ...context, lastComponent });
+      nativeComponents.add(body);
       return body;
     }
-    const { action, subject } = nativeMcpHeading(identity, args);
-    const subtitle = [action, subject].filter(Boolean).join(" ");
     const json = identity.kind === "tool" && !context.expanded ? argumentsJson(args) : "";
     const preview =
       json.length > ARGUMENT_PREVIEW_CHARS ? `${json.slice(0, ARGUMENT_PREVIEW_CHARS)}…` : json;
+    const raw = [
+      `${DISPLAY_NAME} ${subtitle(context)}`,
+      context.expanded ? argumentsJson(args, 2) : preview,
+    ]
+      .filter(Boolean)
+      .join("\n");
     return safeContent(
       () => {
         // Style before placing the issue slot: a theme failure must leave shared issues visible.
         const previewLine = preview ? theme.fg("muted", compactPlainText(preview)) : "";
         const body = new Container();
-        body.addChild(new Text(renderToolHeader({ title: DISPLAY_NAME, subtitle }, theme), 0, 0));
+        body.addChild(heading(theme, context));
         body.addChild(previewIssuesSlot(context));
         if (context.expanded) body.addChild(renderArguments(args, theme));
         else if (preview)
@@ -273,11 +255,17 @@ export function createNativeMcpRenderers(
           });
         return body;
       },
-      [`${DISPLAY_NAME} ${subtitle}`, context.expanded ? argumentsJson(args, 2) : preview]
-        .filter(Boolean)
-        .join("\n"),
-      context.expanded ? undefined : 2,
+      context.expanded ? raw : plainRows(raw, 2),
     );
+  };
+  const renderExpandedOutput: NonNullable<ToolRenderers["renderResult"]> = (
+    result,
+    options,
+    theme,
+    context,
+  ) => {
+    recordReceipt(result, context);
+    return renderOutput(result, options, theme, context);
   };
   const renderResult: NonNullable<ToolRenderers["renderResult"]> = (
     result,
@@ -285,13 +273,13 @@ export function createNativeMcpRenderers(
     theme,
     context,
   ) => {
-    if (options.expanded) return renderOutput(result, options, theme, context);
+    if (options.expanded) return renderExpandedOutput(result, options, theme, context);
+    recordReceipt(result, context);
     if (options.isPartial) return renderProgress(result, theme, context);
     if (!context.isError && nativeMcpHasRecoverableClipping(identity, result, context.args))
       return safeContent(
         () => new Text(renderExpansionAffordance("output", false, theme), 0, 0),
-        "Output · expand",
-        1,
+        plainRows("Output · expand", 1),
       );
     return renderOutputPreview(result, theme, context);
   };
@@ -301,7 +289,10 @@ export function createNativeMcpRenderers(
     compactSummary: nativeMcpSummary(identity),
     animateProgress: true,
     scheduleAnimation,
-    expandedContent: { renderCall: expandedCall, renderResult: renderOutput },
+    expandedContent: {
+      renderCall: (args, theme) => renderArguments(args, theme),
+      renderResult: renderExpandedOutput,
+    },
   };
   if (appearance.selfShell !== undefined) options.selfShell = appearance.selfShell;
   if (appearance.mode !== undefined) options.mode = appearance.mode;
