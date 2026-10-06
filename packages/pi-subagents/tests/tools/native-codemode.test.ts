@@ -113,6 +113,57 @@ describe("native scripted subagent workflows", () => {
     );
 
     it.live(
+      `inspects profile routes as text without launching runs with ${callId === undefined ? "generated" : "empty"} caller ID`,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* nativeCodemodeSession(subagentServiceDouble({}));
+          const result = yield* h.run(
+            print("await tools.subagent_models({profile:'scout'})"),
+            callId,
+          );
+          expect(result.isError).toBe(false);
+          const direct = yield* h.call("subagent_models", { profile: "scout" }, callId);
+          expect(direct.isError).toBe(false);
+          expect(output(result.text)).toBe(direct.text);
+          expect(output(result.text)).toContain("scout");
+        }).pipe(Effect.provide(nodeFilePlatformLayer)),
+      15_000,
+    );
+
+    it.live(
+      `renames runs and surfaces failed renames with ${callId === undefined ? "generated" : "empty"} caller ID`,
+      () =>
+        Effect.gen(function* () {
+          let run = view({ id: "rename-target", name: "original-name" });
+          const service = subagentServiceDouble({
+            rename: (id, name) =>
+              id === run.id
+                ? Effect.sync(() => {
+                    run = { ...run, name };
+                    return run;
+                  })
+                : Effect.fail(new SubagentNotFoundError({ id, message: "Run not found" })),
+          });
+          const h = yield* nativeCodemodeSession(service);
+          const result = yield* h.run(
+            print("await tools.subagent_rename({runId:'rename-target',name:'entry-map'})"),
+            callId,
+          );
+          expect(result.isError).toBe(false);
+          expect(run.name).toBe("entry-map");
+          expect(output(result.text)).toContain(run.id);
+          expect(output(result.text)).toContain(run.name);
+          const failed = yield* h.run(
+            "await tools.subagent_rename({runId:'missing',name:'not-applied'});",
+            callId,
+          );
+          expect(failed.isError).toBe(true);
+          expect(run.name).toBe("entry-map");
+        }).pipe(Effect.provide(nodeFilePlatformLayer)),
+      15_000,
+    );
+
+    it.live(
       `keeps judgment tools model-only and limits scripted lifecycle to stop with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -125,9 +176,7 @@ describe("native scripted subagent workflows", () => {
           });
           const h = yield* nativeCodemodeSession(service);
           for (const name of [
-            "subagent_models",
             "subagent_send",
-            "subagent_rename",
             "subagent_reply",
             "subagent_claims",
             "subagent_workspace",

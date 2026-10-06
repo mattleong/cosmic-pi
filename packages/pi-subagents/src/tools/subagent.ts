@@ -56,7 +56,7 @@ type SubagentToolSpecs = { readonly [N in SubagentToolName]: SubagentToolSpec<N>
 
 /** Offered only while root scripts can reach the orchestration tools. */
 const SCRIPTED_WORKFLOW_GUIDELINE =
-  "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. subagent_list is also callable and returns the hierarchy as text. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each workflow assignment.";
+  "For bounded root-session read-only workflows, native codemode can script subagent_start, subagent_await, subagent_status, and lifecycle stop using version-1 structured results. subagent_models, subagent_list, and subagent_rename are also callable and return text. Print launch IDs immediately, await every call, and use bounded steps. Do not replay a failed script or loop on parent attention. Hand questions, retries, implementation, claims, and integration back to the main agent. The main agent chooses the appropriate profile for each workflow assignment.";
 
 const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
@@ -251,7 +251,12 @@ export function registerSubagentTools(
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     // Judgment tools remain model-issued; the structured contract stays for model calls too.
     const rootContract = isSubagentContractTool(name) && !runtime.proxyCall;
-    const scriptable = scriptsEnabled && (rootContract || name === SUBAGENT_TOOL_NAME.list);
+    const scriptable =
+      scriptsEnabled &&
+      (rootContract ||
+        name === SUBAGENT_TOOL_NAME.models ||
+        name === SUBAGENT_TOOL_NAME.list ||
+        name === SUBAGENT_TOOL_NAME.rename);
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
       ...(scriptable &&
