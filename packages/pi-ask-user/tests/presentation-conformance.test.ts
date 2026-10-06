@@ -10,7 +10,10 @@ import {
 import { opaqueFixture as fixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
-import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
+import {
+  registerAsyncAskUserMessageRenderer,
+  registerAsyncAskUserTools,
+} from "../src/tools/ask-user-async.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
 
@@ -43,6 +46,7 @@ function register(
   const { tools, messageRenderers } = captureRegistrations((pi) => {
     registerAskUserTool(pi, noExecution, scheduleAnimation);
     registerAsyncAskUserTools(pi, noExecution, noExecution, scheduleAnimation);
+    registerAsyncAskUserMessageRenderer(pi);
   });
   return { tools, messages: [...messageRenderers.values()] };
 }

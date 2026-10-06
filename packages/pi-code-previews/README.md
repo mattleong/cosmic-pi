@@ -1,10 +1,10 @@
 # pi-code-previews
 
-Syntax-highlighted builtin previews, native codemode/MCP presentation, and a reusable tool shell.
+Syntax-highlighted builtin previews, native codemode/tool-search/MCP presentation, and a reusable tool shell.
 
 The package publishes TypeScript source and runs directly through Pi's Jiti loader; it has no generated distribution or build prerequisite.
 
-`pi-code-previews` makes `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` output easier to scan in the pi TUI without changing what the tools do. If another extension already owns one of those tools, `pi-code-previews` skips that preview instead of conflicting with it. One stable public `pi.registerToolRenderer` resolver adds presentation without replacing execution definitions or changing tool selection/exposure. Write alone keeps an execution hook for before-write snapshots. Native `codemode` and standalone MCP previews are included; Pi independently owns their execution and the `/mcp` manager.
+`pi-code-previews` makes `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` output easier to scan in the pi TUI without changing what the tools do. If another extension already owns one of those tools, `pi-code-previews` skips that preview instead of conflicting with it. One stable public `pi.registerToolRenderer` resolver adds presentation without replacing execution definitions or changing tool selection/exposure. Write alone keeps an execution hook for before-write snapshots. Native `codemode`, `tool_search`, and standalone MCP previews are included; Pi independently owns their execution and the `/mcp` manager.
 
 ## Features
 
@@ -13,6 +13,7 @@ The package publishes TypeScript source and runs directly through Pi's Jiti load
 - Readable `grep` results grouped by file.
 - Compact `find` and `ls` path lists with optional icons.
 - Native `codemode` program previews and neutral nested-call rows, while retaining Pi’s native execution.
+- Native `tool_search` query previews with neutral listing counts and complete expanded output.
 - Standalone native MCP tool/resource previews, including progress, recovery, and native images.
 - Optional visual warnings for risky-looking shell commands and secret-looking output.
 - Opt-in one-row collapsed tool calls, including pending and running calls.
@@ -45,6 +46,7 @@ Once installed, previews are enhanced automatically for:
 - `find`
 - `ls`
 - Native `codemode`, when its builtin source is eligible (including later MCP activation)
+- Native `tool_search`, when its exact builtin source is eligible (without activating it)
 - Native `mcp__*` calls and `list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`
 
 Everything lives under one command, `/code-previews`; type it and a space to autocomplete its subcommands. Open settings inside pi with:
@@ -59,7 +61,7 @@ Everything lives under one command, `/code-previews`; type it and a space to aut
 /code-previews health
 ```
 
-The health panel shows configured tools, available renderer presentation, write registration errors, unavailable tools, disabled previews, foreign-owner conflicts, and native MCP renderer availability. Individual builtin/codemode preview toggles are available in the Preview tools submenu and take effect after `/reload`; they never activate or hide executable tools. Standalone MCP and supported third-party presentation are independent of that list.
+The health panel shows configured tools, available renderer presentation, write registration errors, unavailable tools, disabled previews, foreign-owner conflicts, and native MCP renderer availability. Individual builtin/codemode/tool-search preview toggles are available in the Preview tools submenu and take effect after `/reload`; they never activate or hide executable tools. Standalone MCP and supported third-party presentation are independent of that list.
 
 The resolver is registered once during factory loading, not once per session. Replay rows created before startup preserve downstream content, then adopt their originating session's trusted settings when ready. Appearance is captured for that owner; retirement cancels its animations without borrowing replacement settings or schedulers. Public metadata is rechecked when choosing renderers. Only write registers an execution definition: its real before-write hook preserves activation and tracks attempted/successful registration separately so a refresh failure after mutation can retry. Discovery failures stop startup; a write registration error is bounded and does not disable other presentation.
 
@@ -80,6 +82,26 @@ No `pi-web-access` dependency or configuration change is required.
 All external support lives under `src/third-party/`, with one static registry entry per adapter.
 See [third-party adapters](docs/third-party-renderers.md) for the compatibility and add/remove
 contract; builtin/native admission remains separate.
+
+## Native tool search
+
+Native `tool_search` presentation requires exact public `builtin:tool-search` ownership. The tool
+is included in the default preview selection; existing explicit `tools` lists must add
+`tool_search` to opt in. Its preview toggle changes presentation only, not activation or exposure.
+Foreign, inline, duplicate, and missing ownership never gain native semantic presentation.
+
+Collapsed rows show a bounded query and **N tools listed** from a valid native `details.loaded`
+receipt, including zero. This is a neutral historical listing, not a claim that those tools remain
+active or that an operation succeeded. Missing or malformed receipts use generic presentation
+without guessed counts. Errors use the same short human issue in preview and compact styles.
+Expansion retains the complete query, optional limit and extra arguments, plus every raw output,
+error and recovery text block. Pi keeps native images and result objects unchanged. No stored
+artifacts are read, and unrelated `fullOutputPath` fields are not treated as recovery receipts.
+
+Pi alone owns the native factory, schema, execution, permissions, and inactive-by-default,
+model-only exposure. Native search can find and activate inactive deferred/codemode tools;
+rendering or replaying a search never does so. Cold rows reuse their originating owner's first-ready
+appearance and scheduler, with no replacement-session adoption.
 
 ## Native codemode
 
@@ -161,7 +183,7 @@ In compact mode, ordinary collapsed calls use one extension-rendered text row wh
 
 Ordinary live output and pending write/edit previews stay hidden until expanded. Each warning or error is one line under the heading, with its own icon and colour: known filesystem and command-status errors get short messages ("File not found", "Exited with code 1"), and unrecognized errors show their first line. The same words appear when expanded, followed by any technical detail or agent-facing recovery. Cancellation uses neutral styling and unconfirmed outcomes use `?`. Routine read-range and known complete-line pagination hints, including read byte caps, appear only when expanded. Byte-cap hints require a recognized numeric size-limit footer and explicit evidence that the final returned line is complete. Routine grep/find/ls result caps use a quiet `limit reached: N` counter, prioritized over optional metadata and timing. A reached cap does not establish a total, additional results, or how many survived output truncation. Successful writes use `diff skipped: size` or `diff skipped: complexity` metadata only for structured size evidence or computed guards with known previous contents. Missing history, non-regular previous paths, unclassified skip reasons, and missing edit diffs are informational, since they concern the preview rather than the change; possible secrets are warnings. Other byte caps, partial lines, oversized-line recovery, and unknown truncation are warnings too. Original tool results are unchanged. Expansion shows the heading, the issues with their details, then unique content, or falls back to the original renderers, within the configured `toolCallBackground`. Compact mode takes precedence over per-tool collapsed-preview toggles and line limits; those retain their existing meaning in `preview` mode. `toolCallTiming` remains independent.
 
-Compact rendering covers eligible builtin `read`, `bash`, `write`, `edit`, `grep`, `find`, and `ls`, plus native `codemode` and standalone MCP renderer presentation. It does not activate disabled tools or replace tools owned by another extension. All tools wrapped with `withCodePreviewShell` use compact rows, including tools without a summary provider. Missing, malformed, or incomplete summaries get a generic row (the error's first line, or a details-on-expand hint), never an automatic full card. In `preview` style, builtin tools show the same issue lines under their heading, including risky-command and secret warnings before the call runs. Pi's host-owned blank separator remains, and Pi still renders native images outside the extension's text-row budget.
+Compact rendering covers eligible builtin `read`, `bash`, `write`, `edit`, `grep`, `find`, and `ls`, plus native `codemode`, `tool_search`, and standalone MCP renderer presentation. It does not activate disabled tools or replace tools owned by another extension. All tools wrapped with `withCodePreviewShell` use compact rows, including tools without a summary provider. Missing, malformed, or incomplete summaries get a generic row (the error's first line, or a details-on-expand hint), never an automatic full card. In `preview` style, builtin tools show the same issue lines under their heading, including risky-command and secret warnings before the call runs. Pi's host-owned blank separator remains, and Pi still renders native images outside the extension's text-row budget.
 
 ### Project settings
 

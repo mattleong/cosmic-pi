@@ -36,7 +36,10 @@ import {
   registerQuestionnaireCapability,
 } from "./boundary/host-owned-calls.ts";
 import { askAtQuestionnaireBoundary, requiresQuestionnaireRelay } from "./boundary/host-relay.ts";
-import { registerAsyncAskUserTools } from "./tools/ask-user-async.ts";
+import {
+  registerAsyncAskUserMessageRenderer,
+  registerAsyncAskUserTools,
+} from "./tools/ask-user-async.ts";
 import { makeAskUserPromptGate } from "./boundary/host-prompt.ts";
 import { asyncBusy } from "./questionnaire/async-service.ts";
 import { makeAskUserDialogBridge } from "./boundary/host-ui.ts";
@@ -71,6 +74,7 @@ export function askUserWithDependencies(
 ): void {
   const bridge = makeAskUserDialogBridge();
   const promptGate = makeAskUserPromptGate();
+  registerAsyncAskUserMessageRenderer(pi);
   // History rebuilt before session_start adopts the first ready activation's presentation.
   const replay = registerCodePreviewReplay(pi, {
     command: "ask-user",

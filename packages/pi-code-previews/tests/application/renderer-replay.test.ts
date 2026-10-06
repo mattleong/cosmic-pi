@@ -22,7 +22,6 @@ import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
 } from "../../src/application/tool-renderers";
-import { retainedCodePreviewRenderers } from "../../src/application/renderer-row";
 import {
   codePreviewsWithDependencies,
   type CodePreviewExtensionDependencies,
@@ -33,7 +32,6 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { renderContextFixture } from "../../testing";
 import type { CodePreviewSettings } from "../../src/config/schema";
-import { createBuiltinPreviewRenderers } from "../../src/tools/renderers/registration";
 import { step } from "../support/effect-test";
 
 beforeAll(() => initTheme("dark", false));
@@ -48,7 +46,7 @@ const info = (name: string): ToolInfo => ({
   exposure: "direct",
   sourceInfo: {
     source: "builtin",
-    path: `builtin:${name}`,
+    path: name === "tool_search" ? "builtin:tool-search" : `builtin:${name}`,
     scope: "temporary",
     origin: "top-level",
   },
@@ -63,7 +61,7 @@ const downstream: ToolRenderers = {
   renderResult: () => new Text("NATIVE RESULT CONTENT", 0, 0),
 };
 const scheduler = { defer: () => () => undefined, schedule: () => () => undefined };
-type ReplayArguments = { command: string } | { code: string };
+type ReplayArguments = { command: string } | { code: string } | { query: string; limit?: number };
 const hostRow = (
   renderers: ToolRenderers | undefined,
   name = "bash",
@@ -79,7 +77,7 @@ const hostRow = (
     "/project",
   );
 
-for (const name of ["bash", "codemode"] as const)
+for (const name of ["bash", "codemode", "tool_search"] as const)
   for (const discovery of ["empty", "error"] as const)
     for (const admission of ["native", "foreign", "missing", "error"] as const) {
       it(`cold ${name} replay survives ${discovery} metadata then ${admission} readiness`, () => {
@@ -99,7 +97,11 @@ for (const name of ["bash", "codemode"] as const)
         const row = hostRow(
           renderers,
           name,
-          name === "bash" ? { command: "echo EXACT_SOURCE" } : { code: "text('EXACT_SOURCE');" },
+          name === "bash"
+            ? { command: "echo EXACT_SOURCE" }
+            : name === "codemode"
+              ? { code: "text('EXACT_SOURCE');" }
+              : { query: "EXACT_SOURCE" },
         );
         row.updateResult(output);
         assert.match(row.render(100).join("\n"), /NATIVE RESULT CONTENT/);
@@ -175,42 +177,94 @@ for (const style of ["preview", "compact"] as const)
     });
   }
 
-it("lazy draw adoption refeeds stored result without host refresh or execution events", () => {
-  const owner = new CodePreviewPresentationOwner();
-  const context = renderContextFixture({
-    args: { command: "echo EXACT_SOURCE" },
-    expanded: true,
-    isPartial: false,
-    invalidate() {},
+for (const style of ["preview", "compact"] as const)
+  for (const mode of ["on", "off", "border"] as const)
+    it(`retained tool search adopts ${style}/${mode} without borrowing replacement ownership`, () => {
+      let owner = new CodePreviewPresentationOwner();
+      const first = owner;
+      const pi = extensionApiFixture({
+        getAllTools: () => [info("tool_search")],
+        getCommands: () => [],
+      });
+      const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+      const renderers = resolver("tool_search", () => downstream);
+      assert.equal(renderers?.renderShell, "self");
+      const row = hostRow(renderers, "tool_search", { query: "EXACT_QUERY", limit: 7 });
+      row.updateResult({ ...output, details: { loaded: ["docs_lookup"] } });
+      assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+      setCodePreviewSettings({
+        ...defaultCodePreviewSettings,
+        toolCallTiming: false,
+        toolCallCollapsedStyle: style,
+        toolCallBackground: mode,
+      });
+      owner.publish("/first", new Set(["tool_search"]), scheduler);
+      for (const expanded of [false, true, false, true]) {
+        row.setExpanded(expanded);
+        row.invalidate();
+        const rendered = row.render(80).join("\n");
+        assert.match(rendered, /EXACT_QUERY/);
+        assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
+        assert.equal(rendered.includes("COMPLETE RETAINED OUTPUT"), expanded);
+        if (expanded) assert.match(rendered, /"limit": 7/);
+      }
+      owner.retire();
+      owner = new CodePreviewPresentationOwner();
+      setCodePreviewSettings({
+        ...defaultCodePreviewSettings,
+        tools: [],
+        toolCallCollapsedStyle: style === "preview" ? "compact" : "preview",
+      });
+      let replacementSchedules = 0;
+      owner.publish("/replacement", new Set(), {
+        ...scheduler,
+        schedule: () => {
+          replacementSchedules++;
+          return () => {};
+        },
+      });
+      row.invalidate();
+      assert.match(row.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
+      assert.equal(first.session?.collapsedStyle, style);
+      assert.equal(first.session?.mode, mode);
+      assert.equal(replacementSchedules, 0);
+      assert.equal(resolver("tool_search", () => downstream)?.renderCall, downstream.renderCall);
+      owner.retire();
+    });
+
+for (const name of ["bash", "tool_search"] as const)
+  it(`lazy ${name} draw adoption refeeds stored result without host refresh or execution events`, () => {
+    const owner = new CodePreviewPresentationOwner();
+    const context = renderContextFixture({
+      args: name === "bash" ? { command: "echo EXACT_SOURCE" } : { query: "EXACT_SOURCE" },
+      expanded: true,
+      isPartial: false,
+      invalidate() {},
+    });
+    const pi = extensionApiFixture({ getAllTools: () => [info(name)], getCommands: () => [] });
+    const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+    const renderers = resolver(name, () => downstream)!;
+    const call = renderers.renderCall!(context.args, plainTheme, context);
+    const result = renderers.renderResult!(
+      output,
+      { expanded: true, isPartial: false },
+      plainTheme,
+      context,
+    );
+    setCodePreviewSettings({
+      ...defaultCodePreviewSettings,
+      syntaxHighlighting: false,
+      toolCallTiming: false,
+      toolCallCollapsedStyle: "compact",
+      toolCallBackground: "border",
+      tools: [name],
+    });
+    owner.publish("/project", new Set([name]), scheduler);
+    const rendered = [...call.render(80), ...result.render(80)].join("\n");
+    assert.match(rendered, /EXACT_SOURCE/);
+    assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
+    owner.retire();
   });
-  const renderers = retainedCodePreviewRenderers(
-    "bash",
-    downstream,
-    owner,
-    () =>
-      owner.session && createBuiltinPreviewRenderers("bash", { ...owner.session, selfShell: true }),
-  );
-  const call = renderers.renderCall!(context.args, plainTheme, context);
-  const result = renderers.renderResult!(
-    output,
-    { expanded: true, isPartial: false },
-    plainTheme,
-    context,
-  );
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    syntaxHighlighting: false,
-    toolCallTiming: false,
-    toolCallCollapsedStyle: "compact",
-    toolCallBackground: "border",
-    tools: ["bash"],
-  });
-  owner.publish("/project", new Set(["bash"]), scheduler);
-  const rendered = [...call.render(80), ...result.render(80)].join("\n");
-  assert.match(rendered, /EXACT_SOURCE/);
-  assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
-  owner.retire();
-});
 
 it("cold and declined rows preserve independent downstream caches and live panel state", () => {
   const owner = new CodePreviewPresentationOwner();

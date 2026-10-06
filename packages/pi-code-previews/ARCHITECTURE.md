@@ -5,11 +5,11 @@
 Code Previews owns syntax-highlighted previews, structured diffs, safer write/edit presentation,
 appearance settings, and the cooperative tool shell. It registers `/code-previews health` and
 `/code-previews settings`, plus `session_start` and `session_shutdown`. One factory-time public
-`pi.registerToolRenderer` resolver presents seven core builtins, native `codemode`, and standalone
-native MCP tools/resources, plus explicitly supported third-party presentation. Pi 1.0.1 is the
+`pi.registerToolRenderer` resolver presents seven core builtins, native `codemode` and `tool_search`,
+and standalone native MCP tools/resources, plus explicitly supported third-party presentation. Pi 1.0.1 is the
 minimum; the workspace tests against 1.0.2.
 
-Pi independently owns native codemode/MCP execution and the `/mcp` manager. Code Previews neither
+Pi independently owns native codemode/tool-search/MCP execution and the `/mcp` manager. Code Previews neither
 composes nor intercepts their factories, registers their execution definitions, nor changes tool
 selection/exposure or permissions. Write alone retains a real before-write snapshot hook.
 Standalone MCP presentation has no startup toggle; old unknown settings fields remain inert on
@@ -30,7 +30,8 @@ disk. The former standalone `pi-mcp-previews` package is retired and must be rem
   reads as unknown. `tools/preview-admission.ts` owns the exact-source admission that rendering,
   status and write registration share. The resolver retains only public renderer fields from
   `next()`, and unsupported foreign tools fall through unchanged. Core/native
-  codemode presentation follows preview selection, not active-at-start status. Native MCP
+  codemode/tool-search presentation follows preview selection, not active-at-start status.
+  `tool_search` requires `builtin:tool-search` (not `builtin:tool_search`). Native MCP
   definitions require builtin MCP ownership; missing historical aliases require the independently
   proven unique builtin `/mcp` manager. Nothing is introduced or activated for presentation.
 - Public `registerCodePreviewReplay` (`application/owned-replay.ts`) lets each cooperating owner register a factory-time renderer-only bridge for its own late tools. It stages self-framed callbacks alongside normal wrapping, admits first-ready adoption only after exact public tool/command source matching, and reuses `renderer-row.ts`. Existing downstream callbacks and later ready rows fall through. The owner closes failed startup and retires on shutdown; no execution, activation, settings I/O, or scheduler belongs to the bridge.
@@ -118,6 +119,13 @@ so closing cannot pop an unrelated stacked surface.
   expansion keeps Program, Calls and Output. Saved-output recovery is informational; missing
   recovery remains a warning. Rendering never reads spill files. Parent and child measured
   subsecond timing obeys settings; retired callbacks cannot use replacement schedulers.
+- `tools/native-tool-search-summary.ts` validates only bounded own-data `details.loaded` receipts
+  (at most 256 names of 256 code units each). Missing, malformed, inherited or accessor evidence
+  declines rather than guessing counts; non-error receipts mean tools listed, not current activation
+  or domain success. `native-tool-search-render.ts` preserves full arguments and every output/error/
+  recovery text on expansion in both styles, leaving images and results untouched. It reads no
+  artifacts and assigns no meaning to unrelated saved-output fields. Native search alone owns
+  discovery and activation; the renderer reuses existing owner/replay and scheduler lifecycles.
 - `tools/native-mcp-render.ts` presents arguments, native output, images and recovery without
   reading retained artifacts. Identity uses exact native metadata, bounded receipts and forward
   SHA matching; missing aliases remain conservative and renderer caches reject foreign ownership.
@@ -139,5 +147,8 @@ Follow the [tool presentation standard](../../docs/architecture/tool-presentatio
 The public `testing.ts` harness exercises actual registered callbacks without execution, including
 expansion, fallback, animation ownership and native images. Package tests protect lifecycle,
 persistence, cancellation and conservative evidence; the env-gated gallery retains builtin and
-native codemode and standalone MCP scenarios. SDK and packed-consumer checks keep builtin native
-execution independent and prove real fixture execution, images and cleanup.
+native codemode, tool-search and standalone MCP scenarios. SDK and packed-consumer checks keep
+builtin native execution independent and prove real fixture execution, images and cleanup. The
+native tool-search SDK test loads the CLI-equivalent factory independently, preserves the same
+pre-start host row through readiness, and executes search only after deliberate activation;
+discovered fixture tools are never executed.

@@ -25,6 +25,21 @@ import {
 } from "../ui/async-tool-render.ts";
 import { argumentsSection } from "../ui/tool-body.ts";
 
+/**
+ * Register once at factory time: Pi draws historical answers before session_start.
+ * Each invocation reads current presentation policy without acquiring session resources.
+ */
+export function registerAsyncAskUserMessageRenderer(pi: ExtensionAPI): void {
+  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, (message, options, theme) =>
+    renderAsyncMessage(
+      message,
+      options,
+      theme,
+      captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
+    ),
+  );
+}
+
 export function registerAsyncAskUserTools(
   pi: ExtensionAPI,
   start: (input: AskUserAsyncRequest, signal?: AbortSignal) => Promise<AsyncQuestionnaireSnapshot>,
@@ -32,14 +47,10 @@ export function registerAsyncAskUserTools(
   scheduleAnimation?: CompactAnimationScheduler,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
-  const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
   const expandedContent = {
     renderCall: <Args>(args: Args, theme: Theme) => argumentsSection(theme, args),
     renderResult: renderAsyncContent,
   };
-  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, (message, options, theme) =>
-    renderAsyncMessage(message, options, theme, compact),
-  );
   pi.registerTool(
     shell(
       defineTool({

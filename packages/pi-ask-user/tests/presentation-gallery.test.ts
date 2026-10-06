@@ -23,7 +23,10 @@ import type {
   AskUserRequest,
 } from "../src/questionnaire/schema.ts";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
-import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
+import {
+  registerAsyncAskUserMessageRenderer,
+  registerAsyncAskUserTools,
+} from "../src/tools/ask-user-async.ts";
 
 const noExecution = () => {
   throw new Error("Rendering must not execute");
@@ -219,6 +222,7 @@ const messages = [
 const registerAll = (pi: ExtensionAPI) => {
   registerAskUserTool(pi, noExecution);
   registerAsyncAskUserTools(pi, noExecution, noExecution);
+  registerAsyncAskUserMessageRenderer(pi);
 };
 
 const directory = galleryDirectory(process.env) ?? "";

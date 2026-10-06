@@ -8,7 +8,11 @@ export const CORE_CODE_PREVIEW_TOOLS = [
   "ls",
 ] as const;
 
-export const ALL_CODE_PREVIEW_TOOLS = [...CORE_CODE_PREVIEW_TOOLS, "codemode"] as const;
+export const ALL_CODE_PREVIEW_TOOLS = [
+  ...CORE_CODE_PREVIEW_TOOLS,
+  "codemode",
+  "tool_search",
+] as const;
 
 export type CodePreviewToolName = (typeof ALL_CODE_PREVIEW_TOOLS)[number];
 

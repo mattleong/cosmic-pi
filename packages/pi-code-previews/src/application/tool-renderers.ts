@@ -6,7 +6,7 @@ import type {
 import { invokeHostCallback } from "pi-cosmic-core";
 import { codePreviewSettings } from "../config/state";
 import { capturePreviewHostTools, type PreviewHostTools } from "../boundary/host-tool-renderers";
-import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../tools/names";
+import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../tools/names";
 import {
   admitsPreviewSource,
   isBuiltinTool,
@@ -16,6 +16,7 @@ import {
 import { createBuiltinPreviewRenderers } from "../tools/renderers/registration";
 import { createNativeCodemodeRenderers } from "../tools/native-codemode-render";
 import { createNativeMcpRenderers } from "../tools/native-mcp-render";
+import { createNativeToolSearchRenderers } from "../tools/native-tool-search-render";
 import {
   resetCodePreviewToolStatuses,
   setCodePreviewToolStatus,
@@ -110,6 +111,10 @@ function select(
     return session.enabledTools?.includes("codemode")
       ? createNativeCodemodeRenderers(session.cwd, presentation)
       : undefined;
+  if (name === "tool_search")
+    return session.enabledTools?.includes("tool_search")
+      ? createNativeToolSearchRenderers(presentation)
+      : undefined;
   // Every remaining admitted name is a native MCP tool or resource.
   return createNativeMcpRenderers(name, host.tools.get(name), downstream, presentation);
 }
@@ -137,7 +142,8 @@ export function createCodePreviewRendererResolver(
     // Prebind discovery may be empty or unavailable. A raw self facade claims no native identity;
     // semantic source admission is deferred until the originating session becomes ready.
     const deferredAdmission =
-      (isCorePreviewName(name) || name === "codemode") && !host?.tools.has(name);
+      (isCorePreviewName(name) || name === "codemode" || name === "tool_search") &&
+      !host?.tools.has(name);
     if (
       !deferredAdmission &&
       (!host ||
@@ -164,7 +170,7 @@ export function publishPreviewToolStatuses(
   ownedTools: ReadonlySet<CodePreviewToolName>,
 ): void {
   resetCodePreviewToolStatuses(enabled);
-  for (const name of [...CORE_CODE_PREVIEW_TOOLS, "codemode"] as const) {
+  for (const name of ALL_CODE_PREVIEW_TOOLS) {
     if (!enabled.has(name)) continue;
     const tool = host.tools.get(name);
     if (!tool) setCodePreviewToolStatus(name, { state: "unavailable" });

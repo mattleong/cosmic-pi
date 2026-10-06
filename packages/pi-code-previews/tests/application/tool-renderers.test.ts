@@ -60,6 +60,71 @@ it("keeps foreign and unrelated renderers, calls next once, and never inspects e
   }
 });
 
+it("native tool search rejects foreign, misspelled, inline, duplicate, and missing ownership", () => {
+  const native = info("tool_search", "builtin:tool-search");
+  let tools: ToolInfo[] = [];
+  const pi = extensionApiFixture({
+    getAllTools: () => tools,
+    getCommands: () => [],
+    getActiveTools() {
+      throw new Error("selection access");
+    },
+    setActiveTools() {
+      throw new Error("selection mutation");
+    },
+    registerTool() {
+      throw new Error("execution registration");
+    },
+  });
+  const owner = new CodePreviewPresentationOwner();
+  owner.publish("/project", new Set(["tool_search"]), scheduler);
+  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  for (const rejected of [
+    [],
+    [info("tool_search")],
+    [info("tool_search", "builtin:tool-search/extra")],
+    [{ ...native, sourceInfo: { ...native.sourceInfo, source: "foreign" } }],
+    [
+      {
+        ...native,
+        sourceInfo: { ...native.sourceInfo, source: "inline", path: "<inline:tool-search>" },
+      },
+    ],
+    [native, native],
+  ]) {
+    tools = rejected;
+    assert.equal(resolver("tool_search", () => downstream)?.renderCall, downstream.renderCall);
+    publishPreviewToolStatuses(capturePreviewHostTools(pi), new Set(["tool_search"]), new Set());
+    assert.notEqual(getCodePreviewToolStatuses().get("tool_search")?.state, "installed");
+  }
+  tools = [native];
+  const renderers = resolver("tool_search", () => downstream)!;
+  const h = createToolPresentationHarness(renderers);
+  h.call({ query: "EXACT_QUERY" });
+  h.result({ content: [{ type: "text", text: "EXACT_OUTPUT" }], details: { loaded: [] } });
+  assert.match(h.render(80).join("\n"), /EXACT_QUERY/);
+  publishPreviewToolStatuses(capturePreviewHostTools(pi), new Set(["tool_search"]), new Set());
+  assert.equal(getCodePreviewToolStatuses().get("tool_search")?.state, "installed");
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: [] });
+  assert.notEqual(
+    resolver("tool_search", () => downstream)?.renderCall,
+    downstream.renderCall,
+    "selection remains captured until replacement",
+  );
+  owner.retire();
+  const excluded = new CodePreviewPresentationOwner();
+  excluded.publish("/next", new Set(), scheduler);
+  assert.equal(
+    createCodePreviewRendererResolver(
+      pi,
+      () => excluded,
+      new Set(),
+    )("tool_search", () => downstream)?.renderCall,
+    downstream.renderCall,
+  );
+  excluded.retire();
+});
+
 it("requires exact native sources and a unique builtin MCP manager for missing history", () => {
   let tools = [info("codemode", "builtin:other"), info("mcp__docs__lookup", "builtin:other")];
   let commands = [manager];

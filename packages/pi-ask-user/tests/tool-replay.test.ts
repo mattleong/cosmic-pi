@@ -2,6 +2,7 @@
 import {
   initTheme,
   ToolExecutionComponent,
+  type ExtensionAPI,
   type ExtensionContext,
   type ExtensionHandler,
   type SourceInfo,
@@ -21,13 +22,18 @@ import {
   extensionApiFixture,
   extensionContextFixture,
   opaqueFixture,
+  plainTheme,
 } from "pi-cosmic-core/testing";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { askUserWithDependencies } from "../src/application.ts";
+import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
+import { formatAskUserOutcome } from "../src/questionnaire/format.ts";
+import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { makeEventBus } from "./support/host.ts";
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
 
 type Handler = ExtensionHandler<any, any>;
+type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 
 beforeAll(() => initTheme("dark", false));
 
@@ -75,6 +81,41 @@ const history = {
   },
 } satisfies Record<HistoryName, HistoryCall>;
 
+const answered: AskUserOutcome = {
+  outcome: "submitted",
+  answers: [
+    {
+      key: "release",
+      kind: "choices",
+      values: ["release_candidate"],
+      labels: ["Staged rollout"],
+      note: "Keep release reversible",
+    },
+    { key: "alternative", kind: "custom", text: "Keep existing clients supported" },
+    {
+      key: "summary",
+      kind: "text",
+      text: "Original answer first line\nOriginal answer final line",
+      note: "Original note first line\nOriginal note final line",
+    },
+  ],
+};
+const answerMessage: Parameters<MessageRenderer>[0] = {
+  role: "custom",
+  customType: ASYNC_MESSAGE_TYPE,
+  content: `${formatAskUserOutcome(answered)}\nRAW_RECOVERY /tmp/answer-recovery.txt`,
+  details: {
+    requestId: "historical-request",
+    deliveryId: "historical-delivery",
+    generation: "historical-generation",
+    outcome: answered,
+  },
+  display: true,
+  timestamp: 0,
+};
+const drawAnswer = (render: MessageRenderer, message = answerMessage, expanded = false) =>
+  render(message, { expanded, outputPad: 0 }, plainTheme)!.render(160).join("\n");
+
 beforeEach(() => {
   vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
   vi.stubEnv("PI_SUBAGENT_RUN_ID", undefined);
@@ -115,6 +156,7 @@ const host = (load: () => Promise<void>) =>
     const commands = new Set<string>();
     const resolvers: ToolRendererResolver[] = [];
     const registered = new Map<string, ToolDefinition<any, any, any>>();
+    const messageRenderers = new Map<string, MessageRenderer>();
     askUserWithDependencies(
       extensionApiFixture({
         events: makeEventBus(),
@@ -124,7 +166,9 @@ const host = (load: () => Promise<void>) =>
         registerCommand: (name: string) => {
           commands.add(name);
         },
-        registerMessageRenderer: vi.fn(),
+        registerMessageRenderer: (type: string, render: MessageRenderer) => {
+          messageRenderers.set(type, render);
+        },
         registerToolRenderer: (resolver: ToolRendererResolver) => {
           resolvers.push(resolver);
         },
@@ -170,12 +214,126 @@ const host = (load: () => Promise<void>) =>
     };
     const emit = (name: string, ctx: ExtensionContext) =>
       Promise.resolve(handlers.get(name)?.({}, ctx));
-    return { registered, row, emit };
+    return { registered, messageRenderers, row, emit };
   });
 
 const frames = (row: ToolExecutionComponent) => [draw(row), draw(row, true)];
 
 layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
+  it.effect("historical answers render before startup and observe later presentation policy", () =>
+    Effect.gen(function* () {
+      applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
+      const entered = deferredPromise();
+      const ready = deferredPromise();
+      const load = vi.fn(() => {
+        entered.resolve();
+        return ready.promise.then(() => {
+          applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
+        });
+      });
+      const h = yield* host(load);
+      const ctx = context("tui");
+      yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
+      // Retain the actual factory callback, not a freshly registered tool renderer.
+      const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+      expect(drawAnswer(render)).not.toContain("Staged rollout");
+      expect(drawAnswer(render, answerMessage, true)).toContain("Staged rollout");
+      expect(load).not.toHaveBeenCalled();
+      expect([...h.registered.keys()]).toEqual([]);
+
+      applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+      expect(drawAnswer(render)).toContain("Staged rollout");
+      const starting = h.emit("session_start", ctx);
+      yield* Effect.promise(() => entered.promise);
+      expect(drawAnswer(render)).toContain("Keep release reversible");
+      expect([...h.registered.keys()]).toEqual([]);
+
+      ready.resolve();
+      yield* Effect.promise(() => starting);
+      expect(drawAnswer(render)).not.toContain("Staged rollout");
+      expect(drawAnswer(render, answerMessage, true)).toContain("RAW_RECOVERY");
+      applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+      expect(drawAnswer(render)).toContain("Staged rollout");
+      // History needs neither the runtime nor delivery authority after shutdown.
+      yield* Effect.promise(() => h.emit("session_shutdown", ctx));
+      expect(drawAnswer(render)).toContain("Keep release reversible");
+    }),
+  );
+
+  for (const style of ["compact", "preview"] as const)
+    it.effect(
+      `factory answer rendering preserves original content and raw recovery (${style})`,
+      () =>
+        Effect.gen(function* () {
+          applyPresentationSettings({ toolCallCollapsedStyle: style });
+          const h = yield* host(() => Promise.resolve());
+          const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+          for (const content of [
+            answerMessage.content,
+            [{ type: "text" as const, text: String(answerMessage.content) }],
+            "",
+          ]) {
+            const message = { ...answerMessage, content };
+            const before = structuredClone(message);
+            for (const expanded of [false, true, false, true]) {
+              const text = drawAnswer(render, message, expanded);
+              expect(text).not.toContain("historical-generation");
+              if (expanded) {
+                for (const value of [
+                  "Staged rollout",
+                  "Keep release reversible",
+                  "Keep existing clients supported",
+                  "Original answer first line",
+                  "Original answer final line",
+                  "Original note first line",
+                  "Original note final line",
+                ])
+                  expect(text).toContain(value);
+                if (content) {
+                  expect(text).toContain("release_candidate");
+                  expect(text).toContain("RAW_RECOVERY /tmp/answer-recovery.txt");
+                }
+              } else {
+                expect(text.includes("Staged rollout")).toBe(style === "preview");
+                expect(text).not.toContain("RAW_RECOVERY");
+                expect(text).not.toContain("Original answer final line");
+              }
+            }
+            expect(message).toEqual(before);
+          }
+          const malformed = { ...answerMessage, details: { outcome: "unknown" } };
+          const fallback = drawAnswer(render, malformed, true);
+          expect(fallback).toContain("Original note final line");
+          expect(fallback).toContain("RAW_RECOVERY /tmp/answer-recovery.txt");
+          expect([...h.registered.keys()]).toEqual([]);
+        }),
+    );
+
+  for (const [mode, relay] of [
+    ["rpc", false],
+    ["print", false],
+    ["tui", true],
+    ["print", true],
+  ] as const)
+    it.effect(`answer replay does not widen tool exposure (${mode}, relay=${relay})`, () =>
+      Effect.gen(function* () {
+        if (relay) {
+          vi.stubEnv("PI_SUBAGENT_CHILD", "1");
+          vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
+        }
+        applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+        const h = yield* host(() => Promise.resolve());
+        const ctx = context(mode);
+        yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
+        const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
+        expect(drawAnswer(render)).toContain("Keep release reversible");
+        expect([...h.registered.keys()]).toEqual([]);
+        yield* Effect.promise(() => h.emit("session_start", ctx));
+        expect(drawAnswer(render, answerMessage, true)).toContain("RAW_RECOVERY");
+        expect([...h.registered.keys()]).toEqual(mode === "print" && !relay ? [] : ["ask_user"]);
+      }),
+    );
+
   for (const style of ["compact", "preview"] as const)
     for (const mode of ["on", "off", "border"] as const)
       it.effect(

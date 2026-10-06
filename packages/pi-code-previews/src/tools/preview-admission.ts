@@ -9,7 +9,7 @@ export const isCorePreviewName = (name: string): name is (typeof CORE_CODE_PREVI
 
 /** Names presentation may claim at all; every other name falls through untouched. */
 export const isPreviewName = (name: string): boolean =>
-  isCorePreviewName(name) || name === "codemode" || isNativeMcpName(name);
+  isCorePreviewName(name) || name === "codemode" || name === "tool_search" || isNativeMcpName(name);
 
 /** Exact public builtin source `builtin:<path>`; the path defaults to the tool's own name. */
 export function isBuiltinTool(
@@ -54,6 +54,7 @@ export function admitsPreviewSource(
         isSameExtensionSource(tool, host.previewSource))
     );
   if (name === "codemode") return isBuiltinTool(tool);
+  if (name === "tool_search") return isBuiltinTool(tool, "tool-search");
   // Registered MCP definitions need exact builtin MCP ownership. Historical calls may precede
   // server connection; only an independently proven builtin manager admits their facade.
   return isNativeMcpName(name) && (tool ? isBuiltinTool(tool, "mcp") : host.nativeManager);

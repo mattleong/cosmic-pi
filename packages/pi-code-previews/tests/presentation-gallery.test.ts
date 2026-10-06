@@ -49,7 +49,9 @@ function registered(style: "compact" | "preview") {
         path:
           name.startsWith("mcp__") || name.endsWith("mcp_resource") || name.startsWith("list_mcp_")
             ? "builtin:mcp"
-            : `builtin:${name}`,
+            : name === "tool_search"
+              ? "builtin:tool-search"
+              : `builtin:${name}`,
         scope: "temporary",
         origin: "top-level",
       },
@@ -166,6 +168,54 @@ const scenarios: ReadonlyArray<
     readonly narrow?: true;
   }
 > = [
+  {
+    tool: "tool_search",
+    title: "native tool search pending long query",
+    args: { query: "Find tools for " + "project documentation ".repeat(30), limit: 8 },
+    phase: "pending",
+    narrow: true,
+  },
+  {
+    tool: "tool_search",
+    title: "native tool search running",
+    args: { query: "project documentation" },
+    result: text("Searching available tool metadata"),
+    phase: "running",
+  },
+  {
+    tool: "tool_search",
+    title: "native tool search returned receipt is not current activation",
+    args: { query: "project documentation", limit: 2 },
+    result: text(
+      "Loaded 2 tools. They are available from your next call:\n- docs_lookup: Search documentation\n- docs_list: List documentation",
+      { loaded: ["docs_lookup", "docs_list"] },
+    ),
+  },
+  {
+    tool: "tool_search",
+    title: "native tool search empty receipt",
+    args: { query: "no matching metadata" },
+    result: text("No matching tools found.", { loaded: [] }),
+  },
+  {
+    tool: "tool_search",
+    title: "native tool search error with complete recovery",
+    args: { query: "docs", limit: 0, extra: "preserved input" },
+    result: text(
+      "Error: limit must be a positive integer\nRetry with a valid limit and keep this recovery text",
+      { loaded: [] },
+    ),
+    isError: true,
+  },
+  {
+    tool: "tool_search",
+    title: "native tool search malformed receipt keeps raw evidence",
+    args: { query: "docs" },
+    result: text("Unknown native response\nComplete diagnostic and recovery evidence", {
+      loaded: "unrecognized",
+      fullOutputPath: "/unrelated-field-not-a-receipt",
+    }),
+  },
   {
     tool: "web_enable",
     title: "third-party web tools enabled",

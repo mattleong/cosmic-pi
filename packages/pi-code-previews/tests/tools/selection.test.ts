@@ -7,6 +7,14 @@ import { getEnabledCodePreviewTools } from "../../src/tools/selection";
 
 beforeEach(() => applyPresentationSettings({}));
 
+test("native tool search is selected by default and can be excluded independently", () => {
+  assert.ok(getEnabledCodePreviewTools().has("tool_search"));
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["codemode"] });
+  assert.equal(getEnabledCodePreviewTools().has("tool_search"), false);
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["tool_search"] });
+  assert.deepEqual([...getEnabledCodePreviewTools()], ["tool_search"]);
+});
+
 test("settings select enabled renderers", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["bash", "write", "edit"] });
   assert.deepEqual([...getEnabledCodePreviewTools()], ["bash", "write", "edit"]);
