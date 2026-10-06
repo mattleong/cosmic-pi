@@ -24,18 +24,12 @@ import {
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import type { CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewRendererSession } from "./renderer-contract";
-import { retainedCodePreviewRenderers, type RetainedRendererOwner } from "./renderer-row";
+import {
+  rendererFields,
+  retainedCodePreviewRenderers,
+  type RetainedRendererOwner,
+} from "./renderer-row";
 import { isThirdPartyPreviewName, thirdPartyAdapter } from "../third-party/registry";
-
-/** Only renderer fields from next() are retained; never treat it as an execution definition. */
-function rendererFields(renderers: ToolRenderers | undefined): ToolRenderers | undefined {
-  if (!renderers) return undefined;
-  return {
-    ...(renderers.renderShell && { renderShell: renderers.renderShell }),
-    ...(renderers.renderCall && { renderCall: renderers.renderCall }),
-    ...(renderers.renderResult && { renderResult: renderers.renderResult }),
-  };
-}
 
 /** An origin token: readiness can change once, but ownership never follows the global slot. */
 export class CodePreviewPresentationOwner implements RetainedRendererOwner {

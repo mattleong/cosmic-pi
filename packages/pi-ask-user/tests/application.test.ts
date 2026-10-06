@@ -1,6 +1,10 @@
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
 import { makeEventBus, makeTuiHost, waitMounted } from "./support/host.ts";
-import type { ExtensionContext, ExtensionHandler } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  ExtensionHandler,
+  SourceInfo,
+} from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -43,6 +47,12 @@ interface CapturedTool {
 interface CapturedCommand {
   readonly handler: (args: string, ctx: ExtensionContext) => Promise<void>;
 }
+const source: SourceInfo = {
+  source: "local",
+  path: "/extensions/pi-ask-user/index.ts",
+  scope: "user",
+  origin: "top-level",
+};
 
 beforeEach(() => {
   vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
@@ -86,6 +96,11 @@ const harness = (
         tool = definition;
         tools.set(definition.name, definition);
       }),
+      // History replay stays live: one public source owns the command anchor and every tool.
+      registerToolRenderer: vi.fn(),
+      getAllTools: () => [...tools.values()].map(({ name }) => ({ name, sourceInfo: source })),
+      getCommands: () =>
+        command ? [{ name: "ask-user", source: "extension" as const, sourceInfo: source }] : [],
     };
     askUserWithDependencies(extensionApiFixture(fixture), loadPreviewSettings);
     const ctx = extensionContextFixture({

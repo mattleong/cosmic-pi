@@ -339,9 +339,14 @@ const executeWorkflowTool = <Args>(
 
 /**
  * Registers the root-only, model-only workflow runner tool, inactive: the application activates
- * it only while the user has opted into workflows with ultracode.
+ * it only while the user has opted into workflows with ultracode. `shell` is the application's
+ * replay-staging wrapper, which stages history presentation without touching activation.
  */
-export function registerWorkflowTool(pi: ExtensionAPI, runtime: WorkflowToolRuntime): void {
+export function registerWorkflowTool(
+  pi: ExtensionAPI,
+  runtime: WorkflowToolRuntime,
+  shell: typeof withCodePreviewShell = withCodePreviewShell,
+): void {
   const tool = defineTool<typeof WorkflowToolParameters, WorkflowToolDetails, WorkflowRenderState>({
     name: WORKFLOW_TOOL_NAME,
     label: "Subagent Workflow",
@@ -365,7 +370,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtime: WorkflowToolRunt
       renderWorkflowResult(result, options, theme, context),
   });
   pi.registerTool(
-    withCodePreviewShell(tool, {
+    shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       compactSummary: workflowCompactSummary,
       expandedContent: {

@@ -26,6 +26,7 @@ function fixture() {
   const sendMessage = vi.fn();
   const notify = vi.fn();
   const updateContext = vi.fn();
+  const noteCwd = vi.fn();
   const command: ExtensionCommand = {
     add: (subcommand) => {
       handler = subcommand.handler;
@@ -35,13 +36,12 @@ function fixture() {
     registerTool(value: Parameters<ExtensionAPI["registerTool"]>[0]) {
       tool = value;
     },
-    registerMessageRenderer() {},
     sendMessage,
   });
   const runFixture = vi.fn().mockResolvedValue(Option.some(image));
   // SAFETY: This owned runner seam returns the image-command's Option result.
   const run = runFixture as Parameters<typeof registerOpenAIImage>[2];
-  registerOpenAIImage(pi, command, run, updateContext, undefined, () => current);
+  registerOpenAIImage(pi, command, run, updateContext, { noteCwd, isCurrent: () => current });
   const controller = new AbortController();
   const ctx = extensionContextFixture({
     cwd: "/project",
@@ -59,6 +59,7 @@ function fixture() {
     sendMessage,
     notify,
     updateContext,
+    noteCwd,
     runFixture,
   };
 }
@@ -91,6 +92,8 @@ describe("image command delivery authority", () => {
       yield* Effect.promise(() => Promise.resolve(h.invoke()));
       expect(h.runFixture).not.toHaveBeenCalled();
       expect(h.updateContext).not.toHaveBeenCalled();
+      // The factory-scoped message renderer keeps the current session's display directory.
+      expect(h.noteCwd).not.toHaveBeenCalled();
       expect(h.notify).not.toHaveBeenCalled();
       expect(h.sendMessage).not.toHaveBeenCalled();
     }),
@@ -106,6 +109,7 @@ describe("image command delivery authority", () => {
       );
       expect(h.runFixture).not.toHaveBeenCalled();
       expect(h.updateContext).not.toHaveBeenCalled();
+      expect(h.noteCwd).not.toHaveBeenCalled();
       expect(onUpdate).not.toHaveBeenCalled();
     }),
   );

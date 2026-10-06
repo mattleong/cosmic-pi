@@ -172,7 +172,6 @@ it.effect("image command and tool results keep one base64 payload", () =>
       registerCommand(name: string, options: { handler: Command }) {
         commands.set(name, options.handler);
       },
-      registerMessageRenderer() {},
       registerTool(value: any) {
         tool = value;
       },
@@ -185,7 +184,7 @@ it.effect("image command and tool results keep one base64 payload", () =>
     // SAFETY: The mock returns the command and tool values expected by these two runner calls.
     const run = runFixture as Parameters<typeof registerOpenAIImage>[2];
     const command = registerExtensionCommand(pi, { name: "openai", description: "OpenAI" });
-    registerOpenAIImage(pi, command, run, vi.fn());
+    registerOpenAIImage(pi, command, run, vi.fn(), { noteCwd: vi.fn() });
     const ctx = extensionContextFixture({
       model: { id: "gpt-5.5" },
       signal: undefined,

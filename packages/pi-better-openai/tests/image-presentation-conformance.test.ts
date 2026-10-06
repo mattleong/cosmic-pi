@@ -12,7 +12,7 @@ import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { imageRecordSummary } from "../src/image/compact-summary.ts";
 import { renderImageContent } from "../src/image/presentation.ts";
-import { registerOpenAIImage } from "../src/image/register.ts";
+import { registerOpenAIImage, registerOpenAIImageMessageRenderer } from "../src/image/register.ts";
 import { imageResultText } from "../src/image/result-text.ts";
 
 const styles = ["compact", "preview"] as const;
@@ -40,7 +40,9 @@ function register(
     toolCallBackground: background,
     toolCallTiming: false,
   });
-  const { tools, messageRenderers } = captureRegistrations((pi) =>
+  const { tools, messageRenderers } = captureRegistrations((pi) => {
+    // The application installs the message renderer at factory time, before any session.
+    const noteCwd = registerOpenAIImageMessageRenderer(pi);
     registerOpenAIImage(
       pi,
       registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
@@ -50,9 +52,9 @@ function register(
       () => {
         throw new Error("Rendering must not update context");
       },
-      scheduleAnimation,
-    ),
-  );
+      { noteCwd, scheduleAnimation },
+    );
+  });
   return { tool: tools[0]!, message: messageRenderers.get("openai-image")! };
 }
 const images = (component: Component): number =>

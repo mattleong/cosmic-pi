@@ -33,6 +33,7 @@ export function registerAskUserTool(
   pi: ExtensionAPI,
   ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
   scheduleAnimation?: CompactAnimationScheduler,
+  shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const tool = defineTool({
     name: "ask_user",
@@ -78,7 +79,7 @@ export function registerAskUserTool(
     },
   });
   pi.registerTool(
-    withCodePreviewShell(tool, {
+    shell(tool, {
       compactSummary: askUserCompactSummary,
       expandedContent: {
         renderCall: (args, theme) => argumentsSection(theme, args),

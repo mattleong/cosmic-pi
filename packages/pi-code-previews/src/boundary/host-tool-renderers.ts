@@ -8,7 +8,10 @@ export interface PreviewHostTools {
 }
 
 /** Public metadata only. Startup deliberately lets discovery failures reach lifecycle handling. */
-export function capturePreviewHostTools(pi: ExtensionAPI): PreviewHostTools {
+export function capturePreviewHostTools(
+  pi: ExtensionAPI,
+  anchorCommand = "code-previews",
+): PreviewHostTools {
   const tools = new Map<string, PreviewToolInfo>();
   const repeated = new Set<string>();
   for (const tool of pi.getAllTools()) {
@@ -20,7 +23,7 @@ export function capturePreviewHostTools(pi: ExtensionAPI): PreviewHostTools {
   const commands = pi.getCommands();
   const managers = commands.filter((command) => command.name === "mcp");
   const anchors = commands.filter(
-    (command) => command.name === "code-previews" && command.source === "extension",
+    (command) => command.name === anchorCommand && command.source === "extension",
   );
   return {
     tools,

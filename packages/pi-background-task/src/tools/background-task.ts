@@ -98,6 +98,7 @@ const backgroundTaskToolResult = (
 export function registerBackgroundTaskTool(
   pi: ExtensionAPI,
   runner: BackgroundTaskToolRunner,
+  shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const tool = defineTool<
     typeof BackgroundTaskParameters,
@@ -163,7 +164,7 @@ export function registerBackgroundTaskTool(
     },
   });
   pi.registerTool(
-    withCodePreviewShell(tool, {
+    shell(tool, {
       compactSummary: backgroundTaskCompactSummary,
       expandedContent: {
         renderCall: () => new Container(),

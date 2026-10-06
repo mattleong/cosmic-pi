@@ -35,18 +35,58 @@ import {
   type ToolParams,
 } from "./types.ts";
 
-const OPENAI_IMAGE_TOOL = "openai_image";
+export const OPENAI_IMAGE_TOOL = "openai_image";
+const OPENAI_IMAGE_MESSAGE = "openai-image";
 
 const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails => details;
 
-/** Registers the image tool and message renderer, and adds or replaces `/openai image`. */
+/** Records the working directory that image messages display saved paths against. */
+export type NoteImageCwd = (source: { readonly cwd: string }) => void;
+
+/**
+ * Registers the `/openai image` message renderer once, at factory time: Pi draws history before
+ * session_start. Presentation policy is read per render. Returns the display-cwd updater.
+ */
+export function registerOpenAIImageMessageRenderer(pi: ExtensionAPI): NoteImageCwd {
+  // Messages carry no working directory; saved paths display relative to the latest one seen.
+  let cwd = "";
+  pi.registerMessageRenderer<CodexImageDetails>(OPENAI_IMAGE_MESSAGE, (message, options, theme) =>
+    renderImageMessage(
+      message,
+      {
+        expanded: options.expanded,
+        compact: captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
+        cwd,
+      },
+      theme,
+    ),
+  );
+  return (source) => {
+    cwd = invokeHostCallback(() => source.cwd, cwd);
+  };
+}
+
+export interface OpenAIImageRegistrationOptions {
+  /** The factory-time message renderer's cwd updater; only current calls reach it. */
+  readonly noteCwd: NoteImageCwd;
+  readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
+  readonly isCurrent?: () => boolean;
+  /** Wraps the tool after trusted preview settings load, e.g. a cold-history replay shell. */
+  readonly shell?: typeof withCodePreviewShell;
+}
+
+/** Registers the image tool, and adds or replaces `/openai image`. */
 export function registerOpenAIImage(
   pi: ExtensionAPI,
   command: ExtensionCommand,
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
   updateContext: (ctx: ExtensionContext) => void,
-  scheduleAnimation?: CompactAnimationScheduler,
-  isCurrent: () => boolean = () => true,
+  {
+    noteCwd,
+    scheduleAnimation,
+    isCurrent = () => true,
+    shell = withCodePreviewShell,
+  }: OpenAIImageRegistrationOptions,
 ) {
   const generateEffect = (params: ToolParams) =>
     OpenAIImageService.use((service) => service.generate(params));
@@ -62,15 +102,6 @@ export function registerOpenAIImage(
     updateContext(ctx);
     return run(generateEffect(params), signal);
   };
-  const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
-  // Messages carry no working directory; saved paths display relative to the latest one seen.
-  let cwd = "";
-  const noteCwd = (ctx: ExtensionContext) => {
-    cwd = invokeHostCallback(() => ctx.cwd, cwd);
-  };
-  pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, options, theme) =>
-    renderImageMessage(message, { expanded: options.expanded, compact, cwd }, theme),
-  );
   command.add({
     name: "image",
     arguments: "<prompt>",
@@ -109,7 +140,7 @@ export function registerOpenAIImage(
               // Promise delivery has a separate microtask: recheck immediately beside send.
               if (!canDeliver()) return;
               pi.sendMessage({
-                customType: "openai-image",
+                customType: OPENAI_IMAGE_MESSAGE,
                 content: [
                   { type: "text", text: imageResultText(image) },
                   { type: "image", data: image.data, mimeType: image.mimeType },
@@ -157,7 +188,7 @@ export function registerOpenAIImage(
     },
   });
   pi.registerTool(
-    withCodePreviewShell(tool, {
+    shell(tool, {
       compactSummary: imageCompactSummary,
       expandedContent: {
         // The compact heading shows the action; its subject may be clipped, so the prompt stays.

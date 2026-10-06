@@ -19,8 +19,8 @@ export function isBuiltinTool(
   return tool?.sourceInfo.source === "builtin" && tool.sourceInfo.path === `builtin:${path}`;
 }
 
-/** A write hook installed earlier, proven by this extension's unique command anchor source. */
-function isOwnedWritePreviewTool(
+/** Exact extension ownership, anchored by a unique public command from the same factory. */
+export function isSameExtensionSource(
   tool: PreviewToolInfo | undefined,
   source: SourceInfo | undefined,
 ): boolean {
@@ -51,7 +51,7 @@ export function admitsPreviewSource(
       isBuiltinTool(tool) ||
       (name === "write" &&
         ownedTools.has("write") &&
-        isOwnedWritePreviewTool(tool, host.previewSource))
+        isSameExtensionSource(tool, host.previewSource))
     );
   if (name === "codemode") return isBuiltinTool(tool);
   // Registered MCP definitions need exact builtin MCP ownership. Historical calls may precede

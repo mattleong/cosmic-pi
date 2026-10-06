@@ -10,6 +10,16 @@ import { getFallbackResultText } from "../tools/data/results";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { RendererArguments, ToolRenderContext } from "../tools/renderers/shared/types";
 
+/** Keep only Pi's public presentation fields, never an execution definition. */
+export function rendererFields(renderers: ToolRenderers | undefined): ToolRenderers | undefined {
+  if (!renderers) return undefined;
+  return {
+    ...(renderers.renderShell && { renderShell: renderers.renderShell }),
+    ...(renderers.renderCall && { renderCall: renderers.renderCall }),
+    ...(renderers.renderResult && { renderResult: renderers.renderResult }),
+  };
+}
+
 export interface RetainedRendererOwner {
   readonly ready: boolean;
   readonly live: boolean;

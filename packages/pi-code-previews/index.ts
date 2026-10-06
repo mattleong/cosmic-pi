@@ -16,6 +16,13 @@ export {
   type CodePreviewShellOptions,
 } from "./src/tools/cooperative-tools";
 
+/** Register an owned tool's cold-history renderer before session_start installs execution. */
+export {
+  registerCodePreviewReplay,
+  type CodePreviewReplay,
+  type CodePreviewReplayOptions,
+} from "./src/application/owned-replay";
+
 /** Compose into the registering extension's session Layer, then pass schedule to its shell. */
 export {
   CodePreviewSchedulerService,

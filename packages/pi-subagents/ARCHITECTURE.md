@@ -15,6 +15,9 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 
 - The root Pi session (depth 0) owns one managed runtime for every descendant; nested Pi processes are authenticated proxy clients that construct no application services.
 - `src/application/` and `src/layer.ts` compose that runtime in the shared session-runtime slot; only the current slot token may register tools or publish activation state, and `/tree` and `/reload` carry the Current Session profiles across replacement.
+- History Pi draws before `session_start` uses the root factory's `registerCodePreviewReplay`, anchored to `/subagents`, for the coordinator tools and `subagent_workflow`.
+  Both registrations wrap through its `shell`, and the current activation publishes once both succeed, so the inactive runner's rows adopt too without any activation change.
+  A failed or aborted first startup closes adoption, shutdown retires it, and `/tree` re-registrations never republish; proxied child registrations keep the plain shell.
 - Replacement and shutdown close the run tree leaf-first.
   `WorkflowService` depends on `SubagentService`, so its finalizers run first: Activity publishes stop, deliveries end, and run fibers stop their agents last.
 

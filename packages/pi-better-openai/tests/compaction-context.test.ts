@@ -86,6 +86,7 @@ describe("owned checkpoint reconstruction", () => {
       },
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),
+      registerMessageRenderer: vi.fn(),
       events: { emit: vi.fn(), on: vi.fn() },
     };
     betterOpenAIWithDependencies(extensionApiFixture(registration));

@@ -6,6 +6,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionHandler,
+  type SourceInfo,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -39,6 +40,12 @@ import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
+const source: SourceInfo = {
+  source: "local",
+  path: "/extensions/pi-background-task/index.ts",
+  scope: "user",
+  origin: "top-level",
+};
 
 const nodeFs = process.getBuiltinModule("node:fs");
 const nodePath = process.getBuiltinModule("node:path");
@@ -87,6 +94,12 @@ const harness = (
     registerTool,
     getActiveTools: () => [...activeTools],
     on: (name: string, handler: Handler) => handlers.set(name, handler),
+    // History replay stays live: one public source owns the command anchor and the tool.
+    registerToolRenderer: vi.fn(),
+    getAllTools: () =>
+      [...new Set(tools.map(({ name }) => name))].map((name) => ({ name, sourceInfo: source })),
+    getCommands: () =>
+      command ? [{ name: "tasks", source: "extension" as const, sourceInfo: source }] : [],
   };
   registerBackgroundTaskApplication(extensionApiFixture(fixture), { loadSettings });
   return {

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import {
   loadCodePreviewSettings,
+  registerCodePreviewReplay,
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
   type CodePreviewSettings,
@@ -58,7 +59,11 @@ import {
   type OpenAIRuntimeError,
   type OpenAISessionInput,
 } from "./layer.ts";
-import { registerOpenAIImage } from "./image/register.ts";
+import {
+  OPENAI_IMAGE_TOOL,
+  registerOpenAIImage,
+  registerOpenAIImageMessageRenderer,
+} from "./image/register.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primitives.ts";
 import { OpenAIBoundaryError, OpenAIUsageService } from "./usage/controller.ts";
@@ -70,6 +75,7 @@ import {
 } from "./usage/projection.ts";
 
 const FAST_ID = "fast";
+const COMMAND = "openai";
 
 export interface BetterOpenAIExtensionDependencies {
   readonly loadPreviewSettings?: (
@@ -104,9 +110,12 @@ export function betterOpenAIWithDependencies(
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-openai");
   // `/openai image` arrives with each session; the startup flag keeps its short `--fast` name.
   const command = registerExtensionCommand(pi, {
-    name: "openai",
+    name: COMMAND,
     description: "OpenAI usage, fast mode, images, and settings",
   });
+  // Pi draws history before session_start, so image message and cold tool-row renderers load now.
+  const noteImageCwd = registerOpenAIImageMessageRenderer(pi);
+  const replay = registerCodePreviewReplay(pi, { command: COMMAND, tools: [OPENAI_IMAGE_TOOL] });
   const config = () => {
     const cfg = MutableRef.get(projection).config;
     if (cfg) return cfg;
@@ -204,10 +213,15 @@ export function betterOpenAIWithDependencies(
           ),
         ),
       ),
-    onActivated: ({ ctx, context, publicationOwner }, token, { injectionIngress, scheduler }) => {
+    onActivated: (
+      { ctx, context, cwd, publicationOwner },
+      token,
+      { injectionIngress, scheduler },
+    ) => {
       currentContext = context;
       currentPublicationOwner = publicationOwner;
       recordFastInjection = injectionIngress;
+      noteImageCwd({ cwd });
       const isCurrent = () => MutableRef.get(publicationOwner) && slot.isCurrent(token);
       registerOpenAIImage(
         pi,
@@ -222,9 +236,16 @@ export function betterOpenAIWithDependencies(
                 }),
               ),
         updateContext,
-        (intervalMs, tick) => (isCurrent() ? scheduler.schedule(intervalMs, tick) : undefined),
-        isCurrent,
+        {
+          noteCwd: noteImageCwd,
+          scheduleAnimation: (intervalMs, tick) =>
+            isCurrent() ? scheduler.schedule(intervalMs, tick) : undefined,
+          isCurrent,
+          shell: replay.shell,
+        },
       );
+      // Only a successfully registered tool lets cold history adopt this activation's shell.
+      replay.publish();
       cosmicUiWatch.start();
       updateFooter(ctx);
       const fast = MutableRef.get(fastProjection);
@@ -369,7 +390,7 @@ export function betterOpenAIWithDependencies(
     run,
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  const startSession = (ctx: ExtensionContext): Promise<void> => {
     const captured = captureSessionHost(ctx);
     if (captured._tag !== "Captured" || captured.aborted) {
       notifyAtHostBoundary(ctx, "Better OpenAI couldn't start", "warning");
@@ -391,6 +412,15 @@ export function betterOpenAIWithDependencies(
         signal,
       )
       .then(() => undefined);
+  };
+  pi.on("session_start", (_event, ctx) => {
+    // Replay adoption is first-startup-only: settling without publication closes it.
+    try {
+      return startSession(ctx).finally(replay.finishStartup);
+    } catch (error) {
+      replay.finishStartup();
+      throw error;
+    }
   });
   pi.on("agent_start", (_event, ctx) => refreshFooter(ctx));
   pi.on("turn_end", (_event, ctx) => {
@@ -479,6 +509,7 @@ export function betterOpenAIWithDependencies(
     );
   });
   pi.on("session_shutdown", () => {
+    replay.retire();
     cosmicUi.shutdown();
     return slot.shutdown();
   });

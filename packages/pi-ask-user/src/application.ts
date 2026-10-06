@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   loadCodePreviewSettings,
+  registerCodePreviewReplay,
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
   type CompactAnimationScheduler,
@@ -49,6 +50,8 @@ interface AskUserSessionInput {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly generation: string;
+  /** Only session_start activations may publish cold-history replay; tree restarts never do. */
+  readonly publishesReplay: boolean;
   active: boolean;
   activity?: QuestionnaireActivityBridge;
   revokeCapability?: () => void;
@@ -68,6 +71,11 @@ export function askUserWithDependencies(
 ): void {
   const bridge = makeAskUserDialogBridge();
   const promptGate = makeAskUserPromptGate();
+  // History rebuilt before session_start adopts the first ready activation's presentation.
+  const replay = registerCodePreviewReplay(pi, {
+    command: "ask-user",
+    tools: ["ask_user", "ask_user_async", "ask_user_async_control"],
+  });
   pi.on("ui_prompt_start", () => {
     promptGate.started();
   });
@@ -176,6 +184,7 @@ export function askUserWithDependencies(
         (request, signal) =>
           runCurrent(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal),
         scheduleAnimation,
+        replay.shell,
       );
       if (ctx.mode === "tui" && !requiresQuestionnaireRelay())
         registerAsyncAskUserTools(
@@ -193,7 +202,10 @@ export function askUserWithDependencies(
               signal,
             ),
           scheduleAnimation,
+          replay.shell,
         );
+      // After every registration this mode allows; unregistered RPC async rows stay raw.
+      if (input.publishesReplay) replay.publish();
     },
     onDeactivated: (input) => {
       input.active = false;
@@ -217,7 +229,7 @@ export function askUserWithDependencies(
     },
   });
 
-  const startSession = (ctx: ExtensionContext) => {
+  const startSession = (ctx: ExtensionContext, publishesReplay: boolean) => {
     historicalDeliveries = captureHistoricalDeliveries(ctx);
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable" || (!ctx.hasUI && !requiresQuestionnaireRelay()))
@@ -229,17 +241,29 @@ export function askUserWithDependencies(
         cwd: captured.cwd,
         projectTrusted: isProjectTrusted(ctx),
         generation: createQuestionnaireGeneration(),
+        publishesReplay,
         active: false,
       })
       .then(() => undefined);
   };
-  pi.on("session_start", (_event, ctx) => startSession(ctx));
-  pi.on("session_tree", (_event, ctx) => startSession(ctx));
+  // Settlement closes replay adoption unless the first startup published it.
+  pi.on("session_start", (_event, ctx) => {
+    try {
+      return startSession(ctx, true).finally(replay.finishStartup);
+    } catch (error) {
+      replay.finishStartup();
+      throw error;
+    }
+  });
+  pi.on("session_tree", (_event, ctx) => startSession(ctx, false));
   pi.on("context", (event) => ({
     messages: event.messages.filter((message) =>
       acceptsAsyncMessage(message, currentGeneration, historicalDeliveries),
     ),
   }));
 
-  pi.on("session_shutdown", () => slot.shutdown());
+  pi.on("session_shutdown", () => {
+    replay.retire();
+    return slot.shutdown();
+  });
 }

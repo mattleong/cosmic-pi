@@ -11,7 +11,7 @@ import {
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { registerExtensionCommand } from "pi-cosmic-core";
-import { registerOpenAIImage } from "../src/image/register.ts";
+import { registerOpenAIImage, registerOpenAIImageMessageRenderer } from "../src/image/register.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
 
 const noExecution = () => {
@@ -129,14 +129,16 @@ describe.skipIf(!directory)("presentation gallery", () => {
           toolCallTiming: false,
         });
         try {
-          const { tools, messageRenderers } = captureRegistrations((pi) =>
+          const { tools, messageRenderers } = captureRegistrations((pi) => {
+            const noteCwd = registerOpenAIImageMessageRenderer(pi);
             registerOpenAIImage(
               pi,
               registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
               noExecution,
               noContext,
-            ),
-          );
+              { noteCwd },
+            );
+          });
           const tool = tools.find((entry) => entry.name === "openai_image")!;
           const renderer = messageRenderers.get("openai-image")!;
           for (const scenario of toolScenarios)

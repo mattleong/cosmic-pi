@@ -8,6 +8,7 @@ import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
   loadCodePreviewSettings,
+  registerCodePreviewReplay,
 } from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
@@ -91,6 +92,8 @@ interface CapturedActivation {
   readonly agentDirectory: string;
   readonly preserveSessionOverrides: boolean;
   readonly restoreReloadHandoff: boolean;
+  /** Only session_start may publish history replay; a /tree activation never wins it. */
+  readonly publishesReplay: boolean;
   readonly sessionKey?: string | undefined;
 }
 
@@ -151,6 +154,11 @@ export function registerSubagentApplication(
   boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
   registerSubagentMessageRenderers(pi);
+  // Pi draws history before session_start registers the tools; `/subagents` anchors ownership.
+  const replay = registerCodePreviewReplay(pi, {
+    command: "subagents",
+    tools: [...SUBAGENT_TOOL_NAME_SET],
+  });
   const receipts = registerSubagentErrorReceipts(pi);
   const bridge = makeSubagentProjectionBridge(pi.events);
   const workflowViews = makeWorkflowActivitySource();
@@ -317,15 +325,20 @@ export function registerSubagentApplication(
             pi,
             { ...prepared.toolRuntime, scheduleAnimation },
             { receipts, owner: receipts.activate() },
+            replay.shell,
           );
           // Registered inactive; the ultracode controller activates it while workflows are on.
-          registerWorkflowTool(pi, {
-            environment: prepared.toolRuntime.environment,
-            savedWorkflows: prepared.savedWorkflows,
-            savedWorkflowLocations: prepared.savedWorkflowLocations,
-            scheduleAnimation,
-            run: (effect, signal) => run(effect, signal),
-          });
+          registerWorkflowTool(
+            pi,
+            {
+              environment: prepared.toolRuntime.environment,
+              savedWorkflows: prepared.savedWorkflows,
+              savedWorkflowLocations: prepared.savedWorkflowLocations,
+              scheduleAnimation,
+              run: (effect, signal) => run(effect, signal),
+            },
+            replay.shell,
+          );
           // A first registration keeps what Pi activated. Later ones deactivate only tools Pi
           // activated that the session had not kept active.
           const activatedByRegistration = activeSubagentTools(pi).filter(
@@ -351,6 +364,7 @@ export function registerSubagentApplication(
           rememberDisabledTools(deactivateSubagentTools(pi));
           return;
         }
+        if (activation.publishesReplay) replay.publish();
         bridge.publish(prepared.projection);
         currentActivation = activation;
         if (activation.restoreReloadHandoff && activation.sessionKey)
@@ -482,6 +496,8 @@ export function registerSubagentApplication(
       agentDirectory,
       preserveSessionOverrides,
       restoreReloadHandoff,
+      // Tree navigation alone preserves the session's overrides.
+      publishesReplay: !preserveSessionOverrides,
       sessionKey: profileReloadSessionKey(ctx),
     };
     const start = () => slot.start(activation, captured.signal);
@@ -489,9 +505,15 @@ export function registerSubagentApplication(
   };
 
   pi.on("session_start", (event, ctx) => {
-    const restoreReloadHandoff = event.reason === "reload";
-    if (!restoreReloadHandoff) profileReloadHandoff.clear();
-    return prepareActivation(ctx, false, restoreReloadHandoff);
+    // Pi emits one session_start per factory load; history adopts only if this startup publishes.
+    try {
+      const restoreReloadHandoff = event.reason === "reload";
+      if (!restoreReloadHandoff) profileReloadHandoff.clear();
+      return prepareActivation(ctx, false, restoreReloadHandoff).finally(replay.finishStartup);
+    } catch (error) {
+      replay.finishStartup();
+      throw error;
+    }
   });
 
   pi.on("turn_end", () => {
@@ -503,6 +525,7 @@ export function registerSubagentApplication(
   pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, true, false, true));
 
   pi.on("session_shutdown", (event, ctx) => {
+    replay.retire();
     receipts.deactivate();
     revokeActivity();
     ultracode.suspend();

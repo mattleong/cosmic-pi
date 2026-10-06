@@ -30,6 +30,7 @@ export function registerAsyncAskUserTools(
   start: (input: AskUserAsyncRequest, signal?: AbortSignal) => Promise<AsyncQuestionnaireSnapshot>,
   control: (input: AskUserAsyncControl, signal?: AbortSignal) => Promise<AsyncQuestionnaireResult>,
   scheduleAnimation?: CompactAnimationScheduler,
+  shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
   const expandedContent = {
@@ -40,7 +41,7 @@ export function registerAsyncAskUserTools(
     renderAsyncMessage(message, options, theme, compact),
   );
   pi.registerTool(
-    withCodePreviewShell(
+    shell(
       defineTool({
         name: "ask_user_async",
         label: "Ask User Async",
@@ -74,7 +75,7 @@ export function registerAsyncAskUserTools(
     ),
   );
   pi.registerTool(
-    withCodePreviewShell(
+    shell(
       defineTool({
         name: "ask_user_async_control",
         label: "Questionnaire Control",

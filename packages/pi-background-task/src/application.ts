@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
   loadCodePreviewSettings,
+  registerCodePreviewReplay,
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
   type CodePreviewSettings,
@@ -43,6 +44,8 @@ import { registerBackgroundTaskTool } from "./tools/background-task.ts";
 interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
   /** Revoked before disposal can publish late task settlement into the shared UI bridge. */
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
+  /** Only session_start activations may publish cold-history replay; tree restarts never do. */
+  readonly publishesReplay: boolean;
 }
 
 export interface BackgroundTaskApplicationBoundaries {
@@ -59,6 +62,8 @@ export function registerBackgroundTaskApplication(
 ): void {
   const bridge = makeProjectionBridge(pi.events);
   const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
+  // History rebuilt before session_start adopts the first ready activation's presentation.
+  const replay = registerCodePreviewReplay(pi, { command: "tasks", tools: ["background_task"] });
   let releaseActivity: (() => void) | undefined;
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   /** The settings this session started with; `/tasks settings` changes apply after /reload. */
@@ -100,14 +105,19 @@ export function registerBackgroundTaskApplication(
           scheduler: yield* CodePreviewSchedulerService,
         };
       }),
-    onActivated: ({ ctx, cwd }, token, prepared) => {
+    onActivated: ({ ctx, cwd, publishesReplay }, token, prepared) => {
       // Only the current-generation activation reaches this hook, and settings are already
       // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
-      registerBackgroundTaskTool(pi, {
-        run,
-        scheduleAnimation: (interval, tick) =>
-          slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
-      });
+      registerBackgroundTaskTool(
+        pi,
+        {
+          run,
+          scheduleAnimation: (interval, tick) =>
+            slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
+        },
+        replay.shell,
+      );
+      if (publishesReplay) replay.publish();
       codeModeHost.activate({
         sessionId: backgroundTaskCodeModeSessionId(ctx),
         sessionCwd: cwd,
@@ -192,7 +202,7 @@ export function registerBackgroundTaskApplication(
       run(BackgroundTaskSettingsFiles.use((files) => files.write(location, id, value))),
   });
 
-  const startSession = (ctx: ExtensionContext) => {
+  const startSession = (ctx: ExtensionContext, publishesReplay: boolean) => {
     revokeActivity();
     codeModeHost.deactivate();
     const captured = captureSessionHost(ctx);
@@ -207,22 +217,32 @@ export function registerBackgroundTaskApplication(
           cwd: captured.cwd,
           projectTrusted: isProjectTrusted(ctx),
           publicationOwner: MutableRef.make(true),
+          publishesReplay,
         },
         captured.signal,
       )
       .then(() => undefined);
   };
 
-  pi.on("session_start", (_event, ctx) => startSession(ctx));
+  // Settlement closes replay adoption unless the first startup published it.
+  pi.on("session_start", (_event, ctx) => {
+    try {
+      return startSession(ctx, true).finally(replay.finishStartup);
+    } catch (error) {
+      replay.finishStartup();
+      throw error;
+    }
+  });
   // Tree navigation keeps the session id but abandons the prior branch's task ownership.
   // Slot replacement joins process cleanup and revokes capabilities before reactivation.
-  pi.on("session_tree", (_event, ctx) => startSession(ctx));
+  pi.on("session_tree", (_event, ctx) => startSession(ctx, false));
 
   pi.on("turn_end", (_event, ctx) => {
     if (slot.isActive()) bridge.setContext(ctx);
   });
 
   pi.on("session_shutdown", () => {
+    replay.retire();
     revokeActivity();
     codeModeHost.deactivate();
     bridge.clear();

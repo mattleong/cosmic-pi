@@ -206,10 +206,12 @@ const TOOL_SPECS: SubagentToolSpecs = {
   },
 };
 
+/** `shell` is the root's replay-staging wrapper; proxied child registrations use the plain one. */
 export function registerSubagentTools(
   pi: ExtensionAPI,
   runtime: SubagentToolRuntime,
   receiptOwner?: SubagentErrorReceiptOwner,
+  shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
@@ -294,7 +296,7 @@ export function registerSubagentTools(
         }),
     });
     const project = createSubagentCompactSummary(tool.name);
-    const wrapped = withCodePreviewShell(tool, {
+    const wrapped = shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
         renderCall: (args, theme) =>

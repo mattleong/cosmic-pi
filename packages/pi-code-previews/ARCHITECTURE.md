@@ -33,6 +33,7 @@ disk. The former standalone `pi-mcp-previews` package is retired and must be rem
   codemode presentation follows preview selection, not active-at-start status. Native MCP
   definitions require builtin MCP ownership; missing historical aliases require the independently
   proven unique builtin `/mcp` manager. Nothing is introduced or activated for presentation.
+- Public `registerCodePreviewReplay` (`application/owned-replay.ts`) lets each cooperating owner register a factory-time renderer-only bridge for its own late tools. It stages self-framed callbacks alongside normal wrapping, admits first-ready adoption only after exact public tool/command source matching, and reuses `renderer-row.ts`. Existing downstream callbacks and later ready rows fall through. The owner closes failed startup and retires on shutdown; no execution, activation, settings I/O, or scheduler belongs to the bridge.
 - `application/tool-renderers.ts` publishes an originating presentation owner only after trusted
   settings and startup succeed. Rows resolved after readiness get ordinary renderers in Pi's own
   shell. `renderer-row.ts` retains only cold replay call/result slots under a fixed self shell,
