@@ -13,8 +13,10 @@ Session-scoped background tasks for Pi. The agent can start long-running command
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-background-task
+pi install "$PWD/packages/pi-background-task"
 ```
 
 Install `pi-cosmic-ui` too for the shared Activity view; without it, `/tasks` opens a standalone manager.

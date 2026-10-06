@@ -15,11 +15,13 @@ Syntax-highlighted, easier-to-scan tool output in the Pi TUI. Code Previews rest
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-code-previews
+pi install "$PWD/packages/pi-code-previews"
 ```
 
-Requires Pi 1.0.1 or later; tested with Pi 1.0.2. If you previously installed the standalone `pi-mcp-previews`, remove it manually (`pi remove npm:pi-mcp-previews`, adding `-l` for project installs) and reload. See the [migration guide](../../docs/migrations/native-mcp-codemode.md).
+Requires Pi 1.0.1 or later; tested with Pi 1.0.2. If you previously installed the standalone `pi-mcp-previews`, remove it manually with `pi remove` and the source `pi list` shows for it (add `-l` for project installs), then reload. See the [migration guide](../../docs/migrations/native-mcp-codemode.md).
 
 ## Usage
 

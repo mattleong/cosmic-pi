@@ -11,10 +11,9 @@ Opens a reusable "by the way" side session: a blank Pi session in its own [Herdr
 
 ## Install
 
-This package is local-only. From the repository root:
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
 
 ```bash
-pnpm install
 pi install "$PWD/packages/pi-herdr-btw"
 ```
 

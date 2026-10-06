@@ -14,8 +14,10 @@ Structured questionnaires that let the agent ask you for decisions instead of gu
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-ask-user
+pi install "$PWD/packages/pi-ask-user"
 ```
 
 Restart Pi afterwards. If another questionnaire extension is installed, disable it so the model sees only one ask-user tool.

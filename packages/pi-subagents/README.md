@@ -15,9 +15,11 @@ Background subagents for Pi. The main agent delegates work to profile-routed age
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-subagents
-pi install npm:pi-cosmic-ui   # recommended: shared Activity view
+pi install "$PWD/packages/pi-subagents"
+pi install "$PWD/packages/pi-cosmic-ui"   # recommended: shared Activity view
 ```
 
 Claude Code and Codex routes need those CLIs installed and signed in. Pi routes need nothing extra.

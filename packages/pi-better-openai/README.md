@@ -12,9 +12,11 @@ Improves Pi's OpenAI subscription workflow with fast mode, usage visibility, nat
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-better-openai
-pi install npm:pi-cosmic-ui   # optional: shared footer
+pi install "$PWD/packages/pi-better-openai"
+pi install "$PWD/packages/pi-cosmic-ui"   # optional: shared footer
 ```
 
 Then sign in with `/login openai-codex` and check it works with `/openai usage`. Credentials stay in Pi's auth store (normally `~/.pi/agent/auth.json`); never copy or commit them.

@@ -12,8 +12,10 @@ Shared, responsive UI for Pi: a composable footer, a unified Activity view for w
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-cosmic-ui
+pi install "$PWD/packages/pi-cosmic-ui"
 ```
 
 Other Cosmic Pi extensions detect it automatically. Without it, they fall back to Pi's status line and their own managers.

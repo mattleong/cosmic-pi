@@ -23,27 +23,28 @@ A pnpm workspace for Pi extensions.
 
 ## Install
 
-Install the published extensions with pi:
-
-```bash
-pi install npm:pi-ask-user
-pi install npm:pi-better-openai
-pi install npm:pi-better-xai
-pi install npm:pi-background-task
-pi install npm:pi-code-previews
-pi install npm:pi-cosmic-ui
-pi install npm:pi-directory-models
-pi install npm:pi-subagents
-```
-
-`pi-herdr-btw` is local-only. Clone this repository, install the workspace dependencies, and register their local paths for persistent use:
+These extensions aren't published to npm, so install them from a local clone. Clone the repository, install its dependencies, and register each extension you want by its local path:
 
 ```bash
 git clone https://github.com/mattleong/cosmic-pi.git
 cd cosmic-pi
 pnpm install
+pi install "$PWD/packages/pi-ask-user"
+pi install "$PWD/packages/pi-background-task"
+pi install "$PWD/packages/pi-better-openai"
+pi install "$PWD/packages/pi-better-xai"
+pi install "$PWD/packages/pi-code-previews"
+pi install "$PWD/packages/pi-cosmic-ui"
+pi install "$PWD/packages/pi-directory-models"
 pi install "$PWD/packages/pi-herdr-btw"
+pi install "$PWD/packages/pi-subagents"
 ```
+
+Or run `scripts/install-all.sh` to install dependencies and register every extension at once. Add `-l` to `pi install` to register an extension for the current project only.
+
+Pi loads local packages in place, so updating is `git pull`, then `pnpm install` if dependencies changed, then `/reload`. Pi's `git:` sources don't work for this repository: each extension is a workspace package that depends on its siblings through pnpm workspace links.
+
+Packages with the same names on npm, such as `pi-ask-user`, `pi-subagents`, and `pi-background-task`, are unrelated projects.
 
 Upgrading from the retired `pi-mcp`, `pi-code-mode`, or standalone `pi-mcp-previews` extensions? Follow the [manual migration guide](docs/migrations/native-mcp-codemode.md). There is intentionally no compatibility layer or automatic credential migration.
 
@@ -74,7 +75,9 @@ pnpm --filter pi-subagents test
 
 ```bash
 pi -e ./packages/pi-ask-user
+pi -e ./packages/pi-background-task
 pi -e ./packages/pi-better-openai
+pi -e ./packages/pi-better-xai
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models
@@ -86,7 +89,7 @@ To add a package to project-local Pi settings, use `pi install -l` with its loca
 
 ## Releases
 
-All workspace packages use the synchronized version `0.2.0`. The public packages are published together; private `pi-herdr-btw` remains local-only. Set the next version from the repository root:
+All workspace packages use the synchronized version `0.2.0`. Nothing is published yet; once releases start, the public packages publish together and private `pi-herdr-btw` stays local-only. Set the next version from the repository root:
 
 ```bash
 pnpm version:set 0.2.1

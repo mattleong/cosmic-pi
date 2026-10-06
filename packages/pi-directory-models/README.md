@@ -11,8 +11,10 @@ Remembers the provider, model, and thinking level you use in each working direct
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-directory-models
+pi install "$PWD/packages/pi-directory-models"
 ```
 
 ## Usage

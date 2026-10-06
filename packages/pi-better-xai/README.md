@@ -14,9 +14,11 @@ xAI     7d ████████░░ 82%  mo ████████░░
 
 ## Install
 
+Not published to npm; install from a [local clone](../../README.md#install). After `pnpm install`, run from the repository root:
+
 ```bash
-pi install npm:pi-better-xai
-pi install npm:pi-cosmic-ui   # optional: shared footer
+pi install "$PWD/packages/pi-better-xai"
+pi install "$PWD/packages/pi-cosmic-ui"   # optional: shared footer
 ```
 
 Requires a SuperGrok or eligible X Premium subscription. Sign in with `/login xai`, choose **Use a subscription**, then check it works with `/xai usage`. API-key logins don't have these meters.
