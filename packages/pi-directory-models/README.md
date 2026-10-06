@@ -1,6 +1,13 @@
 # pi-directory-models
 
-A small Pi extension that remembers the selected provider, model, and thinking level for each working directory.
+Remembers the provider, model, and thinking level you use in each working directory, and restores them when you start a new Pi session there.
+
+## Features
+
+- **Per-directory preferences** restored for fresh sessions and `/new`.
+- **Automatic updates** whenever you change model or thinking level with `/model`, model cycling, or the thinking-level controls.
+- **One-off overrides:** `--model` or `--thinking` on the command line skips restoring for that session and isn't saved.
+- **Symlink-aware:** aliases of the same directory share one preference.
 
 ## Install
 
@@ -8,30 +15,16 @@ A small Pi extension that remembers the selected provider, model, and thinking l
 pi install npm:pi-directory-models
 ```
 
-## Behavior
+## Usage
 
-- Fresh sessions restore the preference for the canonical current directory.
-- `/new` restores the directory preference.
-- Resumed, forked, and reloaded sessions keep their session model.
-- An exact `--model <value>` or `--thinking <value>` before `--` is a one-off override. Either option suppresses restoration of both the saved model and thinking level, and the override is not saved.
-- Bare terminal flags and tokens after `--` do not count as overrides.
-- `/model`, model cycling, and thinking-level changes update the preference.
-- Symlink aliases of the same directory share a preference.
+There are no commands. Pick a model in a directory once and later fresh sessions there start with it. Resumed, forked, and reloaded sessions keep their own model. A directory without a preference records Pi's current model on its first fresh session.
 
-When a directory has no preference, its first ordinary fresh session records Pi's current model and thinking level.
+## Configuration
 
-## Storage and manual editing
-
-Preferences are private global Pi data, not project files:
+Preferences are private global data, one file per directory:
 
 ```text
 ~/.pi/agent/pi-directory-models/<directory>--<short-hash>.json
-```
-
-For example:
-
-```text
-~/.pi/agent/pi-directory-models/cern--7f3a91c2d481.json
 ```
 
 ```json
@@ -44,10 +37,10 @@ For example:
 }
 ```
 
-The readable directory name helps locate the record, the short hash disambiguates directories with the same basename, and `cwd` confirms the exact canonical path. Valid manual edits are read on the next fresh session.
+You can edit these by hand; valid changes apply to the next fresh session. `cwd` is the exact canonical path, and the hash tells apart directories with the same name.
 
-Invalid records, unavailable models, missing authentication, and persistence failures fail open: Pi keeps its current model and shows a bounded warning. An unavailable saved model is retained so a temporary auth or catalog issue does not erase the preference.
+## How it works
 
-## Pi global default
+The extension resolves the canonical current directory at session start and, for fresh sessions, applies its saved preference through Pi's `setModel()`. That changes only the current session, never Pi's global default. Failures fail open: an invalid record, an unavailable model, missing authentication, or a write error leaves Pi's current model in place with a short warning. A saved model that's temporarily unavailable is kept rather than overwritten.
 
-Restoring a directory preference changes only the current session. Pi's extension `setModel()` API does not update Pi's global default.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

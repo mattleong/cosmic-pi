@@ -63,7 +63,7 @@ Saving is available only from Current Session. The save dialog takes a name and 
 
 ## Explicit configuration repair
 
-Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, never rewritten. A mixed local/remote route fails closed in full. Repair the source saved set explicitly with reviewed `host: "local"` candidates and omitted/true `closeOnReport`; credentials are not migrated. Partial Project sets can inherit invalid Global routes, so repair Global or explicitly override the affected Project route. Invalid sets cannot be applied, made default, or saved as a valid Current Session snapshot. Route-invalid sets remain editable; structurally invalid sets require deletion and recreation. Replace or clear an invalid default before deleting its set. See the [README repair procedure](../README.md#repairing-retired-remote-or-stay-open-configurations).
+Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, never rewritten. A mixed local/remote route fails closed in full. Repair the source saved set explicitly with reviewed `host: "local"` candidates and omitted/true `closeOnReport`; credentials are not migrated. Partial Project sets can inherit invalid Global routes, so repair Global or explicitly override the affected Project route. Invalid sets cannot be applied, made default, or saved as a valid Current Session snapshot. Route-invalid sets remain editable; structurally invalid sets require deletion and recreation. Replace or clear an invalid default before deleting its set. See the [repair procedure](reference.md#repairing-retired-remote-or-stay-open-configurations).
 
 ## Nesting settings
 

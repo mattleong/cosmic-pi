@@ -45,10 +45,6 @@ pnpm install
 pi install "$PWD/packages/pi-herdr-btw"
 ```
 
-Code Previews includes standalone native MCP previews with no separate startup toggle. It uses Pi's public renderer resolver rather than owning or replacing native execution or the `/mcp` manager. Builtin tools and native `codemode` follow the preview-tools selection; write alone retains a real before-write snapshot hook. Pi's native MCP configuration lives in `~/.pi/agent/mcp.json` or trusted project `.pi/mcp.json`; use native `/mcp` for connections and sign-in. Native `codemode` can be activated later by MCP's default `codemode` exposure without a presentation reload or forcing all tools active.
-
-If standalone `pi-mcp-previews` was previously installed, remove it manually from every scope (`pi remove npm:pi-mcp-previews`, adding `-l` for a project-local install), or use `pi remove` with the exact local source shown by `pi list`. Then reload. This restores the independent builtin manager; no user configuration or credentials are migrated automatically.
-
 Upgrading from the retired `pi-mcp`, `pi-code-mode`, or standalone `pi-mcp-previews` extensions? Follow the [manual migration guide](docs/migrations/native-mcp-codemode.md). There is intentionally no compatibility layer or automatic credential migration.
 
 ## Development
