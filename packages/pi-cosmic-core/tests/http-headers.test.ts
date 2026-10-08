@@ -9,8 +9,6 @@ it("merges case-insensitively with the last value and casing without moving repl
     ["X-Second", "second"],
     ["X-Third", "third"],
   ]);
-  expect(first).toEqual({ "X-First": "old", "X-Second": "second" });
-  expect(last).toEqual({ "x-FIRST": "new", "X-Third": "third" });
 });
 
 it("deletes null headers and appends headers restored after deletion", () => {

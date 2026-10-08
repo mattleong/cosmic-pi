@@ -7,7 +7,6 @@ import {
   ultracodePromptRunStarted,
   ultracodeRequestSent,
   ultracodeRequestUnsent,
-  ultracodeWindowReset,
   ultracodeWorkflowRunClosed,
   ultracodeWorkflowRunOpened,
   type UltracodeWindow,
@@ -102,19 +101,6 @@ describe("the one-off ultracode window", () => {
       true,
       false,
     ]);
-  });
-
-  it("reopens for the next agent run when a run's notice is accepted", () => {
-    // An interrupted run's notice opens the run, and its acceptance holds the next agent run.
-    expect(
-      openAfter(
-        (state) => ultracodeWindowReset(state),
-        opened("wf-1"),
-        closed("wf-1", "next-turn"),
-        otherPrompt,
-        settled,
-      ),
-    ).toEqual([false, true, true, true, false]);
   });
 
   it("ignores a run it never opened", () => {

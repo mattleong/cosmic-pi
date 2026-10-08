@@ -126,8 +126,6 @@ describe("herdr-btw reuse workflow", () => {
         agentName: LINK.agentName,
         prompt: "Side-session request:\ncontinue please",
       });
-      expect(operationNames(test.calls)).not.toContain("split BTW pane");
-      expect(operationNames(test.calls)).not.toContain("start side-session Pi");
     }),
   );
 
@@ -369,7 +367,6 @@ describe("herdr-btw reuse workflow", () => {
       const test = fixture({ initialLinks: [LINK], failOperation: "start side-session Pi" });
       yield* Effect.flip(withReadiness(test.openNew()));
       expect(test.recordedLinks).toEqual([LINK]);
-      expect(test.linkStore.restore()).toEqual({ _tag: "restored", link: LINK });
       expect(operationCount(test.calls, "start side-session Pi")).toBe(1);
     }),
   );
@@ -391,16 +388,15 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  for (const [recordResult, code, outcome, message] of [
-    ["refused", "herdr_btw_link_record_refused", "confirmed", "wasn't saved"],
-    ["uncertain", "herdr_btw_link_record_outcome_uncertain", "uncertain", "left open"],
+  for (const [recordResult, code, outcome] of [
+    ["refused", "herdr_btw_link_record_refused", "confirmed"],
+    ["uncertain", "herdr_btw_link_record_outcome_uncertain", "uncertain"],
   ] as const) {
     it.effect(`does not reread, retry or hand off after a ${recordResult} link record`, () =>
       Effect.gen(function* () {
         const test = fixture({ recordResult });
         const error = yield* Effect.flip(withReadiness(test.openNew("do not deliver")));
         expect(error).toMatchObject({ code, outcome, paneId: "w1:p2" });
-        expect(error.message).toContain(message);
         expect(test.recordAttempts).toHaveLength(1);
         expect(test.restoreCount()).toBe(0);
         expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");

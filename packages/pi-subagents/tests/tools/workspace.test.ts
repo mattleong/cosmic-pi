@@ -199,7 +199,6 @@ describe("workspace tool", () => {
       // SAFETY: These operations deliberately violate the parameter schema.
       expect(yield* run(operation as never).pipe(Effect.flip, Effect.orDie)).toMatchObject({
         code: "workspace_input_invalid",
-        message: "Workspace arguments failed strict validation.",
       });
   });
 

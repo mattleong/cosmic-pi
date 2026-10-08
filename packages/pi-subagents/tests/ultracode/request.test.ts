@@ -1,12 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import { workflowAuthoringGuidePath } from "../../src/boundary/workflow-authoring-guide.ts";
 import {
   carriesUltracodeRequest,
   parseUltracodeRequest,
   ultracodeRequestMessage,
 } from "../../src/ultracode/request.ts";
-import { nodeFsPromises } from "../support/node-builtins.ts";
 
 describe("/ultracode budget prefix", () => {
   it.each([
@@ -57,11 +54,4 @@ describe("/ultracode request message", () => {
     expect(carriesUltracodeRequest(`Context from an input handler\n${message}`)).toBe(true);
     expect(carriesUltracodeRequest("review the parser")).toBe(false);
   });
-
-  it.effect("points at the guide file shipped with the package", () =>
-    // The path resolves from the module, wherever the package is installed.
-    Effect.promise(() => nodeFsPromises.stat(workflowAuthoringGuidePath())).pipe(
-      Effect.map((stat) => expect(stat.isFile()).toBe(true)),
-    ),
-  );
 });

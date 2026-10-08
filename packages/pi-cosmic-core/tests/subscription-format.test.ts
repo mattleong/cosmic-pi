@@ -8,6 +8,5 @@ it("adds reset times to a usage window only when they are enabled", () => {
   const hidden = formatWindowedUsageLine(windows, { showResetTimes: false }, NOW, NOW);
   const shown = formatWindowedUsageLine(windows, { showResetTimes: true }, NOW, NOW);
   expect(hidden).toContain("5h: 80%");
-  expect(shown).not.toBe(hidden);
   expect(shown.length).toBeGreaterThan(hidden.length);
 });

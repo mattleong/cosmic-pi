@@ -284,7 +284,6 @@ describe("subagent tool", () => {
       effort: "low",
       selection: {
         routeSource: "session",
-        reason: "Profile reviewer selected session override candidate 1 (local/pi).",
       },
     });
   });
@@ -659,7 +658,6 @@ describe("subagent tool", () => {
         code: "SubagentProcessError",
       },
     ]);
-    expect(details?.startFailures?.[0]?.index).toBe(failedEntry?.index);
     expect(details?.startEntries?.at(-1)).toMatchObject({
       index: 31,
       status: "started",

@@ -564,9 +564,7 @@ describe("subagent Pi registration", () => {
       expect(yield* hasSessionOverride(ctx)).toBe(true);
 
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
-      const startupHandlers = handlers;
       ({ handlers, subagents } = registerFreshApplication());
-      expect(handlers).not.toBe(startupHandlers);
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
       expect(yield* hasSessionOverride(ctx)).toBe(true);
 

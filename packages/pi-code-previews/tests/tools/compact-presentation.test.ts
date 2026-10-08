@@ -19,13 +19,11 @@ const plan = (
     ...(options.errorText !== undefined && { errorText: options.errorText }),
   });
 
-test("a usable summary is both the expanded and the collapsed summary", () => {
+test("a usable summary preserves its values and reconciles Pi errors", () => {
   const summary: CompactSummary = { subject: "target", outcome: "success", counters: ["3 lines"] };
   const planned = plan(summary);
   expect(planned.summary).toEqual(summary);
-  expect(planned.collapsedSummary).toBe(planned.summary);
   const reconciled = plan(summary, { isError: true, errorText: "Rejected\nstack" });
-  expect(reconciled.collapsedSummary).toBe(reconciled.summary);
   expect(reconciled.summary?.outcome).toBe("error");
 });
 

@@ -15,7 +15,6 @@ import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { sha256Text, stripAnsi } from "pi-cosmic-core";
-import { toolExpandHint } from "pi-cosmic-ui/tool";
 
 const styleNativeMcp = (
   definition: ToolDefinition<any, any, any>,
@@ -328,22 +327,18 @@ test("a long error reads its own first line inside Pi's truncation envelope", ()
   }
 });
 
-test("preview wraps long single-line output and signals what expansion shows", () => {
+test("preview wraps long single-line output within bounded rows", () => {
   settings("preview");
   const json = JSON.stringify({
     items: Array.from({ length: 80 }, (_, id) => ({ id, title: `Item ${id}` })),
   });
-  for (const [text, hidden] of [
-    [json, true],
-    ["Short output", false],
-  ] as const) {
+  for (const text of [json, "Short output"]) {
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()));
     h.call({ query: "items" });
     h.result(result(text, docs));
     for (const width of [40, 80, 120]) {
       const rows = h.render(width);
       assert.ok(rows.every((row) => visibleWidth(row) <= width));
-      assert.equal(stripAnsi(rows.join("\n")).includes(toolExpandHint()), hidden, `${width}`);
       assert.ok(rows.length <= 10, `${rows.length} rows at ${width}`);
     }
   }

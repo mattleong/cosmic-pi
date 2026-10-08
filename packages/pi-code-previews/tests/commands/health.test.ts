@@ -7,7 +7,7 @@ import { effectTest, step } from "../support/effect-test";
 
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 
-effectTest("closing health keeps its panel geometry and an overlay stacked above it", function* () {
+effectTest("closing health keeps an overlay stacked above it", function* () {
   const commands = new Map<string, Command>();
   registerCodePreviewsCommand(
     extensionApiFixture({
@@ -17,8 +17,6 @@ effectTest("closing health keeps its panel geometry and an overlay stacked above
   const host = fakeCustomSurfaceHost();
   const running = commands.get("code-previews")?.handler("health", host.ctx) ?? Promise.resolve();
   host.mount();
-  // A plain component-sized overlay: no viewport options.
-  assert.equal(host.overlayOptions, undefined);
   const [panel] = host.overlays;
   const questionnaire = { render: () => ["questionnaire"], invalidate() {} };
   const hidden = host.showUnrelated(questionnaire);

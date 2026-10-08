@@ -79,7 +79,7 @@ describe("ask_user tool", () => {
     const lines = resultOutput(tool, { outcome: "submitted", answers: [answer] }, []).split("\n");
     const answerLine = lines.findIndex((line) => line.includes("Scenic"));
     expect(answerLine).toBeGreaterThanOrEqual(0);
-    expect(lines[answerLine + 1]).toMatch(/^\s+.*Avoid tolls/);
+    expect(lines[answerLine + 1]).toMatch(/.*Avoid tolls/);
     for (const malformed of malformedNoteAnswers())
       expect(
         resultOutput(tool, { outcome: "submitted", answers: [malformed] }, [

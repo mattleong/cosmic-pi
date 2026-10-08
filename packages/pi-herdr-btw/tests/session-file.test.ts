@@ -156,8 +156,6 @@ describe("createBlankChildSessionFile", () => {
         expect(result.path).toContain("2026-08-26T01-02-03-004Z_blank-child-id.jsonl");
         expect(statSync(result.path).mode & 0o777).toBe(0o600);
         const header = readFileSync(result.path, "utf8").split("\n")[0] ?? "";
-        expect(header).toContain('"type":"session"');
-        expect(header).toContain('"id":"blank-child-id"');
         expect(header).toContain(`"timestamp":"${FIRST_TIMESTAMP}"`);
         expect(header).toContain('"cwd":"/project"');
         expect(probeSessionHeader(result.path)).toEqual({

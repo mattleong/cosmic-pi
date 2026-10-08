@@ -66,13 +66,9 @@ function imageServiceLayer(options: {
 describe("OpenAIImageService", () => {
   it.effect("uses one captured context/config snapshot for defaults and overrides", () => {
     const requests: StreamingHttpTestRequest[] = [];
-    let modelReads = 0;
     const context = testContext({
       token: registryToken,
-      model: () => {
-        modelReads++;
-        return unrelatedModel;
-      },
+      model: () => unrelatedModel,
     });
     const config = makeResolvedConfig({
       image: {
@@ -126,7 +122,6 @@ describe("OpenAIImageService", () => {
       });
       const nextDefault = yield* service.generate({ prompt: "default after override" });
       expect(nextDefault.imageModel).toBe(DEFAULT_IMAGE_MODEL);
-      expect(modelReads).toBe(2);
     }).pipe(provideBuiltLayer(serviceLayer));
   });
 

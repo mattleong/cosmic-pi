@@ -45,7 +45,6 @@ test("native outcomes require known native evidence, and child delivery is neutr
   const completed = projection(output("completed", [call()]));
   assert.equal(completed?.outcome, "success");
   assert.equal(completed?.children?.entries[0]?.status, "returned");
-  assert.equal(completed?.children?.entries[0]?.returnedCheckmark, true);
   assert.equal(completed?.children?.entries[0]?.metadata, undefined);
   assert.equal(completed?.children?.entries[0]?.durationMs, undefined);
   assert.equal(

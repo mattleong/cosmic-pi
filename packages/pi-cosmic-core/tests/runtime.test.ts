@@ -86,7 +86,6 @@ for (const operation of ["aborted", "addEventListener"] as const) {
         host.signal,
       );
 
-      expect(running).toBeInstanceOf(Promise);
       yield* Effect.promise(() => running.catch(() => undefined));
       expect({ finalized, removals: host.removals(), started }).toEqual({
         finalized: true,

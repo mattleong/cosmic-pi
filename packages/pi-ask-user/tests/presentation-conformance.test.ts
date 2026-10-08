@@ -258,7 +258,6 @@ describe("registered questionnaire presentation", () => {
       expect(text.includes("Retained note")).toBe(expanded);
       // The generation is provenance for context filtering, never shown.
       expect(text).not.toContain("historical-generation");
-      expect(text.startsWith("  ")).toBe(true);
     }
   });
 

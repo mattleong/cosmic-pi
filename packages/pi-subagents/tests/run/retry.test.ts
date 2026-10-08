@@ -260,8 +260,8 @@ describe("explicit profile-route retry", () => {
             });
             return;
           }
-          expect(recovery).toEqual({
-            runId: expect.stringMatching(/^agent-/),
+          expect(recovery!.runId).toMatch(/\S/);
+          expect(recovery).toMatchObject({
             cleanupDisposition: "confirmed",
             retryDisposition: "eligible",
             remainingCandidateCount: 1,

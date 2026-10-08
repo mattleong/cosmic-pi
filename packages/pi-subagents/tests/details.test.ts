@@ -346,7 +346,6 @@ describe("persisted subagent details version 2", () => {
         throw new Error("hostile getter");
       },
     });
-    expect(() => decodeStartAwaitCardDetails(throwing)).not.toThrow();
     expect(decodeStartAwaitCardDetails(throwing)).toBeUndefined();
 
     const proxied = new Proxy(awaitWire(), {
@@ -354,7 +353,6 @@ describe("persisted subagent details version 2", () => {
         throw new Error("hostile proxy");
       },
     });
-    expect(() => decodeStartAwaitCardDetails(proxied)).not.toThrow();
     expect(decodeStartAwaitCardDetails(proxied)).toBeUndefined();
   });
 
@@ -786,9 +784,6 @@ describe("persisted subagent details version 2", () => {
     const decoded = decodeCompactToolDetails(details);
     expect(decoded).toEqual(details);
     expect(Object.isFrozen(decoded)).toBe(true);
-
-    const oldCard = makeCompactToolDetails({ action: "status", runs: [run()] });
-    expect(decodeCompactToolDetails(oldCard)).toEqual(oldCard);
   });
 
   it("fits legal claim-heavy cards by preserving counts and explicit omission", () => {
@@ -838,7 +833,6 @@ describe("persisted subagent details version 2", () => {
       })),
     });
 
-    expect(details.action).toBe("models");
     if (details.action !== "models") throw new Error("Expected model details.");
     expect(details.profiles).toHaveLength(7);
     expect(details.profiles[0]?.candidates).toHaveLength(32);

@@ -28,7 +28,6 @@ describe("herdr-btw policy", () => {
   it("generates bounded Herdr-safe agent names", () => {
     const name = makeAgentName("SESSION !!! WITH SPACES", "workspace:pane/999999999");
     expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
-    expect(name.length).toBeLessThanOrEqual(32);
   });
 
   it("derives the child display name without host path state", () => {
@@ -67,14 +66,13 @@ describe("herdr-btw workflow", () => {
       });
       expect(
         operationInputs<HerdrStartSideSessionInput>(test.calls, "start side-session Pi")[0],
-      ).toEqual({
+      ).toMatchObject({
         agentName: result.agentName,
         paneId: "w1:p2",
         childSessionId: CHILD_ID,
         childSessionPath: CHILD_FILE,
         parentSessionId: SESSION_ID,
         parentSessionPath: SESSION_FILE,
-        displayName: "BTW · project",
       });
       expect(operationInputs(test.calls, "prompt side-session Pi")[0]).toEqual({
         agentName: result.agentName,

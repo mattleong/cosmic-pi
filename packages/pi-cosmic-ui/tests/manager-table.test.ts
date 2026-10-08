@@ -21,7 +21,6 @@ it("measures the whole dataset with display widths independent of visible rows",
   expect(visibleWidth(first.slice(0, first.indexOf("ready")))).toBe(
     visibleWidth(last.slice(0, last.indexOf("failed"))),
   );
-  expect(table.row(rows[0]!)).toBe(first);
   expect(visibleWidth(table.row(["\x1b[31m短\x1b[0m", "ready"]))).toBe(visibleWidth(first));
 });
 

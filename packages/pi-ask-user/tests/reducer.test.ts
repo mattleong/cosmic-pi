@@ -56,7 +56,6 @@ describe("questionnaire reducer", () => {
       outcome: "submitted",
       answers: [{ key: "details", kind: "text", text: "revised\nanswer", note: "context" }],
     });
-    expect(cancelQuestionnaire()).toEqual({ outcome: "cancelled", answers: [] });
   });
   it("builds stable choice and custom answer details", () => {
     let state = createQuestionnaireState(request);

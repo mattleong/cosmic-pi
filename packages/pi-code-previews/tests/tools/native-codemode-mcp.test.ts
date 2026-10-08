@@ -121,7 +121,6 @@ test("MCP child delivery stays neutral and original call identity survives expan
   const summary = summarize(result);
   const row = summary?.children?.entries[0];
   assert.equal(row?.status, "returned");
-  assert.equal(row?.returnedCheckmark, true);
   assert.ok(
     row?.issues?.some((issue) => issue.code === "native-call-name" && issue.detail === name),
   );

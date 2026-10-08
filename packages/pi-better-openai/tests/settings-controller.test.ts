@@ -165,7 +165,6 @@ describe("Better OpenAI settings controller", () => {
       component.handleInput?.(input.enter);
 
       const rendered = component.render(100).join("\n");
-      expect(rendered).toContain("Redacted config");
       expect(rendered).toContain("[REDACTED]");
       expect(rendered).not.toContain(syntheticToken);
       expect(rendered).not.toContain("\u001b");

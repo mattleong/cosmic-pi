@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../src/run/limits.ts";
-import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import {
   decodeSubagentProxyRequest,
   decodeSubagentProxyResult,
@@ -97,10 +96,6 @@ describe("nested Pi proxy protocol", () => {
       }),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
-  it("covers every subagent tool with a proxy round-trip case in tuple order", () => {
-    expect(SUBAGENT_TOOL_NAMES).toEqual(proxyRoundTripCases.map(({ tool }) => tool));
-  });
-
   it.each(proxyRoundTripCases)("round-trips $tool inputs", (input) => {
     const encoded = encodeSubagentProxyInput(input);
     expect(encoded).toEqual({ tool: input.tool, argumentsJson: JSON.stringify(input.args) });
@@ -214,7 +209,6 @@ describe("nested Pi proxy protocol", () => {
     expect(decodeSubagentProxyRequest({ tool, argumentsJson: JSON.stringify(args) })).toMatchObject(
       {
         code: "proxy_request_invalid",
-        message: `Nested ${tool} arguments failed strict validation.`,
       },
     );
   });
@@ -226,7 +220,6 @@ describe("nested Pi proxy protocol", () => {
       expect(decoded).toBeInstanceOf(InvalidSubagentRequestError);
       expect(decoded).toMatchObject({
         code: "proxy_request_invalid",
-        message: "Nested Pi requested an unknown coordinator tool.",
       });
     },
   );

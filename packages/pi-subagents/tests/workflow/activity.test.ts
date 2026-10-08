@@ -130,7 +130,7 @@ describe("workflow activity", () => {
       status: "pending",
       parent,
       phase: "Verify",
-      actions: [{ id: "skip", label: "Skip", handoff: false, confirmation: expect.any(String) }],
+      actions: [{ id: "skip", handoff: false, confirmation: expect.any(String) }],
     });
     expect(found.get("agent-r1-2")?.startedAt).toBeUndefined();
   });

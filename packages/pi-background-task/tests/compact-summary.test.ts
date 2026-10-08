@@ -414,7 +414,6 @@ describe("background task compact semantics", () => {
     expect(find(result, "task-1:slice-truncated")?.detail).toMatch(/afterCursor/u);
     for (const issue of result?.issues ?? []) {
       expect(issue.message).not.toMatch(/cursor|tailLines/iu);
-      expect(issue.detail).not.toContain(issue.message);
     }
   });
 

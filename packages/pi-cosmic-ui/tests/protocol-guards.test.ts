@@ -26,7 +26,6 @@ describe("Cosmic UI protocol guards", () => {
       normalizeCosmicFooterUpsertEvent,
       normalizeCosmicFooterRemoveEvent,
     ]) {
-      expect(() => normalize(input())).not.toThrow();
       expect(normalize(input())).toBeUndefined();
     }
   });

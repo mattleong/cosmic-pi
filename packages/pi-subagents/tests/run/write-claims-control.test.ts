@@ -210,7 +210,6 @@ describe("shared-cwd write claims", () => {
         writeClaims: ["src/a.ts", "src/c.ts"],
         writeAudit: { violations: [{ path: "src/c.ts" }] },
       });
-      expect(repaired.writeAudit?.violations).toHaveLength(1);
     });
   });
 

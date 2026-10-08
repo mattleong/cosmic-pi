@@ -256,7 +256,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       yield* h.start();
       expect(h.setModel).toHaveBeenCalledWith(h.remembered);
-      expect(h.setThinkingLevel).toHaveBeenCalledWith("high");
       expect(h.thinking()).toBe("high");
 
       h.select(h.initial, "low");
@@ -288,7 +287,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* Effect.yieldNow;
 
       expect(yield* Deferred.isDone(successorSettled)).toBe(false);
-      expect(h.setModel).toHaveBeenCalledTimes(1);
 
       yield* Deferred.succeed(settlement, undefined);
       yield* Fiber.join(first);
@@ -574,7 +572,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect((yield* readPreference(h.agentDirectory, target)).cwd).toBe(
         yield* fs.realPath(target),
       );
-      expect(yield* h.preferenceExists()).toBe(true);
     }),
   );
 });

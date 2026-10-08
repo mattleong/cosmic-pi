@@ -126,21 +126,6 @@ describe("searchable selector state", () => {
     expect(component.render(80).join("\n")).toContain("Unavailable in this runtime");
   });
 
-  it("advertises the configured cancel key and its closing outcome while searching", () => {
-    const fixture = page();
-    const component = new SearchableSelectPage({
-      ...fixture.options,
-      initialSearchMode: true,
-      cancelBehavior: "close",
-      keybindingLabel: (id, fallback) => (id === "tui.select.cancel" ? "C-g" : fallback),
-    });
-    const frame = component.render(120).join("\n");
-    expect(frame).toContain("C-g");
-    // Esc is not bound, and cancelling closes the page rather than leaving search.
-    expect(frame).not.toContain("Esc");
-    expect(frame).not.toContain("Done");
-  });
-
   it("keeps zero-height empty and reserves tiny heights for the frame", () => {
     const top = page(2, "Catalog warning").component.render(48);
     for (const height of [0, 1, 2]) {

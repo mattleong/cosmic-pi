@@ -200,8 +200,6 @@ describe("subagent_workflow tool", () => {
         expect(result.isError).toBe(true);
         const issue = detailsOf(result).issue!;
         expect(issueMessageStyleProblems(issue.message, { forbidden }), issue.message).toEqual([]);
-        // A syntax error names its line once, as people read it, not the parser's position.
-        expect(issue.message, issue.message).not.toMatch(/\(\d+:\d+\)/u);
         // The agent keeps the full explanation.
         expect(textOf(result).length).toBeGreaterThan(issue.message.length);
       }

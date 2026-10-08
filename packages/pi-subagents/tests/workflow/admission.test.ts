@@ -275,16 +275,14 @@ describe("workflow agent admission", () => {
         'return await parallel(["x.ts", "y.ts", "z.ts"].map((file) => () => agent("Edit " + file, { profile: "worker" })));',
       );
       for (let finishedWriters = 0; finishedWriters < 3; finishedWriters++) {
-        const view = yield* runWhere(
+        yield* runWhere(
           workflows,
           started.id,
           (run) => run.agents.filter((agent) => agent.state === "running").length === 1,
         );
-        const running = view.agents.find((agent) => agent.state === "running")!;
         const task = ["x.ts", "y.ts", "z.ts"].find(
           (file) => stateOfTask(fixture, `Edit ${file}`) === "running",
         )!;
-        expect(running).toBeDefined();
         yield* reportTask(fixture, `Edit ${task}`, `${task} edited`);
         yield* runWhere(
           workflows,

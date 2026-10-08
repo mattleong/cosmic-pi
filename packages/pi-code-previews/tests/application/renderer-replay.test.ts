@@ -247,28 +247,27 @@ it("cold and declined rows preserve independent downstream caches and live panel
   owner.retire();
 });
 
-for (const close of ["replacement", "shutdown"] as const)
-  it(`retired replay rows never adopt the ${close} owner's settings`, () => {
-    let owner = new CodePreviewPresentationOwner();
-    const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
-    const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
-    const old = hostRow(resolver("bash", () => downstream));
-    owner.retire();
-    owner = new CodePreviewPresentationOwner();
-    setPlainPreviewSettings({
-      toolCallCollapsedStyle: "compact",
-      toolCallBackground: "border",
-      tools: ["bash"],
-    });
-    owner.publish("/replacement", new Set(["bash"]), scheduler);
-    old.invalidate();
-    old.setExpanded(true);
-    assert.match(old.render(80).join("\n"), /NATIVE RESULT CONTENT/);
-    const fresh = hostRow(resolver("bash", () => downstream));
-    fresh.setExpanded(true);
-    assert.match(fresh.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
-    owner.retire();
+it("retired replay rows never adopt the replacement owner's settings", () => {
+  let owner = new CodePreviewPresentationOwner();
+  const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
+  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  const old = hostRow(resolver("bash", () => downstream));
+  owner.retire();
+  owner = new CodePreviewPresentationOwner();
+  setPlainPreviewSettings({
+    toolCallCollapsedStyle: "compact",
+    toolCallBackground: "border",
+    tools: ["bash"],
   });
+  owner.publish("/replacement", new Set(["bash"]), scheduler);
+  old.invalidate();
+  old.setExpanded(true);
+  assert.match(old.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+  const fresh = hostRow(resolver("bash", () => downstream));
+  fresh.setExpanded(true);
+  assert.match(fresh.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
+  owner.retire();
+});
 
 effectIt.effect(
   "factory replay stays native through pending and failed settings, then only new rows adopt replacement",

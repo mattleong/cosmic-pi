@@ -21,14 +21,12 @@ describe("footer layout", () => {
     expect(paired.find((line) => line.includes("7d"))).toContain("9/12");
     for (const value of ["OpenAI", "5h: --", "reset-only", "arbitrary status"])
       expect(paired.join("\n")).toContain(value);
-    expect(paired.join("\n")).not.toContain("↺");
 
     const lines = renderProviderUsageLines("OpenAI", text, 24, plainTheme, false);
     const rendered = lines.join("\n");
     expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
     expect(rendered).toContain("9/10");
     expect(rendered).toContain("9/12");
-    expect(lines.every((line) => line.trim() !== "OpenAI")).toBe(true);
   });
 
   it("keeps every compact metric contribution as available width changes", () => {

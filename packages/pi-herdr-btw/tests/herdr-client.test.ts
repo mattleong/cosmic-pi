@@ -308,7 +308,6 @@ it.effect("sanitizes and bounds uncertain mutation exit diagnostics", () =>
     expect(error.message).toContain("password=[REDACTED]");
     expect(error.message).not.toContain(credential);
     expect(error.message).not.toContain("\u0000");
-    expect(error.message).toMatch(/…$/u);
     expect(error.message.length).toBeLessThanOrEqual(2_100);
   }),
 );

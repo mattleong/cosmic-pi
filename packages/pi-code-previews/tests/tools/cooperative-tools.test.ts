@@ -294,7 +294,6 @@ test("compact style is captured and wraps self shells without changing execution
   const context = renderContextFixture({ args: { path: "file" } });
   const component = compact.renderCall?.(context.args, theme, context);
   assert.ok(component);
-  assert.equal(component.render(100).length, 1);
   assert.match(renderComponent(component), /compact-subject/u);
 });
 

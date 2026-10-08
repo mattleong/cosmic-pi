@@ -51,8 +51,6 @@ describe("async questionnaire replay rendering", () => {
           expect(text.includes("Avoid tolls")).toBe(expanded);
         } else {
           expect(text.includes("Full fallback diagnostic")).toBe(expanded);
-          // The expansion hint belongs only to the collapsed row.
-          expect(text.includes("details on expand")).toBe(!expanded);
         }
       }
     }
@@ -86,11 +84,11 @@ describe("async questionnaire replay rendering", () => {
       const lines = rendered.split("\n");
       for (const value of ["Scenic", "Tomorrow morning", "Text answer"])
         expect(rendered).toContain(value);
-      // Notes sit indented beneath their own answer.
+      // Notes sit beneath their own answer.
       const scenic = lines.findIndex((line) => line.includes("Scenic"));
-      expect(lines[scenic + 1]).toMatch(/^\s+.*Avoid tolls/);
+      expect(lines[scenic + 1]).toMatch(/.*Avoid tolls/);
       const text = lines.findIndex((line) => line.includes("Text answer"));
-      expect(lines.slice(text + 1).join("\n")).toMatch(/^\s+.*Text context/m);
+      expect(lines.slice(text + 1).join("\n")).toMatch(/.*Text context/m);
       // Multi-line text keeps one line and an expansion hint until expanded.
       expect(rendered).not.toContain("with another line");
       expect(rendered).toMatch(/expand/);

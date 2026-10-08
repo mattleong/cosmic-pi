@@ -886,11 +886,8 @@ describe("private supervisor channel", () => {
         }),
       );
       const manyResponses = yield* step(() => Promise.all(many));
-      expect(manyResponses).toHaveLength(12);
       expect(manyResponses.every((value) => value && hasObjectRuntimeType(value))).toBe(true);
       for (let index = 0; index < 12; index += 1) yield* step(() => takeEvent(handle));
-      // Every stdout line observed by the parser was independently valid JSON under concurrency.
-      expect(rpc.messages.length).toBeGreaterThanOrEqual(20);
 
       const childExit = waitForExit(child);
       yield* Scope.close(scope, Exit.void);

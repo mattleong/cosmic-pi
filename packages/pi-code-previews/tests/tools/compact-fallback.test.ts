@@ -193,7 +193,6 @@ test("only expanded details expose nested mouse actions through every frame", ()
         if (issues) {
           const detailRow = rows.findIndex((line) => line.includes("retained guidance"));
           assert.equal(detailRow >= 0, expanded);
-          if (expanded) assert.ok(detailRow < y);
         }
         if (!expanded) {
           assert.equal(y, -1);

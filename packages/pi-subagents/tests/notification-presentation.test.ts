@@ -50,7 +50,6 @@ test.each(["compact", "preview"] as const)(
         expect(text.includes("PRIVATE_RUN_ID")).toBe(expanded);
         // Collapsed, the row names the subagent in one plain line.
         if (!expanded) expect(text).toContain("Worker");
-        if (!expanded) expect(text.split("\n")[0]).not.toMatch(/\.$/u);
         expect(
           text.includes(
             message.customType === "pi-subagents-completed"

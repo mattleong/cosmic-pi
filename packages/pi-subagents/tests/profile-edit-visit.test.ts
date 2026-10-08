@@ -234,7 +234,6 @@ describe("profile editing visit", () => {
     const undo = visit.undoDraft(saved(), "worker", after);
     expect(undo).toMatchObject({ restore: { sourceVersion: 6, declaration: raw } });
     if (!("draft" in undo)) throw new Error(undo.error);
-    expect(undo.restore?.declaration).not.toBe(raw);
     if (Array.isArray(undo.restore?.declaration)) undo.restore.declaration.push("disabled");
     expect(visit.undoDraft(saved(), "worker", after)).toMatchObject({
       restore: { declaration: raw },

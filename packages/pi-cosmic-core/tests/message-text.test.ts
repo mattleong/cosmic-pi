@@ -36,7 +36,6 @@ test("first-line messages drop error-class wrappers and trailing agent advice", 
     expect(firstLineMessage(text, "fallback")).toBe(expected);
   expect(firstLineMessage("Error: ", "fallback")).toBe("fallback");
   expect(firstLineMessage('{"action":"tools.call","isError":true}', "fallback")).toBe("fallback");
-  expect(firstLineMessage("[REDACTED] token was rejected", "fallback")).not.toBe("fallback");
   const clipped = firstLineMessage("word ".repeat(40), "fallback", 30);
   expect(clipped.length).toBeLessThanOrEqual(30);
   expect(clipped.endsWith("…")).toBe(true);

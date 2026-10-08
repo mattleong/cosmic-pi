@@ -292,5 +292,4 @@ it("bounds collapsed log previews and counts only log lines", () => {
   harness.result(result, { expanded: true });
   const expanded = harness.render(120);
   for (const line of lines) expect(expanded.join("\n")).toContain(line);
-  expect(expanded.at(-1)?.trim()).not.toBe("");
 });

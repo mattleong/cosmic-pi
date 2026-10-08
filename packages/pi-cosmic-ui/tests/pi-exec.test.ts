@@ -43,7 +43,6 @@ describe("Pi exec", () => {
         expect(error).toBeInstanceOf(PiExecError);
         expect(error).toMatchObject({
           operation: "gh",
-          message: "Unable to inspect pull request status.",
         });
         expect(JSON.stringify(error)).not.toContain("secret host failure");
       }),

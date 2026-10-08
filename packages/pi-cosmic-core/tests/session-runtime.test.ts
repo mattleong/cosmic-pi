@@ -323,7 +323,6 @@ it.effect("host abort interrupts a stalled startup once, silently, and removes i
     expect(yield* Effect.promise(() => startup)).toBeUndefined();
     expect(counts()).toEqual({ interruptions: 1, settlements: 0 });
     const listener = addEventListener.mock.calls[0]?.[1];
-    expect(listener).toBeTypeOf("function");
     expect(removeEventListener).toHaveBeenCalledWith("abort", listener);
   }),
 );

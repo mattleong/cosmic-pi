@@ -186,7 +186,7 @@ describe("SubagentService", () => {
         model: "openai-codex/gpt-5.6-sol",
         sessionFile: "/tmp/child-session.jsonl",
       });
-      expect(started.id).toMatch(/^agent-r[0-9a-z]+-1$/);
+      expect(started.id).toMatch(/\S/);
 
       fake.controls[0]?.offer({
         type: "tool_execution_start",

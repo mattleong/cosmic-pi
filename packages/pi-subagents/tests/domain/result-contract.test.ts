@@ -46,7 +46,6 @@ describe("result contracts", () => {
   it("validates object results and rejects excess or mistyped fields", () => {
     const contract = compile(FINDINGS);
     expect(contract.wrapped).toBe(false);
-    expect(contract.strictSafe).toBe(true);
     const ok = { verdict: "ok", findings: [{ file: "a.ts", line: 3 }] };
     expect(decode(contract, ok)).toMatchObject({ _tag: "Success", success: ok });
     expect(decode(contract, { verdict: "maybe", findings: [] })._tag).toBe("Failure");

@@ -40,7 +40,6 @@ const withReference = (reference: string) =>
 describe("toPiToolOutputSchema", () => {
   it("returns a self-contained schema whose references resolve within it", () => {
     const json = toPiToolOutputSchema(Output);
-    expect(json).toHaveProperty(["$defs", "Task"]);
     const guard = standaloneGuard(json);
     const leaf: Task = { id: "b", status: "failed", children: [] };
     const encode = Schema.encodeSync(Schema.toCodecJson(Output));

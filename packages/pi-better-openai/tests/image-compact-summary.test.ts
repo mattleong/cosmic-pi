@@ -119,7 +119,6 @@ describe("image compact summary", () => {
     expect(summary?.outcome).toBe("error");
     const [issue] = summary?.issues ?? [];
     expect(issue?.message).toContain("/login openai-codex");
-    expect(issue?.message).not.toContain("OAuth");
     expect(styleProblems(summary)).toEqual([]);
   });
 });

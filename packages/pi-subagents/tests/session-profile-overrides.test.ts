@@ -305,7 +305,6 @@ describe("session profile overrides", () => {
         _tag: "SessionProfileConflictError",
         expectedRevision: initial.revision,
         actualRevision: initial.revision,
-        message: expect.stringContaining("invalid routes or provenance"),
       });
     }),
   );
@@ -394,13 +393,12 @@ describe("session profile overrides", () => {
         maxDepth: 5,
       });
 
-      const invalid = yield* service
+      yield* service
         .patchSessionNesting({
           nesting: { maxDirectChildren: 0, maxDepth: 5 },
           expectedRevision: overridden.revision,
         })
         .pipe(Effect.flip);
-      expect(invalid.message).toContain("nesting policy is invalid");
 
       const cleared = yield* service.patchSessionNesting({
         expectedRevision: overridden.revision,

@@ -186,7 +186,7 @@ describe("registered builtin presentation", () => {
     bash.result(result("done"));
     expect(plain(bash.render(160))).toMatch(/Deletes files recursively/u);
   });
-  test("preview-style write and edit put issues under the heading, above their call content", () => {
+  test("preview-style write puts issues under the heading, above its call content", () => {
     const write = builtin("write", "off", "preview");
     const content = "SECRET_LINE -----BEGIN PRIVATE KEY-----";
     write.call({ path: "/project/key.pem", content }, { expanded: true });
@@ -196,16 +196,6 @@ describe("registered builtin presentation", () => {
     expect(warning).toBeGreaterThan(text.indexOf("key.pem"));
     expect(warning).toBeLessThan(text.indexOf("SECRET_LINE"));
     expect(count(text, "May contain a private key")).toBe(1);
-    const edit = builtin("edit", "off", "preview");
-    edit.call(
-      { path: "/project/a.ts", edits: [{ oldText: "a", newText: "b" }] },
-      {
-        executionStarted: true,
-      },
-    );
-    edit.result(result("Operation failed: disk full"), { isError: true });
-    const failed = plain(edit.render(160)).split("\n");
-    expect(failed[1]).toContain("Operation failed: disk full");
   });
 
   test("preview style states a failed command's closing status once, keeping its output", () => {

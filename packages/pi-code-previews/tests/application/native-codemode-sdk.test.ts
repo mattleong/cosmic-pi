@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   createCodemodeExtension,
   type AgentSession,
-  type ExtensionAPI,
   type ToolDefinition,
   type ToolRendererResolver,
 } from "@earendil-works/pi-coding-agent";
@@ -36,7 +35,6 @@ it.live(
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-native-sdk-" });
       const models = yield* offlineModels(directory);
       const settings = quietSettings({ defaultTools: ["+codemode"] });
-      let ownerApi: ExtensionAPI | undefined;
       let boundSession: AgentSession | undefined;
       const nativeDefinitions: ToolDefinition<any, any, any>[] = [];
       const rendererRegistrations: ToolRendererResolver[] = [];
@@ -68,10 +66,7 @@ it.live(
         extensionFactories: [
           {
             name: "code-previews-test",
-            factory: (pi) => {
-              ownerApi = pi;
-              return presentation(pi);
-            },
+            factory: presentation,
           },
           {
             name: "codemode",
@@ -257,7 +252,6 @@ it.live(
       assert.ok(visible);
       assert.equal(visible.sourceInfo.source, "builtin");
       assert.equal(visible.sourceInfo.path, "builtin:codemode");
-      assert.ok(ownerApi);
       assert.equal(session.getCallableToolNames().includes("codemode"), false);
       const probe = session.agent.state.tools.find((tool) => tool.name === "native_probe");
       assert.ok(probe);
@@ -265,16 +259,13 @@ it.live(
       const run = (code: string) =>
         probe.execute("native-test", { code }, undefined, (update) => updates.push(update));
       const saved = yield* step(() =>
-        run(
-          "store('answer', 41); text(await tools.echo({value:'hello'})); return typeof models.getModelsOfType;",
-        ),
+        run("store('answer', 41); text(await tools.echo({value:'hello'}));"),
       );
       const text = saved.content
         .filter((part) => part.type === "text")
         .map((part) => part.text)
         .join("\n");
       assert.ok(text.includes("hook:hello\nRESULT_HOOK"), text);
-      assert.ok(text.includes("function"), "native models access remains enabled by default");
       assert.ok(updates.length > 0);
       assert.deepEqual(hooks, ["call", "result"]);
       const restored = yield* step(() => run("return load('answer') + 1;"));

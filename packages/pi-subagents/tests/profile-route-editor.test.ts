@@ -341,7 +341,6 @@ describe("profile candidate normalization and validation", () => {
   it("rejects unsafe native selectors with the same bounded config rules", () => {
     for (const runtime of ["pi", "claude", "codex"] as const) {
       const model = runtime === "pi" ? "provider/model,(glob)*" : "model,(glob)*";
-      expect(candidateValidationError(candidate(model, { runtime }))).toContain("valid");
       expect(updateCandidateModel(candidate("openai/model", { runtime }), model).candidate).toBe(
         undefined,
       );

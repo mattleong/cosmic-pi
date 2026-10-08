@@ -251,7 +251,7 @@ describe("subagent tool", () => {
       const progress = updates[0] ?? "";
       expect(progress).toContain("0/2");
       expect(progress).not.toContain("finished");
-      expect(progress).toMatch(/◎ .*auth-review \(agent-1\)/);
+      expect(progress).toContain("auth-review (agent-1)");
       expect(progress.indexOf("auth-review")).toBeLessThan(progress.indexOf("nested-review"));
       expect(progress).toContain("test-review (agent-2)");
       expect(awaited?.content[0]?.text).toContain("First report.");

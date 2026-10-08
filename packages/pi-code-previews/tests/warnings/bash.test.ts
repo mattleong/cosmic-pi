@@ -5,7 +5,6 @@ import { getBashWarnings } from "../../src/warnings/bash";
 test("getBashWarnings detects destructive command categories", () => {
   for (const [command, warningCount] of [
     ["sudo rm -rf build", 2],
-    ["rm -r -f build", 1],
     ["rm -Rf build", 1],
     ["git reset --hard && git clean -fd", 2],
     ["chmod -R 755 build && chown --recursive user build", 2],

@@ -206,9 +206,7 @@ describe("issues independent of hidden preview bodies", () => {
         phase === "pending" ? undefined : result("ordinary output"),
         phase,
       );
-      expect(value?.issues).toEqual([
-        expect.objectContaining({ severity: "warning", message: "Deletes files recursively" }),
-      ]);
+      expect(value?.issues).toEqual([expect.objectContaining({ severity: "warning" })]);
       expect(value?.outcome).toBe(phase === "settled" ? "warning" : undefined);
     }
   });

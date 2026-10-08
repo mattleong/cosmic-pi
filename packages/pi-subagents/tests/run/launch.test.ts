@@ -7,6 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import { MAX_RETAINED_RUNS } from "../../src/run/limits.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
+import { isSupervisorRunId } from "../../src/supervisor/protocol.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   completeLocalRun,
@@ -51,8 +52,8 @@ describe("SubagentService", () => {
         return { second, stale };
       });
 
-      expect(first.id).toMatch(/^agent-r[0-9a-z]+-1$/);
-      expect(result.second.id).toMatch(/^agent-r[0-9a-z]+-1$/);
+      expect(isSupervisorRunId(first.id)).toBe(true);
+      expect(isSupervisorRunId(result.second.id)).toBe(true);
       expect(result.second.id).not.toBe(first.id);
       expect(result.stale).toMatchObject({ _tag: "SubagentNotFoundError", id: first.id });
     }),

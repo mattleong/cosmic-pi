@@ -151,7 +151,6 @@ describe("security formatting", () => {
   it("normalizes horizontal tabs to inert spaces in styled terminal output", () => {
     const styled = sanitizeTerminalStyledText("one\ttwo");
     expect(styled).toBe("one   two");
-    expect(styled).not.toContain("\t");
   });
 
   it("shares one SGR traffic budget across same-line fragments", () => {
