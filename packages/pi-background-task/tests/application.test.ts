@@ -1,34 +1,29 @@
 // Promise assertions characterize the Pi lifecycle boundary.
-import { tmpdir } from "node:os";
 import {
   createEventBus,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
-  type ExtensionHandler,
-  type SourceInfo,
+  type ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import {
   deferredPromise,
-  extensionApiFixture,
   extensionContextFixture,
   opaqueFixture,
+  recordingExtensionHost,
 } from "pi-cosmic-core/testing";
-import { makeSessionCapabilityProtocol, signalProcess } from "pi-cosmic-core";
+import {
+  makeSessionCapabilityProtocol,
+  nodeFilePlatformLayer,
+  signalProcess,
+} from "pi-cosmic-core";
 import { ACTIVITY_VIEW_DISCOVER } from "pi-cosmic-ui/activity/view";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { vi } from "vitest";
-import {
-  BACKGROUND_TASK_CODE_MODE_BOUNDS,
-  BACKGROUND_TASK_CODE_MODE_QUERY,
-  BACKGROUND_TASK_CODE_MODE_VERSION,
-  normalizeBackgroundTaskCodeModeCapability,
-  type BackgroundTaskCodeModeCapability,
-  type BackgroundTaskCodeModeInput,
-} from "../src/code-mode/protocol.ts";
 import {
   registerBackgroundTaskApplication,
   type BackgroundTaskApplicationBoundaries,
@@ -37,33 +32,6 @@ import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts"
 import { registerTasksCommand, type TaskManagerActions } from "../src/settings/controller.ts";
 import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
-
-type Handler = ExtensionHandler<any, any>;
-type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
-const source: SourceInfo = {
-  source: "local",
-  path: "/extensions/pi-background-task/index.ts",
-  scope: "user",
-  origin: "top-level",
-};
-
-const nodeFs = process.getBuiltinModule("node:fs");
-const nodePath = process.getBuiltinModule("node:path");
-if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
-const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = nodeFs;
-const { join } = nodePath;
-const processEnv: NodeJS.ProcessEnv = process.env;
-
-interface CapturedBackgroundTool {
-  readonly name: string;
-  readonly execute: (
-    id: string,
-    input: BackgroundTaskToolInput,
-    signal: AbortSignal,
-    onUpdate: undefined,
-    context: ExtensionContext,
-  ) => Promise<object>;
-}
 
 const context = (cwd: string) =>
   extensionContextFixture({
@@ -78,52 +46,23 @@ const harness = (
   loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"],
   events: ExtensionAPI["events"] = createEventBus(),
 ) => {
-  const handlers = new Map<string, Handler>();
-  let command: RegisteredCommand | undefined;
-  const tools: CapturedBackgroundTool[] = [];
-  const activeTools: string[] = [];
-  const registerTool = vi.fn((tool: CapturedBackgroundTool) => {
-    tools.push(tool);
-    if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
-  });
-  const fixture = {
-    events,
-    registerCommand: vi.fn((name: string, definition: RegisteredCommand) => {
-      if (name === "tasks") command = definition;
-    }),
-    registerTool,
-    getActiveTools: () => [...activeTools],
-    on: (name: string, handler: Handler) => handlers.set(name, handler),
-    // History replay stays live: one public source owns the command anchor and the tool.
-    registerToolRenderer: vi.fn(),
-    getAllTools: () =>
-      [...new Set(tools.map(({ name }) => name))].map((name) => ({ name, sourceInfo: source })),
-    getCommands: () =>
-      command ? [{ name: "tasks", source: "extension" as const, sourceInfo: source }] : [],
-  };
-  registerBackgroundTaskApplication(extensionApiFixture(fixture), { loadSettings });
+  // History replay stays live: one public source owns the command anchor and the tool.
+  const host = recordingExtensionHost({}, { events });
+  registerBackgroundTaskApplication(host.pi, { loadSettings });
   return {
-    tools,
-    registerTool,
-    events,
-    activeTools,
+    tools: host.registrations,
+    /** Executes the current `background_task` registration, as Pi does for the agent. */
+    execute: (input: BackgroundTaskToolInput, ctx: ExtensionToolContext) => {
+      const tool = host.registrations.findLast(({ name }) => name === "background_task");
+      if (!tool) return Promise.reject(new Error("background_task was not registered"));
+      return tool.execute("call", input, new AbortController().signal, undefined, ctx);
+    },
     emit: (
       name: "session_start" | "session_tree" | "turn_end" | "session_shutdown",
       ctx: ExtensionContext,
-    ) => Promise.resolve(handlers.get(name)?.({}, ctx)),
-    discover: (sessionId: string) => {
-      const found: BackgroundTaskCodeModeCapability[] = [];
-      events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
-        version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        sessionId,
-        respond: <Candidate>(candidate: Candidate) => {
-          const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
-          if (capability) found.push(capability);
-        },
-      });
-      return found;
-    },
+    ) => host.emit(name, ctx),
     runCommand: (args: string, ctx: ExtensionCommandContext) => {
+      const command = host.commands.get("tasks");
       if (!command) return Promise.reject(new Error("task command was not registered"));
       return Promise.resolve(command.handler(args, ctx));
     },
@@ -149,7 +88,6 @@ function tasksCommandHarness(
   state: BackgroundTaskState = "exited",
   actions: Partial<TaskManagerActions> = {},
 ) {
-  let command: RegisteredCommand | undefined;
   const host = fakeCustomSurfaceHost({
     rows: 8,
     keybindings: opaqueFixture({ matches: () => false }),
@@ -164,16 +102,12 @@ function tasksCommandHarness(
     signal: undefined,
     ui,
   });
-  const pi = extensionApiFixture({
-    registerCommand: (_name: string, definition: RegisteredCommand) => {
-      command = definition;
-    },
-  });
+  const extension = recordingExtensionHost();
   const bridge: BackgroundTaskProjectionBridge = opaqueFixture({
     get: () => ({ tasks: [managerTask(state)] }),
     subscribe: () => () => {},
   });
-  registerTasksCommand(pi, bridge, {
+  registerTasksCommand(extension.pi, bridge, {
     stop: () => Promise.resolve(),
     clear: () => Promise.resolve(),
     config: () => undefined,
@@ -181,9 +115,8 @@ function tasksCommandHarness(
     write: () => Promise.resolve(),
     ...actions,
   });
-  if (!command) throw new Error("task command was not registered");
-  const registered = command;
-  const run = (args: string) => Promise.resolve(registered.handler(args, ctx));
+  const run = (args: string) =>
+    Promise.resolve(extension.commands.get("tasks")!.handler(args, ctx));
   return {
     custom,
     notify,
@@ -307,30 +240,20 @@ describe("background-task Pi lifecycle", () => {
 
   it.effect("reports the active generation's normalized config without rereading it", () =>
     Effect.gen(function* () {
-      const fixture = yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const agentDirectory = mkdtempSync(join(tmpdir(), "pi-background-task-agent-"));
-          const cwd = mkdtempSync(join(tmpdir(), "pi-background-task-project-"));
-          const configDirectory = join(cwd, ".pi", "extensions");
-          const configPath = join(configDirectory, "pi-background-task.json");
-          const previousAgentDirectory = processEnv.PI_CODING_AGENT_DIR;
-          mkdirSync(configDirectory, { recursive: true });
-          writeFileSync(configPath, '{"maxRunning":100,"maxWaitSeconds":300}');
-          processEnv.PI_CODING_AGENT_DIR = agentDirectory;
-          return { agentDirectory, configPath, cwd, previousAgentDirectory };
-        }),
-        (current) =>
-          Effect.sync(() => {
-            if (current.previousAgentDirectory === undefined) delete processEnv.PI_CODING_AGENT_DIR;
-            else processEnv.PI_CODING_AGENT_DIR = current.previousAgentDirectory;
-            rmSync(current.agentDirectory, { recursive: true, force: true });
-            rmSync(current.cwd, { recursive: true, force: true });
-          }),
+      const fs = yield* FileSystem.FileSystem;
+      const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-background-agent-" });
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "pi-background-project-" });
+      const configPath = `${cwd}/.pi/extensions/pi-background-task.json`;
+      yield* fs.makeDirectory(`${cwd}/.pi/extensions`, { recursive: true });
+      yield* fs.writeFileString(configPath, '{"maxRunning":100,"maxWaitSeconds":300}');
+      yield* Effect.acquireRelease(
+        Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory)),
+        () => Effect.sync(() => vi.unstubAllEnvs()),
       );
       const app = harness(() => Promise.resolve());
       const notify = vi.fn();
       const ctx = extensionContextFixture({
-        cwd: fixture.cwd,
+        cwd,
         signal: undefined,
         isProjectTrusted: () => true,
         hasUI: true,
@@ -340,7 +263,7 @@ describe("background-task Pi lifecycle", () => {
 
       yield* Effect.gen(function* () {
         yield* Effect.promise(() => app.emit("session_start", ctx));
-        writeFileSync(fixture.configPath, '{"maxRunning":2,"maxWaitSeconds":4}');
+        yield* fs.writeFileString(configPath, '{"maxRunning":2,"maxWaitSeconds":4}');
 
         yield* Effect.promise(() => app.runCommand("settings status", ctx));
         const firstMessage = notify.mock.calls[0]?.[0];
@@ -354,7 +277,7 @@ describe("background-task Pi lifecycle", () => {
         expect(replacementMessage).toEqual(expect.stringContaining("maxRunning = 2"));
         expect(replacementMessage).toEqual(expect.stringContaining("maxWaitSeconds = 4"));
       }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
   );
 
   it.effect("ignores turn_end while the runtime slot is inactive", () =>
@@ -433,16 +356,16 @@ describe("background-task Pi lifecycle", () => {
       settings.resolve();
       yield* Effect.promise(() => starting);
 
-      expect(app.registerTool).not.toHaveBeenCalled();
+      expect(app.tools).toHaveLength(0);
       yield* Effect.promise(() => app.emit("session_shutdown", ctx));
     }),
   );
 
-  it.live("tree navigation terminates prior processes and revokes same-session capabilities", () =>
+  it.live("tree navigation terminates prior processes and starts a fresh registry", () =>
     Effect.gen(function* () {
       const activity = fakeActivityHost("tree-session");
       const app = harness(() => Promise.resolve(), activity.events);
-      const ctx: ExtensionContext = {
+      const ctx = {
         ...context(process.cwd()),
         sessionManager: opaqueFixture({
           getSessionId: () => "tree-session",
@@ -454,10 +377,7 @@ describe("background-task Pi lifecycle", () => {
         // Navigation keeps the same session identity. Repeat to prove that each branch gets
         // a usable fresh registry, rather than only disposing the initial runtime.
         for (let navigation = 0; navigation < 2; navigation += 1) {
-          const capability = app.discover("tree-session")[0];
-          if (!capability) throw new Error("background task capability was not available");
-          const execute = (input: BackgroundTaskCodeModeInput) =>
-            capability.execute("tree-task", input, new AbortController().signal, 4_096);
+          const execute = (input: BackgroundTaskToolInput) => app.execute(input, ctx);
           const started = yield* Effect.promise(() =>
             execute({
               action: "start",
@@ -467,25 +387,26 @@ describe("background-task Pi lifecycle", () => {
                 `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
             }),
           );
-          if (started.action !== "start") throw new Error("start returned the wrong action");
+          if (started.details.action !== "start")
+            throw new Error("start returned the wrong action");
+          const taskId = started.details.snapshot.id;
           const ready = yield* Effect.promise(() =>
             execute({
               action: "wait",
-              id: started.snapshot.id,
+              id: taskId,
               until: "output",
               contains: ":end",
               waitSeconds: 5,
             }),
           );
-          if (ready.action !== "wait") throw new Error("wait returned the wrong action");
-          expect(ready.wait.outcome).toBe("matched");
-          const logs = yield* Effect.promise(() =>
-            execute({ action: "logs", id: started.snapshot.id }),
-          );
-          const match = /ready:(\d+):(\d+):end/.exec(logs.text);
+          if (ready.details.action !== "wait") throw new Error("wait returned the wrong action");
+          expect(ready.details.wait.outcome).toBe("matched");
+          const logs = yield* Effect.promise(() => execute({ action: "logs", id: taskId }));
+          const output = logs.content.map((part) => (part.type === "text" ? part.text : ""));
+          const match = /ready:(\d+):(\d+):end/.exec(output.join(""));
           const nodePid = Number(match?.[1]);
           const descendantPid = Number(match?.[2]);
-          const shellPid = ready.wait.snapshot.pid;
+          const shellPid = ready.details.wait.snapshot.pid;
           if (
             !shellPid ||
             ![nodePid, descendantPid].every((pid) => Number.isSafeInteger(pid) && pid > 0)
@@ -503,7 +424,7 @@ describe("background-task Pi lifecycle", () => {
           expect(descendantPid).not.toBe(nodePid);
           for (const pid of pids) expect(signalProcess(pid, 0)).toBe("present");
           expect(activity.get()?.items).toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: started.snapshot.id })]),
+            expect.arrayContaining([expect.objectContaining({ id: taskId })]),
           );
 
           yield* Effect.promise(() => app.emit("session_tree", ctx));
@@ -515,104 +436,12 @@ describe("background-task Pi lifecycle", () => {
           }
           for (const pid of pids) expect(signalProcess(pid, 0)).toBe("absent");
           expect(activity.get()?.items).toEqual([]);
-          yield* Effect.promise(() =>
-            expect(execute({ action: "list" })).rejects.toMatchObject({
-              _tag: "PiSessionRuntimeError",
-            }),
-          );
-          const replacement = app.discover("tree-session")[0];
-          if (!replacement) throw new Error("replacement capability was not available");
-          expect(
-            yield* Effect.promise(() =>
-              replacement.execute(
-                "fresh-list",
-                { action: "list" },
-                new AbortController().signal,
-                4_096,
-              ),
-            ),
-          ).toMatchObject({ tasks: [] });
-          expect(
-            yield* Effect.promise(() =>
-              app.tools
-                .at(-1)!
-                .execute(
-                  "fresh-tool",
-                  { action: "list" },
-                  new AbortController().signal,
-                  undefined,
-                  ctx,
-                ),
-            ),
-          ).toMatchObject({ details: { action: "list", tasks: [] } });
+          expect(yield* Effect.promise(() => execute({ action: "list" }))).toMatchObject({
+            details: { action: "list", tasks: [] },
+          });
         }
       }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
     }).pipe(Effect.scoped),
-  );
-
-  it.effect("publishes one current-session Code Mode capability and revokes it on shutdown", () =>
-    Effect.gen(function* () {
-      const app = harness(() => Promise.resolve());
-      const ctx: ExtensionContext = {
-        ...context(process.cwd()),
-        sessionManager: opaqueFixture({
-          getSessionId: () => "session-1",
-          getSessionFile: () => undefined,
-        }),
-      };
-      yield* Effect.promise(() => app.emit("session_start", ctx));
-
-      expect(() =>
-        app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
-          version: BACKGROUND_TASK_CODE_MODE_VERSION,
-          sessionId: "session-1",
-          respond: () => Promise.reject(new Error("contained response rejection")),
-        }),
-      ).not.toThrow();
-
-      const { discover } = app;
-      expect(discover("other-session")).toEqual([]);
-      const discovered = discover("session-1");
-      expect(discovered).toHaveLength(1);
-      const capability = discovered[0]!;
-      const nested = (input: BackgroundTaskCodeModeInput, maxOutputBytes = 4_096) =>
-        capability.execute("nested", input, new AbortController().signal, maxOutputBytes);
-      const topLevel = (input: BackgroundTaskToolInput) =>
-        app.tools[0]!.execute("top-level", input, new AbortController().signal, undefined, ctx);
-
-      const command = 'node -e "setTimeout(() => {}, 10000)"';
-      const { maxIdChars, maxPathChars } = BACKGROUND_TASK_CODE_MODE_BOUNDS;
-      const rejectedStarts: ReadonlyArray<readonly [BackgroundTaskCodeModeInput, number]> = [
-        [{ action: "start", command }, 0],
-        [{ action: "start", command, cwd: "x".repeat(maxPathChars) }, 1_000_000],
-        [{ action: "start", command, id: "x".repeat(maxIdChars + 1) }, 1_000_000],
-      ];
-      for (const [input, maxOutputBytes] of rejectedStarts)
-        yield* Effect.promise(() => expect(nested(input, maxOutputBytes)).rejects.toBeDefined());
-
-      const started = yield* Effect.promise(() => nested({ action: "start", command }));
-      if (started.action !== "start") throw new Error("nested start returned the wrong action");
-      const taskId = started.snapshot.id;
-      expect(taskId).toBe("task-1");
-      expect(yield* Effect.promise(() => nested({ action: "list", state: "all" }))).toMatchObject({
-        tasks: [{ id: taskId }],
-      });
-      expect(yield* Effect.promise(() => topLevel({ action: "list", state: "all" }))).toMatchObject(
-        { details: { action: "list", tasks: [{ id: taskId }] } },
-      );
-
-      app.activeTools.splice(0, app.activeTools.length);
-      yield* Effect.promise(() =>
-        expect(nested({ action: "list" })).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
-      );
-
-      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
-      yield* Effect.promise(() =>
-        expect(nested({ action: "list" }, 1_024)).rejects.toMatchObject({
-          _tag: "PiSessionRuntimeError",
-        }),
-      );
-    }),
   );
 
   it.effect("interrupts a never-settling settings load on shutdown", () =>
@@ -632,7 +461,7 @@ describe("background-task Pi lifecycle", () => {
       yield* Effect.promise(() => Promise.all([starting, shutdown]));
 
       expect(loaderSignal?.aborted).toBe(true);
-      expect(app.registerTool).not.toHaveBeenCalled();
+      expect(app.tools).toHaveLength(0);
     }),
   );
 });

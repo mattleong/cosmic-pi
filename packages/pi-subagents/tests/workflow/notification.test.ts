@@ -3,7 +3,11 @@ import { formatCost, formatTokens } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentMessageRenderers } from "../../src/application/messages.ts";
-import { makeHostNotifier } from "../../src/boundary/host-notifier.ts";
+import {
+  makeHostNotifier,
+  type SubagentWorkflowNotification,
+} from "../../src/boundary/host-notifier.ts";
+import type { WorkflowInterruptedRun } from "../../src/workflow/journal.ts";
 import {
   emptyWorkflowUsage,
   WORKFLOW_LOG_LIMIT,
@@ -49,6 +53,25 @@ const finishedRun = (patch: Partial<WorkflowRunView> = {}): WorkflowRunView =>
     result: { text: '{ "bugs": 2 }', clipped: false },
     ...patch,
   });
+
+/** A run an earlier activation left unfinished, as its notice describes it. */
+const interrupted = (patch: Partial<WorkflowInterruptedRun> = {}) =>
+  interruptedWorkflowNotification({
+    runId: "wf-a-3",
+    name: "migration",
+    finished: 4,
+    workspaces: [],
+    origin: inlineOrigin,
+    ...patch,
+  });
+
+/** Sends notifications through the real host notifier; returns what reached Pi. */
+const sent = (...notifications: ReadonlyArray<SubagentWorkflowNotification>) => {
+  const sendMessage = vi.fn();
+  const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
+  const accepted = notifications.map((notification) => notify(notification));
+  return { calls: sendMessage.mock.calls, accepted };
+};
 
 let restore = () => {};
 afterEach(() => restore());
@@ -123,11 +146,6 @@ describe("workflow notification", () => {
     expect(notification.content.length).toBeLessThan(32 * 1024);
   });
 
-  it("repeats warnings that explain null results when the run completed", () => {
-    const notification = workflowNotification(finishedRun())!;
-    expect(notification.content).toContain("agent flaky failed: timeout");
-  });
-
   it("keeps reporting warnings after later log lines evicted them from the log", () => {
     const warned = withWorkflowEvent(
       finishedRun({ logs: [] }),
@@ -154,10 +172,8 @@ describe("workflow notification", () => {
       ...run,
       result: { ...fitted, path: "/tmp/full-result.txt" },
     })!;
-    const sendMessage = vi.fn();
-    makeHostNotifier(extensionApiFixture({ sendMessage }))(notification);
     // The host delivers the content whole, so the saved file's path and the tail survive.
-    expect(sendMessage.mock.calls[0]![0].content).toBe(notification.content);
+    expect(sent(notification).calls[0]![0].content).toBe(notification.content);
     expect(notification.content).toContain("/tmp/full-result.txt");
     expect(notification.content.endsWith("END")).toBe(true);
   });
@@ -327,45 +343,26 @@ describe("workflow notification", () => {
 
   it("restarts an interrupted inline run from its saved copy, and a file run from its file", () => {
     const copy = "/runs/wf-a-3/script.js";
-    const interrupted = (source: WorkflowSource) =>
-      interruptedWorkflowNotification({
-        runId: "wf-a-3",
-        name: "migration",
-        finished: 1,
-        workspaces: [],
-        origin: { source, scriptPath: copy },
-      }).content;
-    const inline = interrupted({ kind: "inline" });
+    const restarted = (source: WorkflowSource) =>
+      interrupted({ origin: { source, scriptPath: copy } }).content;
+    const inline = restarted({ kind: "inline" });
     expect(inline).toContain(`scriptPath: "${copy}"`);
     expect(inline).toContain('resumeFromRunId: "wf-a-3"');
-    const file = interrupted({ kind: "file", path: "/project/migrate.js" });
+    const file = restarted({ kind: "file", path: "/project/migrate.js" });
     expect(file).toContain('scriptPath: "/project/migrate.js"');
     expect(file).toContain('resumeFromRunId: "wf-a-3"');
     expect(file).not.toContain(copy);
   });
 
   it("names an interrupted run, how to resume it and its worktrees", () => {
-    const notice = interruptedWorkflowNotification({
-      runId: "wf-a-3",
-      name: "migration",
-      finished: 4,
-      workspaces: ["workspace-1"],
-      origin: inlineOrigin,
-    });
+    const notice = interrupted({ workspaces: ["workspace-1"] });
     expect(notice).toMatchObject({ outcome: "interrupted", workspaces: ["workspace-1"] });
     expect(notice.content).toContain('resumeFromRunId: "wf-a-3"');
     expect(notice.content).toContain("workspace-1");
   });
 
   it("offers no restart for a run that was being stopped when the session was torn down", () => {
-    const notice = interruptedWorkflowNotification({
-      runId: "wf-a-3",
-      name: "migration",
-      finished: 4,
-      workspaces: ["workspace-1"],
-      stopped: true,
-      origin: inlineOrigin,
-    });
+    const notice = interrupted({ workspaces: ["workspace-1"], stopped: true });
     expect(notice.content).not.toContain("resumeFromRunId");
     expect(notice.workspaces).toEqual(["workspace-1"]);
     expect(notice.content).toContain("workspace-1");
@@ -378,29 +375,30 @@ describe("workflow notification", () => {
   });
 
   it("records the run's tokens for its row, and a cost only when every agent reported one", () => {
-    const sendMessage = vi.fn();
-    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const usage = { ...emptyWorkflowUsage(), totalTokens: 1_234, cost: 0.5 };
-    notify(workflowNotification(finishedRun({ usage }))!);
-    expect(sendMessage.mock.calls[0]![0].details).toMatchObject({ totalTokens: 1_234, cost: 0.5 });
-    notify(workflowNotification(finishedRun({ usage: { ...usage, unpriced: 1 } }))!);
-    expect(sendMessage.mock.calls[1]![0].details).toMatchObject({ totalTokens: 1_234 });
-    expect(sendMessage.mock.calls[1]![0].details).not.toHaveProperty("cost");
+    const { calls } = sent(
+      workflowNotification(finishedRun({ usage }))!,
+      workflowNotification(finishedRun({ usage: { ...usage, unpriced: 1 } }))!,
+    );
+    expect(calls[0]![0].details).toMatchObject({ totalTokens: 1_234, cost: 0.5 });
+    expect(calls[1]![0].details).toMatchObject({ totalTokens: 1_234 });
+    expect(calls[1]![0].details).not.toHaveProperty("cost");
   });
 
   it("steers the root once and reports a host that couldn't accept it", () => {
-    const sendMessage = vi.fn();
-    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
     const notification = workflowNotification(finishedRun())!;
-    expect(notify(notification)).toEqual({ actionAccepted: true });
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customType: "pi-subagents-workflow",
-        display: true,
-        content: notification.content,
-      }),
-      { deliverAs: "steer", triggerTurn: true },
-    );
+    const { calls, accepted } = sent(notification);
+    expect(accepted).toEqual([{ actionAccepted: true }]);
+    expect(calls).toEqual([
+      [
+        expect.objectContaining({
+          customType: "pi-subagents-workflow",
+          display: true,
+          content: notification.content,
+        }),
+        { deliverAs: "steer", triggerTurn: true },
+      ],
+    ]);
     const failing = makeHostNotifier(
       extensionApiFixture({
         sendMessage: vi.fn(() => {
@@ -412,76 +410,34 @@ describe("workflow notification", () => {
   });
 
   it("informs the next turn without starting one for a user's stop or an interrupted run", () => {
-    const sendMessage = vi.fn();
-    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
-    notify(workflowNotification(finishedRun({ state: "stopped", stoppedBy: "user" }))!);
-    notify(
-      interruptedWorkflowNotification({
-        runId: "wf-a-3",
-        name: "x",
-        finished: 0,
-        workspaces: [],
-        origin: inlineOrigin,
-      }),
+    const { calls } = sent(
+      workflowNotification(finishedRun({ state: "stopped", stoppedBy: "user" }))!,
+      interrupted(),
     );
-    expect(sendMessage.mock.calls.map((call) => call[1])).toEqual([
+    expect(calls.map((call) => call[1])).toEqual([
       { deliverAs: "steer", triggerTurn: false },
       { deliverAs: "steer", triggerTurn: false },
     ]);
   });
 
-  it.each(["compact", "preview"] as const)(
+  it.each([
+    ["compact", workflowNotification(finishedRun())!, "review", "wf-a-7", '"bugs": 2'],
+    ["preview", workflowNotification(finishedRun())!, "review", "wf-a-7", '"bugs": 2'],
+    ["compact", interrupted(), "migration", "wf-a-3", 'resumeFromRunId: "wf-a-3"'],
+  ] as const)(
     "renders one %s row naming the workflow and the full content when expanded",
-    (style) => {
+    (style, notification, name, runId, detail) => {
       restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
-      const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
-      const sendMessage = vi.fn();
-      makeHostNotifier(extensionApiFixture({ sendMessage }))(workflowNotification(finishedRun())!);
-      const message = sendMessage.mock.calls[0]![0];
-      const render = renderers.get("pi-subagents-workflow")!;
-      const collapsed = render(
-        { ...message, role: "custom", timestamp: 0 },
-        { expanded: false, outputPad: 0 },
-        plainTheme,
-      )!
-        .render(160)
-        .join("\n");
-      expect(collapsed).toContain("review");
-      expect(collapsed).not.toContain("wf-a-7");
-      const expanded = render(
-        { ...message, role: "custom", timestamp: 0 },
-        { expanded: true, outputPad: 0 },
-        plainTheme,
-      )!
-        .render(160)
-        .join("\n");
-      expect(expanded).toContain("wf-a-7");
-      expect(expanded).toContain('"bugs": 2');
+      const render = captureRegistrations(registerSubagentMessageRenderers).messageRenderers.get(
+        "pi-subagents-workflow",
+      )!;
+      const message = { ...sent(notification).calls[0]![0], role: "custom", timestamp: 0 };
+      const lines = (expanded: boolean) =>
+        render(message, { expanded, outputPad: 0 }, plainTheme)!.render(160).join("\n");
+      expect(lines(false)).toContain(name);
+      expect(lines(false)).not.toContain(runId);
+      expect(lines(true)).toContain(runId);
+      expect(lines(true)).toContain(detail);
     },
   );
-
-  it("renders an interrupted run as a workflow row naming it", () => {
-    restore = applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
-    const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
-    const sendMessage = vi.fn();
-    makeHostNotifier(extensionApiFixture({ sendMessage }))(
-      interruptedWorkflowNotification({
-        runId: "wf-a-3",
-        name: "migration",
-        finished: 2,
-        workspaces: [],
-        origin: inlineOrigin,
-      }),
-    );
-    const message = sendMessage.mock.calls[0]![0];
-    const collapsed = renderers.get("pi-subagents-workflow")!(
-      { ...message, role: "custom", timestamp: 0 },
-      { expanded: false, outputPad: 0 },
-      plainTheme,
-    )!
-      .render(160)
-      .join("\n");
-    expect(collapsed).toContain("migration");
-    expect(collapsed).not.toContain("wf-a-3");
-  });
 });

@@ -1,4 +1,4 @@
-import { sanitizeTerminalLine, type JsonObject } from "pi-cosmic-core";
+import { invokeBestEffort, sanitizeTerminalLine, type JsonObject } from "pi-cosmic-core";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
@@ -13,8 +13,9 @@ import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import {
-  InvalidSubagentRequestError,
+  invalidRequest,
   subagentErrorCode,
+  type InvalidSubagentRequestError,
   type SubagentError,
 } from "../run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../run/model.ts";
@@ -52,18 +53,18 @@ const startSpecs = (
 ): Effect.Effect<ReadonlyArray<SubagentStartSpec>, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
     if (agents.length === 0 || agents.length > MAX_START_BATCH)
-      return yield* new InvalidSubagentRequestError({
-        code: "agent_count_invalid",
-        message: `subagent_start requires between 1 and ${MAX_START_BATCH} agents.`,
-      });
+      return yield* invalidRequest(
+        "agent_count_invalid",
+        `subagent_start requires between 1 and ${MAX_START_BATCH} agents.`,
+      );
     for (const agent of agents) {
       // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const disallowedField = firstDisallowedLaunchOverride(agent as Readonly<JsonObject>);
       if (disallowedField)
-        return yield* new InvalidSubagentRequestError({
-          code: "launch_override_not_allowed",
-          message: disallowedLaunchOverrideMessage(disallowedField),
-        });
+        return yield* invalidRequest(
+          "launch_override_not_allowed",
+          disallowedLaunchOverrideMessage(disallowedField),
+        );
     }
     return agents;
   });
@@ -82,10 +83,7 @@ const routeFields = (
   effort: source.effort,
   openaiFastMode: source.openaiFastMode,
   ...(selection?.candidateIndex !== undefined && { candidateIndex: selection.candidateIndex }),
-  ...(selection?.warning !== undefined &&
-    selection.warning.length > 0 && {
-      warning: selection.warning,
-    }),
+  ...(selection?.warning && { warning: selection.warning }),
 });
 
 const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute => ({
@@ -167,11 +165,10 @@ const admissionError = (
   readOnly: boolean,
 ): InvalidSubagentRequestError | undefined =>
   readOnly && request.writeIntent !== "read-only"
-    ? new InvalidSubagentRequestError({
-        code: "scripted_writer_not_supported",
-        message:
-          "Codemode scripts can only start read-only agents\n\nStart writers from the main agent directly or inside a subagent_workflow script.",
-      })
+    ? invalidRequest(
+        "scripted_writer_not_supported",
+        "Codemode scripts can only start read-only agents\n\nStart writers from the main agent directly or inside a subagent_workflow script.",
+      )
     : undefined;
 
 /** Runs the batch, publishing hostile-input-proof partial receipts in request order. */
@@ -192,32 +189,30 @@ export const executeStartBatch = (
     const profileService = yield* SubagentProfileService;
     const profileSnapshot = yield* profileService.capture;
     const partialOutcomes = new Map<number, SubagentStartOutcome>();
-    const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
-      partialOutcomes.set(outcome.index, outcome);
-      const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
-      const pendingEntries = specs.flatMap((spec, index) =>
-        partialOutcomes.has(index) ? [] : [`#${index + 1} ${entryName(spec, index)}`],
-      );
-      const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${pendingEntries.join(", ")})` : ""}.`;
-      return Effect.sync(() =>
-        input.onUpdate?.({
-          content: [{ type: "text", text: summary }],
-          details: makeStartDetails({
-            startEntries: startEntriesFor(specs, partialOutcomes),
-            ...(failures.length > 0 && { startFailures: failures }),
+    const publishOutcome = (outcome: SubagentStartOutcome) =>
+      Effect.sync(() => {
+        partialOutcomes.set(outcome.index, outcome);
+        const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
+        const pendingEntries = specs.flatMap((spec, index) =>
+          partialOutcomes.has(index) ? [] : [`#${index + 1} ${entryName(spec, index)}`],
+        );
+        const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${pendingEntries.join(", ")})` : ""}.`;
+        // A stale or failing progress renderer cannot change the launch outcomes.
+        invokeBestEffort(() =>
+          input.onUpdate?.({
+            content: [{ type: "text", text: summary }],
+            details: makeStartDetails({
+              startEntries: startEntriesFor(specs, partialOutcomes),
+              ...(failures.length > 0 && { startFailures: failures }),
+            }),
           }),
-        }),
-      ).pipe(
-        Effect.catchDefect(() => Effect.void),
-        Effect.asVoid,
-      );
-    };
+        );
+      });
     const resolveRequest = (spec: SubagentStartSpec) =>
       resolveProfileStart(input.pi, spec, input.ctx, input.environment, profileSnapshot).pipe(
         Effect.map((request) => ({
           ...request,
           nestingPolicy: profileSnapshot.effectiveConfig.nesting,
-          nestingPolicyRevision: profileSnapshot.revision,
         })),
       );
     const launchOne = (spec: SubagentStartSpec, index: number) =>
@@ -234,12 +229,13 @@ export const executeStartBatch = (
         Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
         Effect.tap(publishOutcome),
       );
-    const outcomes = yield* Effect.forEach(specs, launchOne, { concurrency: MAX_START_BATCH });
-    const { ordered, launched, failures } = settleStartOutcomes(outcomes);
+    // Every outcome passes through publishOutcome, so the published map is the final one.
+    yield* Effect.forEach(specs, launchOne, { concurrency: MAX_START_BATCH, discard: true });
+    const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
     return {
       runs: launched,
       startFailures: failures,
-      startEntries: startEntriesFor(specs, new Map(ordered.map((o) => [o.index, o]))),
+      startEntries: startEntriesFor(specs, partialOutcomes),
       startOutcomes: ordered,
     };
   });

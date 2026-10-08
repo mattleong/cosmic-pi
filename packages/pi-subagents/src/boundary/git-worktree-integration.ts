@@ -9,7 +9,6 @@ import {
 } from "./git-worktree-process.ts";
 import { createWorkspaceDirectory, publishWorkspaceFile } from "./git-worktree-publish.ts";
 import {
-  bytesEqual,
   readWorkspaceFile,
   type SnapshotEntry,
   type WorkspaceSnapshot,
@@ -33,7 +32,7 @@ const checkPreimage = (root: string, name: string, expected: SnapshotEntry | und
         expected &&
         (visible.mode !== expected.mode ||
           visible.permissions !== expected.permissions ||
-          !bytesEqual(visible.bytes, expected.bytes)))
+          Buffer.compare(visible.bytes, expected.bytes) !== 0))
     )
       return yield* workspaceFailure(
         "integrate",
@@ -101,7 +100,7 @@ export const publishWorkspace = (
     );
     const entries = yield* Effect.forEach(changed, (name) =>
       Effect.gen(function* () {
-        const token = yield* newWorkspaceId();
+        const token = yield* newWorkspaceId;
         const expected = previous.get(name),
           content = next.get(name);
         return {

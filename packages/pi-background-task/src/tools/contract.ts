@@ -10,6 +10,7 @@ import {
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
   stripTerminalControls,
+  utf8Suffix,
 } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
@@ -20,7 +21,6 @@ import {
   type BackgroundTaskStatus,
   type BackgroundTaskStatusWait,
 } from "../task/model.ts";
-import { utf8Tail } from "../task/utf8.ts";
 import {
   BACKGROUND_TASK_CONTRACT_ID,
   BACKGROUND_TASK_CONTRACT_VERSION,
@@ -54,7 +54,7 @@ const metadata = (value: string | undefined, maximum: number): string | undefine
 const isFinished = (state: BackgroundTaskState): boolean => !isActiveTaskState(state);
 
 /** One task's contract metadata, including the failure cause that persisted details omit. */
-export const projectTaskContract = (task: BackgroundTaskStatus): BackgroundTaskContractTask => {
+const projectTaskContract = (task: BackgroundTaskStatus): BackgroundTaskContractTask => {
   const name = metadata(task.name, BOUNDS.maxNameChars);
   const signal = metadata(task.signal, BOUNDS.maxSignalChars);
   const error = metadata(task.error, BOUNDS.maxErrorChars);
@@ -104,9 +104,9 @@ export const combinedLogOutput = (events: ReadonlyArray<BackgroundLogEvent>): st
  */
 export const logsContract = (
   slice: BackgroundLogSlice,
-  output: string = combinedLogOutput(slice.events),
+  output: string,
 ): BackgroundTaskLogsContract => {
-  const clipped = utf8Tail(output, MAX_CONTRACT_LOG_OUTPUT_BYTES).text;
+  const clipped = utf8Suffix(output, MAX_CONTRACT_LOG_OUTPUT_BYTES);
   return {
     ...envelope,
     action: "logs",

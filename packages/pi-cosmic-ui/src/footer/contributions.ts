@@ -24,9 +24,6 @@ export function alignSides(left: string, right: string, width: number): string {
 
 const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
   ["model", "accent"],
-  ["effort", "thinkingText"],
-  ["location", "accent"],
-  ["branch", "syntaxType"],
   ["pullRequest", "mdLink"],
   ["git", "syntaxOperator"],
   ["session", "customMessageLabel"],
@@ -35,7 +32,6 @@ const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
   ["metrics.cacheRead", "syntaxType"],
   ["metrics.cacheWrite", "syntaxType"],
   ["metrics.cost", "syntaxNumber"],
-  ["extensions", "mdLink"],
 ]);
 
 const TONE_COLORS = {
@@ -149,10 +145,9 @@ export function renderContributionLine(
   const left = visible.filter((entry) => entry.align !== "right");
   const right = visible.filter((entry) => entry.align === "right");
 
-  const rightBudget = width;
-  const fittedRight = fitContributions(right, rightBudget, compact);
+  const fittedRight = fitContributions(right, width, compact);
   const rightRaw = rawContributionLine(fittedRight, compact);
-  const clippedRight = clipToWidth(rightRaw, rightBudget, "");
+  const clippedRight = clipToWidth(rightRaw, width, "");
   const rightWidth = visibleWidth(clippedRight);
 
   const reservedGap = left.length > 0 && rightWidth > 0 ? 2 : 0;

@@ -1,4 +1,13 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import {
+  extensionContextFixture,
+  plainTheme,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
+import { expect, vi } from "vitest";
 import { resolveSubagentConfig } from "../../src/config/options.ts";
 import { decodeSubagentConfig } from "../../src/config/schema.ts";
 import type { ProfileId } from "../../src/profiles/model.ts";
@@ -8,7 +17,15 @@ import {
 } from "../../src/profiles/session-overrides.ts";
 import type { FleetManagerActions } from "../../src/settings/controller.ts";
 import type { ProfileSettingsInspection } from "../../src/settings/profile-route-editor.ts";
+import { SubagentFleetComponent } from "../../src/ui/fleet.ts";
+import { step } from "../support/effect-test.ts";
+import { mountingCustomUi } from "./pi-host.ts";
 import { declaredCandidate } from "./profiles.ts";
+
+/** Decodes a test document literal into the JSON object a store reads. */
+export const jsonObject = Schema.decodeUnknownSync(
+  Schema.Record(Schema.String, Schema.MutableJson),
+);
 
 /** Decodes and resolves Global and optional Project documents at fixed fake paths. */
 export const resolveTestConfig = <GlobalDocument, ProjectDocument>(
@@ -105,4 +122,42 @@ export const fleetManagerActionsFixture = (
     listNativeModels: unused,
     ...overrides,
   };
+};
+
+/** Opens a registered `/subagents` fleet in a mounted terminal, driven by keys. */
+export const openRegisteredFleet = function* (register: (pi: ExtensionAPI) => void, columns = 120) {
+  const { pi, commands } = recordingExtensionHost();
+  register(pi);
+  const overlays: Component[] = [];
+  const { custom } = mountingCustomUi(plainTheme, (created) => overlays.push(created), {
+    columns,
+    rows: 30,
+  });
+  const ctx = extensionContextFixture({
+    hasUI: true,
+    mode: "tui",
+    ui: { notify: vi.fn(), custom },
+  });
+  const running = commands.get("subagents")?.handler("", ctx) ?? Promise.resolve();
+  yield* step(() => vi.waitFor(() => expect(overlays).toHaveLength(1)));
+  const fleet = overlays[0];
+  if (!(fleet instanceof SubagentFleetComponent)) throw new Error("Expected the fleet.");
+  const press = (...keys: string[]) => {
+    for (const key of keys) {
+      fleet.handleInput(key);
+      fleet.render(columns);
+    }
+  };
+  /** Waits for the one in-flight action to settle into a final outcome. */
+  const settled = function* () {
+    yield* step(() =>
+      vi.waitFor(() => expect([undefined, "info"]).not.toContain(fleet.noticeKind)),
+    );
+    return fleet.noticeKind;
+  };
+  const close = function* () {
+    press("\u001b");
+    yield* step(() => running);
+  };
+  return { fleet, press, settled, close };
 };

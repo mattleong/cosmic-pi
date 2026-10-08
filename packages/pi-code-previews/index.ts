@@ -33,23 +33,7 @@ export {
 export { getCodePreviewToolIcon } from "./src/tools/presentation";
 
 /** Newline-joined text parts of a tool result's content. */
-export {
-  getTextContent,
-  getFallbackResultText,
-  getBoundedTextContent,
-} from "./src/tools/data/results";
-
-/** Safe plain-text and read-only animation helpers for cooperating renderers. */
-export { compactPlainText } from "./src/preview/compact-row";
-export { escapeControlChars } from "./src/shared/terminal-text";
-export { getCodePreviewAnimationFrame } from "./src/preview/tool-timing";
-
-/** Argument-only native resource targets shared by standalone and nested presentations. */
-export {
-  nativeMcpResourceAction,
-  nativeMcpResourceSubject,
-  type NativeMcpResourceTool,
-} from "./src/tools/native-mcp-resource-subject";
+export { getTextContent } from "./src/tools/data/results";
 
 /** Public settings types used by package authors integrating with pi-code-previews. */
 export type {
@@ -58,18 +42,11 @@ export type {
   ToolCallCollapsedStyle,
 } from "./src/config/schema";
 
-/** Argument-only builtin targets for compound/nested call previews. */
-export {
-  describeBuiltinCompactSubject,
-  type BuiltinCompactTool,
-} from "./src/tools/builtin-subject";
-
 /** One issue shape for every compact card: a human message plus expanded-only detail. */
 export {
   compactIssueSeverity,
   mergeCompactIssues,
   type CompactIssue,
-  type CompactIssueSeverity,
 } from "./src/tools/compact-issues";
 export {
   exitStatusMeaning,

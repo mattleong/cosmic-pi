@@ -6,9 +6,9 @@ import {
   type CompactSummaryProvider,
 } from "pi-code-previews";
 import { failureMessage } from "pi-cosmic-core";
+import { IMAGE_OUTPUT_FORMATS } from "../config/schema.ts";
 import {
   IMAGE_ACTIONS,
-  IMAGE_OUTPUT_FORMATS,
   isCodexImageDetails,
   type CodexImageDetails,
   type ToolParams,
@@ -34,11 +34,28 @@ export const imageRecord = <Value>(value: Value): CodexImageDetails | undefined 
 const savedFileName = (path: string | undefined): string =>
   path?.split(/[\\/]/u).pop()?.trim() ?? "";
 
-const warning = (code: string, message: string): CompactIssue => ({
-  severity: "warning",
-  code,
-  message,
+type StatusSummary = Pick<CompactSummary, "outcome" | "issues">;
+const uncertain = (code: string, message: string): StatusSummary => ({
+  outcome: "uncertain",
+  issues: [{ severity: "warning", code, message }],
 });
+const UNCONFIRMED_COMPLETION = uncertain(
+  "image-missing",
+  "Image generation finished, but no image is attached",
+);
+// A Map, so an arbitrary provider status can never match an inherited object key.
+const STATUS_SUMMARIES = new Map<string, StatusSummary>([
+  [
+    "failed",
+    {
+      outcome: "error",
+      issues: [{ severity: "error", code: "image-failed", message: "Image generation failed" }],
+    },
+  ],
+  ["cancelled", { outcome: "cancelled" }],
+  ["in_progress", uncertain("image-in_progress", "Image generation may still be running")],
+  ["incomplete", uncertain("image-incomplete", "Image generation did not finish")],
+]);
 
 export interface ImageSummaryOptions {
   /** Only an attached image confirms a completed generation. */
@@ -64,40 +81,12 @@ export function imageRecordSummary(
     subject: imagePromptSubject(options.prompt ?? record.prompt),
     ...(fileName !== "" && { metadata: [fileName] }),
   };
-  switch (record.status) {
-    case "completed":
-      return options.hasImage
-        ? { ...base, outcome: "success" }
-        : {
-            ...base,
-            outcome: "uncertain",
-            issues: [
-              warning("image-missing", "Image generation finished, but no image is attached"),
-            ],
-          };
-    case "failed":
-      return {
-        ...base,
-        outcome: "error",
-        issues: [{ severity: "error", code: "image-failed", message: "Image generation failed" }],
-      };
-    case "cancelled":
-      return { ...base, outcome: "cancelled" };
-    case "in_progress":
-      return {
-        ...base,
-        outcome: "uncertain",
-        issues: [warning("image-in_progress", "Image generation may still be running")],
-      };
-    case "incomplete":
-      return {
-        ...base,
-        outcome: "uncertain",
-        issues: [warning("image-incomplete", "Image generation did not finish")],
-      };
-    default:
-      return undefined;
-  }
+  if (record.status === "completed")
+    return options.hasImage
+      ? { ...base, outcome: "success" }
+      : { ...base, ...UNCONFIRMED_COMPLETION };
+  const known = STATUS_SUMMARIES.get(record.status);
+  return known && { ...base, ...known };
 }
 
 // Credential failures the user fixes by signing in; read from the first line only.

@@ -1,11 +1,6 @@
 // Lifecycle fixture models only public metadata and renderer resolution, never native execution.
 import assert from "node:assert/strict";
-import type {
-  ExtensionContext,
-  ToolInfo,
-  ToolRenderers,
-  ToolRendererResolver,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -13,9 +8,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import {
-  extensionApiFixture,
   extensionContextFixture,
   opaqueFixture,
+  recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import { animationSchedulerProbe, createToolPresentationHarness } from "../../testing";
@@ -73,19 +68,14 @@ const running = {
     calls: [{ id: "private/1", name: "read", args: '{"path":"a.ts"}', status: "running" }],
   },
 };
-type Handler = (event: Readonly<Record<never, never>>, ctx: ExtensionContext) => Promise<void>;
 function fixture(
   load: (attempt: number) => Effect.Effect<CodePreviewSettings> = () => Effect.succeed(preview),
 ) {
-  const handlers = new Map<string, Handler>();
-  const resolvers: ToolRendererResolver[] = [];
   const probe = animationSchedulerProbe();
   let active = ["codemode"];
   let visible: ToolInfo | undefined = info();
   let attempt = 0;
-  const pi = extensionApiFixture({
-    on: (name: string, handler: Handler) => handlers.set(name, handler),
-    registerToolRenderer: (resolver: ToolRendererResolver) => resolvers.push(resolver),
+  const host = recordingExtensionHost(undefined, {
     getAllTools: () => (visible ? [visible] : []),
     getActiveTools: () => [...active],
     getCommands: () => [],
@@ -101,7 +91,7 @@ function fixture(
     isProjectTrusted: () => true,
     ui: { notify() {} },
   });
-  const registered = codePreviewsWithDependencies(pi, {
+  const registered = codePreviewsWithDependencies(host.pi, {
     makeRuntime: (api) =>
       makePiManagedRuntime(
         api,
@@ -122,7 +112,7 @@ function fixture(
   return {
     probe,
     registered,
-    resolvers,
+    resolvers: host.toolRenderers,
     active: (value: string[]) => {
       active = value;
     },
@@ -130,15 +120,9 @@ function fixture(
     visible: (value: ToolInfo | undefined) => {
       visible = value;
     },
-    resolve: (name = "codemode", base = downstream) => {
-      const next = (index: number): ToolRenderers | undefined => {
-        const resolver = resolvers[index];
-        return resolver ? resolver(name, () => next(index + 1)) : base;
-      };
-      return next(0)!;
-    },
-    start: () => handlers.get("session_start")!({}, ctx),
-    shutdown: () => handlers.get("session_shutdown")!({}, ctx),
+    resolve: (name = "codemode", base = downstream) => host.resolve(name, base)!,
+    start: () => host.emit("session_start", ctx),
+    shutdown: () => host.emit("session_shutdown", ctx),
   };
 }
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));

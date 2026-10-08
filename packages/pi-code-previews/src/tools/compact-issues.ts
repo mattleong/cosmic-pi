@@ -15,7 +15,6 @@ export const CompactIssueSchema = Schema.Struct({
 });
 /** Presentation evidence only. Codes never grant execution or recovery authority. */
 export type CompactIssue = typeof CompactIssueSchema.Type;
-export type CompactIssueSeverity = CompactIssue["severity"];
 
 /** Merge repeated evidence in first-seen order. Details keep every distinct line. */
 export function mergeCompactIssues(

@@ -1,49 +1,26 @@
 // Pi rebuilds history before session_start; those same rows adopt the first activation.
-import {
-  initTheme,
-  ToolExecutionComponent,
-  type ExtensionAPI,
-  type ExtensionContext,
-  type ExtensionHandler,
-  type SourceInfo,
-  type ToolDefinition,
-  type ToolInfo,
-  type ToolRendererResolver,
-  type ToolRenderers,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import type { CodePreviewSettings } from "pi-code-previews";
-import { applyPresentationSettings } from "pi-code-previews/testing";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
-  deferredPromise,
-  extensionApiFixture,
-  extensionContextFixture,
-  opaqueFixture,
-  plainTheme,
-} from "pi-cosmic-core/testing";
-import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
-import { askUserWithDependencies } from "../src/application.ts";
+  applyPresentationSettings,
+  drawToolRow,
+  hostToolRow,
+  toolRowFrames,
+} from "pi-code-previews/testing";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
+import { afterEach, beforeAll, expect, vi } from "vitest";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import { formatAskUserOutcome } from "../src/questionnaire/format.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
-import { makeEventBus } from "./support/host.ts";
+import { startExtension, withoutRelayMarker, type MessageRenderer } from "./support/extension.ts";
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
-
-type Handler = ExtensionHandler<any, any>;
-type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 
 beforeAll(() => initTheme("dark", false));
 
 const restoreSettings = applyPresentationSettings({});
-const source: SourceInfo = {
-  source: "local",
-  path: "/extensions/pi-ask-user/index.ts",
-  scope: "user",
-  origin: "top-level",
-};
 const snapshot = {
   requestId: "request-1",
   deliveryId: "delivery-1",
@@ -116,14 +93,8 @@ const answerMessage: Parameters<MessageRenderer>[0] = {
 const drawAnswer = (render: MessageRenderer, message = answerMessage, expanded = false) =>
   render(message, { expanded, outputPad: 0 }, plainTheme)!.render(160).join("\n");
 
-beforeEach(() => {
-  vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
-  vi.stubEnv("PI_SUBAGENT_RUN_ID", undefined);
-});
-afterEach(() => {
-  restoreSettings();
-  vi.unstubAllEnvs();
-});
+withoutRelayMarker();
+afterEach(restoreSettings);
 
 const context = (mode: "tui" | "rpc" | "print") =>
   extensionContextFixture({
@@ -140,84 +111,19 @@ const loads = (settings: Partial<CodePreviewSettings>) => () => {
   return Promise.resolve();
 };
 
-const draw = (row: ToolExecutionComponent, expanded = false) => {
-  row.setExpanded(expanded);
-  row.invalidate();
-  return row.render(120).join("\n");
-};
-
-/** Actual factory callbacks over public metadata naming one source for command and tools. */
+/** Actual factory callbacks, with rows Pi rebuilds from history through the public resolvers. */
 const host = (load: () => Promise<void>) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-replay-" });
-    yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
-    const handlers = new Map<string, Handler>();
-    const commands = new Set<string>();
-    const resolvers: ToolRendererResolver[] = [];
-    const registered = new Map<string, ToolDefinition<any, any, any>>();
-    const messageRenderers = new Map<string, MessageRenderer>();
-    askUserWithDependencies(
-      extensionApiFixture({
-        events: makeEventBus(),
-        on: (name: string, handler: Handler) => {
-          handlers.set(name, handler);
-        },
-        registerCommand: (name: string) => {
-          commands.add(name);
-        },
-        registerMessageRenderer: (type: string, render: MessageRenderer) => {
-          messageRenderers.set(type, render);
-        },
-        registerToolRenderer: (resolver: ToolRendererResolver) => {
-          resolvers.push(resolver);
-        },
-        registerTool: (tool: ToolDefinition<any, any, any>) => {
-          registered.set(tool.name, tool);
-        },
-        getAllTools: (): ToolInfo[] =>
-          [...registered.values()].map(({ name, description, parameters }) => ({
-            name,
-            description,
-            parameters,
-            exposure: "direct",
-            sourceInfo: source,
-          })),
-        getCommands: () =>
-          [...commands].map((name) => ({
-            name,
-            description: name,
-            source: "extension" as const,
-            sourceInfo: source,
-          })),
-      }),
-      load,
-    );
-    // Pi consults resolvers, then the registered definition, which is absent before startup.
-    const resolve = (name: string, index = 0): ToolRenderers | undefined =>
-      index < resolvers.length
-        ? resolvers[index]!(name, () => resolve(name, index + 1))
-        : registered.get(name);
+    const extension = yield* startExtension(load);
     const row = (name: HistoryName) => {
       const { args, text, details } = history[name];
-      const component = new ToolExecutionComponent(
-        name,
-        `${name}-call`,
-        args,
-        { showImages: false },
-        resolve(name),
-        opaqueFixture({ requestRender() {} }),
-        "/project",
-      );
-      component.updateResult({ content: [{ type: "text", text }], details, isError: false });
-      return component;
+      return hostToolRow(name, args, extension.resolve(name), {
+        id: `${name}-call`,
+        result: { content: [{ type: "text", text }], details, isError: false },
+      });
     };
-    const emit = (name: string, ctx: ExtensionContext) =>
-      Promise.resolve(handlers.get(name)?.({}, ctx));
-    return { registered, messageRenderers, row, emit };
+    return { ...extension, row };
   });
-
-const frames = (row: ToolExecutionComponent) => [draw(row), draw(row, true)];
 
 layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
   it.effect("historical answers render before startup and observe later presentation policy", () =>
@@ -239,14 +145,14 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       expect(drawAnswer(render)).not.toContain("Staged rollout");
       expect(drawAnswer(render, answerMessage, true)).toContain("Staged rollout");
       expect(load).not.toHaveBeenCalled();
-      expect([...h.registered.keys()]).toEqual([]);
+      expect([...h.tools.keys()]).toEqual([]);
 
       applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
       expect(drawAnswer(render)).toContain("Staged rollout");
       const starting = h.emit("session_start", ctx);
       yield* Effect.promise(() => entered.promise);
       expect(drawAnswer(render)).toContain("Keep release reversible");
-      expect([...h.registered.keys()]).toEqual([]);
+      expect([...h.tools.keys()]).toEqual([]);
 
       ready.resolve();
       yield* Effect.promise(() => starting);
@@ -305,7 +211,7 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
           const fallback = drawAnswer(render, malformed, true);
           expect(fallback).toContain("Original note final line");
           expect(fallback).toContain("RAW_RECOVERY /tmp/answer-recovery.txt");
-          expect([...h.registered.keys()]).toEqual([]);
+          expect([...h.tools.keys()]).toEqual([]);
         }),
     );
 
@@ -327,53 +233,50 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
         yield* Effect.addFinalizer(() => Effect.promise(() => h.emit("session_shutdown", ctx)));
         const render = h.messageRenderers.get(ASYNC_MESSAGE_TYPE)!;
         expect(drawAnswer(render)).toContain("Keep release reversible");
-        expect([...h.registered.keys()]).toEqual([]);
+        expect([...h.tools.keys()]).toEqual([]);
         yield* Effect.promise(() => h.emit("session_start", ctx));
         expect(drawAnswer(render, answerMessage, true)).toContain("RAW_RECOVERY");
-        expect([...h.registered.keys()]).toEqual(mode === "print" && !relay ? [] : ["ask_user"]);
+        expect([...h.tools.keys()]).toEqual(mode === "print" && !relay ? [] : ["ask_user"]);
       }),
     );
 
-  for (const style of ["compact", "preview"] as const)
-    for (const mode of ["on", "off", "border"] as const)
-      it.effect(
-        `TUI history from before startup adopts each questionnaire tool (${style}/${mode})`,
-        () =>
-          Effect.gen(function* () {
-            const h = yield* host(
-              loads({
-                toolCallCollapsedStyle: style,
-                toolCallBackground: mode,
-                toolCallTiming: false,
-              }),
-            );
-            const rows = names.map((name) => ({ name, row: h.row(name) }));
-            const cold = rows.map(({ row }) => draw(row));
-            yield* Effect.promise(() => h.emit("session_start", context("tui")));
-            expect(new Set(h.registered.keys())).toEqual(new Set(names));
-            rows.forEach(({ name, row }, index) => {
-              expect(draw(row)).not.toBe(cold[index]);
-              // A row resolved after startup draws the registered tool's ordinary presentation.
-              expect(frames(row)).toEqual(frames(h.row(name)));
-              const expanded = draw(row, true);
-              for (const line of history[name].text.split("\n")) expect(expanded).toContain(line);
-            });
-            expect(draw(rows[0]!.row, true)).toContain(defaultQuestion.prompt);
-            expect(draw(rows[2]!.row, true)).toContain("request-1");
-            yield* Effect.promise(() => h.emit("session_shutdown", context("tui")));
-          }),
+  // Code Previews proves every appearance; this proves the questionnaire tools adopt one.
+  it.effect("TUI history from before startup adopts each questionnaire tool", () =>
+    Effect.gen(function* () {
+      const h = yield* host(
+        loads({
+          toolCallCollapsedStyle: "compact",
+          toolCallBackground: "border",
+          toolCallTiming: false,
+        }),
       );
+      const rows = names.map((name) => ({ name, row: h.row(name) }));
+      const cold = rows.map(({ row }) => drawToolRow(row));
+      yield* Effect.promise(() => h.emit("session_start", context("tui")));
+      expect(new Set(h.tools.keys())).toEqual(new Set(names));
+      rows.forEach(({ name, row }, index) => {
+        expect(drawToolRow(row)).not.toBe(cold[index]);
+        // A row resolved after startup draws the registered tool's ordinary presentation.
+        expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row(name)));
+        const expanded = drawToolRow(row, true);
+        for (const line of history[name].text.split("\n")) expect(expanded).toContain(line);
+      });
+      expect(drawToolRow(rows[0]!.row, true)).toContain(defaultQuestion.prompt);
+      expect(drawToolRow(rows[2]!.row, true)).toContain("request-1");
+      yield* Effect.promise(() => h.emit("session_shutdown", context("tui")));
+    }),
+  );
 
   it.effect("RPC history adopts only the registered blocking tool; async rows stay raw", () =>
     Effect.gen(function* () {
       const h = yield* host(loads({ toolCallCollapsedStyle: "compact", toolCallTiming: false }));
       const rows = names.map((name) => h.row(name));
-      const cold = rows.map(frames);
+      const cold = rows.map((row) => toolRowFrames(row));
       yield* Effect.promise(() => h.emit("session_start", context("rpc")));
-      expect([...h.registered.keys()]).toEqual(["ask_user"]);
-      expect(frames(rows[0]!)).toEqual(frames(h.row("ask_user")));
-      expect(frames(rows[0]!)).not.toEqual(cold[0]);
-      expect(rows.slice(1).map(frames)).toEqual(cold.slice(1));
+      expect([...h.tools.keys()]).toEqual(["ask_user"]);
+      expect(toolRowFrames(rows[0]!)).toEqual(toolRowFrames(h.row("ask_user")));
+      expect(toolRowFrames(rows[0]!)).not.toEqual(cold[0]);
+      expect(rows.slice(1).map((row) => toolRowFrames(row))).toEqual(cold.slice(1));
       yield* Effect.promise(() => h.emit("session_shutdown", context("rpc")));
     }),
   );
@@ -389,7 +292,7 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
           return Promise.race([]);
         });
         const row = h.row("ask_user");
-        const cold = frames(row);
+        const cold = toolRowFrames(row);
         if (failure === "no UI")
           yield* Effect.promise(() => h.emit("session_start", context("print")));
         else {
@@ -402,8 +305,8 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
         // Later activations register normally but cannot publish into closed history.
         yield* Effect.promise(() => h.emit("session_tree", context("tui")));
         yield* Effect.promise(() => h.emit("session_start", context("tui")));
-        expect(h.registered.has("ask_user")).toBe(true);
-        expect(frames(row)).toEqual(cold);
+        expect(h.tools.has("ask_user")).toBe(true);
+        expect(toolRowFrames(row)).toEqual(cold);
         yield* Effect.promise(() => h.emit("session_shutdown", context("tui")));
       }),
     );

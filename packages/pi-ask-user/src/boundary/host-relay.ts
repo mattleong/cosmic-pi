@@ -12,6 +12,7 @@ import {
 const hasRelayMarker = (environment: Readonly<NodeJS.ProcessEnv>): boolean =>
   environment.PI_SUBAGENT_CHILD === "1" && !!environment.PI_SUBAGENT_RUN_ID?.trim();
 export const requiresQuestionnaireRelay = (): boolean => hasRelayMarker(process.env);
+const relayFailure = (message: string) => new AskUserHostError({ operation: "relay", message });
 
 export const askAtQuestionnaireBoundary = (
   events: QuestionnaireEvents,
@@ -23,31 +24,20 @@ export const askAtQuestionnaireBoundary = (
     if (!relay)
       return requiresQuestionnaireRelay()
         ? Effect.fail(
-            new AskUserHostError({
-              operation: "relay",
-              message:
-                "The root questionnaire relay is unavailable. Do not fall back to a child-local dialog.",
-            }),
+            relayFailure(
+              "The root questionnaire relay is unavailable. Do not fall back to a child-local dialog.",
+            ),
           )
         : AskUserService.use((service) => service.ask(request));
     return Effect.tryPromise({
       try: (signal) => relay.ask(request, signal),
-      catch: () =>
-        new AskUserHostError({
-          operation: "relay",
-          message: "The root questionnaire relay failed or was revoked.",
-        }),
+      catch: () => relayFailure("The root questionnaire relay failed or was revoked."),
     }).pipe(
       Effect.flatMap((input) => {
         const outcome = decodeQuestionnaireOutcome(input);
         return outcome
           ? Effect.succeed(outcome)
-          : Effect.fail(
-              new AskUserHostError({
-                operation: "relay",
-                message: "The root questionnaire relay returned an invalid result.",
-              }),
-            );
+          : Effect.fail(relayFailure("The root questionnaire relay returned an invalid result."));
       }),
     );
   });

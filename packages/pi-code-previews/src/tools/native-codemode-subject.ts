@@ -1,19 +1,11 @@
 import * as Predicate from "effect/Predicate";
 import type { CompactChild } from "./compact-summary";
-import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
+import { describeBuiltinCompactSubject } from "./builtin-subject";
+import { getReadLineRange } from "./data/args";
 import type { NativeArgumentPreview } from "./native-codemode-args";
-import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-resource-subject";
+import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-identity";
+import { isCorePreviewName } from "./preview-admission";
 import { formatDisplayPath } from "pi-cosmic-core";
-
-const builtinNames: ReadonlySet<string> = new Set([
-  "bash",
-  "read",
-  "write",
-  "edit",
-  "grep",
-  "find",
-  "ls",
-]);
 
 /** Argument/name-only targets; never inspect results, foreign definitions, or provider state. */
 export function nativeCodemodeCallSubject(
@@ -45,13 +37,9 @@ export function nativeCodemodeCallSubject(
       action: resourceAction,
       subject: nativeMcpResourceSubject(name, text("server"), text("uri")),
     };
-  if (builtinNames.has(name)) {
-    if (preview.complete) {
-      // SAFETY: The name allowlist is exactly the shared projector's builtin union.
-      return {
-        subject: describeBuiltinCompactSubject(name as BuiltinCompactTool, preview.values, cwd),
-      };
-    }
+  if (isCorePreviewName(name)) {
+    if (preview.complete)
+      return { subject: describeBuiltinCompactSubject(name, preview.values, cwd) };
     if (name === "bash") return { subject: text("command") };
     const rawPath = text("path") || text("file_path");
     const path = rawPath ? formatDisplayPath(rawPath, cwd) : "";
@@ -59,22 +47,10 @@ export function nativeCodemodeCallSubject(
       const pattern = text("pattern");
       return { subject: pattern && path ? `${pattern} in ${path}` : pattern || path };
     }
-    if (name === "read" && path) {
-      const offset = preview.values.offset;
-      const limit = preview.values.limit;
-      if (Predicate.isNumber(offset) && Number.isSafeInteger(offset) && offset > 0) {
-        if (
-          Predicate.isNumber(limit) &&
-          Number.isSafeInteger(limit) &&
-          limit > 0 &&
-          limit - 1 <= Number.MAX_SAFE_INTEGER - offset
-        )
-          return { subject: `${path}:${offset}-${offset + limit - 1}` };
-        return { subject: `${path}:${offset}` };
-      }
-    }
+    const offset = preview.values.offset;
+    const ranged = name === "read" && Number.isSafeInteger(offset) && Number(offset) > 0;
     // No '.', '*', or start line is inferred from fields missing beyond the cut.
-    return { subject: path };
+    return { subject: path && ranged ? path + getReadLineRange(preview.values) : path };
   }
   if (name === "background_task") {
     const action = preview.partialFields.has("action") ? "" : text("action");
@@ -86,9 +62,7 @@ export function nativeCodemodeCallSubject(
         subject = `for "${text("contains")}"`;
     } else if (action === "list" && ["active", "completed"].includes(text("state")))
       subject = text("state");
-    const projected: Pick<CompactChild, "subject" | "action"> = { subject };
-    if (action) projected.action = action.replaceAll("_", " ");
-    return projected;
+    return action ? { subject, action: action.replaceAll("_", " ") } : { subject };
   }
   return { subject: "" };
 }

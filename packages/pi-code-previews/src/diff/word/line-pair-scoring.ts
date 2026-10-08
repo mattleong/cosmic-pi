@@ -16,36 +16,32 @@ const CHANGED_LINE_PAIR_AMBIGUITY_RATIO = 0.92;
 const HIGH_CONFIDENCE_CROSSING_PAIR_MARGIN = 0.12;
 const HIGH_CONFIDENCE_CROSSING_PAIR_RATIO = 0.85;
 
-export function competingChangedLineScoreAt(
-  removedLength: number,
-  addedLength: number,
+/** The best score either line of a pair reaches with another partner not yet used. */
+export type CompetingChangedLineScoreAt = (
   removedPosition: number,
   addedPosition: number,
-  scoreAt: ChangedLineScoreAt,
   usedRemoved?: ReadonlySet<number>,
   usedAdded?: ReadonlySet<number>,
-): number {
-  let competingScore = 0;
-  for (
-    let candidateAddedPosition = 0;
-    candidateAddedPosition < addedLength;
-    candidateAddedPosition++
-  ) {
-    if (candidateAddedPosition === addedPosition || usedAdded?.has(candidateAddedPosition))
-      continue;
-    competingScore = Math.max(competingScore, scoreAt(removedPosition, candidateAddedPosition));
-  }
-  for (
-    let candidateRemovedPosition = 0;
-    candidateRemovedPosition < removedLength;
-    candidateRemovedPosition++
-  ) {
-    if (candidateRemovedPosition === removedPosition || usedRemoved?.has(candidateRemovedPosition))
-      continue;
-    competingScore = Math.max(competingScore, scoreAt(candidateRemovedPosition, addedPosition));
-  }
-  return competingScore;
-}
+) => number;
+
+export const competingChangedLineScores =
+  (
+    removedLength: number,
+    addedLength: number,
+    scoreAt: ChangedLineScoreAt,
+  ): CompetingChangedLineScoreAt =>
+  (removedPosition, addedPosition, usedRemoved, usedAdded) => {
+    let competingScore = 0;
+    for (let candidate = 0; candidate < addedLength; candidate++) {
+      if (candidate === addedPosition || usedAdded?.has(candidate)) continue;
+      competingScore = Math.max(competingScore, scoreAt(removedPosition, candidate));
+    }
+    for (let candidate = 0; candidate < removedLength; candidate++) {
+      if (candidate === removedPosition || usedRemoved?.has(candidate)) continue;
+      competingScore = Math.max(competingScore, scoreAt(candidate, addedPosition));
+    }
+    return competingScore;
+  };
 
 export function isAmbiguousChangedLinePairScore(score: number, competingScore: number): boolean {
   return (

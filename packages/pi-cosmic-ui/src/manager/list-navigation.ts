@@ -11,7 +11,7 @@ const MOVEMENT_OFFSETS = {
 };
 
 /** One-row and page motions that shift the selection by a signed offset. */
-export type MovementMotion = keyof typeof MOVEMENT_OFFSETS;
+type MovementMotion = keyof typeof MOVEMENT_OFFSETS;
 
 /** Motion keybindings shared by settings list pages; endpoint motions jump to the bounds. */
 export type ListMotion = MovementMotion | "first" | "last";

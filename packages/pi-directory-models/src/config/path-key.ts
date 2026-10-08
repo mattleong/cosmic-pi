@@ -14,10 +14,6 @@ function readableDirectorySlug(basename: string): string {
   return normalized || "directory";
 }
 
-function shortPathHash(canonicalCwd: string): string {
-  return sha256Text(canonicalCwd).slice(0, HASH_CHARS);
-}
-
 export function preferenceFilename(canonicalCwd: string, basename: string): string {
-  return `${readableDirectorySlug(basename)}--${shortPathHash(canonicalCwd)}.json`;
+  return `${readableDirectorySlug(basename)}--${sha256Text(canonicalCwd).slice(0, HASH_CHARS)}.json`;
 }

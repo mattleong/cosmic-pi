@@ -1,8 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
+import * as Queue from "effect/Queue";
+import { openOwnedSurface, type OwnedSurfaceError } from "pi-cosmic-ui/boundary/host-surface";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -11,77 +12,55 @@ import { captureExternalEditorCommand, editWithExternalEditor } from "./host-ext
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
-/** Admission beside `custom`. Its release frees the prompt gate, then the dialog's bridge token. */
-export const admitDialog =
-  (
-    bridge: AskUserDialogBridge,
-    token: () => number | undefined,
-    gate: AskUserPromptGate | undefined,
-    recheck: boolean,
-  ) =>
-  (): false | (() => void) => {
-    if (recheck && gate && !gate.canOpen()) return false;
-    const releasePrompt = gate?.enter();
-    return () => {
-      releasePrompt?.();
-      const owned = token();
-      if (owned !== undefined) bridge.clear(owned);
-    };
-  };
-
-const renderFailed = () =>
-  new AskUserHostError({
-    operation: "render",
-    message: "Couldn't show the questionnaire.",
-  });
-
+/**
+ * Lazily loads and opens the questionnaire dialog on the dock with host-owned hide/resume.
+ * Admission rechecks the prompt gate in the same synchronous call as `custom`; its release frees
+ * the gate, then the dialog's bridge token. Closing revokes hide/resume and external-editor
+ * authority before Pi's `done`. A queued opener first awaits the public prompt gate and retries a
+ * blocked admission.
+ * Every failure becomes one redacted render error.
+ */
 export const makeAskUserTuiHost =
-  (
-    ctx: ExtensionContext,
-    bridge: AskUserDialogBridge,
-    promptGate?: AskUserPromptGate,
-  ): AskUserHost =>
-  (request, opened, queued) =>
+  (ctx: ExtensionContext, bridge: AskUserDialogBridge, gate?: AskUserPromptGate): AskUserHost =>
+  (request, presence, queued) =>
     Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(
-      Effect.tap(() => (queued && promptGate ? promptGate.awaitOpen : Effect.void)),
-      Effect.flatMap(({ AskUserDialog }) =>
-        Effect.suspend(() => {
+      Effect.flatMap(({ AskUserDialog }) => {
+        // One opening attempt; a blocked admission builds a fresh one.
+        const open = Effect.suspend(() => {
           const authority = new AbortController();
-          let handle: OverlayHandle | undefined;
-          let bridgeToken: number | undefined;
           const editors = new Set<Promise<void>>();
-          const editExternally = (
-            tui: TUI,
-            command: string | undefined,
-            value: string,
-          ): Promise<string | undefined> => {
-            if (authority.signal.aborted) return Promise.resolve(undefined);
-            const editing = editWithExternalEditor(tui, command, value, authority.signal);
-            // Settlement includes the owned process, temporary files, and TUI restoration.
-            // Retain only nonrejecting joins; dialog consumers still receive live failures.
-            const settled = editing.then(
-              () => undefined,
-              () => undefined,
-            );
-            editors.add(settled);
-            void settled.then(() => editors.delete(settled));
-            return editing.then(
-              (result) => (authority.signal.aborted ? undefined : result),
-              (error) => {
-                if (!authority.signal.aborted) throw error;
-                return undefined;
-              },
-            );
+          let live = true;
+          let handle: OverlayHandle | undefined;
+          let token: number | undefined;
+          // Mounting and resuming report `open`; collapsing reports `hidden`.
+          const report = (visibility: "open" | "hidden") => {
+            if (!presence) return;
+            if (visibility === "open") Deferred.doneUnsafe(presence.opened, Effect.void);
+            Queue.offerUnsafe(presence.visibility, visibility);
           };
-
+          const show = (visibility: "open" | "hidden") => {
+            if (!live) return false;
+            handle?.setHidden(visibility === "hidden");
+            report(visibility);
+            return true;
+          };
           return openOwnedSurface<AskUserOutcome>(ctx, {
             placement: "dock",
             closedValue: cancelQuestionnaire(),
-            // Recheck after the lazy import, in the same synchronous call as custom().
-            admit: admitDialog(bridge, () => bridgeToken, promptGate, !!(opened || queued)),
-            onClose: () => authority.abort(),
+            admit: () => {
+              if (gate && !gate.canOpen()) return false;
+              const releasePrompt = gate?.enter();
+              return () => {
+                releasePrompt?.();
+                if (token !== undefined) bridge.clear(token);
+              };
+            },
+            onClose: () => {
+              live = false;
+              authority.abort();
+            },
             create: ({ tui, theme, keybindings, getHeight, finish }) => {
-              const editorCommand = captureExternalEditorCommand(ctx);
+              const command = captureExternalEditorCommand(ctx);
               const dialog = new AskUserDialog({
                 tui,
                 theme,
@@ -89,40 +68,60 @@ export const makeAskUserTuiHost =
                 request,
                 getHeight,
                 done: finish,
-                editExternally: (value) => editExternally(tui, editorCommand, value),
                 collapse: () => {
-                  handle?.setHidden(true);
-                  if (!authority.signal.aborted && bridgeToken !== undefined)
-                    bridge.markCollapsed(bridgeToken);
+                  if (show("hidden") && token !== undefined) bridge.markCollapsed(token);
+                },
+                editExternally: (value) => {
+                  if (authority.signal.aborted) return Promise.resolve(undefined);
+                  const editing = editWithExternalEditor(tui, command, value, authority.signal);
+                  // Settlement includes the owned process, temporary files, and TUI restoration.
+                  // Retain only nonrejecting joins; dialog consumers still receive live failures.
+                  const settled = editing.then(
+                    () => undefined,
+                    () => undefined,
+                  );
+                  editors.add(settled);
+                  void settled.then(() => editors.delete(settled));
+                  return editing.then(
+                    (result) => (authority.signal.aborted ? undefined : result),
+                    (error) => {
+                      if (!authority.signal.aborted) throw error;
+                      return undefined;
+                    },
+                  );
                 },
               });
-              bridgeToken = bridge.activate(() => {
-                if (authority.signal.aborted) return;
-                handle?.setHidden(false);
-                tui.requestRender(true);
+              token = bridge.activate(() => {
+                if (show("open")) tui.requestRender(true);
               });
               return dialog;
             },
             onMounted: (mounted) => {
               handle = mounted;
-              if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
-              if (opened) Deferred.doneUnsafe(opened, Effect.void);
+              if (token !== undefined) bridge.markOpened(token);
+              report("open");
             },
-          }).pipe(
             // Ordered finalization joins only admitted, owned editor cleanup, never
             // the arbitrary custom Promise. Closing revoked later admissions first.
-            Effect.ensuring(Effect.promise(() => Promise.all(editors))),
-            Effect.catch((error) =>
-              error.reason === "blocked" && queued && promptGate
-                ? promptGate.awaitOpen.pipe(
-                    Effect.andThen(
-                      makeAskUserTuiHost(ctx, bridge, promptGate)(request, opened, queued),
-                    ),
-                  )
-                : Effect.fail(renderFailed()),
-            ),
-          );
-        }),
+          }).pipe(Effect.ensuring(Effect.promise(() => Promise.all(editors))));
+        });
+        const retrying: Effect.Effect<AskUserOutcome, OwnedSurfaceError> = (
+          gate?.awaitOpen ?? Effect.void
+        ).pipe(
+          Effect.andThen(open),
+          // Only a closed prompt gate blocks admission, so a retry first waits for it to reopen.
+          Effect.catchIf(
+            (error) => error.reason === "blocked",
+            () => retrying,
+          ),
+        );
+        return queued ? retrying : open;
+      }),
+      Effect.mapError(
+        () =>
+          new AskUserHostError({
+            operation: "render",
+            message: "Couldn't show the questionnaire.",
+          }),
       ),
-      Effect.mapError(renderFailed),
     );

@@ -6,8 +6,6 @@ import {
   HerdrClient,
   type HerdrClientContract,
   type HerdrPane,
-  type HerdrSplitPaneInput,
-  type HerdrStartSideSessionInput,
 } from "../../src/boundary/herdr-client.ts";
 import type {
   HerdrBtwLinkRecord,
@@ -20,19 +18,12 @@ import type {
   SessionHeaderProbe,
 } from "../../src/boundary/session-file.ts";
 import type { HerdrBtwLink, HerdrBtwLinkRestoration } from "../../src/btw/link.ts";
-import { makeHerdrBtwService } from "../../src/btw/service.ts";
+import { HerdrBtwService } from "../../src/btw/service.ts";
 import { HerdrBtwError } from "../../src/btw/errors.ts";
-
-export type HerdrBtwClientCallInput =
-  | HerdrSplitPaneInput
-  | HerdrStartSideSessionInput
-  | Readonly<{ paneId: string }>
-  | Readonly<{ agentName: string; prompt: string }>
-  | Readonly<{ agentName: string }>;
 
 export interface HerdrBtwClientCall {
   readonly operation: string;
-  readonly input?: HerdrBtwClientCallInput;
+  readonly input?: unknown;
 }
 
 const MUTATING_OPERATIONS = new Set([
@@ -72,11 +63,13 @@ export const withShellReadiness = <A, E>(workflow: Effect.Effect<A, E>) =>
     return yield* Fiber.join(fiber);
   });
 
-const SESSION_FILE = "/sessions/parent.jsonl";
-const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
-const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
-const CHILD_FILE = "/sessions/child.jsonl";
-const CWD = "/project";
+export const SESSION_FILE = "/sessions/parent.jsonl";
+export const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
+export const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
+export const CHILD_FILE = "/sessions/child.jsonl";
+/** A lexical alias of CHILD_FILE; comparators decide whether it names the same file. */
+export const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
+export const CWD = "/project";
 
 /** Comparator for scenarios where one or two paths are lexically distinct aliases of one file. */
 export const aliasIdentity =
@@ -126,9 +119,9 @@ export interface HerdrBtwFixtureOptions {
  */
 export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   const calls: HerdrBtwClientCall[] = [];
-  const runEffect = <A>(
+  const runEffect = <A, Input>(
     operation: string,
-    input: HerdrBtwClientCallInput | undefined,
+    input: Input,
     effect: () => Effect.Effect<A, HerdrBtwError>,
   ): Effect.Effect<A, HerdrBtwError> =>
     Effect.suspend(() => {
@@ -137,7 +130,7 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
         ? Effect.fail(commandFailure(operation))
         : effect();
     });
-  const run = <A>(operation: string, input: HerdrBtwClientCallInput | undefined, result: () => A) =>
+  const run = <A, Input>(operation: string, input: Input, result: () => A) =>
     runEffect(operation, input, () => Effect.sync(result));
   const createdChildId = options.createdChildId ?? CHILD_ID;
   const createdChildFile = options.createdChildFile ?? CHILD_FILE;
@@ -219,7 +212,7 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
         });
         return options.holdStart === undefined
           ? started
-          : Effect.flatMap(Deferred.await(options.holdStart), () => started);
+          : Deferred.await(options.holdStart).pipe(Effect.andThen(started));
       }),
     promptSideSessionPi: (agentName, prompt) =>
       run("prompt side-session Pi", { agentName, prompt }, () => undefined),
@@ -280,7 +273,7 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
     createBlankChildSessionFile: () =>
       Effect.succeed({ _tag: "created" as const, path: createdChildFile }),
   };
-  const makeService = makeHerdrBtwService({ ...input, linkStore }, serviceOptions).pipe(
+  const makeService = HerdrBtwService.make({ ...input, linkStore }, serviceOptions).pipe(
     Effect.provideService(HerdrClient, client),
   );
   const open = (prompt?: string | undefined) =>

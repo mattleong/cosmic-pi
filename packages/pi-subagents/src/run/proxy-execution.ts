@@ -55,9 +55,9 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
         "Nested Pi coordinator access is unavailable for this run.",
       );
     const runKeyPrefix = `${record.view.id}:`;
-    let concurrent = 0;
-    for (const [candidateKey] of executions)
-      if (candidateKey.startsWith(runKeyPrefix)) concurrent += 1;
+    const concurrent = [...executions].filter(([candidateKey]) =>
+      candidateKey.startsWith(runKeyPrefix),
+    ).length;
     if (concurrent >= 16)
       return reject("proxy_capacity", "Nested Pi has too many concurrent coordinator calls.");
     if (FiberMap.hasUnsafe(executions, key))

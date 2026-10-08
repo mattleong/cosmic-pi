@@ -2,7 +2,7 @@
  * Style properties every collapsed issue message must satisfy. Checks properties, not copy:
  * producers keep their own wording, and this guards against machine text reaching people.
  */
-export interface IssueMessageStyleOptions {
+interface IssueMessageStyleOptions {
   /** Internal identifiers that must never appear, such as run or result IDs. */
   readonly forbidden?: readonly string[];
   /** Longest acceptable message. Pass-through content may use its own bound. */

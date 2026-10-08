@@ -6,7 +6,7 @@ import * as Stream from "effect/Stream";
 import type { BackendHandle } from "../backend/model.ts";
 import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import type { SubagentError } from "./errors.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "./errors.ts";
+import { invalidRequest, SubagentProcessError } from "./errors.ts";
 import type { RunEventHandler } from "./events.ts";
 import { isTerminalRunState } from "./model.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
@@ -101,13 +101,13 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
           }),
         );
         if (!spawnClaimed)
-          return yield* new InvalidSubagentRequestError({
-            code: "start_cancelled",
-            message: `Subagent ${record.view.id} was stopped before backend spawn.`,
-          });
-        return yield* Effect.suspend(() => record.driver.spawn(record.launch)).pipe(
-          Effect.provideService(Scope.Scope, scope),
-        );
+          return yield* invalidRequest(
+            "start_cancelled",
+            `Subagent ${record.view.id} was stopped before backend spawn.`,
+          );
+        return yield* record.driver
+          .spawn(record.launch)
+          .pipe(Effect.provideService(Scope.Scope, scope));
       }).pipe(
         Effect.ensuring(
           Effect.suspend(() =>
@@ -142,10 +142,10 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
         }),
       );
       if (!attached)
-        return yield* new InvalidSubagentRequestError({
-          code: "start_cancelled",
-          message: `Subagent ${record.view.id} was stopped during startup.`,
-        });
+        return yield* invalidRequest(
+          "start_cancelled",
+          `Subagent ${record.view.id} was stopped during startup.`,
+        );
       const isCurrentProcess = withLock(
         Effect.sync(() => record.scope === scope && record.process === process),
       );
@@ -164,7 +164,7 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
             Effect.ensuring(Effect.sync(() => process.acknowledge(event))),
           ),
         ),
-        Effect.catchCause(() => Effect.void),
+        Effect.ignoreCause,
         Effect.forkIn(scope, { startImmediately: true }),
       );
       yield* process.awaitExit.pipe(

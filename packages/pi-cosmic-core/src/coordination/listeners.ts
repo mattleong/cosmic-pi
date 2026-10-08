@@ -1,6 +1,3 @@
-import * as Effect from "effect/Effect";
-import { identity } from "effect/Function";
-import type * as Scope from "effect/Scope";
 import { invokeHostCallback } from "../host-session.ts";
 
 /**
@@ -15,16 +12,3 @@ export const notifyListeners = <Args extends ReadonlyArray<unknown>>(
     if (listeners.has(listener)) invokeHostCallback(() => listener(...args), undefined);
   }
 };
-
-/**
- * Registers a listener for the current scope and removes it when the scope closes. `guard`
- * wraps both steps, for example with the owning service's lock.
- */
-export const scopedListener = <Listener>(
-  listeners: Set<Listener>,
-  listener: Listener,
-  guard: (step: Effect.Effect<void>) => Effect.Effect<void> = identity,
-): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.acquireRelease(guard(Effect.sync(() => void listeners.add(listener))), () =>
-    guard(Effect.sync(() => void listeners.delete(listener))),
-  );

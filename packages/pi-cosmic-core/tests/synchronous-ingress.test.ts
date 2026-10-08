@@ -2,21 +2,16 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Schema from "effect/Schema";
 import {
   makeSynchronousIngress,
   type SynchronousIngress,
 } from "../src/coordination/synchronous-ingress.ts";
 import { capturedTelemetrySnapshot, makeCapturedLogger, yieldUntil } from "../testing.ts";
 
-class CallbackFailure extends Schema.TaggedError<CallbackFailure>()("CallbackFailure", {
-  message: Schema.String,
-}) {}
-
 it.effect("drains accepted values in offer order and reports dropped overflow", () =>
   Effect.gen(function* () {
     const values: number[] = [];
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
+    const ingress = yield* makeSynchronousIngress<number, never>({
       capacity: 2,
       overflow: "drop",
       handle: (value) => Effect.sync(() => void values.push(value)),
@@ -41,7 +36,7 @@ it.effect("keeps the latest coalesced value behind already queued work", () =>
     const releaseSecond = yield* Deferred.make<void>();
     const handledLatest = yield* Deferred.make<void>();
     const values: number[] = [];
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
+    const ingress = yield* makeSynchronousIngress<number, never>({
       capacity: 1,
       overflow: "coalesce-latest",
       handle: (value) =>
@@ -84,7 +79,7 @@ it.effect("rejects non-finite and non-integer capacities", () =>
       1.5,
       Number.MAX_SAFE_INTEGER + 1,
     ]) {
-      const result = yield* makeSynchronousIngress<number, never, never>({
+      const result = yield* makeSynchronousIngress<number, never>({
         capacity,
         overflow: "drop",
         handle: () => Effect.void,
@@ -94,37 +89,10 @@ it.effect("rejects non-finite and non-integer capacities", () =>
   }),
 );
 
-it.effect("isolates callback and failure-observer failures", () =>
-  Effect.gen(function* () {
-    const handled: number[] = [];
-    const failures: string[] = [];
-    const ingress = yield* makeSynchronousIngress<number, CallbackFailure, never>({
-      capacity: 4,
-      overflow: "drop",
-      handle: (value) =>
-        value === 1
-          ? new CallbackFailure({ message: "expected" })
-          : Effect.sync(() => void handled.push(value)),
-      onFailure: (error) =>
-        Effect.sync(() => void failures.push(error.message)).pipe(
-          Effect.andThen(Effect.die("hostile failure observer")),
-        ),
-    });
-    yield* Effect.sync(() => {
-      ingress.offer(1);
-      ingress.offer(2);
-    });
-    yield* yieldUntil(() => handled.length >= 1);
-    expect(failures).toEqual(["expected"]);
-    expect(handled).toEqual([2]);
-    yield* ingress.shutdown;
-  }),
-);
-
 it.effect("keeps draining after a handler throws while constructing its Effect", () =>
   Effect.gen(function* () {
     const handled: number[] = [];
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
+    const ingress = yield* makeSynchronousIngress<number, never>({
       capacity: 2,
       overflow: "drop",
       handle: (value) => {
@@ -150,7 +118,7 @@ for (const trigger of ["scope", "shutdown"] as const) {
         Effect.gen(function* () {
           const started = yield* Deferred.make<void>();
           const interrupted = yield* Deferred.make<void>();
-          const create = makeSynchronousIngress<number, never, never>({
+          const create = makeSynchronousIngress<number, never>({
             capacity: 1,
             overflow: "drop",
             handle: () =>
@@ -177,7 +145,6 @@ for (const trigger of ["scope", "shutdown"] as const) {
                   ),
                 ),
               );
-          yield* ingress.awaitShutdown;
           if (active) yield* Deferred.await(interrupted);
           expect(ingress.offer(2)).toBe("closed");
         }),
@@ -187,7 +154,7 @@ for (const trigger of ["scope", "shutdown"] as const) {
 
 it.effect("rejects synchronous offers as soon as shutdown starts", () =>
   Effect.gen(function* () {
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
+    const ingress = yield* makeSynchronousIngress<number, never>({
       capacity: 1,
       overflow: "drop",
       handle: () => Effect.void,
@@ -204,7 +171,7 @@ it.effect("logs a cause-free diagnostic for handler defects and keeps the worker
   return Effect.gen(function* () {
     const poisonSeen = yield* Deferred.make<void>();
     const healthyDone = yield* Deferred.make<void>();
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
+    const ingress = yield* makeSynchronousIngress<number, never>({
       capacity: 4,
       overflow: "drop",
       handle: (value) =>
@@ -228,7 +195,7 @@ it.effect("does not report normal shutdown interruption as a handler defect", ()
   const logger = makeCapturedLogger();
   return Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
+    const ingress = yield* makeSynchronousIngress<number, never>({
       capacity: 1,
       overflow: "drop",
       handle: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
@@ -236,7 +203,6 @@ it.effect("does not report normal shutdown interruption as a handler defect", ()
     expect(ingress.offer(1)).toBe("accepted");
     yield* Deferred.await(started);
     yield* ingress.shutdown;
-    yield* ingress.awaitShutdown;
     expect(logger.entries).toEqual([]);
   }).pipe(Effect.provide(logger.layer));
 });

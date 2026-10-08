@@ -7,10 +7,13 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
-import { AgentDirectory, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
+import {
+  AgentDirectory,
+  decodeUnknownOrUndefined,
+  SafeFile,
+  StreamingHttpClient,
+} from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../config/schema.ts";
@@ -21,7 +24,6 @@ import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
 import { parseImageSse } from "./stream.ts";
 import {
   DEFAULT_IMAGE_MODEL,
-  TOOL_PARAMS,
   ToolParamsSchema,
   fail,
   failWith,
@@ -30,7 +32,6 @@ import {
 } from "./types.ts";
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-const TOOL_PARAM_KEYS = new Set(Object.keys(TOOL_PARAMS.properties));
 
 const resolveModel = (
   params: Pick<ToolParams, "model">,
@@ -38,8 +39,7 @@ const resolveModel = (
   cfg: ResolvedConfig,
 ): string => {
   const requested = params.model?.trim();
-  if (requested)
-    return requested.includes("/") ? requested.split("/").pop() || requested : requested;
+  if (requested) return requested.split("/").pop() || requested;
   const currentModel = ctx.model;
   return currentModel?.provider === "openai-codex"
     ? (currentModel.id ?? cfg.image.defaultModel)
@@ -72,15 +72,11 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           ctx: ExtensionContext,
           cfg: ResolvedConfig | undefined,
         ) {
-          const parameterKeys = yield* Effect.try({
-            try: () => (Predicate.isObject(rawParams) ? Object.keys(rawParams) : undefined),
-            catch: failWith("params", "Invalid OpenAI image parameters."),
+          // Pi's parameter schema forbids additional properties; decoding enforces the same policy.
+          const params = decodeUnknownOrUndefined(ToolParamsSchema, rawParams, {
+            onExcessProperty: "error",
           });
-          if (!parameterKeys || parameterKeys.some((key) => !TOOL_PARAM_KEYS.has(key)))
-            return yield* fail("params", "Invalid OpenAI image parameters.");
-          const params = yield* Schema.decodeUnknownEffect(ToolParamsSchema)(rawParams).pipe(
-            Effect.mapError(failWith("params", "Invalid OpenAI image parameters.")),
-          );
+          if (!params) return yield* fail("params", "Invalid OpenAI image parameters.");
           if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
           if (!cfg.image.enabled)
             return yield* fail("config", "OpenAI image generation is disabled in config.");

@@ -30,9 +30,9 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
       }),
     startup: () => Effect.void,
     onActivated: ({ parentReference }) => parentReferenceBridge.activate(parentReference),
-    onDeactivated: () => parentReferenceBridge.clear(),
+    onDeactivated: () => parentReferenceBridge.activate(undefined),
     onStartFailure: ({ ctx }) => {
-      parentReferenceBridge.clear();
+      parentReferenceBridge.activate(undefined);
       notifyHerdrBtw(ctx, "Herdr BTW couldn't start", "warning");
     },
   });

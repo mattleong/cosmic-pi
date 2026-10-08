@@ -7,14 +7,7 @@ import type {
 } from "../protocol/protocol.ts";
 import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import type { FooterHostProjection } from "../boundary/host-footer-projection.ts";
-
-export interface FooterTotals {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-}
+import type { FooterTotals } from "../boundary/host-usage.ts";
 
 function basename(path: string): string {
   const normalized = path.replaceAll("\\", "/").replace(/\/$/, "");
@@ -54,9 +47,9 @@ export function builtinContributions(
   const { model, branch, sessionName, subscription } = host;
   const location = abbreviateHomePath(host.cwd, homeDirectory);
 
-  let modelText = model?.id ?? "no-model";
   const thinking = host.thinking;
-  if (host.providerCount > 1 && model) modelText = `${model.provider} / ${modelText}`;
+  const modelText =
+    host.providerCount > 1 && model ? `${model.provider} / ${model.id}` : (model?.id ?? "no-model");
 
   const result: CosmicFooterTextContribution[] = [
     {
@@ -165,37 +158,38 @@ export function builtinContributions(
       priority: 80,
       order: 100,
     });
-  const metric = (id: string, text: string, order: number): CosmicFooterTextContribution => {
-    const contribution: CosmicFooterTextContribution = {
+  const metric = (id: string, text: string, order: number, align?: "right") =>
+    result.push({
       kind: "text",
       id,
       region: "metrics",
       text,
       priority: 90,
       order,
-    };
-    result.push(contribution);
-    return contribution;
-  };
+      ...(align && { align }),
+    });
   if (totals.input) metric("metrics.input", `↑${formatTokens(totals.input)}`, 200);
   if (totals.output) metric("metrics.output", `↓${formatTokens(totals.output)}`, 210);
   if (totals.cacheRead) metric("metrics.cacheRead", `r${formatTokens(totals.cacheRead)}`, 220);
   if (totals.cacheWrite) metric("metrics.cacheWrite", `w${formatTokens(totals.cacheWrite)}`, 230);
   if (totals.cost || subscription)
-    metric("metrics.cost", `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`, 240).align =
-      "right";
+    metric(
+      "metrics.cost",
+      `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`,
+      240,
+      "right",
+    );
   for (const status of host.extensionStatuses) {
     const placement = statusPlacements.get(status.id);
-    const contribution: CosmicFooterTextContribution = {
+    result.push({
       kind: "text",
       id: `extension.${status.id}`,
       region: placement?.region ?? DEFAULT_STATUS_REGION,
       text: status.text,
       priority: placement?.priority ?? DEFAULT_STATUS_PRIORITY,
       order: placement?.order ?? DEFAULT_STATUS_ORDER,
-    };
-    if (placement?.align) contribution.align = placement.align;
-    result.push(contribution);
+      ...(placement?.align && { align: placement.align }),
+    });
   }
   return result;
 }

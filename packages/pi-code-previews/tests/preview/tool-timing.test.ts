@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { getCodePreviewAnimationFrame } from "../../index";
+import { getCodePreviewAnimationFrame } from "../../src/preview/tool-timing";
 
 test("animation frame is a read-only scalar projection of owned renderer state", () => {
   const state = Object.freeze({ codePreviewAnimationFrame: 7 });

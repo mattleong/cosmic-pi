@@ -2,10 +2,9 @@ import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
   SessionManager,
-  type ExtensionHandler,
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { betterOpenAIWithDependencies } from "../src/application.ts";
 import {
@@ -18,7 +17,7 @@ import {
   OPENAI_COMPACTION_DETAILS_TYPE,
   OPENAI_COMPACTION_SUMMARY,
 } from "../src/compaction/protocol.ts";
-import { assistantMessage, serializedSnapshot } from "./helpers.ts";
+import { appendAssistant, assistantMessage, serializedSnapshot } from "./helpers.ts";
 
 const details = {
   type: OPENAI_COMPACTION_DETAILS_TYPE,
@@ -47,15 +46,6 @@ const appendUser = (manager: SessionManager, content: string) =>
 const appendCheckpoint = (manager: SessionManager, retained = manager.getLeafId()!) =>
   manager.appendCompaction(OPENAI_COMPACTION_SUMMARY, retained, 100, details, true);
 
-const appendAssistant = (
-  manager: SessionManager,
-  stopReason: "error" | "length" | "stop",
-  content: string,
-) =>
-  manager.appendMessage(
-    assistantMessage([{ type: "text", text: content }], { stopReason, timestamp: 10 }),
-  );
-
 function history() {
   const manager = SessionManager.inMemory("/virtual/repair");
   manager.appendMessage({
@@ -79,26 +69,20 @@ function history() {
 
 describe("owned checkpoint reconstruction", () => {
   it("the host boundary aborts requests and cancels compaction when owned-context repair is unavailable", () => {
-    const handlers = new Map<string, ExtensionHandler<any, any>>();
-    const registration = {
-      on: (event: string, handler: ExtensionHandler<any, any>) => {
-        handlers.set(event, handler);
-      },
-      registerFlag: vi.fn(),
-      registerCommand: vi.fn(),
-      registerMessageRenderer: vi.fn(),
-      events: { emit: vi.fn(), on: vi.fn() },
-    };
-    betterOpenAIWithDependencies(extensionApiFixture(registration));
+    const { pi, handlers } = recordingExtensionHost(
+      {},
+      { registerFlag: vi.fn(), events: { emit: vi.fn(), on: vi.fn() } },
+    );
+    betterOpenAIWithDependencies(pi);
     const host = { sessionManager: history(), abort: vi.fn(), ui: { notify: vi.fn() } };
     const ctx = extensionContextFixture(host);
-    handlers.get("context_with_system")!(
+    handlers.get("context_with_system")![0]!(
       { type: "context_with_system", messages: host.sessionManager.buildSessionContext().messages },
       ctx,
     );
     expect(host.abort).toHaveBeenCalledOnce();
     expect(host.ui.notify).toHaveBeenCalled();
-    expect(handlers.get("session_before_compact")!({}, ctx)).toEqual({ cancel: true });
+    expect(handlers.get("session_before_compact")![0]!({}, ctx)).toEqual({ cancel: true });
   });
   it("restores all dialogue with one canonical snapshot and genuine tail updates, without mutation", () => {
     const manager = history();

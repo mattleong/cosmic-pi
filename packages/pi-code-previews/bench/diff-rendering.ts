@@ -15,7 +15,7 @@ import {
 } from "./helpers";
 
 const { renderSyntaxHighlightedDiff } = await import("../src/diff/render");
-const { changedRanges } = await import("../src/diff/word/emphasis");
+const { changedRangesWithConfidence } = await import("../src/diff/word/emphasis");
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/config/state");
 const { startBenchmarkShikiSession } = await import("./shiki-session");
 
@@ -97,7 +97,7 @@ try {
       results.push(
         runBench(benchCase.name, "word-ranges", mode, () => {
           for (const pair of benchCase.rangePairs) {
-            const ranges = changedRanges(pair.before, pair.after, mode);
+            const ranges = changedRangesWithConfidence(pair.before, pair.after, mode);
             sink += ranges.removed.length + ranges.added.length;
           }
         }),

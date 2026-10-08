@@ -6,13 +6,11 @@ export function captureExplicitPreferenceArgument(args?: readonly string[]): boo
   try {
     const argv = args ?? process.argv.slice(2);
     const endOfOptions = argv.indexOf("--");
-    const optionCount = endOfOptions < 0 ? argv.length : endOfOptions;
-
-    for (let index = 0; index + 1 < optionCount; index += 1) {
-      const argument = argv[index];
-      if (argument === "--model" || argument === "--thinking") return true;
-    }
-    return false;
+    // A flag counts only when its value also precedes the end-of-options marker.
+    return argv
+      .slice(0, endOfOptions < 0 ? argv.length : endOfOptions)
+      .slice(0, -1)
+      .some((argument) => argument === "--model" || argument === "--thinking");
   } catch {
     return false;
   }

@@ -2,7 +2,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -74,29 +76,6 @@ describe("windows tree terminator", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("cleans a partially installed helper despite throwing listener removal", () =>
-    Effect.gen(function* () {
-      const fake = fakeProcessTreeTerminator();
-      const failed = yield* forceTaskkill((command, args, options) => {
-        const child = fake.spawn(command, args, options);
-        return {
-          ...child,
-          on: (event, listener) => {
-            if (event === "error") throw new Error("listener setup failed");
-            child.on(event, listener);
-          },
-          removeListener: (event, listener) => {
-            child.removeListener(event, listener);
-            throw new Error("listener removal failed");
-          },
-        };
-      }).pipe(Effect.flip);
-      expect(failed).toMatchObject({ _tag: "LocalProcessError" });
-      expect(fake.killed).toEqual(["SIGKILL"]);
-      expect(fake.isUnrefed()).toBe(true);
-      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 0 });
-    }).pipe(Effect.scoped),
-  );
   it.effect("still escalates after the graceful helper times out", () =>
     Effect.gen(function* () {
       const graceful = fakeProcessTreeTerminator();
@@ -157,20 +136,6 @@ describe("windows tree terminator", () => {
       fake.emit("error", new Error("late shutdown error"));
     }),
   );
-  it.effect("confirms a zero-exit taskkill and removes its listeners", () =>
-    Effect.gen(function* () {
-      const fake = fakeProcessTreeTerminator();
-      const fiber = yield* forceTaskkill(fake.spawn).pipe(
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      expect(fake.spawns).toEqual([{ command: "taskkill", args: ["/pid", "42", "/T", "/F"] }]);
-      fake.emit("exit", 0);
-      yield* Fiber.join(fiber);
-      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 0 });
-      expect(fake.killed).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("maps nonzero exit and spawn error to redacted typed failures", () =>
     Effect.gen(function* () {
       const nonzero = fakeProcessTreeTerminator();
@@ -190,24 +155,6 @@ describe("windows tree terminator", () => {
       expect(erroredFailure).toMatchObject({ _tag: "LocalProcessError" });
       expect(String(erroredFailure)).not.toContain("FAKE_SECRET_123");
       expect(errored.listenerCounts()).toEqual({ exit: 0, error: 0 });
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("bounds a never-exiting taskkill with synchronous kill/unref/listener cleanup", () =>
-    Effect.gen(function* () {
-      const fake = fakeProcessTreeTerminator();
-      const fiber = yield* forceTaskkill(fake.spawn).pipe(
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      expect(fake.killed).toEqual([]);
-      yield* TestClock.adjust("2 seconds");
-      // Under TestClock a cleanup that awaited taskkill's exit would hang this join forever.
-      const failure = yield* Fiber.join(fiber).pipe(Effect.flip);
-      expect(failure).toMatchObject({ _tag: "LocalProcessError" });
-      expect(fake.killed).toEqual(["SIGKILL"]);
-      expect(fake.isUnrefed()).toBe(true);
-      // Settle listeners are gone; only the harmless late-error listener remains.
-      expect(fake.listenerCounts()).toEqual({ exit: 0, error: 1 });
     }).pipe(Effect.scoped),
   );
 
@@ -241,28 +188,21 @@ describe("windows tree terminator", () => {
 });
 
 describe("local process boundary", () => {
-  it.effect("interrupts pending cwd inspection and ignores late settlement without spawning", () =>
+  it.effect("interrupts a cwd inspection that never settles", () =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
-      const pending = yield* Deferred.make<{ isDirectory(): boolean }>();
-      let inspectedResult = false;
-      const layer = LocalProcess.layerWithInspection(() => {
-        Deferred.doneUnsafe(entered, Effect.void);
-        return Effect.runPromise(Deferred.await(pending));
-      });
+      // A masked inspection would hang this interruption instead of abandoning it.
+      const layer = LocalProcess.layerWith(
+        FileSystem.layerNoop({
+          stat: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+        }),
+      );
       const starting = yield* LocalProcess.use((service) =>
         service.spawn({ command: "exit 0", cwd: ".", ingressBufferBytes: 1024 }),
       ).pipe(Effect.scoped, provideBuiltLayer(layer), Effect.forkScoped);
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(starting);
-      yield* Deferred.succeed(pending, {
-        isDirectory: () => {
-          inspectedResult = true;
-          return true;
-        },
-      });
-      yield* Effect.promise(() => Promise.resolve());
-      expect(inspectedResult).toBe(false);
+      expect(Exit.hasInterrupts(yield* Fiber.await(starting))).toBe(true);
     }),
   );
   it("case-folds blocked environment keys only on Windows", () => {

@@ -30,7 +30,7 @@ import type { BackgroundTaskToolDetails } from "../tools/command.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
 import { taskDisplayName, taskStateLabel } from "./task-state.ts";
 
-/** Persisted details decoded with the shared task schema; anything else is None. */
+/** Persisted details decoded with the shared task schema, minus retired fields; else None. */
 export const decodeBackgroundTaskDetails = Schema.decodeUnknownOption(BackgroundTaskDetailsSchema);
 
 /** Aggregate messages name their task in a short prefix; the raw result keeps full identity. */
@@ -38,29 +38,14 @@ const MAX_TASK_LABEL_CHARS = 40;
 /** A wait's literal text as headings and messages quote it. */
 const MAX_QUOTED_CHARS = 40;
 
-type Action = BackgroundTaskToolInput["action"];
-
 const SEVERITY_ORDER: ReadonlyArray<CompactIssue["severity"]> = ["error", "warning", "info"];
 
-const ACTION_LABELS = {
-  start: "start",
-  list: "list",
-  status: "status",
-  logs: "logs",
-  wait: "wait",
-  stop: "stop",
-  stop_all: "stop all",
-  clear: "clear",
-} as const satisfies Record<Action, string>;
-
 /**
- * An action as people read it: `stop_all` is "stop all". Foreign arguments can name any action,
- * so only own keys count; `constructor` must not resolve to `Object.prototype`'s.
+ * An action as people read it: `stop_all` is "stop all", and every other action reads as its
+ * name. Foreign arguments can name any action, so the name is sanitized rather than trusted.
  */
-export const backgroundTaskActionLabel = (action: Action): string =>
-  Object.hasOwn(ACTION_LABELS, action)
-    ? ACTION_LABELS[action]
-    : sanitizeTerminalLine(String(action));
+export const backgroundTaskActionLabel = (action: BackgroundTaskToolInput["action"]): string =>
+  action === "stop_all" ? "stop all" : sanitizeTerminalLine(String(action));
 
 /** Literal text a wait matches, quoted and bounded for one row. */
 export const quotedWaitText = (text: string): string =>
@@ -87,23 +72,23 @@ export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>
   }
 }
 
+/** The one snapshot a single-task result carries. */
+export function resultSnapshot(
+  details: BackgroundTaskToolDetails,
+): BackgroundTaskSnapshot | undefined {
+  if (details.action === "start" || details.action === "status" || details.action === "stop")
+    return details.snapshot;
+  return details.action === "wait" ? details.wait.snapshot : undefined;
+}
+
 /** The task a settled result is about, by name or command; empty when the details name none. */
 export function backgroundTaskResultSubject(
   details: BackgroundTaskToolDetails,
   args: Partial<BackgroundTaskToolInput>,
 ): string {
-  switch (details.action) {
-    case "start":
-    case "status":
-    case "stop":
-      return taskDisplayName(details.snapshot);
-    case "wait":
-      return taskDisplayName(details.wait.snapshot);
-    case "list":
-      return backgroundTaskCallSubject(args);
-    default:
-      return "";
-  }
+  const snapshot = resultSnapshot(details);
+  if (snapshot) return taskDisplayName(snapshot);
+  return details.action === "list" ? backgroundTaskCallSubject(args) : "";
 }
 
 const issue = (
@@ -441,8 +426,6 @@ export const projectBackgroundTaskCompactSummary = ({
                 : "success";
       return { action, subject, metadata: [taskStateLabel(logs.state)], outcome, issues };
     }
-    default:
-      return undefined;
   }
 };
 

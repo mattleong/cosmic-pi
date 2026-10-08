@@ -3,7 +3,7 @@ import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 
 const STATUS_KEY = "pi-ask-user";
 
-export interface DialogActivity {
+interface DialogActivity {
   readonly id: string;
   readonly token: number;
   readonly phase: "open" | "hidden" | "closing";

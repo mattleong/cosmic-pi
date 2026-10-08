@@ -34,7 +34,6 @@ export type DecodedMcpMessage =
     }
   | {
       readonly method: "unknown";
-      readonly requestedMethod: string;
       readonly id?: RpcId | undefined;
     };
 
@@ -42,7 +41,7 @@ export type ToolCall = Extract<DecodedMcpMessage, { readonly method: "tools/call
 
 export interface McpToolResult {
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
-  isError?: true;
+  readonly isError?: true;
 }
 
 const own = (value: JsonObject, key: string): boolean =>
@@ -55,7 +54,9 @@ const exactKeys = <ValueInput>(
 ): value is ValueInput & JsonObject =>
   isJsonObject(value) &&
   Object.keys(value).every((key) => allowed.includes(key)) &&
-  required.every((key) => own(value, key));
+  required.every((key) => own(value, key)) &&
+  // Params that allow `_meta` accept only bounded metadata there.
+  (!own(value, "_meta") || boundedMetadata(value._meta));
 
 export const boundedString = <ValueInput>(
   value: ValueInput,
@@ -86,8 +87,7 @@ const boundedMetadata = <ValueInput>(value: ValueInput, depth = 0): boolean => {
 };
 
 const validMeta = <ParamsInput>(params: ParamsInput): boolean =>
-  params === undefined ||
-  (exactKeys(params, ["_meta"]) && (!own(params, "_meta") || boundedMetadata(params._meta)));
+  params === undefined || exactKeys(params, ["_meta"]);
 
 const messageInputSchema = {
   type: "object",
@@ -108,27 +108,25 @@ const toolAnnotations = {
   idempotentHint: false,
   openWorldHint: false,
 } as const;
+const messageTool = (name: string, description: string) => ({
+  name,
+  description,
+  inputSchema: messageInputSchema,
+  annotations: toolAnnotations,
+});
 export const toolDefinitions = [
-  {
-    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
-    description: "Publish bounded assignment progress to the parent projection.",
-    inputSchema: messageInputSchema,
-    annotations: toolAnnotations,
-  },
-  {
-    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
-    description:
-      "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
-    inputSchema: messageInputSchema,
-    annotations: toolAnnotations,
-  },
-  {
-    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
-    description:
-      "Ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
-    inputSchema: messageInputSchema,
-    annotations: toolAnnotations,
-  },
+  messageTool(
+    SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
+    "Publish bounded assignment progress to the parent projection.",
+  ),
+  messageTool(
+    SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
+    "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
+  ),
+  messageTool(
+    SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
+    "Ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
+  ),
   {
     name: SUPERVISOR_MCP_TOOL_NAMES[3],
     description:
@@ -167,8 +165,7 @@ const decodeInitializeMessage = <ParamsInput>(
       ["protocolVersion", "capabilities", "clientInfo", "_meta"],
       ["protocolVersion"],
     ) ||
-    !boundedString(params.protocolVersion, 64) ||
-    (own(params, "_meta") && !boundedMetadata(params._meta))
+    !boundedString(params.protocolVersion, 64)
   )
     return undefined;
   return { method: "initialize", id, protocolVersion: params.protocolVersion };
@@ -188,8 +185,7 @@ const decodeCancelledMessage = <ParamsInput>(
     id !== undefined ||
     !exactKeys(params, ["requestId", "reason", "_meta"], ["requestId"]) ||
     !validRpcId(params.requestId) ||
-    (params.reason !== undefined && !boundedString(params.reason, 512, false)) ||
-    (own(params, "_meta") && !boundedMetadata(params._meta))
+    (params.reason !== undefined && !boundedString(params.reason, 512, false))
   )
     return undefined;
   return { method: "notifications/cancelled", requestId: params.requestId };
@@ -209,17 +205,11 @@ const decodeToolCallMessage = <ParamsInput>(
   if (
     id === undefined ||
     !exactKeys(params, ["name", "arguments", "_meta"], ["name", "arguments"]) ||
-    !boundedString(params.name, 128) ||
-    (own(params, "_meta") && !boundedMetadata(params._meta))
+    !boundedString(params.name, 128)
   )
     return undefined;
   return { method: "tools/call", id, name: params.name, arguments: params.arguments };
 };
-
-const decodeUnknownMessage = (requestedMethod: string, id: RpcId | undefined): DecodedMcpMessage =>
-  id === undefined
-    ? { method: "unknown", requestedMethod }
-    : { method: "unknown", requestedMethod, id };
 
 export const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | undefined => {
   if (
@@ -246,15 +236,14 @@ export const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessa
     case "tools/call":
       return decodeToolCallMessage(value.params, id);
     default:
-      return decodeUnknownMessage(value.method, id);
+      return { method: "unknown", ...(id !== undefined && { id }) };
   }
 };
 
-export const toolResult = (text: string, isError = false): McpToolResult => {
-  const result: McpToolResult = { content: [{ type: "text", text }] };
-  if (isError) result.isError = true;
-  return result;
-};
+export const toolResult = (text: string, isError = false): McpToolResult => ({
+  content: [{ type: "text", text }],
+  ...(isError && { isError: true as const }),
+});
 
 const isCancellationCode = (code: string | undefined): boolean =>
   code === "question_cancelled" ||

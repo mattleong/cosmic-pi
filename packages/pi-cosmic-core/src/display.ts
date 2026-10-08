@@ -76,9 +76,9 @@ export const formatCost = (cost: number): string => {
  * At most `limit` UTF-16 units, marker included, never splitting a surrogate pair. Clipped text
  * loses trailing spaces before the marker: "a long sentence th…".
  */
-export const clipText = (text: string, limit: number, marker = "…"): string => {
+export const clipText = (text: string, limit: number): string => {
   const budget = Math.max(0, Math.floor(limit));
   if (text.length <= budget) return text;
-  if (budget <= marker.length) return safeTextPrefix(marker, budget);
-  return `${safeTextPrefix(text, budget - marker.length).trimEnd()}${marker}`;
+  if (budget <= 1) return safeTextPrefix("…", budget);
+  return `${safeTextPrefix(text, budget - 1).trimEnd()}…`;
 };

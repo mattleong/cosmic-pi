@@ -4,6 +4,7 @@ import { resolvePreviewLanguage } from "../../src/syntax/language";
 
 test("resolvePreviewLanguage handles filenames, shebangs, and conservative content", () => {
   assert.equal(resolvePreviewLanguage({ path: ".env.local" }), "dotenv");
+  assert.equal(resolvePreviewLanguage({ path: "deploy/production.env" }), "dotenv");
   assert.equal(resolvePreviewLanguage({ path: "Dockerfile.dev" }), "dockerfile");
   assert.equal(resolvePreviewLanguage({ path: "Makefile" }), "makefile");
   assert.equal(resolvePreviewLanguage({ path: "src/index.ts" }), "typescript");

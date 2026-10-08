@@ -16,10 +16,9 @@ import {
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import {
-  InvalidSubagentRequestError,
-  isCleanupUnconfirmed,
-  isOutcomeUncertain,
+  invalidRequest,
   subagentErrorCode,
+  type InvalidSubagentRequestError,
   type SubagentError,
 } from "../run/errors.ts";
 import {
@@ -47,7 +46,7 @@ import {
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure } from "./model.ts";
-import { isPendingDeliveryError } from "./outcome.ts";
+import { isPendingDeliveryError, isUncertainToolFailure } from "./outcome.ts";
 import {
   claimsOperationError,
   lifecycleMessageError,
@@ -116,23 +115,21 @@ const forEachOutcome = <R>(
 
 type AwaitedLifecycleResult = Effect.Success<ReturnType<typeof forEachOutcome>>;
 
-const requiredField = (
-  value: string,
-  code: string,
-  label: string,
+const required = (
   action: SubagentToolAction,
-): Effect.Effect<string, InvalidSubagentRequestError> =>
-  value.trim()
-    ? Effect.succeed(value.trim())
+  field: "runId" | "message",
+  value: string,
+): Effect.Effect<string, InvalidSubagentRequestError> => {
+  const trimmed = value.trim();
+  return trimmed
+    ? Effect.succeed(trimmed)
     : Effect.fail(
-        new InvalidSubagentRequestError({ code, message: `${action} requires ${label}.` }),
+        invalidRequest(
+          field === "runId" ? "run_id_required" : "message_required",
+          `${action} requires ${field}.`,
+        ),
       );
-
-const requiredRunId = (action: SubagentToolAction, runId: string) =>
-  requiredField(runId, "run_id_required", "runId", action);
-
-const requiredMessage = (action: SubagentToolAction, message: string) =>
-  requiredField(message, "message_required", "message", action);
+};
 
 const requiredTargetIds = (
   action: SubagentToolAction,
@@ -141,31 +138,20 @@ const requiredTargetIds = (
   const ids = runIds.map((id) => id.trim());
   if (ids.length === 0)
     return Effect.fail(
-      new InvalidSubagentRequestError({
-        code: "run_ids_required",
-        message: `${action} requires at least one run ID.`,
-      }),
+      invalidRequest("run_ids_required", `${action} requires at least one run ID.`),
     );
   if (ids.some((id) => !id))
-    return Effect.fail(
-      new InvalidSubagentRequestError({
-        code: "run_id_invalid",
-        message: "Subagent target IDs must be non-empty.",
-      }),
-    );
+    return Effect.fail(invalidRequest("run_id_invalid", "Subagent target IDs must be non-empty."));
   const unique = [...new Set(ids)];
   if (unique.length > MAX_TARGET_RUNS)
     return Effect.fail(
-      new InvalidSubagentRequestError({
-        code: "too_many_run_ids",
-        message: `Subagent actions accept at most ${MAX_TARGET_RUNS} targets.`,
-      }),
+      invalidRequest(
+        "too_many_run_ids",
+        `Subagent actions accept at most ${MAX_TARGET_RUNS} targets.`,
+      ),
     );
   return Effect.succeed(unique);
 };
-
-const joinSections = (sections: ReadonlyArray<string>): string =>
-  sections.filter(Boolean).join("\n\n");
 
 export const executeSubagentActionEffect = (
   pi: ExtensionAPI,
@@ -193,7 +179,7 @@ export const executeSubagentActionEffect = (
   const requestedAwaitIds = awaitState?.requestedIds;
   const present = (result: SubagentExecutionResult) =>
     presentSubagentResult(input, result, requestedAwaitIds);
-  const effect = Effect.gen(function* () {
+  return Effect.gen(function* () {
     const service = yield* SubagentService;
     const authorize = (ids: ReadonlyArray<string>) =>
       callerRunId ? service.authorizeTargets(callerRunId, ids) : Effect.void;
@@ -203,10 +189,6 @@ export const executeSubagentActionEffect = (
         : scripted
           ? service.startScriptSessionOwned(request)
           : service.startSessionOwned(request);
-    const consumeCompletions = (
-      observations: ReadonlyArray<SubagentRunObservation>,
-      fullyRenderedIds: ReadonlySet<string>,
-    ) => service.consumeCompletions(renderedCompletionReceipts(observations, fullyRenderedIds));
     // Construct the complete result inside the claim scope. A formatting or details
     // defect leaves the report available to the notification outbox.
     const completeObservations = (
@@ -221,11 +203,11 @@ export const executeSubagentActionEffect = (
         const runs = observations.map((observation) => observation.run);
         const attentionRequired = runs.some(isParentActionRequiredRun);
         if (scripted && attentionRequired)
-          return yield* new InvalidSubagentRequestError({
-            code: "scripted_parent_attention_required",
-            message: `Subagents need parent attention\n\nEnd the workflow and handle this directly.\n\n${attentionRecoveryText(runs)}`,
-          });
-        const prefix = joinSections([...sections, attentionRecoveryText(runs)]);
+          return yield* invalidRequest(
+            "scripted_parent_attention_required",
+            `Subagents need parent attention\n\nEnd the workflow and handle this directly.\n\n${attentionRecoveryText(runs)}`,
+          );
+        const prefix = [...sections, attentionRecoveryText(runs)].filter(Boolean).join("\n\n");
         const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
         const additional = extra();
         const contract =
@@ -251,9 +233,13 @@ export const executeSubagentActionEffect = (
           ...(contract && { contract }),
         };
         const result = yield* Effect.sync(() => present(outcome));
-        const receipts = renderedCompletionReceipts(observations, formatted.fullyRenderedIds);
+        // Claims list text never carries reports, so it leaves them for the notification outbox.
+        const receipts =
+          input.tool === SUBAGENT_TOOL_NAME.claims
+            ? []
+            : renderedCompletionReceipts(observations, formatted.fullyRenderedIds);
         awaitState?.markDeliveryAttempt(receipts.map((receipt) => receipt.id));
-        yield* consumeCompletions(observations, formatted.fullyRenderedIds);
+        yield* service.consumeCompletions(receipts);
         return { result, fullyRenderedIds: formatted.fullyRenderedIds };
       });
     const finishStatus = (ids: ReadonlyArray<string>) =>
@@ -272,9 +258,7 @@ export const executeSubagentActionEffect = (
               return completeObservations(
                 observations,
                 [formatActionFailures(action, actionFailures)],
-                () => ({
-                  actionFailures,
-                }),
+                () => ({ actionFailures }),
               );
             },
             input.tool === SUBAGENT_TOOL_NAME.status
@@ -309,14 +293,13 @@ export const executeSubagentActionEffect = (
         return yield* finishStatus(yield* requiredTargetIds(action, input.args.runIds));
       case SUBAGENT_TOOL_NAME.await: {
         const ids = yield* requiredTargetIds(action, input.args.runIds);
-        const until = input.args.until;
         yield* authorize(ids);
         // The tool discriminator above always constructs this call's await state.
         const state = awaitState!;
         return yield* service
           .withAwaitTerminalObservations(
             ids,
-            until,
+            input.args.until,
             state.update,
             (observations) =>
               completeObservations(
@@ -330,24 +313,23 @@ export const executeSubagentActionEffect = (
       }
       case SUBAGENT_TOOL_NAME.send: {
         const ids = yield* requiredTargetIds(action, input.args.runIds);
-        const message = yield* requiredMessage(action, input.args.message);
+        const message = yield* required(action, "message", input.args.message);
         yield* authorize(ids);
         return present(yield* forEachOutcome(ids, (id) => service.send(id, message), true));
       }
       case SUBAGENT_TOOL_NAME.reply: {
-        const id = yield* requiredRunId(action, input.args.runId);
-        const message = yield* requiredMessage(action, input.args.message);
+        const id = yield* required(action, "runId", input.args.runId);
+        const message = yield* required(action, "message", input.args.message);
         yield* authorize([id]);
         return present(yield* forEachOutcome([id], (runId) => service.reply(runId, message)));
       }
       case SUBAGENT_TOOL_NAME.lifecycle: {
         const { args } = input;
         if (scripted && args.action !== "stop")
-          return yield* new InvalidSubagentRequestError({
-            code: "scripted_lifecycle_not_supported",
-            message:
-              "Workflow lifecycle supports stopping only. Hand retry, resume, and interrupt decisions back to the parent agent.",
-          });
+          return yield* invalidRequest(
+            "scripted_lifecycle_not_supported",
+            "Workflow lifecycle supports stopping only. Hand retry, resume, and interrupt decisions back to the parent agent.",
+          );
         const presentLifecycle = (result: AwaitedLifecycleResult) =>
           present({
             ...result,
@@ -362,44 +344,39 @@ export const executeSubagentActionEffect = (
           return presentLifecycle(
             yield* forEachOutcome(ids, (id) => {
               let handedOff = false;
-              const operation = Effect.acquireUseRelease(
+              return Effect.acquireUseRelease(
                 service.claimRetryContinuation(id),
                 (claim) =>
                   resolveProfileRetry(pi, claim, ctx, environment).pipe(
-                    Effect.map((request) => ({
-                      ...request,
-                      parentRunId: claim.source.parentRunId,
-                      nestingPolicy: policySnapshot.effectiveConfig.nesting,
-                      nestingPolicyRevision: policySnapshot.revision,
-                    })),
-                    Effect.catch((error) => {
-                      const finalize =
-                        subagentErrorCode(error) === "retry_route_exhausted"
-                          ? service.exhaustRetryClaim(id, claim.claimToken)
-                          : isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
-                            ? service.blockRetryClaim(id, claim.claimToken)
-                            : Effect.void;
-                      return finalize.pipe(Effect.andThen(Effect.fail(error)));
-                    }),
+                    Effect.tapError((error) =>
+                      subagentErrorCode(error) === "retry_route_exhausted"
+                        ? service.exhaustRetryClaim(id, claim.claimToken)
+                        : isUncertainToolFailure(error)
+                          ? service.blockRetryClaim(id, claim.claimToken)
+                          : Effect.void,
+                    ),
                     Effect.flatMap((request) =>
-                      service.startRetrySessionOwned(request, () => {
-                        handedOff = true;
-                      }),
+                      service.startRetrySessionOwned(
+                        {
+                          ...request,
+                          parentRunId: claim.source.parentRunId,
+                          nestingPolicy: policySnapshot.effectiveConfig.nesting,
+                        },
+                        () => {
+                          handedOff = true;
+                        },
+                      ),
                     ),
                   ),
                 (claim) =>
                   handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken),
               );
-              return operation;
             }),
           );
         }
         const messageError = lifecycleMessageError(args);
         if (messageError !== undefined)
-          return yield* new InvalidSubagentRequestError({
-            code: "lifecycle_message_invalid",
-            message: messageError,
-          });
+          return yield* invalidRequest("lifecycle_message_invalid", messageError);
         const ids = yield* requiredTargetIds(action, args.runIds);
         yield* authorize(ids);
         return presentLifecycle(
@@ -413,7 +390,7 @@ export const executeSubagentActionEffect = (
         );
       }
       case SUBAGENT_TOOL_NAME.rename: {
-        const id = yield* requiredRunId(action, input.args.runId);
+        const id = yield* required(action, "runId", input.args.runId);
         yield* authorize([id]);
         return present(
           yield* forEachOutcome([id], (runId) => service.rename(runId, input.args.name.trim())),
@@ -423,13 +400,10 @@ export const executeSubagentActionEffect = (
         const operation = input.args;
         const operationError = claimsOperationError(operation);
         if (operationError !== undefined)
-          return yield* new InvalidSubagentRequestError({
-            code: "claims_input_invalid",
-            message: operationError,
-          });
+          return yield* invalidRequest("claims_input_invalid", operationError);
         if (operation.action === "list")
           return yield* finishStatus(yield* requiredTargetIds(action, operation.runIds ?? []));
-        const id = yield* requiredRunId(action, operation.runId ?? "");
+        const id = yield* required(action, "runId", operation.runId ?? "");
         yield* authorize([id]);
         return present(
           yield* forEachOutcome([id], (runId) =>
@@ -443,8 +417,6 @@ export const executeSubagentActionEffect = (
       }
     }
   });
-
-  return effect;
 };
 
 export const executeSubagentAction = (

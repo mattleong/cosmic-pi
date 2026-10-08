@@ -10,9 +10,9 @@ import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
 
-export type BorderSlot = "call" | "result";
+type BorderSlot = "call" | "result";
 
-export type BorderState = RendererState & {
+type BorderState = RendererState & {
   codePreviewBorderCallComponent?: Component;
   codePreviewBorderResultComponent?: Component;
   codePreviewBorderShell?: BorderedToolCall;
@@ -25,11 +25,6 @@ export type BorderState = RendererState & {
 };
 
 type BorderColorKey = "borderMuted" | "warning" | "success" | "error";
-
-type BorderRenderContext = {
-  isError: boolean;
-  isPartial: boolean;
-};
 
 export function borderState(context: { state: unknown }): BorderState {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
@@ -48,21 +43,6 @@ export function renderWithBorderSlot<T>(state: BorderState, slot: BorderSlot, re
   }
 }
 
-function getBorderExpandLabel(state: BorderState): string | undefined {
-  return state.codePreviewBorderResultExpandLabel ?? state.codePreviewBorderCallExpandLabel;
-}
-
-export function syncBorderShellChrome(
-  shell: BorderedToolCall,
-  state: BorderState,
-  context: BorderRenderContext,
-  timingLabel: string | undefined,
-): void {
-  shell.setBorderColor(borderColorKey(context));
-  shell.setExpandLabel(getBorderExpandLabel(state));
-  shell.setTimingLabel(timingLabel);
-}
-
 export function shouldRenderBorderResultSeparately(
   state: BorderState,
   isPartial: boolean,
@@ -74,63 +54,71 @@ export function shouldRenderBorderResultSeparately(
   );
 }
 
-function borderColorKey(context: BorderRenderContext): BorderColorKey {
+export function borderColorKey(context: { isError: boolean; isPartial: boolean }): BorderColorKey {
   if (context.isError) return "error";
   if (context.isPartial) return "warning";
   return "success";
+}
+
+/** The row's border frame, reused while its theme is unchanged, around both current slots. */
+export function frameBorderShell(
+  context: { state: unknown; isError: boolean; isPartial: boolean },
+  theme: Theme,
+  timingLabel: string | undefined,
+): BorderedToolCall {
+  const state = borderState(context);
+  const previous = state.codePreviewBorderShell;
+  const shell =
+    previous instanceof BorderedToolCall && state.codePreviewBorderTheme === theme
+      ? previous
+      : new BorderedToolCall(theme);
+  shell.setContent(
+    state.codePreviewBorderCallComponent,
+    state.codePreviewBorderResultComponent,
+    state,
+    borderColorKey(context),
+    timingLabel,
+  );
+  state.codePreviewBorderShell = shell;
+  state.codePreviewBorderTheme = theme;
+  return shell;
 }
 
 const RESET_ANSI = "\x1b[0m";
 
 export class BorderedToolCall implements Component {
   private readonly body = new Container();
-  private callComponent: Component | undefined;
   private borderColorKey: BorderColorKey = "borderMuted";
   private expandLabel: string | undefined;
   private timingLabel: string | undefined;
-  private resultComponent: Component | undefined;
-  private cachedWidth: number | undefined;
-  private cachedRows: string[] | undefined;
+  private cache: { width: number; rows: string[] } | undefined;
   private readonly theme: Theme;
 
   constructor(theme: Theme) {
     this.theme = theme;
   }
 
-  setBorderColor(colorKey: BorderColorKey): void {
-    if (this.borderColorKey === colorKey) return;
-    this.borderColorKey = colorKey;
-    this.invalidateCache();
-  }
-
-  setCall(component: Component | undefined): void {
-    this.callComponent = component;
-    this.invalidateCache();
-  }
-
-  setExpandLabel(label: string | undefined): void {
-    if (this.expandLabel === label) return;
-    this.expandLabel = label;
-    this.invalidateCache();
-  }
-
-  setTimingLabel(label: string | undefined): void {
-    if (this.timingLabel === label) return;
-    this.timingLabel = label;
-    this.invalidateCache();
-  }
-
-  setResult(component: Component | undefined): void {
-    this.resultComponent = component;
-    this.invalidateCache();
+  /** Frames both slots; a hint the result slot recorded replaces the call slot's. */
+  setContent(
+    call: Component | undefined,
+    result: Component | undefined,
+    state: BorderState,
+    color: BorderColorKey,
+    timingLabel: string | undefined,
+  ): void {
+    this.body.clear();
+    if (call) this.body.addChild(call);
+    if (result) this.body.addChild(result);
+    this.borderColorKey = color;
+    this.expandLabel =
+      state.codePreviewBorderResultExpandLabel ?? state.codePreviewBorderCallExpandLabel;
+    this.timingLabel = timingLabel;
+    this.cache = undefined;
   }
 
   render(width: number): string[] {
-    if (this.cachedWidth === width && this.cachedRows) return this.cachedRows;
-    const rows = this.renderUncached(width);
-    this.cachedWidth = width;
-    this.cachedRows = rows;
-    return rows;
+    if (this.cache?.width !== width) this.cache = { width, rows: this.renderUncached(width) };
+    return this.cache.rows;
   }
 
   handleMouse(event: TuiMouseEvent) {
@@ -144,35 +132,22 @@ export class BorderedToolCall implements Component {
   }
 
   invalidate(): void {
-    this.invalidateCache();
-    this.callComponent?.invalidate?.();
-    this.resultComponent?.invalidate?.();
-  }
-
-  private invalidateCache(): void {
-    this.cachedWidth = undefined;
-    this.cachedRows = undefined;
+    this.cache = undefined;
+    this.body.invalidate();
   }
 
   private renderUncached(width: number): string[] {
     // A frame needs two border cells, two padding cells, and at least one content cell.
-    if (width < MIN_FRAMED_WIDTH) return this.renderBody(Math.max(1, width));
+    if (width < MIN_FRAMED_WIDTH) return this.body.render(Math.max(1, width));
     const innerWidth = width - 4;
     const border = (value: string) => this.theme.fg(this.borderColorKey, value);
     const timing = this.timingLabel ? ` ${this.theme.fg("muted", this.timingLabel)} ` : "";
     const expand = this.expandLabel ? ` ${this.expandLabel} ` : "";
     return [
       renderBorder(width, border, "╭", "╮", timing),
-      ...this.renderBody(innerWidth).map((line) => this.frameLine(line, innerWidth, border)),
+      ...this.body.render(innerWidth).map((line) => this.frameLine(line, innerWidth, border)),
       renderBorder(width, border, "╰", "╯", expand),
     ];
-  }
-
-  private renderBody(width: number): string[] {
-    this.body.clear();
-    if (this.callComponent) this.body.addChild(this.callComponent);
-    if (this.resultComponent) this.body.addChild(this.resultComponent);
-    return this.body.render(width);
   }
 
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {
@@ -223,8 +198,7 @@ export function hiddenPreviewExpandHintForShell(
   theme: Theme,
   label: string,
 ): string {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const shellState = state as BorderState;
+  const shellState = borderState({ state });
   const slot = shellState.codePreviewBorderCurrentSlot;
   if (slot !== "call" && slot !== "result") return renderExpansionAffordance(label, false, theme);
   const corner = theme.fg("muted", toolExpandHint());

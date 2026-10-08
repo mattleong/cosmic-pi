@@ -2,16 +2,16 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
-import type {
-  CandidateUpdate,
-  ProfileRouteDraft,
-  ProfileSettingsInspection,
-  ProfileWorkspaceTarget,
+import {
+  profileRouteOptionLabel,
+  type CandidateUpdate,
+  type ProfileRouteDraft,
+  type ProfileSettingsInspection,
+  type ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
 import {
   candidateFieldChoices,
   candidateFieldRows,
-  profileRouteOptionLabel,
   runWithValue,
   selectCandidateField,
   targetProfilePrimarySummary,
@@ -25,11 +25,41 @@ import { qualifiedProfileSetLabel } from "./profile-set-picker-model.ts";
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
+  type SearchableSelectPageChoice,
 } from "pi-cosmic-ui/manager/searchable-select";
 
 interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
 }
+
+/** The host plumbing every shared selector page takes from the editor that opens it. */
+export const selectHost = ({
+  theme,
+  getHeight,
+  requestRender,
+  matchesKeybinding,
+  keybindingLabel,
+}: SharedSelectorOptions): SharedSelectorOptions => ({
+  theme,
+  getHeight,
+  requestRender,
+  matchesKeybinding,
+  keybindingLabel,
+});
+
+/** One selector row, searchable by its value, label, and description unless told otherwise. */
+export const selectChoice = <A>(
+  value: string,
+  label: string,
+  description: string,
+  payload: A,
+  searchText = `${value} ${label} ${description}`,
+): SearchableSelectPageChoice<A> => ({
+  value,
+  item: { value, label, description },
+  searchText,
+  payload,
+});
 
 export const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session" ? "Session" : qualifiedProfileSetLabel(target.set);
@@ -81,29 +111,16 @@ export const makeCandidateFieldSelector = (
     parentEffort: options.parentEffort,
   };
   return new SearchableSelectPage<string>({
-    theme: options.theme,
+    ...selectHost(options),
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
     title: `Choose ${label.toLowerCase()}`,
     subtitle: `${targetLabel(options.target)} · current: ${row?.value ?? current}`,
-    choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
-      (choice) => ({
-        value: choice.value,
-        item: {
-          value: choice.value,
-          label: choice.label,
-          description: choice.description,
-        },
-        searchText: `${choice.value} ${choice.label} ${choice.description}`,
-        payload: choice.value,
-      }),
+    choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map((choice) =>
+      selectChoice(choice.value, choice.label, choice.description, choice.value),
     ),
     current,
     notice: options.notice,
     emptyText: "No matching values",
-    getHeight: options.getHeight,
-    requestRender: options.requestRender,
-    matchesKeybinding: options.matchesKeybinding,
-    keybindingLabel: options.keybindingLabel,
     select: (value: string) =>
       options.select(
         selectCandidateField(options.candidate, options.field, value, changeOptions),
@@ -127,22 +144,15 @@ export const makeRouteActionsSelector = (
 ): SearchableSelectPage<string> => {
   const choices = profileWorkspaceActionChoices(options);
   return new SearchableSelectPage<string>({
-    theme: options.theme,
+    ...selectHost(options),
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · Actions`,
     title: `Manage ${profileRouteOptionLabel(options.candidateIndex)} · ${options.profile}`,
     subtitle: targetLabel(options.target),
-    choices: choices.map((choice) => ({
-      value: choice.action,
-      item: { value: choice.action, label: choice.label, description: choice.description },
-      searchText: `${choice.action} ${choice.label} ${choice.description}`,
-      payload: choice.action,
-    })),
+    choices: choices.map((choice) =>
+      selectChoice(choice.action, choice.label, choice.description, choice.action),
+    ),
     current: "",
     emptyText: "No actions are available",
-    getHeight: options.getHeight,
-    requestRender: options.requestRender,
-    matchesKeybinding: options.matchesKeybinding,
-    keybindingLabel: options.keybindingLabel,
     select: (value: string) => {
       const choice = choices.find((entry) => entry.action === value);
       if (choice) options.select(choice.action);
@@ -154,8 +164,6 @@ export const makeRouteActionsSelector = (
 export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly inspection: ProfileSettingsInspection;
   readonly current: ProfileId;
-  readonly parentEffort: SubagentEffort;
-  readonly parentModel?: string | undefined;
   readonly initialQuery?: string | undefined;
   readonly target: ProfileWorkspaceTarget;
   readonly select: (profile: ProfileId) => void;
@@ -166,32 +174,25 @@ export const makeProfileSearchSelector = (
   options: ProfileSearchSelectorOptions,
 ): SearchableSelectPage<string> => {
   return new SearchableSelectPage<string>({
-    theme: options.theme,
+    ...selectHost(options),
     breadcrumb: targetLabel(options.target),
     title: "Search profiles",
     subtitle: targetLabel(options.target),
     choices: PROFILE_IDS.map((profile) => {
       const summary = targetProfilePrimarySummary(options.inspection, options.target, profile);
-      return {
-        value: profile,
-        item: {
-          value: profile,
-          label: `${profile}${profile === "generalist" ? " · used when no profile is chosen" : ""}`,
-          description: summary,
-        },
-        searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${summary}`,
-        payload: profile,
-      };
+      return selectChoice(
+        profile,
+        `${profile}${profile === "generalist" ? " · used when no profile is chosen" : ""}`,
+        summary,
+        profile,
+        `${profile} ${PROFILE_DEFINITIONS[profile].description} ${summary}`,
+      );
     }),
     current: options.current,
     initialQuery: options.initialQuery,
     initialSearchMode: true,
     cancelBehavior: "close",
     emptyText: "No matching profiles",
-    getHeight: options.getHeight,
-    requestRender: options.requestRender,
-    matchesKeybinding: options.matchesKeybinding,
-    keybindingLabel: options.keybindingLabel,
     select: (value: string) => {
       const profile = PROFILE_IDS.find((entry) => entry === value);
       if (profile) options.select(profile);

@@ -1,6 +1,5 @@
 import {
   initTheme,
-  ToolExecutionComponent,
   type ExtensionAPI,
   type SourceInfo,
   type ToolDefinition,
@@ -12,7 +11,12 @@ import { Text } from "@earendil-works/pi-tui";
 import { beforeAll, expect, it } from "vitest";
 import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { registerCodePreviewReplay } from "../../index";
-import { createToolPresentationHarness, withPresentationSettings } from "../../testing";
+import {
+  createToolPresentationHarness,
+  drawToolRow,
+  hostToolRow,
+  withPresentationSettings,
+} from "../../testing";
 
 beforeAll(() => initTheme("dark", false));
 const source: SourceInfo = {
@@ -115,27 +119,16 @@ for (const style of ["preview", "compact"] as const)
         { toolCallCollapsedStyle: style, toolCallBackground: mode, toolCallTiming: false },
         () => {
           const h = fixture();
-          const cold = h.resolve();
-          const row = new ToolExecutionComponent(
-            "owned",
-            "historical",
-            args,
-            { showImages: false },
-            cold,
-            opaqueFixture({ requestRender() {} }),
-            "/project",
-          );
-          row.updateResult(result);
+          const row = hostToolRow("owned", args, h.resolve(), { result });
           expect(row.render(160).join("\n")).not.toContain("OWNED_CALL");
           const wrapped = h.stage();
           expect(wrapped.execute).toBe(h.tool.execute);
           h.replay.publish();
           h.replay.finishStartup();
-          const frames = [true, false, true].map((expanded) => {
-            row.setExpanded(expanded);
-            row.invalidate();
-            return { expanded, text: row.render(160).join("\n") };
-          });
+          const frames = [true, false, true].map((expanded) => ({
+            expanded,
+            text: drawToolRow(row, expanded, 160),
+          }));
           for (const { text } of frames.filter((frame) => frame.expanded)) {
             expect(text).toContain("OWNED_CALL");
             expect(text).toContain("COMPLETE_INPUT");

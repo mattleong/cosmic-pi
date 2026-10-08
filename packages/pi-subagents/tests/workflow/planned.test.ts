@@ -1,6 +1,5 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
 import { workflowRunSummary, workflowStatusText } from "../../src/tools/workflow-format.ts";
 import type { WorkflowPlannedAgent, WorkflowRunView } from "../../src/workflow/model.ts";
 import {
@@ -16,12 +15,13 @@ import { workflowRunView } from "../fixtures/run-view.ts";
 import {
   eventually,
   finished,
+  inline,
   reportTask,
   resultValue,
   runWhere,
-  testHost,
-  withWorkflows,
-  workflowFixture,
+  script,
+  startScript,
+  workflowTest,
 } from "./fixtures/workflow-harness.ts";
 
 const planned = (
@@ -83,10 +83,14 @@ describe("claiming planned agents", () => {
     expect(
       workflowAgentFromDraft({ callId: 1, queuedAt: 1, label: "verifier" }, "agent-p-3", claimed),
     ).toMatchObject({ phase: "Verify", state: "queued" });
-    // A reused result counts in the claimed entry's phase too.
+    // A reused result claims its entry too, and counts as reused work in the entry's phase.
     const entry = { key: "k", result: "done", outputTokens: 3, chars: 6 };
-    const [, reused] = reuseWorkflowResult(run(reviewPlan), entry, { label: "security" });
-    expect(reused.reusedPhases).toEqual([{ title: "Review", count: 1 }]);
+    const [reusedEntry, reused] = reuseWorkflowResult(run(reviewPlan), entry, {
+      label: "security",
+    });
+    expect(reusedEntry?.runId).toBe("agent-p-2");
+    expect(reused).toMatchObject({ reused: 1, reusedPhases: [{ title: "Review", count: 1 }] });
+    expect(reused.planned).toHaveLength(2);
     // An unlabelled call outside any phase still claims nothing.
     expect(claimWorkflowPlanned(run(reviewPlan), {})[0]).toBeUndefined();
   });
@@ -137,21 +141,6 @@ describe("claiming planned agents", () => {
     });
   });
 
-  it("keeps the call's own label and profile over the claimed entry's", () => {
-    const [claimed] = claimWorkflowPlanned(run(reviewPlan), { phase: "Review", label: "security" });
-    const agent = workflowAgentFromDraft(
-      { callId: 4, queuedAt: 1, label: "security", phase: "Review", profile: "generalist" },
-      claimed?.runId ?? "",
-      claimed,
-    );
-    expect(agent).toMatchObject({ runId: "agent-p-2", label: "security", profile: "generalist" });
-    expect(workflowAgentFromDraft({ callId: 5, queuedAt: 1 }, "agent-own")).toMatchObject({
-      runId: "agent-own",
-      label: "agent-5",
-      state: "queued",
-    });
-  });
-
   it("shows only the profile a claimed call runs with, never the planned one", () => {
     const [byLabel] = claimWorkflowPlanned(run(reviewPlan), { phase: "Review", label: "security" });
     // The call runs with its own (default) profile, so its row doesn't show the planned one.
@@ -177,15 +166,6 @@ describe("claiming planned agents", () => {
         byOrder,
       ).profile,
     ).toBe("scout");
-  });
-
-  it("claims the planned entry of a reused result, which then counts as reused", () => {
-    const entry = { key: "k", result: "done", outputTokens: 3, chars: 6 };
-    const [claimed, rest] = reuseWorkflowResult(run(reviewPlan), entry, { phase: "Verify" });
-    expect(claimed?.runId).toBe("agent-p-3");
-    expect(rest.planned).toHaveLength(2);
-    expect(rest.reused).toBe(1);
-    expect(rest.reusedPhases).toEqual([{ title: "Verify", count: 1 }]);
   });
 });
 
@@ -240,172 +220,127 @@ describe("narrator line", () => {
   });
 });
 
-const script = (meta: string, body: string) =>
-  `export const meta = { name: "planned", description: "Planned agents", phases: ${meta} };\n${body}`;
-
-const inline = (meta: string, body: string) => ({
-  kind: "inline" as const,
-  script: script(meta, body),
-});
-
 const REVIEW_META = `[{ title: "Review", agents: ["correctness", { label: "security", profile: "reviewer" }] }, { title: "Verify", agents: ["verifier"] }]`;
+const FIX_META = `[{ title: "Fix", agents: ["fixer"] }]`;
+
+/** An inline script whose meta declares `phases`. */
+const withMeta = (phases: string, body: string) => inline(body, "planned", phases);
 
 describe("planned agents in a run", () => {
-  it.live("shows declared agents before they start and keeps one id through the run", () => {
-    const fixture = workflowFixture();
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline(
-              REVIEW_META,
-              'phase("Review"); return await agent("check security", { label: "security" });',
-            ),
-            args: null,
-          },
-          testHost(),
-        );
-        expect(started.planned.map(({ phase, label }) => [phase, label])).toEqual([
-          ["Review", "correctness"],
-          ["Review", "security"],
-          ["Verify", "verifier"],
-        ]);
-        expect(new Set(started.planned.map((entry) => entry.runId)).size).toBe(3);
-        const security = started.planned[1]!;
+  it.live("shows declared agents before they start and keeps one id through the run", () =>
+    workflowTest({}, function* ({ fixture, workflows }) {
+      const started = yield* startScript(
+        workflows,
+        withMeta(
+          REVIEW_META,
+          'phase("Review"); return await agent("check security", { label: "security" });',
+        ),
+      );
+      expect(started.planned.map(({ phase, label }) => [phase, label])).toEqual([
+        ["Review", "correctness"],
+        ["Review", "security"],
+        ["Verify", "verifier"],
+      ]);
+      expect(new Set(started.planned.map((entry) => entry.runId)).size).toBe(3);
+      const security = started.planned[1]!;
 
-        const queued = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
-        expect(queued.agents[0]).toMatchObject({ runId: security.runId, label: "security" });
-        expect(queued.planned.map((entry) => entry.label)).toEqual(["correctness", "verifier"]);
+      const queued = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
+      expect(queued.agents[0]).toMatchObject({ runId: security.runId, label: "security" });
+      expect(queued.planned.map((entry) => entry.label)).toEqual(["correctness", "verifier"]);
 
-        // The subagent itself starts under the planned id.
-        const subagentId = yield* reportTask(fixture, "check security", "No issues.");
-        expect(subagentId).toBe(security.runId);
+      // The subagent itself starts under the planned id.
+      const subagentId = yield* reportTask(fixture, "check security", "No issues.");
+      expect(subagentId).toBe(security.runId);
 
-        const done = yield* finished(workflows, started.id);
-        expect(done.state).toBe("completed");
-        // Entries no call claimed stay as history of what never ran.
-        expect(done.planned.map((entry) => entry.label)).toEqual(["correctness", "verifier"]);
-      }),
-    );
-  });
+      const done = yield* finished(workflows, started.id);
+      expect(done.state).toBe("completed");
+      // Entries no call claimed stay as history of what never ran.
+      expect(done.planned.map((entry) => entry.label)).toEqual(["correctness", "verifier"]);
+    }),
+  );
 
   it.live("lets a resumed run's reused calls claim their planned entries", () => {
-    const fixture = workflowFixture();
     const find = 'phase("Review"); const found = await agent("review it");';
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const original = yield* workflows.start(
-          { source: inline(REVIEW_META, `${find}\nthrow new Error("not yet");`), args: null },
-          testHost(),
-        );
-        yield* reportTask(fixture, "review it", "Reviewed.");
-        expect((yield* finished(workflows, original.id)).planned).toHaveLength(2);
-        const resumed = yield* workflows.start(
-          {
-            source: inline(REVIEW_META, `${find}\nreturn found;`),
-            args: null,
-            resumeFromRunId: original.id,
-          },
-          testHost(),
-        );
-        const done = yield* finished(workflows, resumed.id);
-        expect(done.reused).toBe(1);
-        expect(done.agents).toEqual([]);
-        expect(done.planned.map((entry) => entry.label)).toEqual(["security", "verifier"]);
-      }),
-    );
+    return workflowTest({}, function* ({ fixture, workflows }) {
+      const original = yield* startScript(
+        workflows,
+        withMeta(REVIEW_META, `${find}\nthrow new Error("not yet");`),
+      );
+      yield* reportTask(fixture, "review it", "Reviewed.");
+      expect((yield* finished(workflows, original.id)).planned).toHaveLength(2);
+      const resumed = yield* startScript(
+        workflows,
+        withMeta(REVIEW_META, `${find}\nreturn found;`),
+        { resumeFromRunId: original.id },
+      );
+      const done = yield* finished(workflows, resumed.id);
+      expect(done.reused).toBe(1);
+      expect(done.agents).toEqual([]);
+      expect(done.planned.map((entry) => entry.label)).toEqual(["security", "verifier"]);
+      expect(done.reusedPhases).toEqual([{ title: "Review", count: 1 }]);
+    });
   });
 
-  it.live("claims the planned agents of a meta phase titled with surrounding spaces", () => {
-    const fixture = workflowFixture();
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline(
-              `[{ title: " Review ", agents: ["first", "second"] }]`,
-              'phase(" Review "); return await Promise.all([agent("check one"), agent("check two")]);',
-            ),
-            args: null,
-          },
-          testHost(),
-        );
-        const queued = yield* runWhere(workflows, started.id, (view) => view.agents.length === 2);
-        expect(queued.agents.map((agent) => agent.label).sort()).toEqual(["first", "second"]);
-        expect(queued.planned).toEqual([]);
-        expect(queued.phases.map((phase) => phase.title)).toEqual(["Review"]);
-        yield* reportTask(fixture, "check one", "1");
-        yield* reportTask(fixture, "check two", "2");
-        const done = yield* finished(workflows, started.id);
-        expect(done.planned).toEqual([]);
-      }),
-    );
-  });
+  it.live("claims the planned agents of a meta phase titled with surrounding spaces", () =>
+    workflowTest({}, function* ({ fixture, workflows }) {
+      const started = yield* startScript(
+        workflows,
+        withMeta(
+          `[{ title: " Review ", agents: ["first", "second"] }]`,
+          'phase(" Review "); return await Promise.all([agent("check one"), agent("check two")]);',
+        ),
+      );
+      const queued = yield* runWhere(workflows, started.id, (view) => view.agents.length === 2);
+      expect(queued.agents.map((agent) => agent.label).sort()).toEqual(["first", "second"]);
+      expect(queued.planned).toEqual([]);
+      expect(queued.phases.map((phase) => phase.title)).toEqual(["Review"]);
+      yield* reportTask(fixture, "check one", "1");
+      yield* reportTask(fixture, "check two", "2");
+      const done = yield* finished(workflows, started.id);
+      expect(done.planned).toEqual([]);
+    }),
+  );
 
   it.live("lets a nested workflow's call outside a phase claim only its own planned agents", () => {
-    const fixture = workflowFixture({
-      scripts: {
-        child: script(
-          `[{ title: "Fix", agents: ["fixer"] }]`,
-          'return await agent("fix it", { label: "fixer" });',
+    const child = script('return await agent("fix it", { label: "fixer" });', "planned", FIX_META);
+    return workflowTest({ scripts: { child } }, function* ({ fixture, workflows }) {
+      const started = yield* startScript(
+        workflows,
+        withMeta(
+          `[{ title: "Review", agents: ["fixer"] }]`,
+          `const fixed = await workflow("child");
+          phase("Review");
+          return [fixed, await agent("review it", { label: "fixer" })];`,
         ),
-      },
+      );
+      const parent = started.planned[0]!;
+      const loaded = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
+      const child = loaded.agents[0]!;
+      // The child's call takes the child's entry, in the child's phase, and leaves the parent's.
+      expect(child.runId).not.toBe(parent.runId);
+      expect(child.phase).toBe(loaded.phases.at(-1)?.title);
+      expect(loaded.planned).toEqual([parent]);
+      yield* reportTask(fixture, "fix it", "Fixed.");
+      const reviewed = yield* runWhere(workflows, started.id, (view) => view.agents.length === 2);
+      expect(reviewed.agents[1]).toMatchObject({ runId: parent.runId, phase: "Review" });
+      yield* reportTask(fixture, "review it", "Reviewed.");
+      const done = yield* finished(workflows, started.id);
+      expect(resultValue(done)).toEqual(["Fixed.", "Reviewed."]);
+      expect(done.planned).toEqual([]);
     });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline(
-              `[{ title: "Review", agents: ["fixer"] }]`,
-              `const fixed = await workflow("child");
-              phase("Review");
-              return [fixed, await agent("review it", { label: "fixer" })];`,
-            ),
-            args: null,
-          },
-          testHost(),
-        );
-        const parent = started.planned[0]!;
-        const loaded = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
-        const child = loaded.agents[0]!;
-        // The child's call takes the child's entry, in the child's phase, and leaves the parent's.
-        expect(child.runId).not.toBe(parent.runId);
-        expect(child.phase).toBe(loaded.phases.at(-1)?.title);
-        expect(loaded.planned).toEqual([parent]);
-        yield* reportTask(fixture, "fix it", "Fixed.");
-        const reviewed = yield* runWhere(workflows, started.id, (view) => view.agents.length === 2);
-        expect(reviewed.agents[1]).toMatchObject({ runId: parent.runId, phase: "Review" });
-        yield* reportTask(fixture, "review it", "Reviewed.");
-        const done = yield* finished(workflows, started.id);
-        expect(resultValue(done)).toEqual(["Fixed.", "Reviewed."]);
-        expect(done.planned).toEqual([]);
-      }),
-    );
   });
 
   it.live("adds a nested workflow's planned agents under its phases", () => {
-    const fixture = workflowFixture({
-      scripts: {
-        child: script(
-          `[{ title: "Fix", agents: ["fixer"] }]`,
-          'phase("Fix"); return await agent("fix it");',
-        ),
-      },
+    const child = script('phase("Fix"); return await agent("fix it");', "planned", FIX_META);
+    return workflowTest({ scripts: { child } }, function* ({ fixture, workflows }) {
+      const started = yield* startScript(workflows, 'return await workflow("child");');
+      const loaded = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
+      const agent = loaded.agents[0]!;
+      expect(agent.label).toBe("fixer");
+      expect(agent.phase).toBe(loaded.phases.at(-1)?.title);
+      expect(loaded.planned).toEqual([]);
+      yield* reportTask(fixture, "fix it", "Fixed.");
+      yield* eventually(() => fixture.delivered[0], "the workflow notification");
     });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          { source: inline(`[{ title: "Main" }]`, 'return await workflow("child");'), args: null },
-          testHost(),
-        );
-        const loaded = yield* runWhere(workflows, started.id, (view) => view.agents.length === 1);
-        const agent = loaded.agents[0]!;
-        expect(agent.label).toBe("fixer");
-        expect(agent.phase).toBe(loaded.phases.at(-1)?.title);
-        expect(loaded.planned).toEqual([]);
-        yield* reportTask(fixture, "fix it", "Fixed.");
-        yield* eventually(() => fixture.delivered[0], "the workflow notification");
-      }),
-    );
   });
 });

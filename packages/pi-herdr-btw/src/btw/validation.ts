@@ -11,7 +11,7 @@ import type {
   SessionFileIdentityComparison,
   SessionHeaderProbe,
 } from "../boundary/session-file.ts";
-import { confirmedFailure, HerdrBtwError } from "./errors.ts";
+import { confirmedFailure } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
 import { parseHerdrBtwSessionId } from "./marker.ts";
 
@@ -30,30 +30,28 @@ export const isValidBlankChildProbe = (
   probe.header.id === childSessionId &&
   probe.header.parentSession === undefined;
 
-export const ensureHerdrProtocol = (
+export const ensureHerdrProtocol = Effect.fn("HerdrBtw.ensureHerdrProtocol")(function* (
   client: HerdrClientContract,
-): Effect.Effect<void, HerdrBtwError> =>
-  Effect.gen(function* () {
-    const protocol = yield* client.inspectProtocol();
-    if (protocol < MINIMUM_HERDR_PROTOCOL)
-      return yield* confirmedFailure(
-        "inspect protocol",
-        "herdr_upgrade_required",
-        `Herdr BTW needs Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer (found ${protocol})`,
-      );
-  });
+) {
+  const protocol = yield* client.inspectProtocol();
+  if (protocol < MINIMUM_HERDR_PROTOCOL)
+    return yield* confirmedFailure(
+      "inspect protocol",
+      "herdr_upgrade_required",
+      `Herdr BTW needs Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer (found ${protocol})`,
+    );
+});
 
-export const ensurePiIntegration = (
+export const ensurePiIntegration = Effect.fn("HerdrBtw.ensurePiIntegration")(function* (
   client: HerdrClientContract,
-): Effect.Effect<void, HerdrBtwError> =>
-  Effect.gen(function* () {
-    if (!(yield* client.inspectPiIntegration()))
-      return yield* confirmedFailure(
-        "inspect Pi integration",
-        "herdr_pi_integration_unavailable",
-        "Herdr BTW needs Herdr's Pi integration; run herdr integration install pi, then try again",
-      );
-  });
+) {
+  if (!(yield* client.inspectPiIntegration()))
+    return yield* confirmedFailure(
+      "inspect Pi integration",
+      "herdr_pi_integration_unavailable",
+      "Herdr BTW needs Herdr's Pi integration; run herdr integration install pi, then try again",
+    );
+});
 
 const parentSessionUnavailable = () =>
   confirmedFailure(
@@ -62,48 +60,47 @@ const parentSessionUnavailable = () =>
     "This Pi session has no saved session file to link to",
   );
 
-export const validateBtwInput = (
+export const validateBtwInput = Effect.fn("HerdrBtw.validateBtwInput")(function* (
   prompt: string | undefined,
   input: HerdrBtwSessionInput,
   probeSessionHeader: (path: string) => SessionHeaderProbe,
-): Effect.Effect<{ sessionFile: string; sessionId: string }, HerdrBtwError> =>
-  Effect.gen(function* () {
-    if (input.environment.HERDR_ENV !== "1" || !input.environment.HERDR_PANE_ID)
-      return yield* confirmedFailure(
-        "validate environment",
-        "herdr_environment_unavailable",
-        "Herdr BTW only works in a Pi session inside a Herdr pane",
-      );
+) {
+  if (input.environment.HERDR_ENV !== "1" || !input.environment.HERDR_PANE_ID)
+    return yield* confirmedFailure(
+      "validate environment",
+      "herdr_environment_unavailable",
+      "Herdr BTW only works in a Pi session inside a Herdr pane",
+    );
 
-    if (!input.sessionFile) return yield* parentSessionUnavailable();
-    const sessionId = parseHerdrBtwSessionId(input.sessionId);
-    if (sessionId === undefined)
-      return yield* confirmedFailure(
-        "validate parent session",
-        "parent_session_id_unavailable",
-        "Couldn't read this Pi session's ID",
-      );
-    const parentProbe = probeSessionHeader(input.sessionFile);
-    if (parentProbe._tag !== "valid") return yield* parentSessionUnavailable();
-    if (parentProbe.header.id !== sessionId)
-      return yield* confirmedFailure(
-        "validate parent session",
-        "parent_session_owner_mismatch",
-        "This session's file belongs to a different Pi session",
-      );
+  if (!input.sessionFile) return yield* parentSessionUnavailable();
+  const sessionId = parseHerdrBtwSessionId(input.sessionId);
+  if (sessionId === undefined)
+    return yield* confirmedFailure(
+      "validate parent session",
+      "parent_session_id_unavailable",
+      "Couldn't read this Pi session's ID",
+    );
+  const parentProbe = probeSessionHeader(input.sessionFile);
+  if (parentProbe._tag !== "valid") return yield* parentSessionUnavailable();
+  if (parentProbe.header.id !== sessionId)
+    return yield* confirmedFailure(
+      "validate parent session",
+      "parent_session_owner_mismatch",
+      "This session's file belongs to a different Pi session",
+    );
 
-    if (
-      prompt !== undefined &&
-      (prompt.includes("\0") || Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES)
-    )
-      return yield* confirmedFailure(
-        "validate prompt",
-        "btw_prompt_invalid",
-        `The prompt must be at most ${MAX_PROMPT_BYTES} bytes with no NUL characters`,
-      );
+  if (
+    prompt !== undefined &&
+    (prompt.includes("\0") || Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES)
+  )
+    return yield* confirmedFailure(
+      "validate prompt",
+      "btw_prompt_invalid",
+      `The prompt must be at most ${MAX_PROMPT_BYTES} bytes with no NUL characters`,
+    );
 
-    return { sessionFile: input.sessionFile, sessionId };
-  });
+  return { sessionFile: input.sessionFile, sessionId };
+});
 
 const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
   const shellPid = processInfo.shell_pid;
@@ -119,31 +116,30 @@ const paneHasAvailableShell = (processInfo: HerdrPaneProcessInfo): boolean => {
   );
 };
 
-export const waitForAvailableShell = (
+export const waitForAvailableShell = Effect.fn("HerdrBtw.waitForAvailableShell")(function* (
   client: HerdrClientContract,
   paneId: string,
-): Effect.Effect<void, HerdrBtwError> =>
-  Effect.gen(function* () {
-    let stableReadings = 0;
-    for (let attempt = 1; attempt <= SHELL_READINESS_ATTEMPTS; attempt += 1) {
-      const processInfo = yield* client.inspectPaneProcessInfo(paneId);
-      if (processInfo.pane_id !== paneId)
-        return yield* confirmedFailure(
-          "inspect BTW pane shell",
-          "herdr_btw_pane_shell_mismatch",
-          "Herdr reported a different pane, so Pi wasn't started",
-        );
-      stableReadings = paneHasAvailableShell(processInfo) ? stableReadings + 1 : 0;
-      if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
-      if (attempt < SHELL_READINESS_ATTEMPTS) yield* Effect.sleep(SHELL_READINESS_DELAY_MILLIS);
-    }
+) {
+  let stableReadings = 0;
+  for (let attempt = 1; attempt <= SHELL_READINESS_ATTEMPTS; attempt += 1) {
+    const processInfo = yield* client.inspectPaneProcessInfo(paneId);
+    if (processInfo.pane_id !== paneId)
+      return yield* confirmedFailure(
+        "inspect BTW pane shell",
+        "herdr_btw_pane_shell_mismatch",
+        "Herdr reported a different pane, so Pi wasn't started",
+      );
+    stableReadings = paneHasAvailableShell(processInfo) ? stableReadings + 1 : 0;
+    if (stableReadings >= REQUIRED_STABLE_SHELL_READINGS) return;
+    if (attempt < SHELL_READINESS_ATTEMPTS) yield* Effect.sleep(SHELL_READINESS_DELAY_MILLIS);
+  }
 
-    return yield* confirmedFailure(
-      "inspect BTW pane shell",
-      "herdr_btw_pane_shell_not_ready",
-      "The new pane's shell didn't become ready in time, so Pi wasn't started",
-    );
-  });
+  return yield* confirmedFailure(
+    "inspect BTW pane shell",
+    "herdr_btw_pane_shell_not_ready",
+    "The new pane's shell didn't become ready in time, so Pi wasn't started",
+  );
+});
 
 /**
  * Fail-closed parent/child file-distinctness: the child path must differ textually AND compare
@@ -162,36 +158,27 @@ const piAgentSession = (agent: HerdrPane) => {
   return session?.source === "herdr:pi" && session.agent === "pi" ? session : undefined;
 };
 
-export const validateStartedAgent = (
+/** Exact pane, terminal, name, and path-based child evidence required after startup. */
+export const isOwnedStartedAgent = (
   agent: HerdrPane,
   pane: HerdrPane,
   agentName: string,
   parentSessionFile: string,
   expectedChildPath: string,
   compareSessionFileIdentity: SessionFileIdentityComparator,
-): Effect.Effect<void, HerdrBtwError> => {
+): boolean => {
   const childSession = piAgentSession(agent);
-  if (
-    agent.pane_id !== pane.pane_id ||
-    agent.terminal_id !== pane.terminal_id ||
-    agent.workspace_id !== pane.workspace_id ||
-    agent.tab_id !== pane.tab_id ||
-    agent.name !== agentName ||
-    agent.agent !== "pi" ||
-    childSession?.kind !== "path" ||
-    compareSessionFileIdentity(childSession.value, expectedChildPath) !== "same" ||
-    !isDistinctChildSessionPath(expectedChildPath, parentSessionFile, compareSessionFileIdentity)
-  )
-    return Effect.fail(
-      new HerdrBtwError({
-        operation: "start side-session Pi",
-        code: "herdr_agent_ownership_mismatch",
-        message: "Herdr reported a different Pi starting than the one launched",
-        outcome: "uncertain",
-      }),
-    );
-
-  return Effect.void;
+  return (
+    agent.pane_id === pane.pane_id &&
+    agent.terminal_id === pane.terminal_id &&
+    agent.workspace_id === pane.workspace_id &&
+    agent.tab_id === pane.tab_id &&
+    agent.name === agentName &&
+    agent.agent === "pi" &&
+    childSession?.kind === "path" &&
+    compareSessionFileIdentity(childSession.value, expectedChildPath) === "same" &&
+    isDistinctChildSessionPath(expectedChildPath, parentSessionFile, compareSessionFileIdentity)
+  );
 };
 
 const linkedAgentSessionIdentity = (

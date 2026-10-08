@@ -3,17 +3,25 @@
 // failure-atomic prepare/remove, and cancelable bounded auth probes. This boundary owns no wire transport
 // and must not import the LocalCliProcess service.
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { synchronousRandomHex, runBoundedProcessNode } from "pi-cosmic-core";
+import {
+  synchronousRandomHex,
+  runBoundedProcessNode,
+  type BoundedProcessResult,
+} from "pi-cosmic-core";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { claudeArgv, claudeSettings } from "../backend/claude-policy.ts";
-import type { SubagentRuntime } from "../domain/routing.ts";
-import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
 import {
-  codexFeatureLines,
+  claudeArgv,
+  claudeSettings,
+  claudeWriterCwdRulePolicy,
+  type ClaudeWriterCwdPolicy,
+} from "../backend/claude-policy.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
+import {
   ensurePrivateDirectory,
   readValidatedCodexAuth,
   removePrivateDirectory,
@@ -108,9 +116,7 @@ export const approvedCodexApiKey = (source: NodeJS.ProcessEnv): string | undefin
   return Predicate.isString(apiKey) &&
     apiKey.length > 0 &&
     apiKey.length <= 8_192 &&
-    !apiKey.includes("\0") &&
-    !apiKey.includes("\r") &&
-    !apiKey.includes("\n")
+    !/[\0\r\n]/u.test(apiKey)
     ? apiKey
     : undefined;
 };
@@ -136,7 +142,19 @@ export const sanitizeLocalCliEnvironment = (
   };
 };
 
+/**
+ * The one platform decision before the pure Claude policy grammar: a writer cwd must be an
+ * absolute path for its cwd/scoped-Edit rule pair to exist.
+ */
+export const claudeWriterCwdPolicy = (cwd: string | undefined): ClaudeWriterCwdPolicy | undefined =>
+  Predicate.isString(cwd) && nodePath.isAbsolute(cwd) ? claudeWriterCwdRulePolicy(cwd) : undefined;
+
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
+
+const CODEX_DISABLED_FEATURES =
+  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies".split(
+    " ",
+  );
 
 const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   'approval_policy = "never"',
@@ -148,7 +166,13 @@ const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
   "[agents]",
   "enabled = true",
-  ...codexFeatureLines(openaiFastMode),
+  // Every reviewed feature is off except opted-in fast mode.
+  "[features]",
+  ...CODEX_DISABLED_FEATURES.map(
+    (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
+  ),
+  "multi_agent = true",
+  "hooks = false",
 ];
 
 const codexConfig = (supervisor: SupervisorConnectionMetadata, openaiFastMode: boolean): string =>
@@ -162,8 +186,9 @@ export const removeLocalCliHarness = (
   Effect.tryPromise({ try: () => removePrivateDirectory(directory), catch: harnessCleanupFailed });
 
 /**
- * Owns one unique private harness directory: root preparation stays interruptible, the exclusive
- * directory and its build stay masked, and a failed build is cleaned up before it is reported.
+ * Owns one unique private harness directory: root preparation keeps the caller's
+ * interruptibility, the exclusive directory and its build stay masked, and a failed build is
+ * cleaned up before it is reported.
  */
 const prepareOwnedHarness = <Harness>(
   agentDirectory: string,
@@ -181,11 +206,14 @@ const prepareOwnedHarness = <Harness>(
       yield* restore(prepareStep(() => ensurePrivateDirectory(packageRoot)));
       yield* restore(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
-      const built = yield* Effect.exit(build(directory));
-      if (built._tag === "Success") return built.value;
-      const cleaned = yield* Effect.exit(cleanup(directory));
-      if (cleaned._tag === "Failure") return yield* harnessCleanupFailed();
-      return yield* Effect.failCause(built.cause);
+      return yield* build(directory).pipe(
+        Effect.catchCause((cause) =>
+          cleanup(directory).pipe(
+            Effect.catchCause(() => Effect.fail(harnessCleanupFailed())),
+            Effect.andThen(Effect.failCause(cause)),
+          ),
+        ),
+      );
     }),
   );
 
@@ -276,7 +304,6 @@ export const prepareLocalCliHarness = (
   );
 
 export interface CodexCatalogHarness {
-  readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly release: Effect.Effect<void, LocalCliHarnessError>;
 }
@@ -289,7 +316,6 @@ export const prepareCodexCatalogHarness = (options: {
   prepareOwnedHarness(options.agentDirectory, CATALOG_HARNESS_ROOT, "codex", (directory) =>
     prepareStep(() =>
       prepareCodexHome(directory, codexCatalogConfig(), options.environment).then((codexHome) => ({
-        args: codexArgv(),
         env: {
           ...sanitizeLocalCliEnvironment(options.environment, "codex"),
           CODEX_HOME: codexHome,
@@ -299,19 +325,14 @@ export const prepareCodexCatalogHarness = (options: {
     ),
   );
 
-export interface ProbeResult {
-  readonly code: number | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly overflowed: boolean;
-  readonly timedOut: boolean;
-  readonly cleanupUnconfirmed: boolean;
-}
+export type ProbeResult = Omit<BoundedProcessResult, "signal">;
 
-const ClaudeAuthStatusSchema = Schema.Struct({ loggedIn: Schema.Boolean });
+const decodeClaudeAuthStatus = Schema.decodeOption(
+  Schema.fromJsonString(Schema.Struct({ loggedIn: Schema.Boolean })),
+);
 
 export const claudeAuthLoggedIn = (source: string): boolean => {
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ClaudeAuthStatusSchema))(source);
+  const decoded = decodeClaudeAuthStatus(source);
   return Option.isSome(decoded) && decoded.value.loggedIn;
 };
 
@@ -359,8 +380,8 @@ export const runIsolatedCodexAuthProbe = (
         restore(runProbeEffect(executable, ["login", "status"], harness.env)),
       );
       const released = yield* Effect.exit(harness.release);
-      if (released._tag === "Failure") {
-        if (result._tag === "Failure") return yield* harnessCleanupFailed();
+      if (Exit.isFailure(released)) {
+        if (Exit.isFailure(result)) return yield* harnessCleanupFailed();
         return {
           ...result.value,
           code: null,
@@ -368,7 +389,6 @@ export const runIsolatedCodexAuthProbe = (
           stderr: "Codex readiness probe private harness cleanup could not be confirmed.",
         };
       }
-      if (result._tag === "Failure") return yield* Effect.failCause(result.cause);
-      return result.value;
+      return yield* result;
     }),
   );

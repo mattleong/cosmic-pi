@@ -9,16 +9,16 @@ import { countLabel, formatBytes } from "pi-cosmic-core";
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
 /**
- * The service's in-memory snapshot: the v1 member plus the domain-only `failureCause`, the first
- * line of a failed task's output that names the failure, redacted and bounded. It is never
- * persisted: tool results carry it in their text, and details only point at it.
+ * The service's in-memory snapshot: the persisted member plus the domain-only `failureCause`,
+ * the first line of a failed task's output that names the failure, redacted and bounded. It is
+ * never persisted: tool results carry it in their text, and details only point at it.
  */
 export type BackgroundTaskStatus = BackgroundTaskSnapshot & { readonly failureCause?: string };
 export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot"> & {
   readonly snapshot: BackgroundTaskStatus;
   /**
    * How long the service let the wait run: the shorter of `waitSeconds` and the `maxWaitSeconds`
-   * setting. A timed-out wait waited this long. Not part of the frozen v1 wait member.
+   * setting. A timed-out wait waited this long. Not part of the shared wait member.
    */
   readonly appliedWaitSeconds: number;
 };
@@ -81,15 +81,8 @@ const ACTIVE_TASK_STATES: ReadonlySet<BackgroundTaskState> = new Set([
 export const isActiveTaskState = (state: BackgroundTaskState): boolean =>
   ACTIVE_TASK_STATES.has(state);
 
-export interface BackgroundTaskStateCounts {
-  readonly active: number;
-  readonly failed: number;
-}
-
 /** Single owner of the failed policy: `failed` counts both `failed` and `timed_out` tasks. */
-export const countTaskStates = (
-  tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot, "state">>,
-): BackgroundTaskStateCounts => {
+export const countTaskStates = (tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot, "state">>) => {
   let active = 0;
   let failed = 0;
   for (const task of tasks) {

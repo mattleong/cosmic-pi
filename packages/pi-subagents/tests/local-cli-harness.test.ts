@@ -1,11 +1,11 @@
 // Private harness lifecycle tests intentionally exercise real filesystem and process ownership.
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
-import { deferredPromise } from "pi-cosmic-core/testing";
+import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
 import {
   prepareLocalCliHarness,
   sanitizeLocalCliEnvironment,
@@ -13,28 +13,23 @@ import {
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
-import {
-  makeTemporaryDirectory,
-  removeTemporaryDirectories,
-} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
 const executable = fileURLToPath(new URL("./fixtures/local-cli-fixture.mjs", import.meta.url));
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
-const setup = () =>
-  makeTemporaryDirectory("pi-subagents-local-cli-harness-").then((directory) => {
-    const agentDirectory = join(directory, "agent");
-    const home = join(directory, "home");
-    return fs
-      .mkdir(agentDirectory, { mode: 0o700 })
-      .then(() => fs.mkdir(home, { mode: 0o700 }))
-      .then(() => ({
-        directory,
-        agentDirectory,
-        environment: { HOME: home, PATH: inheritedPath(process.env) },
-      }));
-  });
+const setup = Effect.gen(function* () {
+  const directory = yield* temporaryDirectory("pi-subagents-local-cli-harness-");
+  const agentDirectory = join(directory, "agent");
+  const home = join(directory, "home");
+  yield* Effect.promise(() => fs.mkdir(agentDirectory, { mode: 0o700 }));
+  yield* Effect.promise(() => fs.mkdir(home, { mode: 0o700 }));
+  return {
+    directory,
+    agentDirectory,
+    environment: { HOME: home, PATH: inheritedPath(process.env) },
+  };
+});
 
 const supervisor = (directory: string) =>
   supervisorMetadata({
@@ -50,8 +45,6 @@ const harnessEntries = (agentDirectory: string) =>
       if (error.code === "ENOENT") return [];
       throw error;
     });
-
-afterEach(removeTemporaryDirectories);
 
 describe("local CLI harness ownership", () => {
   it("keeps adapter debug controls out of the child environment", () => {
@@ -76,7 +69,7 @@ describe("local CLI harness ownership", () => {
     ],
   ] as const)("%s", ([, harnessCleanupFault, reason, remaining]) =>
     Effect.gen(function* () {
-      const test = yield* Effect.promise(setup);
+      const test = yield* setup;
       const error = yield* Effect.flip(
         prepareLocalCliHarness(
           {
@@ -97,7 +90,7 @@ describe("local CLI harness ownership", () => {
 
   it.live("does not leak a harness when interrupted during masked preparation", () =>
     Effect.gen(function* () {
-      const test = yield* Effect.promise(setup);
+      const test = yield* setup;
       const entered = Deferred.makeUnsafe<void>();
       const gate = deferredPromise();
       const service = makeLocalCliProcess({
@@ -134,7 +127,7 @@ describe("local CLI harness ownership", () => {
 
   it.live("releases the process before removing its scoped harness", () =>
     Effect.gen(function* () {
-      const test = yield* Effect.promise(setup);
+      const test = yield* setup;
       const service = makeLocalCliProcess({
         agentDirectory: test.agentDirectory,
         environment: test.environment,

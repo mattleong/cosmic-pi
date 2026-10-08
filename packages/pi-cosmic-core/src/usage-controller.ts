@@ -5,13 +5,17 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
-import * as Result from "effect/Result";
+import type * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
 import type { RefreshRequest } from "./coordination/refresh-coordinator.ts";
 import { makeSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
-import type { ScopedConfigMetadata, ScopedConfigStore } from "./config/scoped-config-store.ts";
+import {
+  commitPreferredScope,
+  type PreferredScopeStore,
+  type ScopedConfigMetadata,
+  type ScopedConfigStore,
+} from "./config/scoped-config-store.ts";
 import { AgentDirectory } from "./platform/agent-directory.ts";
 import { JsonDocumentStore, type JsonObject } from "./platform/json-document.ts";
 import { JsonHttpClient } from "./platform/json-http.ts";
@@ -24,7 +28,7 @@ import { formatDuration } from "./display.ts";
 import { failureMessage, notificationText } from "./message-text.ts";
 
 /** Usage configuration fields the shared controller relies on. */
-export interface UsageControllerConfigFields {
+interface UsageControllerConfigFields {
   readonly refreshIntervalMs: number;
   readonly showOnlyOnSubscriptionModels: boolean;
 }
@@ -40,7 +44,7 @@ export type UsageControllerConfig = ScopedConfigMetadata & {
 };
 
 /** Core services every provider usage stack depends on. */
-export type UsageProviderRequirements = Path.Path | JsonDocumentStore | JsonHttpClient;
+type UsageProviderRequirements = Path.Path | JsonDocumentStore | JsonHttpClient;
 
 /** Provider fetch result. `patch` carries provider identity fields into the projection. */
 export type UsageFetchOutcome<Snapshot, Patch> =
@@ -62,10 +66,11 @@ type RefreshValue<Snapshot, Patch> =
     });
 
 /** Scoped configuration store operations used by the shared controller. */
-export type UsageControllerStore<Resolved extends ScopedConfigMetadata, E> = Pick<
-  ScopedConfigStore<unknown, Resolved, E>,
-  "resolveConfig" | "readRawConfig" | "resolveCommittedConfig" | "modifyConfig"
->;
+type UsageControllerStore<Resolved extends ScopedConfigMetadata, E> = PreferredScopeStore<
+  Resolved,
+  E
+> &
+  Pick<ScopedConfigStore<unknown, Resolved, E>, "resolveConfig">;
 
 export interface UsageRefreshControllerOptions<
   P extends UsageProjectionBase<Resolved, Snapshot>,
@@ -88,13 +93,12 @@ export interface UsageRefreshControllerOptions<
   readonly startPolling?: boolean | undefined;
   /** Presentation owner controls automatic requests; explicit notified requests still fetch. */
   readonly backgroundEnabled?: (() => boolean) | undefined;
-  readonly agentDir?: string | undefined;
   readonly projectTrusted?: boolean | undefined;
   /** Provider initial projection (shared fields plus provider identity fields). */
   readonly initialProjection: () => P;
   /** Status text published when the current model is not an eligible subscription model. */
   readonly hiddenStatusText: string;
-  readonly missingCredentialsMessage: (authPath: string) => string;
+  readonly missingCredentialsMessage: string;
   /** Identity fields cleared when credentials go missing (e.g. authFound/teamId). */
   readonly clearAuthPatch: Partial<P>;
   readonly store: UsageControllerStore<Resolved, E>;
@@ -118,7 +122,6 @@ export interface UsageRefreshControllerOptions<
   /** Fetches credentials and usage; infrastructure failures must be mapped to outcomes. */
   readonly fetchOutcome: (args: {
     readonly ctx: ExtensionContext;
-    readonly cfg: Resolved;
   }) => Effect.Effect<
     UsageFetchOutcome<Snapshot, Partial<P>>,
     never,
@@ -130,7 +133,7 @@ export interface UsageRefreshControllerOptions<
   readonly dependencies: Context.Context<R>;
 }
 
-export interface UsageRefreshController<
+interface UsageRefreshController<
   P extends UsageProjectionBase<Resolved, Snapshot>,
   Resolved extends UsageControllerConfig,
   Snapshot,
@@ -145,20 +148,11 @@ export interface UsageRefreshController<
   /** Extension seams for provider-specific config mutations sharing the same serialization. */
   readonly getState: Effect.Effect<P>;
   readonly updateState: (f: (current: P) => P) => Effect.Effect<P>;
-  readonly installConfig: (
-    config: Resolved,
-    clearUsage?: boolean,
-    wakePolling?: boolean,
-  ) => Effect.Effect<void>;
-  readonly synchronize: (
-    clearUsage?: boolean,
-  ) => Effect.Effect<void, never, UsageProviderRequirements | R>;
+  /** Installs a committed config, clearing usage and waking polling. */
+  readonly installConfig: (config: Resolved) => Effect.Effect<void>;
   readonly withSettingsPermit: <A, E2, R2>(
     effect: Effect.Effect<A, E2, R2>,
   ) => Effect.Effect<A, E2, R2>;
-  readonly readGlobalFallback: (
-    current: Resolved,
-  ) => Effect.Effect<JsonObject | undefined, E, JsonDocumentStore>;
   readonly provideDependencies: <A, E2>(
     effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
   ) => Effect.Effect<A, E2>;
@@ -192,7 +186,7 @@ export const makeUsageRefreshController = <
     const provideDependencies = <A, E2>(
       effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
     ): Effect.Effect<A, E2> => Effect.provideContext(effect, dependencies);
-    const agentDir = options.agentDir ?? (yield* AgentDirectory);
+    const agentDir = yield* AgentDirectory;
     const authPath = path.join(agentDir, "auth.json");
     const projectTrusted = options.projectTrusted === true;
     const config = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
@@ -219,12 +213,11 @@ export const makeUsageRefreshController = <
         })
         .pipe(Effect.orDie);
     // Best-effort host UI adapter: a failing host callback is logged, never propagated.
-    const notifyHost = <Result>(operation: string, action: () => Result) =>
+    const notifyHost = (operation: string, action: () => void) =>
       Effect.try(() => {
         if (options.canPublish?.() !== false) action();
       }).pipe(
         Effect.catch(() => Effect.logWarning(`${logLabel} UI recovery: ${operation}_failed.`)),
-        Effect.asVoid,
       );
     const notifyChanged = notifyHost("render", onChange);
     const notifyUser = (message: string, level: "info" | "warning") =>
@@ -291,7 +284,7 @@ export const makeUsageRefreshController = <
             now - current.lastFetchAt < cfg.usage.refreshIntervalMs
           )
             return { _tag: "Skipped" } as const;
-          const outcome = yield* options.fetchOutcome({ ctx, cfg });
+          const outcome = yield* options.fetchOutcome({ ctx });
           return { ...outcome, notify, fetchedAt: now };
         }),
       commit: (value) =>
@@ -316,7 +309,7 @@ export const makeUsageRefreshController = <
               });
             if (value._tag === "Failure" || value._tag === "Missing") {
               const missing = value._tag === "Missing";
-              const message = missing ? options.missingCredentialsMessage(authPath) : value.message;
+              const message = missing ? options.missingCredentialsMessage : value.message;
               return mergeState(
                 current,
                 {
@@ -354,55 +347,34 @@ export const makeUsageRefreshController = <
       provideDependencies(refreshEngine.request(request));
     const contextChanged = (clearUsage = false) =>
       provideDependencies(refreshEngine.invalidateWith(synchronize(clearUsage)));
-    const installConfig = (config: Resolved, clearUsage = true, wakePolling = true) =>
+    const installConfig = (config: Resolved) =>
       provideDependencies(
         refreshEngine.invalidateWith(
           updateState((latest) => mergeState(latest, { config })).pipe(
-            Effect.andThen(synchronize(clearUsage)),
+            Effect.andThen(synchronize(true)),
           ),
-          wakePolling,
         ),
       );
-    const readGlobalFallback = Effect.fn(`${options.spanPrefix}.readGlobalFallback`)(function* (
-      current: Resolved,
-    ) {
-      if (current.configPath !== current.projectConfigPath || !current.globalConfigExists)
-        return undefined;
-      return yield* store.readRawConfig(current.globalConfigPath);
-    });
     const updateSettingWithRequirements = Effect.fn(`${options.spanPrefix}.updateSetting`)(
       function* (id: string, value: string) {
         const update = yield* options.decodeSettingUpdate(id, value);
         yield* settingUpdates.withPermit(
-          Effect.gen(function* () {
-            const freshConfig = yield* store.resolveConfig(cwd, agentDir, projectTrusted);
-            const globalFallback = yield* readGlobalFallback(freshConfig);
-            yield* store.modifyConfig(freshConfig.configPath, (raw) => {
-              const committed = update(raw);
-              const nextConfig = store.resolveCommittedConfig(
-                freshConfig,
-                committed,
-                globalFallback,
-              );
-              return {
-                value: nextConfig,
-                document: committed,
-                afterCommit: installConfig(nextConfig),
-              };
-            });
-          }),
+          store
+            .resolveConfig(cwd, agentDir, projectTrusted)
+            .pipe(
+              Effect.flatMap((fresh) => commitPreferredScope(store, fresh, update, installConfig)),
+            ),
         );
         yield* refresh({ force: true });
       },
     );
     const updateSetting = (id: string, value: string) =>
       provideDependencies(updateSettingWithRequirements(id, value));
-    if (options.startPolling !== false) {
-      yield* Effect.gen(function* () {
-        yield* refresh({ force: true });
-        yield* provideDependencies(refreshEngine.startPolling({}));
-      }).pipe(Effect.forkScoped);
-    }
+    if (options.startPolling !== false)
+      yield* refresh({ force: true }).pipe(
+        Effect.andThen(provideDependencies(refreshEngine.startPolling({}))),
+        Effect.forkScoped,
+      );
     const controller: UsageRefreshController<P, Resolved, Snapshot, E, EI, R> = {
       refresh,
       contextChanged,
@@ -411,46 +383,40 @@ export const makeUsageRefreshController = <
       getState: state.getState,
       updateState,
       installConfig,
-      synchronize,
-      withSettingsPermit: (effect) => settingUpdates.withPermit(effect),
-      readGlobalFallback,
+      withSettingsPermit: settingUpdates.withPermit,
       provideDependencies,
     };
     return controller;
   });
 
-/** Input for the shared usage debug report. */
-export interface UsageDebugReport {
+/** Provider-owned fields of the shared usage debug report. */
+interface UsageDebugReport {
   readonly currentModel: string;
-  readonly eligible: boolean;
   readonly requiresSubscriptionModel: boolean;
-  /** Rendered auth summary, e.g. "found" or "missing". */
-  readonly auth: string;
   /** Provider identity line; the value is masked before rendering. */
   readonly identityLabel: string;
   readonly identityValue: string | undefined;
-  readonly lastFetchAt: number | undefined;
-  readonly updatedAt: number | undefined;
-  readonly error: string | undefined;
   readonly refreshIntervalMs: number;
   readonly endpoint: string;
-  readonly authPath: string | undefined;
 }
 
 /** Renders the standard provider usage debug report from projection-owned data. */
-export function formatUsageDebugReport(report: UsageDebugReport): string {
+export function formatUsageDebugReport(
+  state: UsageProjectionBase<unknown, unknown>,
+  report: UsageDebugReport,
+): string {
   return [
     `Current model: ${report.currentModel}`,
-    `Current model eligible: ${report.eligible}`,
+    `Current model eligible: ${state.eligible}`,
     `Requires subscription model: ${report.requiresSubscriptionModel}`,
-    `Auth: ${report.auth}`,
+    `Auth: ${state.authFound ? "found" : "missing"}`,
     `${report.identityLabel}: ${maskIdentifier(report.identityValue) ?? "none"}`,
-    `Last fetch: ${formatTimestampOrNever(report.lastFetchAt)}`,
-    `Last successful update: ${formatTimestampOrNever(report.updatedAt)}`,
-    `Last error: ${report.error ?? "none"}`,
+    `Last fetch: ${formatTimestampOrNever(state.lastFetchAt)}`,
+    `Last successful update: ${formatTimestampOrNever(state.updatedAt)}`,
+    `Last error: ${state.error ?? "none"}`,
     `Refresh interval: ${formatDuration(report.refreshIntervalMs)}`,
     `Endpoint: ${report.endpoint}`,
-    `Auth file: ${report.authPath ?? "unknown"}`,
+    `Auth file: ${state.authPath ?? "unknown"}`,
   ].join("\n");
 }
 
@@ -458,22 +424,15 @@ export function formatUsageDebugReport(report: UsageDebugReport): string {
  * Runs one provider diagnostic effect with a bounded 10-second deadline (the shared provider
  * convention) and maps both failures and timeouts onto a sanitized string, so callers only
  * branch on `Result<A, string>`: `Failure` messages are diagnostics, `Success` carries the
- * provider value. Timeout failures carry no message, so `timeoutMessage` is the fallback text.
+ * provider value. A timeout, or a failure without a message, reports `timeoutMessage`.
  */
 export const timedDiagnosticResult = <A, E extends { readonly message?: string | undefined }, R>(
   effect: Effect.Effect<A, E, R>,
   timeoutMessage: string,
 ): Effect.Effect<Result.Result<A, string>, never, R> =>
   effect.pipe(
-    Effect.timeout("10 seconds"),
+    Effect.mapError((failure) => failure.message ?? timeoutMessage),
+    Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(timeoutMessage) }),
+    Effect.mapError((message) => sanitizeDiagnosticError(message)),
     Effect.result,
-    Effect.map((result) =>
-      result._tag === "Success"
-        ? Result.succeed(result.success)
-        : Result.fail(
-            sanitizeDiagnosticError(
-              Predicate.isString(result.failure.message) ? result.failure.message : timeoutMessage,
-            ),
-          ),
-    ),
   );

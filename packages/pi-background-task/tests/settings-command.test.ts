@@ -1,19 +1,13 @@
-import { initTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
   KeybindingsManager as TuiKeybindingsManager,
   setKeybindings,
   TUI_KEYBINDINGS,
-  type Component,
-  type TUI,
 } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import {
-  deferredPromise,
-  extensionContextFixture,
-  opaqueFixture,
-  plainTheme,
-} from "pi-cosmic-core/testing";
+import { extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { vi } from "vitest";
 import { BACKGROUND_TASK_SETTINGS } from "../src/config/options.ts";
@@ -51,8 +45,6 @@ const pickerHarness = (
 ) => {
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
-  let surface: Component | undefined;
-  const modal = deferredPromise<unknown>();
   const write = vi.fn<TaskSettingsActions["write"]>(() => Promise.resolve());
   const notify = vi.fn();
   const command = taskSettingsSubcommand({
@@ -60,48 +52,33 @@ const pickerHarness = (
     read,
     write,
   });
-  const tui: TUI = opaqueFixture({ requestRender: () => undefined });
-  const keybindings: KeybindingsManager = opaqueFixture({ matches: () => false });
-  const custom = <T>(
-    factory: (
-      tui: TUI,
-      theme: Theme,
-      keybindings: KeybindingsManager,
-      done: (result: T) => void,
-    ) => Component | Promise<Component>,
-  ): Promise<T> => {
-    const created = factory(tui, plainTheme, keybindings, modal.resolve);
-    if (created instanceof Promise) throw new Error("Expected a synchronous settings surface.");
-    surface = created;
-    // SAFETY: The modal settles only with values supplied to the generic done callback.
-    return modal.promise as Promise<T>;
-  };
+  const host = fakeCustomSurfaceHost();
   const ctx = extensionContextFixture({
     cwd: "/project",
     mode: "tui" as const,
     hasUI: true,
     signal: new AbortController().signal,
     isProjectTrusted: () => trusted,
-    ui: { custom, notify },
+    ui: { custom: host.ctx.ui.custom, notify },
   });
   const opened = Promise.resolve(command.handler("", ctx));
-  const input = (data: string) => surface?.handleInput?.(data);
-  const screen = () => surface?.render(300).join("\n") ?? "";
+  const input = (data: string) => host.editor?.handleInput?.(data);
+  const screen = () => host.editor?.render(300).join("\n") ?? "";
   return {
     write,
     notify,
     input,
     screen,
     opened,
-    close: () => modal.resolve(undefined),
-    isOpen: () => !!surface,
+    // Esc reaches the list as its cancel, which closes the picker.
+    close: () => input("\u001b"),
+    /** Mounts a pending opening, as Pi does after its factory, and reports whether one opened. */
+    isOpen: () => {
+      host.mount();
+      return host.editor !== undefined;
+    },
   };
 };
-
-const flush = Effect.callback<void>((resume) => {
-  const handle = setImmediate(() => resume(Effect.void));
-  return Effect.sync(() => clearImmediate(handle));
-});
 
 describe("/tasks settings", () => {
   it.effect("shows the settings this session started with, without terminal controls", () =>
@@ -161,13 +138,13 @@ describe("/tasks settings", () => {
       const rows = BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0);
       for (const trusted of [true, false]) {
         const h = pickerHarness(trusted);
-        yield* flush;
+        yield* macrotask;
         expect(h.isOpen()).toBe(true);
         // One step past the last global row: the first project row, or, with none, the list
         // wraps back to the first global row.
         for (const _ of rows) h.input("j");
         h.input("\r");
-        yield* flush;
+        yield* macrotask;
         expect(h.write).toHaveBeenCalledTimes(1);
         const [location, id] = h.write.mock.calls[0] ?? [];
         expect(location).toEqual({ cwd: "/project", scope: trusted ? "project" : "global" });
@@ -189,7 +166,7 @@ describe("/tasks settings", () => {
             )
           : Promise.resolve({}),
       );
-      yield* flush;
+      yield* macrotask;
       expect(h.isOpen()).toBe(true);
       expect(h.notify).not.toHaveBeenCalled();
       // The project row says which file is broken, in the shared message style.
@@ -203,11 +180,11 @@ describe("/tasks settings", () => {
       expect(issueMessageStyleProblems(reason, { maxLength: 200 })).toEqual([]);
       // The broken scope refuses edits; the global rows still take them.
       h.input("\r");
-      yield* flush;
+      yield* macrotask;
       expect(h.write).not.toHaveBeenCalled();
       h.input("j");
       h.input("\r");
-      yield* flush;
+      yield* macrotask;
       expect(h.write.mock.calls.map(([location]) => location.scope)).toEqual(["global"]);
       h.close();
       yield* Effect.promise(() => h.opened);

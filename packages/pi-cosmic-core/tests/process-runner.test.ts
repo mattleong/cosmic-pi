@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -8,12 +7,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import {
-  awaitProcessClose,
-  provideNodeProcess,
-  type BoundedProcessRequest,
-  type ProcessCloseSource,
-} from "../index.ts";
+import { provideNodeProcess, type BoundedProcessRequest } from "../index.ts";
 import { runBoundedProcessScoped } from "../src/platform/process.ts";
 
 const runNode = (script: string, overrides: Partial<BoundedProcessRequest> = {}) =>
@@ -97,6 +91,17 @@ const fakeRequest = {
   timeoutMillis: 10,
   cleanupTimeoutMillis: 100,
 };
+/** Runs the fake request through `spawn` and records every cleanup report. */
+const runFake = (spawn: Parameters<typeof ChildProcessSpawner.make>[0]) => {
+  const reports: boolean[] = [];
+  const run = runBoundedProcessScoped({
+    ...fakeRequest,
+    onCleanup: (confirmed) => void reports.push(confirmed),
+  }).pipe(
+    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(spawn)),
+  );
+  return { reports, run };
+};
 
 for (const mode of ["denied", "ineffective", "confirmed"] as const) {
   it.effect(`reports ${mode} cancellation cleanup before releasing ownership`, () =>
@@ -105,7 +110,6 @@ for (const mode of ["denied", "ineffective", "confirmed"] as const) {
       const closing = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let running = true;
-      let report: boolean | undefined;
       const handle = fakeHandle({
         isRunning: Effect.sync(() => running),
         kill: () =>
@@ -120,25 +124,15 @@ for (const mode of ["denied", "ineffective", "confirmed"] as const) {
             ),
           ),
       });
-      const spawner = ChildProcessSpawner.make(() =>
-        Deferred.succeed(started, undefined).pipe(Effect.as(handle)),
-      );
-      const pending = yield* runBoundedProcessScoped({
-        ...fakeRequest,
-        onCleanup: (confirmed) => {
-          report = confirmed;
-        },
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.forkScoped,
-      );
+      const fake = runFake(() => Deferred.succeed(started, undefined).pipe(Effect.as(handle)));
+      const pending = yield* fake.run.pipe(Effect.forkScoped);
       yield* Deferred.await(started);
       const interrupted = yield* Fiber.interrupt(pending).pipe(Effect.forkScoped);
       yield* Deferred.await(closing);
-      expect(report).toBeUndefined();
+      expect(fake.reports).toEqual([]);
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(interrupted);
-      expect(report).toBe(mode === "confirmed");
+      expect(fake.reports).toEqual([mode === "confirmed"]);
       expect(running).toBe(mode !== "confirmed");
     }),
   );
@@ -148,10 +142,9 @@ for (const mode of ["timeout", "stream", "partial-spawn", "spawn"] as const) {
   it.effect(`reports uncertain cleanup after ${mode} failure`, () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
-      let report: boolean | undefined;
       let owned = false;
       const handle = fakeHandle(mode === "stream" ? { stdout: Stream.fail(denied) } : {});
-      const spawner = ChildProcessSpawner.make(() =>
+      const fake = runFake(() =>
         Effect.gen(function* () {
           yield* Deferred.succeed(started, undefined);
           if (mode === "partial-spawn") {
@@ -167,20 +160,11 @@ for (const mode of ["timeout", "stream", "partial-spawn", "spawn"] as const) {
           return handle;
         }),
       );
-      const pending = yield* runBoundedProcessScoped({
-        ...fakeRequest,
-        onCleanup: (confirmed) => {
-          report = confirmed;
-        },
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.result,
-        Effect.forkScoped,
-      );
+      const pending = yield* fake.run.pipe(Effect.result, Effect.forkScoped);
       yield* Deferred.await(started);
       if (mode === "timeout") yield* TestClock.adjust(10);
       const result = yield* Fiber.join(pending);
-      expect(report).toBe(false);
+      expect(fake.reports).toEqual([false]);
       if (mode === "timeout")
         expect(result).toMatchObject({
           _tag: "Success",
@@ -191,26 +175,3 @@ for (const mode of ["timeout", "stream", "partial-spawn", "spawn"] as const) {
     }),
   );
 }
-
-class TestCloseSource extends EventEmitter implements ProcessCloseSource {
-  exitCode: number | null = null;
-  signalCode: string | null = null;
-  override once(event: "close", listener: () => void): this {
-    return super.once(event, listener);
-  }
-  override off(event: "close", listener: () => void): this {
-    return super.off(event, listener);
-  }
-}
-
-it.effect("detaches a Node close listener after confirmation", () =>
-  Effect.gen(function* () {
-    const child = new TestCloseSource();
-    const waiting = yield* awaitProcessClose(child, 1_000).pipe(Effect.forkChild);
-    yield* Effect.yieldNow;
-    child.exitCode = 0;
-    child.emit("close");
-    expect(yield* Fiber.join(waiting)).toBe(true);
-    expect(child.listenerCount("close")).toBe(0);
-  }),
-);

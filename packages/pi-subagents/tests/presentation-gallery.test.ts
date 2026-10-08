@@ -46,12 +46,13 @@ import {
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
-import {
-  createParentCompactSummary,
-  createParentExpandedContent,
-} from "../src/tools/compact-parent-summary.ts";
 import { makeAwaitDetails, makeStartDetails } from "../src/tools/details.ts";
-import { parentToolRenderers } from "../src/tools/render-parent.ts";
+import {
+  CONTACT_PARENT_LABEL,
+  contactParentCompactSummary,
+  contactParentExpandedContent,
+  contactParentRenderers,
+} from "../src/tools/render-parent.ts";
 import { RESULT_ACCEPTED_TEXT } from "../src/tools/result-presentation.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
 import { makeAwaitExecution } from "../src/tools/execute-await.ts";
@@ -211,7 +212,6 @@ const dbMigration = view({
   question: {
     requestId: "q-1",
     message: "src/db/seed.ts also needs the new column. May I claim it?",
-    createdAt: now - 30_000,
   },
   ...timing(5),
 });
@@ -250,9 +250,9 @@ interface Execution {
   readonly scripted?: boolean;
 }
 
-// Pi turns a rejected execution into text content with empty details.
-const rejected = (message: string) => ({
-  content: [{ type: "text" as const, text: message }],
+// A text-only result: Pi turns a rejected execution into this, and child receipts share its shape.
+const textResult = (text: string) => ({
+  content: [{ type: "text" as const, text }],
   details: {},
 });
 
@@ -272,7 +272,7 @@ const execute = (input: SubagentToolInput, options: Execution = {}) =>
       const details = decodeSubagentOutcomeDetails(subagentToolAction(input), result.details);
       return { result, isError: details !== undefined && marksSubagentToolError(details) };
     }),
-    Effect.catch((error) => Effect.succeed({ result: rejected(error.message), isError: true })),
+    Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),
     Effect.provideService(SubagentService, subagentServiceDouble(options.service ?? {})),
     Effect.provideService(SubagentProfileService, options.profiles ?? fallbackProfileService),
     Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
@@ -745,9 +745,8 @@ const workspaceService: SubagentServiceDoubleInput = {
         { workspaceId: "ws-9", status: "unavailable", reason: "recovery-record-unavailable" },
       ],
     }),
-  workspaceReview: (workspaceId) =>
+  workspaceReview: () =>
     Effect.succeed({
-      workspaceId,
       revisionId: "rev-1",
       changedPaths: ["db/0007.sql"],
       diff: diffPage,
@@ -906,7 +905,6 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
           requestId: "q-1",
           message:
             "Should I also update the migration in db/0007.sql, or leave it for a follow-up?",
-          createdAt: 1,
         },
       }),
     ],
@@ -923,14 +921,6 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       systemWarning: "Context window 91% full",
     }),
   ]),
-  awaited(
-    "await timed out",
-    [
-      view({ state: "running" }),
-      view({ id: "agent-2", name: "docs-sweep", state: "completed", finalText: "ok" }),
-    ],
-    { timedOut: true },
-  ),
   awaited("writer changes ready for review", [
     view({
       state: "completed",
@@ -986,113 +976,48 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
   },
 ];
 
-// ─── Child and supervisor tools ──────────────────────────────────────────────
+// ─── Child tools ─────────────────────────────────────────────────────────────
 
 /**
- * The child bridges register these inside an activated session; each is this exact wrapper over
- * its definition and the shared parent-contact renderers, so the gallery wraps the same ones.
+ * The child bridge registers this inside an activated session as this exact wrapper over its
+ * definition and the contact_parent renderers, so the gallery wraps the same ones.
  */
-const parentTool = (name: string, label: string) =>
+const contactParentTool = () =>
   withCodePreviewShell(
     defineTool({
-      ...parentToolRenderers(name, label),
-      name,
-      label,
-      description: label,
+      ...contactParentRenderers,
+      name: "contact_parent",
+      label: CONTACT_PARENT_LABEL,
+      description: CONTACT_PARENT_LABEL,
       parameters: Type.Object({}),
       execute: () => Promise.reject(new Error("Rendering must not execute")),
     }),
-    {
-      compactSummary: createParentCompactSummary(name),
-      expandedContent: createParentExpandedContent(name),
-    },
+    { compactSummary: contactParentCompactSummary, expandedContent: contactParentExpandedContent },
   );
-const parentTools = () => [
-  parentTool("contact_parent", "Contact Parent"),
-  parentTool("supervisor_progress", "Supervisor Progress"),
-  parentTool("supervisor_warning", "Supervisor Warning"),
-  parentTool("supervisor_question", "Ask Supervisor"),
-  parentTool("supervisor_submit_report", "Submit Supervisor Report"),
-];
 
-const acknowledged = (text: string) => ({
-  content: [{ type: "text" as const, text }],
-  details: {},
-});
 const progressNote = "Mapped the auth flow; checking token refresh next";
 const warningNote = "Integration tests need docker, which isn't available here; skipping them";
 const questionNote = "Should the migration also backfill rotated_at for existing sessions?";
-const report = "Reviewed src/auth. The refresh flow is safe; session.ts:118 swallows a timeout.";
+const contact = (
+  title: string,
+  kind: string,
+  message: string,
+  scenario: Partial<GalleryScenario>,
+): ToolScenario => ({ tool: "contact_parent", title, args: { kind, message }, ...scenario });
 
 const parentScenarios: ReadonlyArray<ToolScenario> = [
-  {
-    tool: "contact_parent",
-    title: "progress",
-    args: { kind: "progress", message: progressNote },
-    result: acknowledged("Parent received progress."),
-  },
-  {
-    tool: "contact_parent",
-    title: "warning",
-    args: { kind: "warning", message: warningNote },
-    result: acknowledged("Parent received warning."),
-  },
-  {
-    tool: "contact_parent",
-    title: "question waiting for a reply",
-    args: { kind: "question", message: questionNote },
-    phase: "running",
-  },
-  {
-    tool: "contact_parent",
-    title: "question answered",
-    args: { kind: "question", message: questionNote },
-    result: acknowledged("Parent reply: No backfill; leave existing rows null."),
-  },
-  {
-    tool: "contact_parent",
-    title: "question timed out",
-    args: { kind: "question", message: questionNote },
+  contact("progress", "progress", progressNote, {
+    result: textResult("Parent received progress."),
+  }),
+  contact("warning", "warning", warningNote, { result: textResult("Parent received warning.") }),
+  contact("question waiting for a reply", "question", questionNote, { phase: "running" }),
+  contact("question answered", "question", questionNote, {
+    result: textResult("Parent reply: No backfill; leave existing rows null."),
+  }),
+  contact("question timed out", "question", questionNote, {
     isError: true,
-    result: rejected("Parent question timed out without a reply."),
-  },
-  {
-    tool: "supervisor_progress",
-    title: "progress",
-    args: { message: progressNote },
-    result: acknowledged("Progress delivered to the parent projection."),
-  },
-  {
-    tool: "supervisor_warning",
-    title: "warning",
-    args: { message: warningNote },
-    result: acknowledged("Warning recorded in parent-visible run status."),
-  },
-  {
-    tool: "supervisor_question",
-    title: "question waiting for a reply",
-    args: { message: questionNote },
-    phase: "running",
-  },
-  {
-    tool: "supervisor_question",
-    title: "question answered",
-    args: { message: questionNote },
-    result: acknowledged("Parent reply: No backfill; leave existing rows null."),
-  },
-  {
-    tool: "supervisor_submit_report",
-    title: "report accepted",
-    args: { delivery_id: "pi-final-1", report },
-    result: acknowledged("Final report accepted; sequence 1."),
-  },
-  {
-    tool: "supervisor_submit_report",
-    title: "report rejected",
-    args: { delivery_id: "pi-final-2", report },
-    isError: true,
-    result: rejected("This assignment already attempted a different supervisor report identity."),
-  },
+    result: textResult("Parent question timed out without a reply."),
+  }),
 ];
 
 /** The child's private result tool, as registered for a launch with a result contract. */
@@ -1126,14 +1051,14 @@ const resultScenarios: ReadonlyArray<ToolScenario> = [
     tool: "subagent_result",
     title: "accepted",
     args: verdict,
-    result: acknowledged(RESULT_ACCEPTED_TEXT),
+    result: textResult(RESULT_ACCEPTED_TEXT),
   },
   {
     tool: "subagent_result",
     title: "rejected by its schema",
     args: { verdict: "risky", findings: [] },
     isError: true,
-    result: rejected(
+    result: textResult(
       'Validation failed for tool "subagent_result":\n  - verdict: must be equal to one of the allowed values\n\nReceived arguments:\n{"verdict":"risky","findings":[]}',
     ),
   },
@@ -1142,7 +1067,7 @@ const resultScenarios: ReadonlyArray<ToolScenario> = [
     title: "second result refused",
     args: verdict,
     isError: true,
-    result: rejected(
+    result: textResult(
       "A result was already accepted for this run, and the first one is final. Stop now.",
     ),
   },
@@ -1589,7 +1514,7 @@ const workflowRuntime: WorkflowToolRuntime = {
           hasRunFiles: () => Effect.succeed(false),
           listRunRecords: () => Effect.succeed([]),
           writeRunResult: () => Effect.die(new Error("unused")),
-          readRunResult: () => Effect.succeed(undefined),
+          readRunResult: () => Effect.undefined,
           readRunJournal: () => Effect.succeed([]),
           locations: Effect.succeed(galleryWorkflowLocations),
           list: Effect.succeed({
@@ -2167,7 +2092,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
             registerWorkflowTool(pi, workflowRuntime);
             registerSubagentMessageRenderers(pi);
           });
-          const tools = [...registered.tools, ...parentTools(), resultTool()];
+          const tools = [...registered.tools, contactParentTool(), resultTool()];
           for (const { tool, ...entry } of scenarios)
             lines.push(
               ...galleryFrames(tools.find((candidate) => candidate.name === tool)!, {

@@ -6,13 +6,14 @@ import type {
   SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import { profileDefinition } from "./definitions.ts";
+import { PROFILE_DEFINITIONS } from "./definitions.ts";
 import {
   isLocalPiProfileCandidate,
-  normalizeProfileId,
+  isProfileId,
   profileCandidateLabel,
   supportsSubagentFastMode,
   type ProfileCandidate,
+  type ProfileDefinition,
   type ProfileId,
   type ProfileRoute,
   type ProfileRouteContinuation,
@@ -34,7 +35,6 @@ export interface ProfileResolutionEnvironment {
 }
 
 export interface ProfileCandidateAttempt {
-  readonly profile: ProfileId;
   readonly source: SubagentSelectionSource;
   readonly routeSource: ProfileRouteSource;
   readonly candidateIndex: number;
@@ -53,7 +53,6 @@ export interface ProfileCandidateAttempt {
 
 export interface ProfileResolutionPlan {
   readonly kind: "resolved";
-  readonly profile: ProfileId;
   readonly attempts: ReadonlyArray<ProfileCandidateAttempt>;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
   readonly trailingSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -67,7 +66,6 @@ export interface ProfileResolutionFailure {
     | "fork_context_unavailable"
     | "retry_route_exhausted";
   readonly message: string;
-  readonly profile?: ProfileId | undefined;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 
@@ -101,7 +99,6 @@ const LOCAL_PI_MODEL_SKIPS = {
 } as const;
 
 const resolveCandidate = (
-  profile: ProfileId,
   candidate: ProfileCandidate,
   candidateIndex: number,
   environment: ProfileResolutionEnvironment,
@@ -114,7 +111,6 @@ const resolveCandidate = (
   });
   const accept = (model = candidate.model): CandidateResult => ({
     attempt: {
-      profile,
       source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
       candidateIndex,
       host: candidate.host,
@@ -185,7 +181,7 @@ const resolveKnownProfileRoute = (
   environment: ProfileResolutionEnvironment,
   startCandidateIndex: number,
 ): ProfileResolution => {
-  const definition = profileDefinition(profile);
+  const { defaultEffort }: ProfileDefinition = PROFILE_DEFINITIONS[profile];
   const routeLabel =
     routeSource === "builtin"
       ? "built-in route"
@@ -197,13 +193,7 @@ const resolveKnownProfileRoute = (
   let pendingSkipped: SkippedProfileCandidate[] = [];
   route.candidates.forEach((candidate, candidateIndex) => {
     if (candidateIndex < startCandidateIndex) return;
-    const result = resolveCandidate(
-      profile,
-      candidate,
-      candidateIndex,
-      environment,
-      definition.defaultEffort,
-    );
+    const result = resolveCandidate(candidate, candidateIndex, environment, defaultEffort);
     if (result.attempt) {
       attempts.push({
         ...result.attempt,
@@ -218,10 +208,10 @@ const resolveKnownProfileRoute = (
       pendingSkipped.push(result.skipped);
     }
   });
+  const skippedReasons = skippedCandidates.map((candidate) => ` ${candidate.reason}`).join("");
   if (attempts.length > 0)
     return {
       kind: "resolved",
-      profile,
       attempts,
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
@@ -230,8 +220,7 @@ const resolveKnownProfileRoute = (
     return {
       kind: "failed",
       code: "retry_route_exhausted",
-      profile,
-      message: `Profile ${profile} has no eligible remaining candidate after candidate ${startCandidateIndex}.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+      message: `Profile ${profile} has no eligible remaining candidate after candidate ${startCandidateIndex}.${skippedReasons}`,
       skippedCandidates,
     };
   const forkUnavailable =
@@ -240,26 +229,24 @@ const resolveKnownProfileRoute = (
   return {
     kind: "failed",
     code: forkUnavailable ? "fork_context_unavailable" : "profile_no_eligible_model",
-    profile,
     message: forkUnavailable
       ? `Profile ${profile} requires forked context, but the parent session has no stable persisted leaf.`
-      : `Profile ${profile} has no eligible candidate.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+      : `Profile ${profile} has no eligible candidate.${skippedReasons}`,
     skippedCandidates,
   };
 };
 
 /** Pure deterministic profile planning. Foreign readiness checks happen while consuming attempts. */
 export function resolveProfilePlan(
-  requestedProfile: string,
+  profile: string,
   config: ResolvedSubagentConfig,
   environment: ProfileResolutionEnvironment,
 ): ProfileResolution {
-  const profile = normalizeProfileId(requestedProfile);
-  if (!profile)
+  if (!isProfileId(profile))
     return {
       kind: "failed",
       code: "profile_unknown",
-      message: `Unknown subagent profile "${requestedProfile}". Available profiles: ${Object.keys(config.profiles).join(", ")}.`,
+      message: `Unknown subagent profile "${profile}". Available profiles: ${Object.keys(config.profiles).join(", ")}.`,
       skippedCandidates: [],
     };
   const route = config.profiles[profile];
@@ -274,7 +261,6 @@ export function resolveProfilePlan(
     return {
       kind: "failed",
       code: "profile_no_eligible_model",
-      profile,
       message,
       skippedCandidates: [],
     };

@@ -1,24 +1,15 @@
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerHerdrBtwApplication } from "../src/application.ts";
 
-type Handler = ExtensionHandler<any, any>;
-
 const harness = () => {
-  const handlers = new Map<string, Handler[]>();
   const notify = vi.fn();
-  const pi = extensionApiFixture({
-    on(name: string, handler: Handler) {
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-    },
-    registerCommand() {},
-    registerFlag() {},
-    getFlag: () => undefined,
-    appendEntry() {},
-  });
+  const host = recordingExtensionHost(
+    {},
+    { registerFlag() {}, getFlag: () => undefined, appendEntry() {} },
+  );
   const ctx = extensionContextFixture({
     cwd: "/project",
     mode: "tui" as const,
@@ -32,14 +23,12 @@ const harness = () => {
     },
     ui: { notify },
   });
-  registerHerdrBtwApplication(pi);
-  const invokeAll = <EventInput>(name: string, event: EventInput) =>
-    Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, ctx)));
+  registerHerdrBtwApplication(host.pi);
   return {
     ctx,
     notify,
-    start: () => invokeAll("session_start", { type: "session_start" }),
-    shutdown: () => invokeAll("session_shutdown", { reason: "quit" }),
+    start: () => host.emit("session_start", ctx, { type: "session_start" }),
+    shutdown: () => host.emit("session_shutdown", ctx, { reason: "quit" }),
   };
 };
 

@@ -149,7 +149,7 @@ describe("summary resolution", () => {
   });
 
   test("a Pi error overrides claimed success and explains itself with its first line", () => {
-    for (const outcome of ["success", "warning", "error"] as const) {
+    for (const outcome of ["success", "returned", "warning", "error"] as const) {
       const resolved = resolveCompactSummary(
         { ...base, outcome, issues: [warning, info] },
         "settled",
@@ -231,6 +231,9 @@ describe("status precedence", () => {
     expect(status("success", [warning])).toBe("warning");
     expect(status("success", [info])).toBe("success");
     expect(status("warning", [info])).toBe("warning");
+    // A neutral delivery stays neutral until an issue says otherwise.
+    expect(status("returned", [info])).toBe("returned");
+    expect(status("returned", [warning])).toBe("warning");
     expect(status(undefined)).toBe("uncertain");
   });
 

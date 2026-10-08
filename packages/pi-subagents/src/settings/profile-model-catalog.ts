@@ -29,7 +29,6 @@ export interface ProjectedPiModel {
 }
 
 export interface ProfileModelCatalogSnapshot {
-  readonly revision: number;
   readonly piModels: ReadonlyArray<ProjectedPiModel>;
   readonly scopedPiModels: ReadonlyArray<ProjectedPiModel>;
 }
@@ -50,11 +49,10 @@ export interface ProfileModelRegistry {
 export type ProfileModelCatalogRefresh = "updated" | "failed" | "aborted";
 
 const freezeCatalogSnapshot = (
-  revision: number,
   models: ReadonlyArray<ProjectedPiModel>,
   scopedModels: ReadonlyArray<ProjectedPiModel> = models,
 ): ProfileModelCatalogSnapshot =>
-  freezeSnapshot({ revision, piModels: models, scopedPiModels: scopedModels });
+  freezeSnapshot({ piModels: models, scopedPiModels: scopedModels });
 
 const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
   const efforts = getSupportedThinkingLevels(model).flatMap((effort) => {
@@ -72,7 +70,6 @@ const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
 
 const projectRegistry = (
   registry: ProfileModelRegistry,
-  revision: number,
   scopedSelectors: ReadonlySet<string>,
 ): ProfileModelCatalogSnapshot | undefined => {
   try {
@@ -81,7 +78,7 @@ const projectRegistry = (
       scopedSelectors.size === 0
         ? models
         : models.filter((model) => scopedSelectors.has(`${model.provider}/${model.id}`));
-    return freezeCatalogSnapshot(revision, models, scopedModels);
+    return freezeCatalogSnapshot(models, scopedModels);
   } catch {
     return undefined;
   }
@@ -90,52 +87,45 @@ const projectRegistry = (
 /** Replace-only in-memory catalog. Readers capture one immutable generation per action. */
 export class ProfileModelCatalog {
   private snapshot: ProfileModelCatalogSnapshot;
-  private refreshGeneration = 0;
   private readonly registry: ProfileModelRegistry;
   private readonly scopedSelectors: ReadonlySet<string>;
 
   constructor(registry: ProfileModelRegistry, scopedModels: ReadonlyArray<Model<Api>> = []) {
     this.registry = registry;
     this.scopedSelectors = new Set(scopedModels.map((model) => `${model.provider}/${model.id}`));
-    this.snapshot =
-      projectRegistry(registry, 0, this.scopedSelectors) ?? freezeCatalogSnapshot(0, []);
+    this.snapshot = projectRegistry(registry, this.scopedSelectors) ?? freezeCatalogSnapshot([]);
   }
 
   capture(): ProfileModelCatalogSnapshot {
     return this.snapshot;
   }
 
+  /**
+   * Each dashboard refreshes its own catalog once. Interruption aborts the registry signal and
+   * ends the fiber before any result is published.
+   */
   refresh(): Effect.Effect<ProfileModelCatalogRefresh> {
-    return Effect.suspend(() => {
-      const generation = ++this.refreshGeneration;
-      const stale = () => generation !== this.refreshGeneration;
-      const retained = this.snapshot;
-      return Effect.tryPromise({
-        try: (signal) => this.registry.refresh({ signal }),
-        catch: () => undefined,
-      }).pipe(
-        Effect.match({
-          onFailure: () => (stale() ? "aborted" : "failed"),
-          onSuccess: (refreshResult): ProfileModelCatalogRefresh => {
-            if (refreshResult.aborted || stale()) return "aborted";
-            if (refreshResult.errors && refreshResult.errors.size > 0) return "failed";
-            try {
-              if (this.registry.getError()) return "failed";
-            } catch {
-              return "failed";
-            }
-            const projected = projectRegistry(
-              this.registry,
-              retained.revision + 1,
-              this.scopedSelectors,
-            );
-            if (!projected || stale()) return stale() ? "aborted" : "failed";
-            this.snapshot = projected;
-            return "updated";
-          },
-        }),
-      );
-    });
+    return Effect.tryPromise({
+      try: (signal) => this.registry.refresh({ signal }),
+      catch: () => undefined,
+    }).pipe(
+      Effect.match({
+        onFailure: () => "failed",
+        onSuccess: (refreshResult): ProfileModelCatalogRefresh => {
+          if (refreshResult.aborted) return "aborted";
+          if (refreshResult.errors && refreshResult.errors.size > 0) return "failed";
+          try {
+            if (this.registry.getError()) return "failed";
+          } catch {
+            return "failed";
+          }
+          const projected = projectRegistry(this.registry, this.scopedSelectors);
+          if (!projected) return "failed";
+          this.snapshot = projected;
+          return "updated";
+        },
+      }),
+    );
   }
 }
 
@@ -180,7 +170,6 @@ const configuredNativeModel = (runtime: LocalCliRuntime, current: string): Nativ
 const pickerContext = (input: CandidateModelPickerInput): ProfileModelPickerContext => ({
   profile: input.profile,
   candidateIndex: input.candidateIndex,
-  host: input.candidate.host,
   runtime: input.candidate.runtime,
 });
 
@@ -189,10 +178,11 @@ interface NativeModelLoadFailure {
   readonly warning: string;
 }
 
-const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateModelPickerData> => {
-  // SAFETY: The caller branches away from Pi immediately before entering this function.
-  const runtime = input.candidate.runtime as LocalCliRuntime;
-  return Promise.resolve()
+const loadNativeModels = (
+  input: CandidateModelPickerInput,
+  runtime: LocalCliRuntime,
+): Promise<CandidateModelPickerData> =>
+  Promise.resolve()
     .then(() => input.listNativeModels(runtime, input.signal))
     .then(
       (advertised) => {
@@ -233,7 +223,6 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
       };
       return warning ? { ...base, warning: sanitizeTerminalLine(warning) } : base;
     });
-};
 
 type PiModelOptionsInput = Pick<
   CandidateModelPickerInput,
@@ -249,7 +238,6 @@ const piModelOptions = (
     models,
     parentModel: piCatalog.piModels.find((model) => canonicalPiSelector(model) === parentSelector),
     currentSelector: candidate.model,
-    allowParent: true,
   });
 
 /** The efforts a Pi candidate's model offers, gated exactly as its picker gates them. */
@@ -266,7 +254,7 @@ export function loadCandidateModelPicker(
   input: CandidateModelPickerInput,
 ): Promise<CandidateModelPickerData> {
   const candidate = input.candidate;
-  if (candidate.runtime !== "pi") return loadNativeModels(input);
+  if (candidate.runtime !== "pi") return loadNativeModels(input, candidate.runtime);
   // The root registry already reflects project trust.
   const snapshot = input.piCatalog;
   const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>

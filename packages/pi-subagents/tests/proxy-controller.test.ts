@@ -1,10 +1,8 @@
 // Registered nested /subagents actions over the real root executor and proxy codec. Assertions
 // observe the fleet's settled outcome kind and proxied calls, never presentation details.
-import type { AgentToolResult, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
-import { describe, expect, vi } from "vitest";
+import { describe, expect } from "vitest";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import { SubagentProfileService } from "../src/profiles/service.ts";
 import {
@@ -27,9 +25,9 @@ import {
   encodeSubagentProxyPayload,
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
-import { SubagentFleetComponent, type FleetNoticeKind } from "../src/ui/fleet.ts";
-import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
-import { effectTest, step } from "./support/effect-test.ts";
+import { extensionApiFixture } from "./fixtures/pi-host.ts";
+import { openRegisteredFleet } from "./fixtures/profile-settings-inspection.ts";
+import { effectTest } from "./support/effect-test.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import {
   context,
@@ -40,7 +38,6 @@ import {
 
 const CALLER = "caller";
 const ENTER = "\r";
-const ESC = "\x1b";
 const SEND_FAILURE = "Test-owned definite send failure.";
 
 const caller = view({ id: CALLER, name: CALLER, parentRunId: "root", depth: 1 });
@@ -99,57 +96,12 @@ const openProxyFleet = function* (
     calls.push(input);
     return options.respond?.(input) ?? root(input);
   };
-  let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
-  registerSubagentProxyManagerCommand(
-    extensionApiFixture({
-      registerCommand: (
-        _name: string,
-        definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
-      ) => {
-        handler = definition.handler;
-      },
-    }),
-    CALLER,
-    call,
+  const fleet = yield* openRegisteredFleet(
+    (pi) => registerSubagentProxyManagerCommand(pi, CALLER, call),
+    160,
   );
-  const overlays: Component[] = [];
-  const { custom } = mountingCustomUi(plainTheme, (created) => overlays.push(created), {
-    columns: 160,
-    rows: 30,
-  });
-  const ctx = extensionContextFixture({
-    cwd: "/project",
-    hasUI: true,
-    mode: "tui",
-    ui: { notify: vi.fn(), custom },
-  });
-  const running = handler?.("", ctx) ?? Promise.resolve();
-  yield* step(() => vi.waitFor(() => expect(overlays).toHaveLength(1)));
-  const fleet = overlays[0];
-  if (!(fleet instanceof SubagentFleetComponent)) throw new Error("Expected the nested fleet.");
-  const press = (...keys: string[]) => {
-    for (const key of keys) {
-      fleet.handleInput(key);
-      fleet.render(160);
-    }
-  };
   const toolCalls = (tool: string) => calls.filter((input) => input.tool === tool);
-  /** Waits for the one in-flight action to settle into a final outcome. */
-  const settled = function* () {
-    let kind: FleetNoticeKind | undefined;
-    yield* step(() =>
-      vi.waitFor(() => {
-        kind = fleet.noticeKind;
-        expect(kind === undefined || kind === "info").toBe(false);
-      }),
-    );
-    return kind;
-  };
-  const close = function* () {
-    press(ESC);
-    yield* step(() => running);
-  };
-  return { fleet, press, toolCalls, settled, close };
+  return { ...fleet, toolCalls };
 };
 
 const sendGuidance = (fixture: { readonly press: (...keys: string[]) => void }) =>
@@ -285,7 +237,7 @@ describe("nested /subagents proxied actions", () => {
       yield* fixture.close();
     });
 
-  const question = { requestId: "q", message: "Which file?", createdAt: 1 };
+  const question = { requestId: "q", message: "Which file?" };
 
   effectTest("keeps a flagged reply failure an error rather than pending", function* () {
     const fixture = yield* openProxyFleet(

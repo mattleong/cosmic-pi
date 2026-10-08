@@ -8,9 +8,10 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import { deferredPromise } from "pi-cosmic-core/testing";
-import { makeEventBus } from "./support/host.ts";
+import { deferredPromise, macrotask } from "pi-cosmic-core/testing";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { registerQuestionnaireCapability } from "../src/boundary/host-owned-calls.ts";
+import { MAX_PENDING_QUESTIONNAIRES } from "../src/questionnaire/queue.ts";
 import { askAtQuestionnaireBoundary } from "../src/boundary/host-relay.ts";
 import { AskUserService } from "../src/questionnaire/service.ts";
 import {
@@ -165,7 +166,7 @@ it.effect(
   "root capabilities are session-bound, refuse aborted or stale calls and revoke captured handles",
   () =>
     Effect.gen(function* () {
-      const bus = makeEventBus();
+      const bus = createEventBus();
       let calls = 0;
       let current = () => true;
       const layer = AskUserService.layer(() =>
@@ -210,7 +211,7 @@ it.effect(
 );
 it.effect("root revocation contains a throwing unsubscribe and still aborts owned calls", () =>
   Effect.gen(function* () {
-    const bus = makeEventBus();
+    const bus = createEventBus();
     const completion = deferredPromise<AskUserOutcome>();
     const signals: AbortSignal[] = [];
     const dispose = registerQuestionnaireCapability({
@@ -246,7 +247,7 @@ it.effect(
     Effect.gen(function* () {
       vi.stubEnv("PI_SUBAGENT_CHILD", "1");
       vi.stubEnv("PI_SUBAGENT_RUN_ID", "not-authentication");
-      const bus = makeEventBus();
+      const bus = createEventBus();
       let local = 0;
       let forwarded = 0;
       const layer = AskUserService.layer(() =>
@@ -278,7 +279,7 @@ it.effect(
   "root cancel synchronously aborts its owner and acknowledges only after owned cleanup",
   () =>
     Effect.gen(function* () {
-      const bus = makeEventBus();
+      const bus = createEventBus();
       const entered = yield* Deferred.make<void>();
       const cleanupEntered = yield* Deferred.make<void>();
       const cleanup = yield* Deferred.make<void>();
@@ -329,9 +330,80 @@ it.effect(
     }),
 );
 
+/** A root capability whose runs settle only when the test completes them. */
+const registerPendingRuns = () => {
+  const bus = createEventBus();
+  const runs: {
+    signal: AbortSignal;
+    completion: ReturnType<typeof deferredPromise<AskUserOutcome>>;
+  }[] = [];
+  const dispose = registerQuestionnaireCapability({
+    events: bus,
+    sessionId: "root",
+    generation: "one",
+    isCurrent: () => true,
+    run: (_effect, signal) => {
+      const completion = deferredPromise<AskUserOutcome>();
+      runs.push({ signal, completion });
+      return completion.promise;
+    },
+  });
+  return { runs, dispose, capability: queryQuestionnaireCapability(bus, "root")! };
+};
+const closed = { _tag: "AskUserRuntimeClosedError" };
+
+it.effect("root capabilities bound live owners and refuse a duplicate live owner unrun", () =>
+  Effect.gen(function* () {
+    const { runs, dispose, capability } = registerPendingRuns();
+    const signal = yield* Effect.abortSignal;
+    const ownerAt = (index: number) => ({ ...owner, requestId: `request-${index}` });
+    /** Admission runs synchronously, so a refused ask must leave `runs` unchanged at once. */
+    const refused = (index: number) => {
+      const before = runs.length;
+      const asking = capability.ask(request, ownerAt(index), signal);
+      expect(runs).toHaveLength(before);
+      return Effect.promise(() => expect(asking).rejects.toMatchObject(closed));
+    };
+    const pending = [capability.ask(request, ownerAt(0), signal)];
+    yield* refused(0);
+    for (let index = 1; index < MAX_PENDING_QUESTIONNAIRES; index++)
+      pending.push(capability.ask(request, ownerAt(index), signal));
+    yield* refused(MAX_PENDING_QUESTIONNAIRES);
+    expect(runs).toHaveLength(MAX_PENDING_QUESTIONNAIRES);
+    for (const run of runs) run.completion.resolve(answer);
+    expect(yield* Effect.promise(() => Promise.all(pending))).toHaveLength(
+      MAX_PENDING_QUESTIONNAIRES,
+    );
+    dispose();
+  }),
+);
+
+it.effect("root cancel aborts and joins only its exact owner while another owner answers", () =>
+  Effect.gen(function* () {
+    const { runs, dispose, capability } = registerPendingRuns();
+    const signal = yield* Effect.abortSignal;
+    const first = capability.ask(request, owner, signal);
+    const second = capability.ask(request, { ...owner, runId: "run-2" }, signal);
+    let acknowledged = false;
+    const cancelling = capability.cancel(owner).then(() => {
+      acknowledged = true;
+    });
+    expect(runs.map((run) => run.signal.aborted)).toEqual([true, false]);
+    yield* macrotask;
+    expect(acknowledged).toBe(false);
+    runs[0]!.completion.resolve({ outcome: "cancelled", answers: [] });
+    yield* Effect.promise(() => cancelling);
+    expect(yield* Effect.promise(() => first)).toEqual({ outcome: "cancelled", answers: [] });
+    expect(runs[1]!.signal.aborted).toBe(false);
+    runs[1]!.completion.resolve(answer);
+    expect(yield* Effect.promise(() => second)).toEqual(answer);
+    dispose();
+  }),
+);
+
 it.effect("caller cancellation reaches a relayed questionnaire", () =>
   Effect.gen(function* () {
-    const bus = makeEventBus();
+    const bus = createEventBus();
     const ready = yield* Deferred.make<void>();
     const cancelled = yield* Deferred.make<void>();
     const off = attachRelay(bus, {

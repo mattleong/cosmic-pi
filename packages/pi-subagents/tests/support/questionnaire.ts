@@ -1,5 +1,5 @@
-// Shared questionnaire relay fixtures: one single-choice request and a Pi event-bus stand-in.
-import { EventEmitter } from "node:events";
+// Shared questionnaire relay fixtures: one single-choice request and Pi's event bus.
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import type { AskUserRequest } from "pi-ask-user/protocol";
 
 export const pickQuestionnaire: AskUserRequest = {
@@ -17,18 +17,8 @@ export const pickQuestionnaire: AskUserRequest = {
   ],
 };
 
-/** EventEmitter-backed `{ on, emit }` with Pi's unsubscribe-returning `on`. */
-export const eventBus = () => {
-  const emitter = new EventEmitter();
-  return {
-    on: (name: string, handler: (event: any) => void) => {
-      emitter.on(name, handler);
-      return () => {
-        emitter.off(name, handler);
-      };
-    },
-    emit: (name: string, event: any) => {
-      emitter.emit(name, event);
-    },
-  };
-};
+/** Pi's event bus, whose test handlers read the shape of the query they answer. */
+export const eventBus = (): {
+  readonly on: (name: string, handler: (event: any) => void) => () => void;
+  readonly emit: <Event>(name: string, event: Event) => void;
+} => createEventBus();

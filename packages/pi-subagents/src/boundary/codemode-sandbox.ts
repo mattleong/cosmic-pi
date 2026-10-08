@@ -18,7 +18,7 @@ import {
 } from "../workflow/prelude.ts";
 
 /** Matches Pi's own codemode VM memory bound. */
-export const WORKFLOW_SANDBOX_MEMORY_BYTES = 256 * 1024 * 1024;
+const WORKFLOW_SANDBOX_MEMORY_BYTES = 256 * 1024 * 1024;
 /** How long an aborted script may take to hand back its output before it is abandoned. */
 const ABORT_SETTLE_TIMEOUT = "5 seconds";
 

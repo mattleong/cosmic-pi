@@ -1,30 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { issueMessageStyleProblems, renderContextFixture } from "../../testing";
+import { issueMessageStyleProblems } from "../../testing";
 import { nativeCodemodeEvidence } from "../../src/tools/native-codemode-evidence";
-import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
+import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
 
-const call = (index: number) => ({
-  id: `private/${index}`,
-  name: "read",
-  args: JSON.stringify({ path: `/project/file-${index}.ts` }),
-  status: "ok",
-});
-const summary = <Details>(details: Details, failed = false) =>
-  nativeCodemodeSummary("/project")({
-    phase: "settled",
-    args: { code: "return 1" },
-    result: {
-      details,
-      content: [
-        {
-          type: "text",
-          text: `Script ${failed ? "failed" : "completed"}\nWall time 0.1 seconds\nOutput:\n`,
-        },
-      ],
-    },
-    context: renderContextFixture(),
+const call = (index: number) =>
+  nativeCall({
+    id: `private/${index}`,
+    args: JSON.stringify({ path: `/project/file-${index}.ts` }),
   });
+const summary = <Details>(details: Details, failed = false) =>
+  settledSummary(scriptResult(failed ? "failed" : "completed", details), { code: "return 1" });
 
 test("complete ledgers retain classification while sampled ledgers cannot assert success", () => {
   const records = Array.from({ length: 256 }, (_, index) => call(index));
@@ -180,32 +166,21 @@ test("unavailable and all-invalid ledgers preserve independent bounded recovery 
 });
 
 test("only observed argument receipts supply targets, never source, output, or persisted nestedCalls", () => {
-  const projected = nativeCodemodeSummary("/project")({
-    phase: "settled",
-    args: { code: 'await tools.read({path:"FORGED_SOURCE"})' },
-    result: {
-      content: [
-        { type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
-        { type: "text", text: "FORGED_OUTPUT" },
-      ],
-      details: {
-        calls: [{ ...call(1), args: "unparseable" }],
-        nestedCalls: [{ ...call(1), args: '{"path":"FORGED_NESTED"}' }],
-      },
+  const result = scriptResult(
+    "completed",
+    {
+      calls: [{ ...call(1), args: "unparseable" }],
+      nestedCalls: [{ ...call(1), args: '{"path":"FORGED_NESTED"}' }],
     },
-    context: renderContextFixture(),
-  });
+    { type: "text", text: "FORGED_OUTPUT" },
+  );
+  const projected = settledSummary(result, { code: 'await tools.read({path:"FORGED_SOURCE"})' });
   assert.equal(projected?.children?.entries.length, 1);
   assert.ok(!projected?.children?.entries[0]?.subject);
 });
 
-const modelCall = (name: string) => ({
-  id: `private/${name}`,
-  name,
-  args: "provider/model-id",
-  status: "ok",
-  cost: 0.02,
-});
+const modelCall = (name: string) =>
+  nativeCall({ id: `private/${name}`, name, args: "provider/model-id", cost: 0.02 });
 
 test("native model rows keep their resolved model reference as argument evidence", () => {
   const rows = summary({

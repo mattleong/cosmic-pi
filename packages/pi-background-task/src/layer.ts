@@ -33,6 +33,6 @@ export const makeBackgroundTaskLayer = (
   );
 };
 
-export type BackgroundTaskApplicationLayer = ReturnType<typeof makeBackgroundTaskLayer>;
+type BackgroundTaskApplicationLayer = ReturnType<typeof makeBackgroundTaskLayer>;
 export type BackgroundTaskApplication = Layer.Success<BackgroundTaskApplicationLayer>;
 export type BackgroundTaskRuntimeError = Layer.Error<BackgroundTaskApplicationLayer>;

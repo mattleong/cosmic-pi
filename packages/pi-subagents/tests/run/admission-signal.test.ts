@@ -4,6 +4,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
+import { makeRunAdmissionSignal } from "../../src/run/admission-signal.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { profileCandidate } from "../fixtures/profiles.ts";
 import {
@@ -48,21 +49,26 @@ const claimHolder = (
   });
 
 describe("admission signal", () => {
-  it.effect("wakes a writer queued on a file when the blocking writer loses its claim", () => {
+  it.effect("wakes and clears a writer queued on a file when the blocker loses its claim", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       // Claims can only be revoked while the writer waits on a parent question.
       const holder = yield* claimHolder(service, fake, projections);
+      const queued = writer("queued", ["src/b.ts"]);
       const before = yield* service.admissionRevision;
-      const refused = yield* service.start(writer("queued", ["src/b.ts"])).pipe(Effect.flip);
+      const refused = yield* service.start(queued).pipe(Effect.flip);
       expect(refused).toMatchObject({ _tag: "SubagentWriterConflictError", transient: true });
+      expect(yield* service.queuedWriterConflict(queued)).toMatchObject({ activeId: holder.id });
+      // A worktree writer works in its own cwd, so the source's writers never block it.
+      expect(
+        yield* service.queuedWriterConflict({ ...queued, writerWorkspaceModeOverride: "worktree" }),
+      ).toBeUndefined();
       const waiting = yield* service.waitForAdmissionChange(before).pipe(Effect.forkScoped);
 
       yield* service.revokeWriteClaims(holder.id, ["src/b.ts"]);
       yield* Fiber.join(waiting);
-      expect((yield* service.start(writer("queued", ["src/b.ts"]))).writeClaims).toEqual([
-        "src/b.ts",
-      ]);
+      expect(yield* service.queuedWriterConflict(queued)).toBeUndefined();
+      expect((yield* service.start(queued)).writeClaims).toEqual(["src/b.ts"]);
     });
   });
 
@@ -92,24 +98,15 @@ describe("admission signal", () => {
       expect((yield* service.start(writer("queued", ["src/x.ts"]))).state).toBe("running");
     });
   });
-});
 
-describe("queued writer check", () => {
-  it.effect("reports a writer conflict standing until the blocking writer loses its claim", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const holder = yield* claimHolder(service, fake, projections);
-      const queued = writer("queued", ["src/b.ts"]);
-      expect(yield* service.start(queued).pipe(Effect.flip)).toMatchObject({ transient: true });
-      expect(yield* service.queuedWriterConflict(queued)).toMatchObject({ activeId: holder.id });
-      // A worktree writer works in its own cwd, so the source's writers never block it.
-      expect(
-        yield* service.queuedWriterConflict({ ...queued, writerWorkspaceModeOverride: "worktree" }),
-      ).toBeUndefined();
-
-      yield* service.revokeWriteClaims(holder.id, ["src/b.ts"]);
-      expect(yield* service.queuedWriterConflict(queued)).toBeUndefined();
-      expect((yield* service.start(queued)).writeClaims).toEqual(["src/b.ts"]);
-    });
-  });
+  it.effect("fails waits pending at shutdown and every wait after it", () =>
+    Effect.gen(function* () {
+      const signal = makeRunAdmissionSignal(new Map(), new Map());
+      const pending = yield* signal.waitForChange(0).pipe(Effect.flip, Effect.forkScoped);
+      signal.close();
+      const closed = { _tag: "SubagentRuntimeClosedError" };
+      expect(yield* Fiber.join(pending)).toMatchObject(closed);
+      expect(yield* signal.waitForChange(0).pipe(Effect.flip)).toMatchObject(closed);
+    }),
+  );
 });

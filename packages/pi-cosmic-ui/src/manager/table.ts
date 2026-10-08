@@ -2,12 +2,11 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { padListDetailRow } from "./list-detail.ts";
 import { clipToWidth } from "./chrome.ts";
 
-export interface ManagerTableColumn {
+interface ManagerTableColumn {
   /** Minimum useful width. Lower-priority columns disappear first when it cannot fit. */
   readonly minWidth: number;
   /** Higher values reserve space first; declaration order remains the display order. */
   readonly priority: number;
-  readonly maxWidth?: number;
 }
 
 /** Measure the complete dataset, not its visible window. Styling stays caller-owned. */
@@ -19,10 +18,7 @@ export const managerTable = (
   const available = Math.max(0, Math.floor(width));
   const gap = "  ";
   const natural = columns.map((column, index) =>
-    Math.min(
-      column.maxWidth ?? Infinity,
-      Math.max(column.minWidth, ...rows.map((row) => visibleWidth(row[index] ?? ""))),
-    ),
+    Math.max(column.minWidth, ...rows.map((row) => visibleWidth(row[index] ?? ""))),
   );
   const widths = columns.map(() => 0);
   const priority = columns
@@ -50,7 +46,6 @@ export const managerTable = (
     padListDetailRow(clipToWidth(text, widths[column] ?? 0), widths[column] ?? 0);
   return {
     widths,
-    cell,
     row: (cells: ReadonlyArray<string>): string =>
       columns
         .flatMap((_, index) => (widths[index] ? [cell(cells[index] ?? "", index)] : []))

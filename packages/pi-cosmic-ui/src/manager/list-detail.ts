@@ -62,7 +62,7 @@ export interface ListDetailMotionState {
   readonly detailScroll: number;
 }
 
-export interface ListDetailMotionContext {
+interface ListDetailMotionContext {
   readonly layout: ManagerLayoutTier;
   readonly rowCount: number;
   readonly hasSelection: boolean;
@@ -71,7 +71,7 @@ export interface ListDetailMotionContext {
   readonly listSteps: PageSteps;
 }
 
-export type ListDetailMotionResult =
+type ListDetailMotionResult =
   | { readonly _tag: "Close" }
   | { readonly _tag: "Ignored" }
   | {
@@ -122,15 +122,12 @@ export const listDetailMotion = (
   }
   switch (motion) {
     case "cancel":
-      return browsingDetail
-        ? update({ pane: "list", details: false, detailScroll: 0 }, { resetChord: true })
-        : { _tag: "Close" };
-    case "quit":
-      return { _tag: "Close" };
     case "back":
       return browsingDetail
         ? update({ pane: "list", details: false, detailScroll: 0 }, { resetChord: true })
-        : { _tag: "Ignored" };
+        : { _tag: motion === "cancel" ? "Close" : "Ignored" };
+    case "quit":
+      return { _tag: "Close" };
     case "forward":
       return context.hasSelection
         ? update(
@@ -148,12 +145,7 @@ export const listDetailMotion = (
   }
 };
 
-export interface DetailWindowState {
-  readonly scroll: number;
-  readonly lineCount: number;
-}
-
-export interface DetailWindow {
+interface DetailWindow {
   readonly visible: ReadonlyArray<string>;
   readonly scroll: number;
   readonly maxScroll: number;
@@ -181,7 +173,7 @@ export type DetailWindowPosition = boolean | "top" | undefined;
 export const computeDetailWindow = (options: {
   readonly lines: ReadonlyArray<string>;
   readonly height: number;
-  readonly previous: DetailWindowState;
+  readonly previous: Pick<DetailWindow, "scroll" | "lineCount">;
   readonly follow?: DetailWindowPosition;
 }): DetailWindow => {
   const { lines, height, previous } = options;
@@ -217,13 +209,11 @@ export const computeDetailWindow = (options: {
 };
 
 /** Standardized detail position/help copy shared by manager detail panes. */
-export const detailWindowPositionLabel = (overflow: {
-  readonly start: number;
-  readonly end: number;
-  readonly total: number;
-}): string => ` ${overflow.start}–${overflow.end} of ${overflow.total} · C-u/d half-page `;
+export const detailWindowPositionLabel = (
+  overflow: NonNullable<DetailWindow["overflow"]>,
+): string => ` ${overflow.start}–${overflow.end} of ${overflow.total} · C-u/d half-page `;
 
-export interface ListDetailPaneGeometry {
+interface ListDetailPaneGeometry {
   readonly inner: number;
   readonly listWidth: number;
   readonly detailWidth: number;

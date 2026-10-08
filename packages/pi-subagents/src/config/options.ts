@@ -1,7 +1,6 @@
 import { freezeSnapshot } from "pi-cosmic-core";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
-  cloneProfileRoute,
   mapProfileIds,
   normalizeDeclaredProfileRoute,
   PROFILE_IDS,
@@ -60,15 +59,16 @@ export type ResolvedNamedProfileSetStatus =
   | "missing"
   | "structurally-invalid";
 
-export interface ResolvedNamedProfileSet {
+/** One resolved route layer: every profile's route and the layer that supplied it. */
+type ResolvedProfileLayer = Pick<ResolvedSubagentConfig, "profiles" | "profileSources">;
+
+export interface ResolvedNamedProfileSet extends ResolvedProfileLayer {
   readonly origin: {
     readonly scope: NamedProfileSetScope;
     readonly name: string;
   };
   readonly status: ResolvedNamedProfileSetStatus;
   readonly invalidProfiles: ReadonlyArray<ProfileId>;
-  readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
-  readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
 }
 
 export interface ResolveNamedProfileSetInput {
@@ -78,20 +78,16 @@ export interface ResolveNamedProfileSetInput {
   readonly project?: DecodedSubagentConfig | undefined;
 }
 
-interface ResolvedProfileLayer {
-  readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
-  readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
-}
-
 interface ResolvedNamedProfileLayer {
   readonly layer: ResolvedProfileLayer;
   readonly status: ResolvedNamedProfileSetStatus;
 }
 
-const builtInProfileLayer = (): ResolvedProfileLayer => ({
-  profiles: mapProfileIds((id) => cloneProfileRoute(BUILTIN_PROFILE_ROUTES[id])),
+// Layers share route objects; every public result is cloned and frozen once by freezeSnapshot.
+const BUILTIN_PROFILE_LAYER: ResolvedProfileLayer = {
+  profiles: BUILTIN_PROFILE_ROUTES,
   profileSources: mapProfileIds(() => "builtin"),
-});
+};
 
 const invalidProfileLayer = (
   source: "global-invalid" | "project-invalid",
@@ -111,16 +107,14 @@ const resolveNamedProfileLayer = (
     return { layer: invalidProfileLayer(invalidSource), status: "structurally-invalid" };
   const profileSets = decoded.file.profileSets;
   const profileSet =
-    profileSets && Object.prototype.hasOwnProperty.call(profileSets, name)
-      ? profileSets[name]
-      : undefined;
+    profileSets && Object.hasOwn(profileSets, name) ? profileSets[name] : undefined;
   if (!profileSet) return { layer: invalidProfileLayer(invalidSource), status: "missing" };
   const invalidRoutes = decoded.invalidProfileSetRoutes[name] ?? [];
   const profiles = mapProfileIds((id): ProfileRoute => {
     const declaration = profileSet.profiles[id];
     if (invalidRoutes.includes(id)) return { candidates: [] };
     return declaration === undefined
-      ? cloneProfileRoute(lower.profiles[id])
+      ? lower.profiles[id]
       : normalizeDeclaredProfileRoute(declaration);
   });
   const profileSources = mapProfileIds((id): ProfileRouteSource => {
@@ -150,9 +144,10 @@ const resolveProfileSetLayer = (
 export function resolveNamedProfileSet(
   input: ResolveNamedProfileSetInput,
 ): ResolvedNamedProfileSet {
-  const builtin = builtInProfileLayer();
   const lower =
-    input.scope === "project" ? resolveProfileSetLayer(input.global, "global", builtin) : builtin;
+    input.scope === "project"
+      ? resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER)
+      : BUILTIN_PROFILE_LAYER;
   const decoded = input.scope === "global" ? input.global : input.project;
   const resolved = decoded
     ? resolveNamedProfileLayer(decoded, input.scope, input.name, lower)
@@ -182,41 +177,29 @@ const declaredSelection = (
   };
 };
 
-/** A trusted Project declaration wins over Global; with neither, a switch keeps its default. */
-const resolveSubagentFeatureToggles = (
-  global: DecodedSubagentConfig,
-  project?: DecodedSubagentConfig,
-): Pick<ResolvedSubagentConfig, SubagentFeatureToggle | "featureSources"> => {
-  const source = (toggle: SubagentFeatureToggle): SubagentFeatureSource =>
-    project?.file[toggle] !== undefined
-      ? "project"
-      : global.file[toggle] !== undefined
-        ? "global"
-        : "default";
-  const resolve = (toggle: SubagentFeatureToggle): boolean =>
-    project?.file[toggle] ?? global.file[toggle] ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES[toggle];
-  return {
-    ultracode: resolve("ultracode"),
-    featureSources: { ultracode: source("ultracode") },
-  };
-};
-
 /** Project routes in its selected set replace the selected global-set route; missing routes inherit. */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
-  const builtin = builtInProfileLayer();
-  const global = resolveProfileSetLayer(input.global, "global", builtin);
+  const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
-  const nesting =
-    project?.file.nesting ?? input.global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+  // A trusted Project declaration wins over Global; with neither, a switch keeps its default.
+  const ultracode = project?.file.ultracode ?? input.global.file.ultracode;
   return freezeSnapshot({
-    ...resolveSubagentFeatureToggles(input.global, project),
+    ultracode: ultracode ?? DEFAULT_SUBAGENT_FEATURE_TOGGLES.ultracode,
+    featureSources: {
+      ultracode:
+        ultracode === undefined
+          ? "default"
+          : project?.file.ultracode === undefined
+            ? "global"
+            : "project",
+    },
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
     fallbackProfile: "generalist",
     currentProfileSet: declaredSelection("project", project) ??
       declaredSelection("global", input.global) ?? { scope: "builtin" },
-    nesting: { ...nesting },
+    nesting: project?.file.nesting ?? input.global.file.nesting ?? DEFAULT_SUBAGENT_NESTING_POLICY,
     writerWorkspaceMode:
       project?.file.writerWorkspaceMode ??
       input.global.file.writerWorkspaceMode ??

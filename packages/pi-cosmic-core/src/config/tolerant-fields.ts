@@ -8,20 +8,20 @@ export interface TolerantFieldDiagnostic {
   readonly issue: "invalid";
 }
 
-export interface TolerantFieldOptions {
+interface TolerantFieldOptions {
   /** Prefix used for redacted, structural diagnostics. */
   readonly path?: string;
   /** Maximum diagnostics retained for one decode. Defaults to 32. */
   readonly maxDiagnostics?: number;
 }
 
-export type TolerantFieldSchemas = Readonly<Record<string, Schema.Decoder<any>>>;
+type TolerantFieldSchemas = Readonly<Record<string, Schema.Decoder<any>>>;
 
-export type TolerantFieldValues<Fields extends TolerantFieldSchemas> = {
+type TolerantFieldValues<Fields extends TolerantFieldSchemas> = {
   readonly [Key in keyof Fields]?: Schema.Schema.Type<Fields[Key]>;
 };
 
-export interface TolerantFieldResult<Fields extends TolerantFieldSchemas> {
+interface TolerantFieldResult<Fields extends TolerantFieldSchemas> {
   readonly value: TolerantFieldValues<Fields>;
   readonly diagnostics: readonly TolerantFieldDiagnostic[];
 }
@@ -37,29 +37,25 @@ export const decodeTolerantFields = <Input, const Fields extends TolerantFieldSc
 ): TolerantFieldResult<Fields> => {
   const root = Schema.decodeUnknownOption(JsonRecordSchema)(input);
   const raw = Option.isSome(root) ? root.value : {};
-  const diagnostics: TolerantFieldDiagnostic[] = [];
-  const maxDiagnostics = Math.max(0, Math.floor(options.maxDiagnostics ?? 32));
   const prefix = options.path ? `${options.path}.` : "";
   const value: TolerantFieldValues<Fields> = {};
-
-  if (Option.isNone(root) && diagnostics.length < maxDiagnostics) {
-    diagnostics.push({ path: options.path ?? "$", issue: "invalid" });
-  }
+  const diagnostics: TolerantFieldDiagnostic[] = Option.isNone(root)
+    ? [{ path: options.path ?? "$", issue: "invalid" }]
+    : [];
 
   for (const [key, schema] of Object.entries(fields)) {
     if (!Object.hasOwn(raw, key)) continue;
     const decoded = Schema.decodeUnknownOption(schema)(raw[key]);
-    if (Option.isSome(decoded)) {
+    if (Option.isNone(decoded)) diagnostics.push({ path: `${prefix}${key}`, issue: "invalid" });
+    else
       Object.defineProperty(value, key, {
         value: decoded.value,
         enumerable: true,
         configurable: true,
         writable: true,
       });
-    } else if (diagnostics.length < maxDiagnostics) {
-      diagnostics.push({ path: `${prefix}${key}`, issue: "invalid" });
-    }
   }
 
-  return { value, diagnostics };
+  const maxDiagnostics = Math.max(0, Math.floor(options.maxDiagnostics ?? 32));
+  return { value, diagnostics: diagnostics.slice(0, maxDiagnostics) };
 };

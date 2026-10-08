@@ -1,6 +1,7 @@
 // Serialized save boundary. No optimistic value is used as a commit receipt.
 import { sameProfileCandidate, MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
+  CANDIDATE_LIMIT_REACHED,
   declaredRouteForDraft,
   defaultRouteCandidate,
   addRouteCandidate,
@@ -19,13 +20,12 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
   protected performDraftAction(action: CandidateMenuAction | "add" | "reset"): void {
     if (action === "add") {
       if (this.refreshBlocked || this.draft().candidates.length >= MAX_PROFILE_CANDIDATES) {
-        this.setMessage(
+        this.notice(
           "warning",
           this.refreshBlocked
             ? "Close and reopen the editor before making changes."
-            : "The 32-candidate limit has been reached.",
+            : CANDIDATE_LIMIT_REACHED,
         );
-        this.renderSoon();
         return;
       }
       this.addingCandidate = true;
@@ -38,8 +38,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       const plan = this.editVisit.undoDraft(this.options.target, this.profile(), this.inspection);
       this.pendingAction = undefined;
       if ("error" in plan) {
-        this.setMessage("warning", plan.error);
-        this.renderSoon();
+        this.notice("warning", plan.error);
       } else this.persist(plan.draft, 0, undefined, plan.restore);
       return;
     }
@@ -49,12 +48,10 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       candidateIndex: this.candidateIndex,
     });
     if ("error" in result) {
-      this.setMessage("warning", result.error);
-      this.renderSoon();
+      this.notice("warning", result.error);
     } else if ("unchanged" in result) {
       this.pendingAction = undefined;
-      this.setMessage("info", "Nothing to change");
-      this.renderSoon();
+      this.notice("info", "Nothing to change");
     } else {
       this.persist(result.draft, result.candidateIndex);
     }
@@ -68,14 +65,12 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
   ): void {
     if (this.busy) return;
     if (this.refreshBlocked) {
-      this.setMessage("error", "Refresh failed. Close and reopen before editing.");
-      this.renderSoon();
+      this.notice("error", "Refresh failed. Close and reopen before editing.");
       return;
     }
     const declaration = declaredRouteForDraft(next);
     if (!declaration.valid) {
-      this.setMessage("error", declaration.error);
-      this.renderSoon();
+      this.notice("error", declaration.error);
       return;
     }
     const profile = this.profile();
@@ -88,8 +83,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
     this.selectField(field);
     this.busy = true;
     this.pendingAction = undefined;
-    this.setMessage("info", `Saving ${profile}…`);
-    this.renderSoon();
+    this.notice("info", `Saving ${profile}…`);
     void Promise.resolve()
       .then(() =>
         restore
@@ -133,8 +127,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
         this.busy = false;
         this.refreshBlocked = true;
         const detail = error instanceof Error ? error.message : "Could not save profile settings.";
-        this.setMessage("error", `${detail} Close and reopen the editor before another edit.`);
-        this.renderSoon();
+        this.notice("error", `${detail} Close and reopen the editor before another edit.`);
       });
   }
 
@@ -142,8 +135,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
     if (!update) return;
     if (update.error || !update.candidate) {
       this.addingCandidate = false;
-      this.setMessage("warning", update.error ?? "That change could not be applied.");
-      this.renderSoon();
+      this.notice("warning", update.error ?? "That change could not be applied.");
       return;
     }
     if (this.addingCandidate) {
@@ -159,8 +151,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
     }
     const current = this.draft().candidates[this.candidateIndex];
     if (current && sameProfileCandidate(current, update.candidate)) {
-      this.setMessage("info", "Nothing to change");
-      this.renderSoon();
+      this.notice("info", "Nothing to change");
       return;
     }
     const next = replaceRouteCandidate(this.draft(), this.candidateIndex, update.candidate);

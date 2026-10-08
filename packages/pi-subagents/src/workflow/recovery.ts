@@ -2,16 +2,15 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { currentBootTime, currentProcessId, isProcessAlive } from "../boundary/process-liveness.ts";
+import { currentBootTime, isProcessAlive } from "../boundary/process-liveness.ts";
 import type { WorkflowRunFileError, WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import { canonicalResultJson } from "../domain/result-contract.ts";
-import { workflowRequestError, type WorkflowRequestError } from "./errors.ts";
+import { workflowRequestError } from "./errors.ts";
 import {
   makeWorkflowReplay,
   WORKFLOW_JOURNAL_MAX_CHARS,
   type WorkflowInterruptedRun,
   type WorkflowJournalEntry,
-  type WorkflowReplay,
 } from "./journal.ts";
 import { isWorkflowRunFinished, WORKFLOW_RETAINED_RUNS } from "./model.ts";
 import { readWorkflowResultLines, type WorkflowReplayLine } from "./results.ts";
@@ -20,47 +19,9 @@ import {
   isWorkflowRunLiveElsewhere,
   isWorkflowRunNoticeOwed,
   workflowRecordedRun,
-  type WorkflowRecordedRun,
   type WorkflowRunLiveness,
 } from "./run-record.ts";
 import type { WorkflowRunRecordFile, WorkflowStoreContract } from "./store.ts";
-
-/**
- * What this session finds in the run files of runs no longer in memory, such as those of an
- * earlier Pi process: their results for a resume, the notices still owed, and status summaries.
- * Only runs whose `run.json` names this session count.
- */
-export interface WorkflowRecovery {
-  /**
-   * The results a run resuming `runId` replays from its files. It fails when the run is unknown
-   * or pruned, left no record, belongs to another session, or still runs in another Pi process.
-   */
-  readonly replay: (runId: string) => Effect.Effect<WorkflowReplay, WorkflowRequestError>;
-  /**
-   * The newest runs of this session that a teardown interrupted, or whose Pi process is gone
-   * while they ran or before Pi accepted their report, and whose notice Pi never accepted,
-   * oldest first. Runs `remembered` reports are left to the memory that holds them.
-   */
-  readonly interrupted: (
-    remembered: (runId: string) => Effect.Effect<boolean>,
-  ) => Effect.Effect<ReadonlyArray<WorkflowInterruptedRun>>;
-  /** A read-only summary of a run of this session from its files; undefined without one. */
-  readonly recorded: (runId: string) => Effect.Effect<WorkflowRecordedRun | undefined>;
-  /**
-   * Whether the run's record names this session and says Pi accepted a notice or report for it,
-   * as another Pi process of the session may have.
-   */
-  readonly noticeAccepted: (runId: string) => Effect.Effect<boolean>;
-}
-
-export interface WorkflowRecoveryServices {
-  readonly store: Pick<
-    WorkflowStoreContract,
-    "readRunRecord" | "hasRunFiles" | "listRunRecords" | "readRunJournal" | "readRunResult"
-  >;
-  /** The Pi session id run records must name; without one nothing is read. */
-  readonly sessionKey: string | undefined;
-}
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
@@ -69,7 +30,7 @@ const livenessOf = (file: WorkflowRunRecordFile) =>
   Clock.currentTimeMillis.pipe(
     Effect.map(
       (now): WorkflowRunLiveness => ({
-        currentPid: currentProcessId(),
+        currentPid: process.pid,
         bootedAt: currentBootTime(now),
         now,
         writtenAt: file.writtenAt,
@@ -100,7 +61,21 @@ const unreadable = (runId: string) => (error: WorkflowRunFileError) =>
     `Workflow run ${runId} can't be resumed: ${error.message}`,
   );
 
-export const makeWorkflowRecovery = (services: WorkflowRecoveryServices): WorkflowRecovery => {
+/**
+ * What this session finds in the run files of runs no longer in memory, such as those of an
+ * earlier Pi process: their results for a resume, the notices still owed, and status summaries.
+ * Only runs whose `run.json` names this session count.
+ */
+export type WorkflowRecovery = ReturnType<typeof makeWorkflowRecovery>;
+
+export const makeWorkflowRecovery = (services: {
+  readonly store: Pick<
+    WorkflowStoreContract,
+    "readRunRecord" | "hasRunFiles" | "listRunRecords" | "readRunJournal" | "readRunResult"
+  >;
+  /** The Pi session id run records must name; without one nothing is read. */
+  readonly sessionKey: string | undefined;
+}) => {
   const { store, sessionKey } = services;
 
   /** The record when it names this session; undefined when it is missing, unreadable or another's. */
@@ -114,34 +89,31 @@ export const makeWorkflowRecovery = (services: WorkflowRecoveryServices): Workfl
       .readRunJournal(files, WORKFLOW_JOURNAL_MAX_CHARS)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
 
-  /** A line's full result, read from the file it names within `budget`, and the text read. */
-  const fullResult = (files: WorkflowRunFiles, line: WorkflowReplayLine, budget: number) =>
-    line.resultFile === undefined
-      ? Effect.succeed({ result: Option.some(line.result), read: 0 })
-      : store.readRunResult(files, line.resultFile, budget).pipe(
-          Effect.map((text) => ({
-            result: text === undefined ? Option.none<Schema.Json>() : decodeJson(text),
-            read: text?.length ?? 0,
-          })),
-        );
-
-  /** A line's entry; undefined when its full result is missing, too large or malformed. */
-  const entryOf = (files: WorkflowRunFiles, line: WorkflowReplayLine, budget: number) =>
-    fullResult(files, line, budget).pipe(
-      Effect.map(({ result, read }) => {
-        if (Option.isNone(result)) return undefined;
-        const entry: WorkflowJournalEntry = {
-          key: line.key,
-          result: result.value,
-          outputTokens: line.outputTokens,
-          chars: canonicalResultJson(result.value).length,
-          ...(line.workspaceId !== undefined && { workspaceId: line.workspaceId }),
-          ...(line.label !== undefined && { label: line.label }),
-          ...(line.runId !== undefined && { runId: line.runId }),
-        };
-        return { entry, read };
-      }),
-    );
+  /**
+   * A line's entry and the text read for it, its full result read from the file it names within
+   * `budget`; undefined when that result is missing, too large or malformed.
+   */
+  const entryOf = (
+    files: WorkflowRunFiles,
+    { resultFile, ...line }: WorkflowReplayLine,
+    budget: number,
+  ) =>
+    Effect.gen(function* () {
+      const text =
+        resultFile === undefined
+          ? undefined
+          : yield* store.readRunResult(files, resultFile, budget);
+      const result =
+        resultFile === undefined
+          ? Option.some(line.result)
+          : text === undefined
+            ? Option.none()
+            : decodeJson(text);
+      if (Option.isNone(result)) return undefined;
+      const chars = canonicalResultJson(result.value).length;
+      const entry: WorkflowJournalEntry = { ...line, result: result.value, chars };
+      return { entry, read: text?.length ?? 0 };
+    });
 
   /** Replay entries from the run's journal and result files, reading at most the journal bound. */
   const replayEntries = (files: WorkflowRunFiles, lines: ReadonlyArray<string>) =>
@@ -159,11 +131,15 @@ export const makeWorkflowRecovery = (services: WorkflowRecoveryServices): Workfl
 
   /** A run without a record: its files are gone, or it couldn't save one. */
   const missingRun = (runId: string) =>
-    Effect.gen(function* () {
-      return yield* (yield* store.hasRunFiles(runId)) ? unrecordedRun(runId) : unknownRun(runId);
-    });
+    store
+      .hasRunFiles(runId)
+      .pipe(Effect.flatMap((has) => (has ? unrecordedRun(runId) : unknownRun(runId))));
 
-  const replay: WorkflowRecovery["replay"] = (runId) =>
+  /**
+   * The results a run resuming `runId` replays from its files. It fails when the run is unknown
+   * or pruned, left no record, belongs to another session, or still runs in another Pi process.
+   */
+  const replay = (runId: string) =>
     Effect.gen(function* () {
       if (sessionKey === undefined) return yield* missingRun(runId);
       const file = yield* store.readRunRecord(runId).pipe(Effect.mapError(unreadable(runId)));
@@ -213,7 +189,12 @@ export const makeWorkflowRecovery = (services: WorkflowRecoveryServices): Workfl
       return notice;
     });
 
-  const interrupted: WorkflowRecovery["interrupted"] = (remembered) =>
+  /**
+   * The newest runs of this session that a teardown interrupted, or whose Pi process is gone
+   * while they ran or before Pi accepted their report, and whose notice Pi never accepted,
+   * oldest first. Runs `remembered` reports are left to the memory that holds them.
+   */
+  const interrupted = (remembered: (runId: string) => Effect.Effect<boolean>) =>
     Effect.gen(function* () {
       if (sessionKey === undefined) return [];
       const files = yield* store.listRunRecords(
@@ -235,7 +216,8 @@ export const makeWorkflowRecovery = (services: WorkflowRecoveryServices): Workfl
       return file && record ? { file, record } : undefined;
     });
 
-  const recorded: WorkflowRecovery["recorded"] = (runId) =>
+  /** A read-only summary of a run of this session from its files; undefined without one. */
+  const recorded = (runId: string) =>
     Effect.gen(function* () {
       const own = yield* ownRun(runId);
       if (!own) return undefined;
@@ -248,7 +230,11 @@ export const makeWorkflowRecovery = (services: WorkflowRecoveryServices): Workfl
       );
     });
 
-  const noticeAccepted: WorkflowRecovery["noticeAccepted"] = (runId) =>
+  /**
+   * Whether the run's record names this session and says Pi accepted a notice or report for it,
+   * as another Pi process of the session may have.
+   */
+  const noticeAccepted = (runId: string) =>
     ownRun(runId).pipe(Effect.map((own) => own?.record.notified === true));
 
   return { replay, interrupted, recorded, noticeAccepted };

@@ -21,51 +21,41 @@ const bytes = (event: SubagentSessionEvent): number => {
   return size;
 };
 
-export function summarizeToolArguments<ArgsInput>(
-  toolName: string,
-  args: ArgsInput,
-): string | undefined {
+/** The argument that best identifies what a tool call works on. */
+const toolTarget = <ArgsInput>(toolName: string, args: ArgsInput): string | undefined => {
   const input = asObject(args);
   const path =
     stringField(input, "path") ?? stringField(input, "file_path") ?? stringField(input, "cwd");
-  let summary: string | undefined;
   switch (toolName.toLowerCase()) {
     case "bash":
-      summary = stringField(input, "command");
-      break;
+      return stringField(input, "command");
     case "read":
     case "write":
     case "edit":
     case "ls":
-      summary = path;
-      break;
+      return path;
     case "grep": {
       const pattern = stringField(input, "pattern");
-      summary = [pattern ? `/${pattern}/` : undefined, path].filter(Boolean).join(" · ");
-      break;
+      return [pattern ? `/${pattern}/` : undefined, path].filter(Boolean).join(" · ");
     }
     case "find":
     case "glob":
-      summary = [stringField(input, "pattern"), path].filter(Boolean).join(" · ");
-      break;
+      return [stringField(input, "pattern"), path].filter(Boolean).join(" · ");
     case "contact_parent":
-      summary = [stringField(input, "kind"), stringField(input, "message")]
-        .filter(Boolean)
-        .join(": ");
-      break;
+      return [stringField(input, "kind"), stringField(input, "message")].filter(Boolean).join(": ");
     default:
-      summary =
+      return (
         path ??
         stringField(input, "query") ??
         stringField(input, "id") ??
         stringField(input, "name") ??
         stringField(input, "message") ??
-        stringField(input, "command");
+        stringField(input, "command")
+      );
   }
-  return summary ? sanitizeDiagnosticText(summary, MAX_TOOL_TARGET_CHARS) : undefined;
-}
+};
 
-export function appendSessionEvent(
+function appendSessionEvent(
   current: ReadonlyArray<SubagentSessionEvent>,
   event: SubagentSessionEvent,
 ): ReadonlyArray<SubagentSessionEvent> {
@@ -118,7 +108,8 @@ export function startToolSessionEvent(
     readonly startedAt: number;
   },
 ): ReadonlyArray<SubagentSessionEvent> {
-  const target = summarizeToolArguments(input.toolName, input.args);
+  const summary = toolTarget(input.toolName, input.args);
+  const target = summary ? sanitizeDiagnosticText(summary, MAX_TOOL_TARGET_CHARS) : undefined;
   return appendSessionEvent(current, {
     type: "tool" as const,
     toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),

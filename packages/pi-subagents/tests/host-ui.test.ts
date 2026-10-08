@@ -28,6 +28,13 @@ const context = (
     ui: { setWidget, setStatus },
   });
 
+/** A bridge whose ticker never fires and whose clock stands still. */
+const quietBridge = () =>
+  makeSubagentProjectionBridge(undefined, {
+    startTicker: () => () => undefined,
+    getNow: () => 2_000,
+  });
+
 const captureFactory = () => {
   let factory: WidgetFactory | undefined;
   const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
@@ -116,10 +123,7 @@ describe("subagent activity widget host", () => {
 
   it("holds await presentation for the exact lease lifetime", () => {
     const { getFactory, setWidget } = captureFactory();
-    const bridge = makeSubagentProjectionBridge(undefined, {
-      startTicker: () => () => undefined,
-      getNow: () => 2_000,
-    });
+    const bridge = quietBridge();
     const target = view({ id: "target" });
     const other = view({ id: "other" });
     bridge.publish(projectionOf([target, other]));
@@ -139,10 +143,7 @@ describe("subagent activity widget host", () => {
   it("rejects stale presentation leases after context replacement", () => {
     const first = captureFactory();
     const second = captureFactory();
-    const bridge = makeSubagentProjectionBridge(undefined, {
-      startTicker: () => () => undefined,
-      getNow: () => 2_000,
-    });
+    const bridge = quietBridge();
     const target = view({ id: "target" });
 
     bridge.publish(projectionOf([target]));
@@ -186,10 +187,7 @@ describe("subagent activity widget host", () => {
 
   it("only yields widget ownership after acknowledgement and restores the same presentation leases", () => {
     const { getFactory, setWidget } = captureFactory();
-    const bridge = makeSubagentProjectionBridge(undefined, {
-      startTicker: () => () => undefined,
-      getNow: () => 2_000,
-    });
+    const bridge = quietBridge();
     bridge.publish(projectionOf([view({ id: "run" })]));
     const ctx = context(setWidget);
     bridge.setContext(ctx);

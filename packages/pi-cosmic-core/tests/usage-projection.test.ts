@@ -5,59 +5,45 @@ import {
   makeFrozenUsageProjection,
   resetFrozenUsageProjection,
   synchronizeUsageProjectionContext,
+  type UsageProjectionBase,
 } from "../src/usage-projection.ts";
 
 interface TestSnapshot {
   readonly label: string;
 }
 
-interface TestExtras {
+interface TestProjection extends UsageProjectionBase<never, TestSnapshot> {
   readonly teamId: string | undefined;
   readonly accountId: string | undefined;
 }
 
-const initialExtras = (): TestExtras => ({ teamId: undefined, accountId: undefined });
+const initialProjection = (): TestProjection => ({
+  ...initialUsageProjection<never, TestSnapshot>(),
+  teamId: undefined,
+  accountId: undefined,
+});
 
-const makeProjectionRef = () =>
-  makeFrozenUsageProjection<never, TestSnapshot, TestExtras>(initialExtras());
+const makeProjectionRef = () => makeFrozenUsageProjection(initialProjection);
+
+const hidden = { hiddenStatusText: "Usage hidden: not a subscription model." };
 
 describe("usage projection helpers", () => {
-  it("makeFrozenUsageProjection freezes the base fields and provider extras", () => {
+  it("builds and resets the frozen initial projection with provider extras", () => {
     const ref = makeProjectionRef();
-    const state = MutableRef.get(ref);
-    expect(state.teamId).toBeUndefined();
-    expect(state.eligible).toBe(false);
-    expect(state.statusText).toBe("Usage unavailable");
-    expect(Object.isFrozen(state)).toBe(true);
+    const initial = initialProjection();
+    expect(MutableRef.get(ref)).toEqual(initial);
+    expect(Object.isFrozen(MutableRef.get(ref))).toBe(true);
 
-    // Freezing must survive a transition published through the shared helpers.
     synchronizeUsageProjectionContext(ref, () => ({
-      eligible: true,
-      clearUsage: false,
-      statusTexts: { hiddenStatusText: "Hidden." },
+      eligible: false,
+      clearUsage: true,
+      statusTexts: hidden,
     }));
-    const next = MutableRef.get(ref);
-    expect(next.eligible).toBe(true);
-    expect(Object.isFrozen(next)).toBe(true);
-  });
+    expect(MutableRef.get(ref).statusText).toBe(hidden.hiddenStatusText);
 
-  it("resetFrozenUsageProjection rebuilds the frozen initial projection with fresh extras", () => {
-    const ref = makeProjectionRef();
-    synchronizeUsageProjectionContext(ref, (state) =>
-      state.config === undefined
-        ? { eligible: false, clearUsage: true, statusTexts: { hiddenStatusText: "Hidden." } }
-        : { eligible: true, clearUsage: false },
-    );
-    expect(MutableRef.get(ref).statusText).toBe("Hidden.");
-
-    resetFrozenUsageProjection(ref, initialExtras);
-    const reset = MutableRef.get(ref);
-    expect(reset).toEqual({
-      ...initialUsageProjection<never, TestSnapshot>(),
-      teamId: undefined,
-      accountId: undefined,
-    });
-    expect(Object.isFrozen(reset)).toBe(true);
+    resetFrozenUsageProjection(ref, initialProjection);
+    expect(MutableRef.get(ref)).toEqual(initial);
+    expect(Object.isFrozen(MutableRef.get(ref))).toBe(true);
   });
 
   it("applies a decision to the exact projection state observed by its callback", () => {
@@ -67,11 +53,7 @@ describe("usage projection helpers", () => {
     synchronizeUsageProjectionContext(ref, (state) => {
       expect(state).toBe(observed);
       MutableRef.set(ref, { ...state, accountId: "reentrant-update", statusText: "Reentrant." });
-      return {
-        eligible: true,
-        clearUsage: true,
-        statusTexts: { hiddenStatusText: "Hidden." },
-      };
+      return { eligible: true, clearUsage: true, statusTexts: hidden };
     });
 
     const published = MutableRef.get(ref);
@@ -80,27 +62,22 @@ describe("usage projection helpers", () => {
     expect(Object.isFrozen(published)).toBe(true);
   });
 
-  it("synchronizeUsageProjectionContext applies eligibility decisions and default texts", () => {
+  it("synchronizeUsageProjectionContext applies eligibility decisions and status texts", () => {
     const ref = makeProjectionRef();
 
-    // Eligible without overrides: unavailable status text falls back to the shared default
-    // on a clearing transition.
+    // Eligible without overrides: a clearing transition uses the shared unavailable default.
     synchronizeUsageProjectionContext(ref, () => ({ eligible: true, clearUsage: true }));
     expect(MutableRef.get(ref).statusText).toBe("Usage unavailable");
     expect(MutableRef.get(ref).snapshot).toBeUndefined();
 
-    // Hidden with explicit texts: both overrides are honored.
     synchronizeUsageProjectionContext(ref, () => ({
       eligible: false,
       clearUsage: false,
-      statusTexts: {
-        hiddenStatusText: "Usage hidden: not a subscription model.",
-        unavailableStatusText: "Custom unavailable.",
-      },
+      statusTexts: { ...hidden, unavailableStatusText: "Custom unavailable." },
     }));
-    expect(MutableRef.get(ref).statusText).toBe("Usage hidden: not a subscription model.");
+    expect(MutableRef.get(ref).statusText).toBe(hidden.hiddenStatusText);
 
-    // Omitted hidden text falls back to the generic message instead of a type error path.
+    // Omitted hidden text falls back to the generic message.
     synchronizeUsageProjectionContext(ref, () => ({ eligible: false, clearUsage: false }));
     expect(MutableRef.get(ref).statusText).toBe("Usage hidden");
 

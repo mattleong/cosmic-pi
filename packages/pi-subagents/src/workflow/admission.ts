@@ -1,66 +1,40 @@
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
-import type * as Result from "effect/Result";
-import type * as Scope from "effect/Scope";
 import type {
-  SubagentError,
+  InvalidSubagentRequestError,
   SubagentRuntimeClosedError,
   SubagentWriterConflictError,
 } from "../run/errors.ts";
 import type { StartSubagentRequest, SubagentProjection } from "../run/model.ts";
+import type { OwnedRunHandle, OwnedRunStart } from "../run/owned-runs.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
-import type { WorkflowSlots, WorkflowWaitOrder } from "./admission-queue.ts";
-import type { WorkflowBudget } from "./budget.ts";
-import { sameWorkflowWaiting, type WorkflowAgentWaiting } from "./model.ts";
-
-export type WorkflowStartFailure = SubagentError | SubagentRuntimeClosedError;
-
-/** What admission needs from one workflow run and its session. */
-export interface WorkflowAdmissionGate {
-  /** The run's slots; a call holds one while it starts and runs, never behind a writer. */
-  readonly slots: WorkflowSlots;
-  readonly budget: Pick<WorkflowBudget, "exhausted" | "whenExhausted" | "refuse">;
-  readonly log: (level: "info" | "warning", message: string) => Effect.Effect<void>;
-  readonly subagents: Pick<
-    SubagentServiceContract,
-    | "admissionRevision"
-    | "waitForAdmissionChange"
-    | "waitForRevision"
-    | "queuedWriterConflict"
-    | "projection"
-  >;
-}
+import type { WorkflowAgentRun } from "./agent.ts";
+import { couldntStart, overBudgetSettlement, type WorkflowSettlement } from "./agent-settlement.ts";
+import type { WorkflowWaitOrder } from "./admission-queue.ts";
+import type { WorkflowAgentWaiting } from "./model.ts";
 
 /** One agent() call's launch, as admission starts it and waits for the root to admit it. */
-export interface WorkflowAdmissionCall<Started, A> {
+interface WorkflowAdmissionCall {
   readonly order: WorkflowWaitOrder;
   /** The call's label, as the waiting log line names it. */
   readonly label: string;
+  /** Who owns the admitted run, under the run id the call reserved. */
+  readonly owner: OwnedRunStart;
   /**
    * Resolves the launch when the call first holds a slot; the root checks that request again
    * while the call waits. A failure is the call's result.
    */
-  readonly resolve: Effect.Effect<Result.Result<StartSubagentRequest, A>>;
-  /**
-   * Asks the root to start the agent; the attempt's scope owns the admitted run. It runs again
-   * for each attempt, so it must make its start request when run, not when built.
-   */
-  readonly start: (
-    request: StartSubagentRequest,
-  ) => Effect.Effect<Started, SubagentError, Scope.Scope>;
-  /** Runs an admitted agent to its result, still holding its slot. */
-  readonly run: (started: Started) => Effect.Effect<A>;
-  /** The call's result when its start won't be admitted, or the runtime closed while it waited. */
-  readonly refused: (error: WorkflowStartFailure) => A;
-  /** The call's result once the run's budget is exhausted, given the budget's refusal. */
-  readonly exhausted: (refusal: string) => A;
+  readonly resolve: Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError>;
+  /** Runs an admitted agent to its result, still holding its slot; the attempt's scope owns it. */
+  readonly run: (handle: OwnedRunHandle) => Effect.Effect<WorkflowSettlement>;
   /** Records why the call waits; called only when the reason changes, with undefined once it doesn't. */
   readonly waiting: (reason: WorkflowAgentWaiting | undefined) => Effect.Effect<void>;
 }
 
 /** How one pass under a slot ended: the call's result, or a writer it must wait behind. */
-type Pass<A> =
-  | { readonly done: A }
+type Pass =
+  | { readonly done: WorkflowSettlement }
   | {
       readonly writer: SubagentWriterConflictError;
       readonly request: StartSubagentRequest;
@@ -77,32 +51,41 @@ const waitingLine = (label: string, conflict: SubagentWriterConflictError): stri
   `agent "${label}" is queued behind ${conflict.activeName} (${conflict.activeId}): ${conflict.message}`;
 
 /**
- * Starts a call and returns its result once the root admits it and it settles, or its refusal
- * result. The call first takes one of its run's slots, in call order, and resolves its launch.
+ * Starts a call and returns its settlement once the root admits it and it settles, or its
+ * refusal. The call first takes one of its run's slots, in call order, and resolves its launch.
  * Workflow agents have their run's slots instead of the root's direct-child slots, so the root
  * refuses a start only for reasons a slot doesn't cover. A start refused for a writer conflict
  * that clears by itself gives its slot back and waits for a release, so other agents, such as
  * readers behind a queued writer, keep starting. Once the run's budget is exhausted, every wait
- * and every start still under way ends, and the call's result is `exhausted` with the budget's
- * refusal; an admitted agent always runs on.
+ * and every start still under way ends, and the call is skipped with the budget's refusal; an
+ * admitted agent always runs on.
  */
-export const admitWorkflowAgent = <Started, A>(
-  gate: WorkflowAdmissionGate,
-  call: WorkflowAdmissionCall<Started, A>,
-): Effect.Effect<A> => {
-  const { subagents, budget } = gate;
+export const admitWorkflowAgent = (
+  run: Pick<WorkflowAgentRun, "slots" | "budget" | "log">,
+  subagents: Pick<
+    SubagentServiceContract,
+    | "startOwned"
+    | "admissionRevision"
+    | "waitForAdmissionChange"
+    | "waitForRevision"
+    | "queuedWriterConflict"
+    | "projection"
+  >,
+  call: WorkflowAdmissionCall,
+): Effect.Effect<WorkflowSettlement> => {
+  const { budget } = run;
   let request: StartSubagentRequest | undefined;
   let shown: WorkflowAgentWaiting | undefined;
   let waitingOn: string | undefined;
 
   const show = (reason: WorkflowAgentWaiting | undefined) =>
     Effect.suspend(() => {
-      if (sameWorkflowWaiting(shown, reason)) return Effect.void;
+      if (Equal.equals(shown, reason)) return Effect.void;
       shown = reason;
       return call.waiting(reason);
     });
-  const refused = budget.refuse.pipe(Effect.map(call.exhausted));
-  const refuse = refused.pipe(Effect.map((done): Pass<A> => ({ done })));
+  const refused = budget.refuse.pipe(Effect.map(overBudgetSettlement));
+  const refuse = refused.pipe(Effect.map((done): Pass => ({ done })));
 
   /**
    * One start, holding the call's slot; an admitted run then runs in the start's scope. The
@@ -110,12 +93,13 @@ export const admitWorkflowAgent = <Started, A>(
    * wait. The start is given up once the budget is exhausted, since preflight or a worktree can
    * take a while; interrupting it stops an agent already admitted.
    */
-  const attempt = (resolved: StartSubagentRequest): Effect.Effect<Pass<A>> =>
+  const attempt = (resolved: StartSubagentRequest): Effect.Effect<Pass> =>
     Effect.scoped(
       Effect.gen(function* () {
         const revision = yield* subagents.admissionRevision;
+        // Each attempt asks the root again, so the start is made anew every time.
         const started = yield* Effect.raceFirst(
-          Effect.result(call.start(resolved)).pipe(Effect.asSome),
+          Effect.result(subagents.startOwned(resolved, call.owner)).pipe(Effect.asSome),
           budget.whenExhausted.pipe(Effect.as(Option.none())),
         );
         if (Option.isNone(started)) return yield* refuse;
@@ -124,20 +108,16 @@ export const admitWorkflowAgent = <Started, A>(
         const error = result.failure;
         return error._tag === "SubagentWriterConflictError" && error.transient === true
           ? { writer: error, request: resolved, revision }
-          : { done: call.refused(error) };
+          : { done: couldntStart(error) };
       }),
     );
 
   /** A pass holding a slot: resolve once, check for a writer conflict cheaply, then attempt. */
-  const pass: Effect.Effect<Pass<A>> = Effect.gen(function* () {
+  const pass: Effect.Effect<Pass, InvalidSubagentRequestError> = Effect.gen(function* () {
     // The call holds its slot, so it no longer waits for one.
     yield* show(undefined);
     if (yield* budget.exhausted) return yield* refuse;
-    if (request === undefined) {
-      const resolved = yield* call.resolve;
-      if (resolved._tag === "Failure") return { done: resolved.failure };
-      request = resolved.success;
-    }
+    if (request === undefined) request = yield* call.resolve;
     const revision = yield* subagents.admissionRevision;
     const writer = yield* subagents.queuedWriterConflict(request);
     if (writer) return { writer, request, revision };
@@ -150,7 +130,7 @@ export const admitWorkflowAgent = <Started, A>(
       const line = waitingLine(call.label, conflict);
       if (line === waitingOn) return Effect.void;
       waitingOn = line;
-      return gate.log("info", line);
+      return run.log("info", line);
     });
 
   /** Waits for the next projection in which the writer's paused state differs from `paused`. */
@@ -175,40 +155,33 @@ export const admitWorkflowAgent = <Started, A>(
    */
   const awaitWriter = (
     pending: StartSubagentRequest,
-    conflict: SubagentWriterConflictError,
-    revision: number,
+    first: SubagentWriterConflictError,
+    firstRevision: number,
   ): Effect.Effect<void, SubagentRuntimeClosedError> =>
     Effect.gen(function* () {
-      const projection = yield* subagents.projection;
-      const paused = writerPaused(projection, conflict.activeId);
-      yield* noteWriter(conflict);
-      yield* show({ kind: "writer", runId: conflict.activeId, name: conflict.activeName, paused });
-      return yield* Effect.raceFirst(
-        subagents.waitForAdmissionChange(revision).pipe(Effect.as(true)),
-        pauseChanged(conflict.activeId, paused, projection.revision).pipe(Effect.as(false)),
-      );
-    }).pipe(
-      Effect.flatMap((released) =>
-        released
-          ? subagents.admissionRevision.pipe(
-              Effect.flatMap((next) =>
-                subagents
-                  .queuedWriterConflict(pending)
-                  .pipe(
-                    Effect.flatMap((again) =>
-                      again ? awaitWriter(pending, again, next) : show(undefined),
-                    ),
-                  ),
-              ),
-            )
-          : awaitWriter(pending, conflict, revision),
-      ),
-    );
+      let conflict: SubagentWriterConflictError | undefined = first;
+      let revision = firstRevision;
+      while (conflict !== undefined) {
+        const { activeId, activeName } = conflict;
+        const projection = yield* subagents.projection;
+        const paused = writerPaused(projection, activeId);
+        yield* noteWriter(conflict);
+        yield* show({ kind: "writer", runId: activeId, name: activeName, paused });
+        const released = yield* Effect.raceFirst(
+          subagents.waitForAdmissionChange(revision).pipe(Effect.as(true)),
+          pauseChanged(activeId, paused, projection.revision).pipe(Effect.as(false)),
+        );
+        if (!released) continue;
+        revision = yield* subagents.admissionRevision;
+        conflict = yield* subagents.queuedWriterConflict(pending);
+      }
+      yield* show(undefined);
+    });
 
-  const loop: Effect.Effect<A> = gate.slots
+  const loop: Effect.Effect<WorkflowSettlement> = run.slots
     .hold(call.order, { onWait: show({ kind: "slot" }), abort: budget.whenExhausted }, pass)
     .pipe(
-      Effect.flatMap((held): Effect.Effect<A, SubagentRuntimeClosedError> => {
+      Effect.flatMap((held): Effect.Effect<WorkflowSettlement, SubagentRuntimeClosedError> => {
         if (Option.isNone(held)) return refused;
         const step = held.value;
         if ("done" in step) return Effect.succeed(step.done);
@@ -217,7 +190,8 @@ export const admitWorkflowAgent = <Started, A>(
           budget.whenExhausted.pipe(Effect.as(false)),
         ).pipe(Effect.flatMap((cleared) => (cleared ? loop : refused)));
       }),
-      Effect.catch((error) => Effect.succeed(call.refused(error))),
+      // The launch didn't resolve, or the runtime closed while the call waited.
+      Effect.catch((error) => Effect.succeed(couldntStart(error))),
     );
   return loop;
 };

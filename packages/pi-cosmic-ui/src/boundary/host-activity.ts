@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
 import {
   ActivityComponent,
   makeActivityPresentation,
@@ -20,6 +20,7 @@ import {
   ActivityError,
   type ActivityActionRequest,
   type ActivityServiceContract,
+  type ActivityServiceOptions,
 } from "../activity/service.ts";
 import { renderActivityWidget } from "../activity/widget.ts";
 import { activityWidgetHeight } from "../activity/widget-projection.ts";
@@ -32,7 +33,14 @@ import { inputDockVisible } from "./host-input-dock.ts";
 /** Activity rows kept while an input dock needs the shared above-editor space. */
 const COMPACT_WIDGET_ROWS = 3;
 
-const DiscoverySchema = Schema.Struct({ version: Schema.Literal(1), sessionId: Schema.String });
+const isDiscovery = Schema.is(
+  Schema.Struct({ version: Schema.Literal(1), sessionId: Schema.String }),
+);
+const MANAGER_TITLES = {
+  workflows: "Activity",
+  subagents: "Subagents",
+  tasks: "Background tasks",
+} satisfies Record<ActivitySection, string>;
 /** Host callbacks are best effort. */
 const safe = (run: () => void): void => invokeHostCallback(run, undefined);
 const neutral = () => ({ render: () => [], invalidate() {} });
@@ -54,14 +62,8 @@ interface Binding {
   manager: object | undefined;
 }
 export interface ActivityHost {
-  readonly bind: (service: ActivityServiceContract) => () => void;
-  readonly publish: (
-    service: ActivityServiceContract,
-    rows: readonly ActivityRow[],
-    starting?: number,
-  ) => void;
-  readonly update: (service: ActivityServiceContract) => void;
-  readonly tick: (service: ActivityServiceContract, now: number) => void;
+  /** Hooks that bind one session's activity service to this host until it releases them. */
+  readonly serviceOptions: () => Required<ActivityServiceOptions>;
   readonly activate: (ctx: ExtensionContext, service: ActivityServiceContract) => void;
   readonly deactivate: () => void;
   readonly open: (
@@ -102,44 +104,48 @@ export function makeActivityHost(
     binding.update = () => undefined;
   };
   const host: ActivityHost = {
-    bind(service) {
-      const binding: Binding = {
-        service,
-        rows: [],
-        starting: 0,
-        now: 0,
-        presentation: makeActivityPresentation(),
-        nonce: {},
-        cleanups: [],
-        active: false,
-        installed: false,
-        render: () => undefined,
-        update: () => undefined,
-        close: () => undefined,
-        manager: undefined,
+    serviceOptions() {
+      let binding: Binding | undefined;
+      return {
+        publish: (rows, starting) => {
+          if (!binding) return;
+          binding.rows = rows;
+          binding.starting = starting;
+          if (binding.active) safe(binding.render);
+        },
+        changed: () => {
+          if (binding?.active && current === binding) safe(binding.update);
+        },
+        tick: (now) => {
+          if (!binding) return;
+          binding.now = now;
+          if (binding.active && (binding.rows.length || binding.starting > 0)) safe(binding.render);
+        },
+        connect: (service) => {
+          const bound: Binding = {
+            service,
+            rows: [],
+            starting: 0,
+            now: 0,
+            presentation: makeActivityPresentation(),
+            nonce: {},
+            cleanups: [],
+            active: false,
+            installed: false,
+            render: () => undefined,
+            update: () => undefined,
+            close: () => undefined,
+            manager: undefined,
+          };
+          binding = bound;
+          bindings.set(service, bound);
+          return () => {
+            release(bound);
+            bindings.delete(service);
+            if (binding === bound) binding = undefined;
+          };
+        },
       };
-      bindings.set(service, binding);
-      return () => {
-        release(binding);
-        bindings.delete(service);
-      };
-    },
-    publish(service, rows, starting = 0) {
-      const binding = bindings.get(service);
-      if (!binding) return;
-      binding.rows = rows;
-      binding.starting = starting;
-      if (binding.active) safe(binding.render);
-    },
-    update(service) {
-      const binding = bindings.get(service);
-      if (binding?.active && current === binding) safe(binding.update);
-    },
-    tick(service, now) {
-      const binding = bindings.get(service);
-      if (!binding) return;
-      binding.now = now;
-      if (binding.active && (binding.rows.length || binding.starting > 0)) safe(binding.render);
     },
     activate(ctx, service) {
       const binding = bindings.get(service);
@@ -150,56 +156,41 @@ export function makeActivityHost(
       binding.sessionId = ctx.sessionManager.getSessionId();
       binding.active = true;
       const isCurrent = () => binding.active && current === binding;
-      const accept: Parameters<ActivityEvents["on"]>[1] = (data) => {
-        try {
+      // Each envelope is decoded once into a detached copy; malformed ones never reach the service.
+      const accept: Parameters<ActivityEvents["on"]>[1] = (data) =>
+        safe(() => {
+          if (!isCurrent() || !binding.installed) return;
+          const envelope = decodeUnknownOrUndefined(ActivityEnvelopeSchema, data);
           if (
-            !isCurrent() ||
-            !binding.installed ||
-            !Schema.is(ActivityEnvelopeSchema)(data) ||
-            data.sessionId !== binding.sessionId ||
-            data.hostToken !== binding.nonce
+            !envelope ||
+            envelope.sessionId !== binding.sessionId ||
+            envelope.hostToken !== binding.nonce
           )
             return;
-          if (data.operation === "register" && (!data.invoke || !data.acknowledge)) return;
-          const acknowledge = data.acknowledge;
-          const event: ActivityEnvelope = {
-            version: data.version,
-            sessionId: data.sessionId,
-            providerId: data.providerId,
-            token: data.token,
-            hostToken: data.hostToken,
-            operation: data.operation,
-            items: data.items,
-            starting: data.starting,
-          };
-          if (data.invoke) Object.assign(event, { invoke: data.invoke });
-          if (data.getDetail) Object.assign(event, { getDetail: data.getDetail });
-          if (acknowledge)
-            Object.assign(event, {
-              acknowledge: (available: boolean) =>
-                safe(() => {
-                  if (isCurrent()) acknowledge(available && binding.installed);
-                }),
-            });
+          if (envelope.operation === "register" && (!envelope.invoke || !envelope.acknowledge))
+            return;
+          const { acknowledge } = envelope;
+          const event: ActivityEnvelope = acknowledge
+            ? {
+                ...envelope,
+                acknowledge: (available) =>
+                  safe(() => {
+                    if (isCurrent()) acknowledge(available && binding.installed);
+                  }),
+              }
+            : envelope;
           submit(
             Effect.suspend(() =>
               isCurrent() && binding.installed ? service.receive(event) : Effect.void,
             ),
           );
-        } catch {
-          /* Malformed envelopes never reach the service. */
-        }
-      };
+        });
       safe(() => binding.cleanups.push(pi.events.on(ACTIVITY_EVENT, accept)));
       safe(() =>
         binding.cleanups.push(
           pi.events.on(ACTIVITY_DISCOVER, (data) =>
             safe(() => {
-              if (
-                isCurrent() &&
-                Schema.is(DiscoverySchema)(data) &&
-                data.sessionId === binding.sessionId
-              )
+              if (isCurrent() && isDiscovery(data) && data.sessionId === binding.sessionId)
                 announce(binding);
             }),
           ),
@@ -246,12 +237,10 @@ export function makeActivityHost(
                   ? renderActivityWidget(
                       binding.rows,
                       width,
-                      inputDockVisible()
-                        ? Math.min(
-                            COMPACT_WIDGET_ROWS,
-                            activityWidgetHeight(binding.rows, tui.terminal.rows),
-                          )
-                        : activityWidgetHeight(binding.rows, tui.terminal.rows),
+                      Math.min(
+                        inputDockVisible() ? COMPACT_WIDGET_ROWS : Number.POSITIVE_INFINITY,
+                        activityWidgetHeight(binding.rows, tui.terminal.rows),
+                      ),
                       {
                         starting: binding.starting,
                         theme,
@@ -321,12 +310,7 @@ export function makeActivityHost(
             const component = new ActivityComponent({
               snapshot: () => binding.rows,
               ...(section && { initialSection: section }),
-              title:
-                section === "subagents"
-                  ? "Subagents"
-                  : section === "tasks"
-                    ? "Background tasks"
-                    : "Activity",
+              title: section ? MANAGER_TITLES[section] : "Activity",
               starting: () => binding.starting,
               presentation: binding.presentation,
               theme,
@@ -388,7 +372,7 @@ const invokeOrWarn = (
     .pipe(
       Effect.tapError(() =>
         Effect.sync(() =>
-          safe(() => notifyAtHostBoundary(ctx, "That action is no longer available", "warning")),
+          notifyAtHostBoundary(ctx, "That action is no longer available", "warning"),
         ),
       ),
     );
@@ -398,8 +382,6 @@ const serviceDetail = (
   deliver: (text: string) => void,
 ) =>
   service.detail(request).pipe(
-    Effect.match({
-      onSuccess: (text) => safe(() => deliver(text)),
-      onFailure: () => safe(() => deliver("Details aren't available; the item may have changed")),
-    }),
+    Effect.orElseSucceed(() => "Details aren't available; the item may have changed"),
+    Effect.flatMap((text) => Effect.sync(() => safe(() => deliver(text)))),
   );

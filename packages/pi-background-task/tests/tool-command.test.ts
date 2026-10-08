@@ -1,106 +1,65 @@
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { formatDuration } from "pi-cosmic-core";
-import { BackgroundTaskService } from "../src/task/service.ts";
+import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { backgroundLogLines, executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
+import {
+  provideTaskService,
+  taskServiceDouble,
+  taskStatus,
+  taskWait,
+} from "./support/task-service-double.ts";
 
-const unexpected = () => Effect.die("Invalid wait reached the task service");
-const service = {
-  start: unexpected,
-  list: unexpected,
-  status: unexpected,
-  logs: unexpected,
-  wait: unexpected,
-  stop: unexpected,
-  stopAll: unexpected,
-  clear: unexpected(),
-};
+/** The shared executor over a service double; unsupplied service calls are defects. */
+const execute = (
+  input: Parameters<typeof executeBackgroundTaskCommand>[0],
+  service: Partial<BackgroundTaskServiceContract>,
+  maxTextBytes?: number,
+) =>
+  executeBackgroundTaskCommand(input, "/", maxTextBytes).pipe(
+    provideTaskService(taskServiceDouble(service)),
+  );
 
 describe("shared background task command", () => {
   it.effect("tells the agent how a task ended, including a spawn error and signal", () =>
     Effect.gen(function* () {
-      const base = { command: "run", cwd: "/", startedAt: 1, logCursor: 0, droppedLogBytes: 0 };
-      const tasks = {
-        "bg-1": {
-          ...base,
-          id: "bg-1",
-          state: "failed" as const,
-          error: "Couldn't start the process",
-        },
-        "bg-2": {
-          ...base,
-          id: "bg-2",
-          state: "failed" as const,
-          exitCode: null,
-          signal: "SIGKILL",
-        },
-      };
-      for (const [id, task] of Object.entries(tasks)) {
-        const result = yield* executeBackgroundTaskCommand({ action: "status", id }, "/").pipe(
-          Effect.provideService(BackgroundTaskService, {
-            ...service,
-            status: () => Effect.succeed(task),
-          }),
-          Effect.provide(Path.layer),
+      const tasks = [
+        taskStatus({ id: "bg-1", state: "failed", error: "Couldn't start the process" }),
+        taskStatus({ id: "bg-2", state: "failed", exitCode: null, signal: "SIGKILL" }),
+      ];
+      for (const task of tasks) {
+        const result = yield* execute(
+          { action: "status", id: task.id },
+          { status: () => Effect.succeed(task) },
         );
-        if ("error" in task) expect(result.text).toContain(task.error);
-        if ("signal" in task) expect(result.text).toContain(task.signal);
+        expect(result.text).toContain(task.error ?? task.signal);
       }
     }),
   );
 
   it.effect("rejects a wait without until before acquiring a task waiter", () =>
     Effect.gen(function* () {
-      const error = yield* executeBackgroundTaskCommand(
-        { action: "wait", id: "bg-1" },
-        "/project",
-      ).pipe(
-        Effect.provideService(BackgroundTaskService, service),
-        Effect.provide(Path.layer),
-        Effect.flip,
-      );
+      const error = yield* execute({ action: "wait", id: "bg-1" }, {}).pipe(Effect.flip);
       expect(error._tag).toBe("InvalidBackgroundCommandError");
     }),
   );
 
   it.effect("reports how long a capped wait lasted, not the time it requested", () =>
     Effect.gen(function* () {
-      const snapshot = {
-        id: "bg-1",
-        command: "serve",
-        cwd: "/",
-        state: "running" as const,
-        startedAt: 1,
-        logCursor: 0,
-        droppedLogBytes: 0,
-      };
+      const snapshot = taskStatus({ id: "bg-1", state: "running" });
       const input = {
         action: "wait" as const,
         id: "bg-1",
         until: "exit" as const,
         waitSeconds: 90,
       };
-      const result = yield* executeBackgroundTaskCommand(input, "/").pipe(
-        Effect.provideService(BackgroundTaskService, {
-          ...service,
-          wait: () =>
-            Effect.succeed({
-              id: "bg-1",
-              outcome: "timeout" as const,
-              snapshot,
-              nextCursor: 0,
-              earliestAvailableCursor: 0,
-              droppedBytes: 0,
-              appliedWaitSeconds: 30,
-            }),
-        }),
-        Effect.provide(Path.layer),
-      );
-      // The applied wait sits beside the frozen v1 wait member, never inside it.
+      const result = yield* execute(input, {
+        wait: () => Effect.succeed(taskWait(snapshot, "timeout")),
+      });
+      // The applied wait sits beside the shared wait member, never inside it.
       expect(result.details).toMatchObject({ action: "wait", appliedWaitSeconds: 30 });
       expect("wait" in result.details && result.details.wait).not.toHaveProperty(
         "appliedWaitSeconds",
@@ -116,117 +75,65 @@ describe("shared background task command", () => {
     }),
   );
 
-  it.effect("persists only log metadata and truncation fields, never log text", () =>
+  it.effect("keeps the newest log lines when the text is cut and persists only what it holds", () =>
     Effect.gen(function* () {
       const logs = { id: "bg-1", nextCursor: 2, earliestAvailableCursor: 1, droppedBytes: 0 };
-      const text = "private line\n".repeat(10);
-      const event = { cursor: 1, stream: "stdout" as const, text, timestamp: 1, bytes: 130 };
-      const slice = { ...logs, state: "running" as const, events: [event] };
-      const result = yield* executeBackgroundTaskCommand({ action: "logs", id: "bg-1" }, "/", {
-        maxTextBytes: 64,
-      }).pipe(
-        Effect.provideService(BackgroundTaskService, {
-          ...service,
-          logs: () => Effect.succeed(slice),
-        }),
-        Effect.provide(Path.layer),
-      );
-      expect(result.details).toEqual({
-        action: "logs",
-        logs: { ...logs, state: "running" },
-        truncation: {
-          truncated: true,
-          outputBytes: expect.any(Number),
-          totalBytes: 130,
-          outputLines: expect.any(Number),
-          totalLines: expect.any(Number),
-        },
-      });
+      // A byte-bound cut, and a line-bound cut where the metadata line tips the text over.
+      for (const [count, maxTextBytes] of [
+        [20, 96],
+        [DEFAULT_MAX_LINES + 100, DEFAULT_MAX_BYTES],
+      ] as const) {
+        const lines = Array.from({ length: count }, (_, index) => `line ${index + 1}`);
+        const text = `${lines.join("\n")}\n`;
+        const bytes = Buffer.byteLength(text);
+        const event = { cursor: 1, stream: "stdout" as const, text, timestamp: 1, bytes };
+        const slice = { ...logs, state: "running" as const, events: [event] };
+        const result = yield* execute(
+          { action: "logs", id: "bg-1" },
+          { logs: () => Effect.succeed(slice) },
+          maxTextBytes,
+        );
+        const kept = backgroundLogLines(result.text, logs);
+        expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(maxTextBytes);
+        expect(kept.length).toBeGreaterThan(0);
+        expect(kept).toEqual(lines.slice(-kept.length));
+        // Details carry log metadata and truncation fields, never the log text itself.
+        expect(result.details).toEqual({
+          action: "logs",
+          logs: { ...logs, state: "running" },
+          truncation: {
+            truncated: true,
+            outputBytes: Buffer.byteLength(kept.join("\n")),
+            totalBytes: bytes,
+            outputLines: kept.length,
+            totalLines: count,
+          },
+        });
+      }
     }),
-  );
-
-  it.effect(
-    "keeps the newest log lines when the text is cut and reports exactly what it holds",
-    () =>
-      Effect.gen(function* () {
-        const logs = { id: "bg-1", nextCursor: 2, earliestAvailableCursor: 1, droppedBytes: 0 };
-        // A byte-bound cut, and a line-bound cut where the metadata line tips the text over.
-        for (const [count, maxTextBytes] of [
-          [20, 96],
-          [DEFAULT_MAX_LINES + 100, DEFAULT_MAX_BYTES],
-        ] as const) {
-          const lines = Array.from({ length: count }, (_, index) => `line ${index + 1}`);
-          const text = `${lines.join("\n")}\n`;
-          const bytes = Buffer.byteLength(text);
-          const event = { cursor: 1, stream: "stdout" as const, text, timestamp: 1, bytes };
-          const slice = { ...logs, state: "running" as const, events: [event] };
-          const result = yield* executeBackgroundTaskCommand({ action: "logs", id: "bg-1" }, "/", {
-            maxTextBytes,
-          }).pipe(
-            Effect.provideService(BackgroundTaskService, {
-              ...service,
-              logs: () => Effect.succeed(slice),
-            }),
-            Effect.provide(Path.layer),
-          );
-          const kept = backgroundLogLines(result.text, logs);
-          expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(maxTextBytes);
-          expect(kept.length).toBeGreaterThan(0);
-          expect(kept).toEqual(lines.slice(-kept.length));
-          expect(result.details).toEqual({
-            action: "logs",
-            logs: { ...logs, state: "running" },
-            truncation: {
-              truncated: true,
-              outputBytes: Buffer.byteLength(kept.join("\n")),
-              totalBytes: bytes,
-              outputLines: kept.length,
-              totalLines: count,
-            },
-          });
-        }
-      }),
   );
 
   it.effect("puts a failed task's cause in the text and only its span in details", () =>
     Effect.gen(function* () {
-      const failed = {
+      const failed = taskStatus({
         id: "bg-2",
         name: "tests",
-        command: "pnpm test",
-        cwd: "/",
-        state: "failed" as const,
-        startedAt: 1,
+        state: "failed",
         endedAt: 2,
         exitCode: 1,
         logCursor: 3,
-        droppedLogBytes: 0,
         failureCause: "FAIL tests/auth.test.ts > adds",
-      };
+      });
       const { failureCause: _cause, ...persisted } = failed;
-      const { exitCode: _exit, endedAt: _ended, ...base } = persisted;
-      const running = { ...base, id: "bg-3", state: "running" as const };
-      const statusService = {
-        ...service,
+      const running = taskStatus({ id: "bg-3", name: "tests", state: "running", logCursor: 3 });
+      const service = {
         status: () => Effect.succeed(failed),
         list: () => Effect.succeed([running, failed]),
       };
-      const run = (
-        input: Parameters<typeof executeBackgroundTaskCommand>[0],
-        maxTextBytes?: number,
-      ) =>
-        executeBackgroundTaskCommand(
-          input,
-          "/",
-          maxTextBytes === undefined ? {} : { maxTextBytes },
-        ).pipe(
-          Effect.provideService(BackgroundTaskService, statusService),
-          Effect.provide(Path.layer),
-        );
       for (const input of [{ action: "status", id: "bg-2" }, { action: "list" }] as const) {
-        const result = yield* run(input);
+        const result = yield* execute(input, service);
         expect(result.text).toContain("cause: FAIL tests/auth.test.ts > adds");
-        // Details keep metadata only: the v1 snapshot and where the cause sits in the text.
+        // Details keep metadata only: the snapshot and where the cause sits in the text.
         const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
           result.details,
         );
@@ -253,7 +160,7 @@ describe("shared background task command", () => {
         );
       }
       // Text truncated before the cause drops its span; the row keeps the bare exit status.
-      const cut = yield* run({ action: "status", id: "bg-2" }, 30);
+      const cut = yield* execute({ action: "status", id: "bg-2" }, service, 30);
       expect("causes" in cut.details && cut.details.causes).toBeFalsy();
       expect(
         projectBackgroundTaskCompactSummary({

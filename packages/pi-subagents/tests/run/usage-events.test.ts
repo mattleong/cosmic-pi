@@ -3,14 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
-import { makeRunSettlement } from "../../src/run/settlement.ts";
-import type { RunRecord } from "../../src/run/internal.ts";
 import type { BackendHandle } from "../../src/backend/model.ts";
-import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { emptyUsage } from "../../src/run/model.ts";
-import { makeRunContext } from "./fixtures/run-context.ts";
+import { makeTestSettlement, partialRecord } from "./fixtures/run-context.ts";
 import {
   fakeNativeReportBackendLayer,
   nativeReportRequest,
@@ -25,20 +22,12 @@ it.effect("process usage rechecks handle ownership inside the mutation lock", ()
     const original = { pid: 1 } as BackendHandle;
     // SAFETY: This test compares handle identity only and never invokes a backend method.
     const replacement = { pid: 2 } as BackendHandle;
-    const fields = {
+    const record = partialRecord({
       process: original,
       stoppedByParent: false,
       view: view({ state: "running", usage: emptyUsage() }),
-    } satisfies Pick<RunRecord, "process" | "stoppedByParent" | "view">;
-    // SAFETY: The owned usage merger reads only the process, stop flag, and view fields.
-    const record = fields as RunRecord;
-    // SAFETY: This test calls only the usage merger, which never uses notification delivery.
-    const delivery = {} as RunNotificationDelivery;
-    const settlement = makeRunSettlement({
-      ...(yield* makeRunContext({ withLock: lock.withPermits(1) })),
-      delivery,
-      closeRecordScope: () => Effect.void,
     });
+    const settlement = yield* makeTestSettlement({ withLock: lock.withPermits(1) });
     const charge = { ...emptyUsage(), input: 10, totalTokens: 10 };
     yield* lock.take(1);
     const pending = yield* settlement
@@ -61,7 +50,7 @@ it.effect("usage-only events preserve activity across paused resume and report c
     fakeNativeReportBackendLayer({ capabilities: ["steer", "interrupt", "resume"] }),
   );
   return withService(layer, function* (service) {
-    const run = yield* service.start(nativeReportRequest({ model: "claude-native" }));
+    const run = yield* service.start(nativeReportRequest());
     const control = backend.controls[0]!;
     const epoch = control.assignmentEpochs[0]!;
     control.offer({
@@ -72,10 +61,7 @@ it.effect("usage-only events preserve activity across paused resume and report c
     });
     yield* yieldUntil(() => (projections.at(-1)?.runs[0]?.sessionEvents.length ?? 0) > 0, 200);
     const before = yield* service.status(run.id);
-    control.offer({
-      type: "usage",
-      usage: { ...emptyUsage(), input: 10, totalTokens: 10 },
-    });
+    control.offer({ type: "usage", usage: { ...emptyUsage(), input: 10, totalTokens: 10 } });
     yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.input === 10, 200);
     const active = yield* service.status(run.id);
     expect(active.lastActivityAt).toBe(before.lastActivityAt);

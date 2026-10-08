@@ -22,12 +22,10 @@ describe("subagent UI refresh cadence", () => {
   it("opts into paused elapsed time and terminal relative ages by render surface", () => {
     expect(subagentUiRefreshCadence(states("paused"))).toBeUndefined();
     expect(subagentUiRefreshCadence(states("paused"), { includePausedElapsed: true })).toBe(1_000);
-    expect(subagentUiRefreshCadence(states("reported", "completed"))).toBeUndefined();
-    expect(
-      subagentUiRefreshCadence(states("reported", "completed"), {
-        includeTerminalAges: true,
-      }),
-    ).toBe(1_000);
+    expect(subagentUiRefreshCadence(states("completed"))).toBeUndefined();
+    expect(subagentUiRefreshCadence(states("completed"), { includeTerminalAges: true })).toBe(
+      1_000,
+    );
   });
 
   it("does not repaint static terminal states", () => {

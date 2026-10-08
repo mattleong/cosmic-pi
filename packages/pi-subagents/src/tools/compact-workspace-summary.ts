@@ -1,10 +1,7 @@
 import { compactIssueSeverity } from "pi-code-previews";
-import * as Schema from "effect/Schema";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
-
-const decode = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);
 
 /** Where a diff page sits, in people's terms; never raw offsets or IDs. */
 function reviewPosition(details: WorkspaceToolDetails): string {
@@ -146,30 +143,14 @@ function reviewIssues(details: WorkspaceToolDetails): CompactIssue[] {
   ];
 }
 
-/** Review, test, and integration gates are procedure, not problems: shown only on expansion. */
-export function compactWorkspaceSummary<ValueInput>(
-  value: ValueInput,
-  operation: string,
-): CompactSummary | undefined {
-  const decoded = decode(value);
-  if (decoded._tag === "None" || decoded.value.operation !== operation) return undefined;
-  const details = decoded.value;
-  // Receipt fields are optional in the transport union, but required by these operations.
-  if (!hasOperationReceipt(details) || !validPagination(details)) return undefined;
-  const metadata: string[] = [];
-  const line = workspaceReceiptLine(details);
-  const counters = line === undefined ? [] : [line];
-  if (details.operation === "list" && line === undefined) metadata.push("workspace metadata");
-  let issues: CompactIssue[] = [];
+function operationIssues(details: WorkspaceToolDetails): CompactIssue[] {
   switch (details.operation) {
     case "list":
-      issues = listIssues(details);
-      break;
+      return listIssues(details);
     case "review":
-      issues = reviewIssues(details);
-      break;
+      return reviewIssues(details);
     case "prepare":
-      issues = [
+      return [
         step(
           "test-preparation",
           "Test the prepared tree without editing it",
@@ -181,9 +162,8 @@ export function compactWorkspaceSummary<ValueInput>(
           "After passing tests and complete diff review, integrate this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
         ),
       ];
-      break;
     case "revise":
-      issues = [
+      return [
         {
           severity: "warning",
           code: "revision-invalidated",
@@ -191,19 +171,34 @@ export function compactWorkspaceSummary<ValueInput>(
           detail: `Prior review and preparation are invalid. Await successor ${details.successorRunId ?? "shown in expanded details"}, then review its new immutable revision from the beginning before preparing and testing again.`,
         },
       ];
-      break;
     case "integrate":
-      issues = (details.warnings ?? []).map((warning) => ({ severity: "warning", ...warning }));
-      break;
+      return (details.warnings ?? []).map((warning) => ({ severity: "warning", ...warning }));
     case "discard":
-      break;
+      return [];
   }
+}
+
+/** Review, test, and integration gates are procedure, not problems: shown only on expansion. */
+export function compactWorkspaceSummary<ValueInput>(
+  value: ValueInput,
+  operation: string,
+): CompactSummary | undefined {
+  const details = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, value);
+  // Receipt fields are optional in the transport union, but required by these operations.
+  if (
+    details?.operation !== operation ||
+    !hasOperationReceipt(details) ||
+    !validPagination(details)
+  )
+    return undefined;
+  const line = workspaceReceiptLine(details);
+  const issues = operationIssues(details);
   return {
     action: operation === "list" ? "inspect" : operation,
     // Workspace IDs stay in expanded evidence; the heading names what the workspace holds.
     subject: "Proposed changes",
-    counters,
-    metadata,
+    counters: line === undefined ? [] : [line],
+    metadata: details.operation === "list" && line === undefined ? ["workspace metadata"] : [],
     issues,
     outcome: compactIssueSeverity(issues) ?? "success",
   };

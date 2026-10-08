@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { synchronousRandomUuid, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { AskUserHostError } from "../questionnaire/errors.ts";
@@ -13,23 +12,20 @@ const Metadata = Schema.Struct({
   generation: Schema.String.check(Schema.isMaxLength(100)),
   deliveryId: Schema.String.check(Schema.isMaxLength(120)),
 });
-const decodeReceipt = Schema.decodeUnknownOption(
-  Schema.Struct({ version: Schema.Literal(1), ...Metadata.fields }),
-);
-const metadata = <Input>(value: Input) => decodeUnknownOrUndefined(Metadata, value);
+const Receipt = Schema.Struct({ version: Schema.Literal(1), ...Metadata.fields });
 
 export const createQuestionnaireGeneration = (): string => synchronousRandomUuid();
 
 /** A queued message cannot establish its own provenance after branch replacement. */
 export const captureHistoricalDeliveries = (ctx: ExtensionContext): ReadonlySet<string> => {
   try {
-    const ids: string[] = [];
+    const ids = new Set<string>();
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type !== "custom" || entry.customType !== ASYNC_RECEIPT_TYPE) continue;
-      const data = Option.getOrUndefined(decodeReceipt(entry.data));
-      if (data) ids.push(`${data.generation}/${data.deliveryId}`);
+      const data = decodeUnknownOrUndefined(Receipt, entry.data);
+      if (data) ids.add(`${data.generation}/${data.deliveryId}`);
     }
-    return new Set(ids);
+    return ids;
   } catch {
     return new Set();
   }
@@ -41,7 +37,7 @@ export const acceptsAsyncMessage = (
   historical: ReadonlySet<string>,
 ): boolean => {
   if (message.role !== "custom" || message.customType !== ASYNC_MESSAGE_TYPE) return true;
-  const data = metadata(message.details);
+  const data = decodeUnknownOrUndefined(Metadata, message.details);
   return (
     !!data &&
     (data.generation === generation || historical.has(`${data.generation}/${data.deliveryId}`))

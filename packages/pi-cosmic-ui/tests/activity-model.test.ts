@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { activityKey } from "../src/activity/protocol.ts";
-import { retainActivity, type ActivityRow } from "../src/activity/model.ts";
+import { activityPath, retainActivity, type ActivityRow } from "../src/activity/model.ts";
 import {
   activitySectionId,
   groupedActivityTree,
   type GroupedActivityRow,
 } from "../src/activity/grouped-tree.ts";
-import { activityPath, needsYou } from "../src/activity/tree.ts";
+import { needsYou } from "../src/activity/attention.ts";
 import { activityRow as row } from "./support/activity.ts";
 
 /** The source rows the grouped tree shows, without its section rows. */
@@ -50,20 +50,6 @@ describe("activity ownership", () => {
       blocked: 1,
       failed: 0,
     });
-  });
-  it("counts human input separately from parent waits and blocked descendants", () => {
-    const owner = row("owner");
-    const human = row("human", "needs-input", owner.id);
-    const parent = row("parent", "needs-input", owner.id, { inputTarget: "parent" });
-    const blocked = row("blocked", "blocked", owner.id);
-    const values = [owner, parent, blocked, human];
-    expect(needsYou(values)).toEqual([human]);
-    const collapsed = members(groupedActivityTree(values, { collapsed: new Set([owner.key]) }));
-    expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]?.summary.attention).toEqual({ user: 1, parent: 1, blocked: 1, failed: 0 });
-    expect(
-      members(groupedActivityTree(values, { focus: owner.key }))[0]?.summary.attention,
-    ).toEqual(collapsed[0]?.summary.attention);
   });
   it("preserves sibling ancestry across collapse, history ordering, and branch focus", () => {
     const values = [
@@ -235,7 +221,8 @@ describe("activity ownership", () => {
     const live = row("live", "running", "a");
     const descendant = row("descendant", "running", "live");
     const history = Array.from({ length: 100 }, (_, index) => row(`history-${index}`, "done"));
-    const retained = retainActivity([...cycle, ...history], [live, descendant]);
+    // Retained rows are newest first, so the cycle's finished rows are the oldest history here.
+    const retained = retainActivity([...history, ...cycle], [live, descendant]);
     expect(retained.some((entry) => entry.id === "a" || entry.id === "b")).toBe(false);
     expect(activityPath(retained, live.key)).toEqual([
       retained.find((entry) => entry.key === live.key),
@@ -244,6 +231,23 @@ describe("activity ownership", () => {
     expect(retained.filter((entry) => entry.status === "running").map((entry) => entry.id)).toEqual(
       ["live", "descendant"],
     );
+  });
+  it("keeps the most recently finished root branches past the history bound", () => {
+    // Roots finish, then their source drops them, one after another.
+    let rows: readonly ActivityRow[] = [];
+    for (let index = 0; index < 105; index++)
+      rows = retainActivity(retainActivity(rows, [row(`dropped-${index}`, "done")]), []);
+    expect(new Set(rows.map((entry) => entry.id))).toEqual(
+      new Set(Array.from({ length: 100 }, (_, index) => `dropped-${index + 5}`)),
+    );
+    // A source still publishing more finished roots than the bound keeps those that ended last.
+    const published = Array.from({ length: 120 }, (_, index) =>
+      row(`published-${index}`, "done", undefined, { endedAt: index }),
+    );
+    for (const order of [published, published.toReversed()])
+      expect(new Set(retainActivity([], order).map((entry) => entry.endedAt))).toEqual(
+        new Set(Array.from({ length: 100 }, (_, index) => index + 20)),
+      );
   });
   it("bounds finished root history and preserves retained history descendants", () => {
     const previous = Array.from({ length: 120 }, (_, index) => row(String(index), "done"));

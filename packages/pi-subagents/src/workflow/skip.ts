@@ -25,7 +25,9 @@ export const makeWorkflowSkip =
       for (const holder of holders)
         if (yield* runs.modify(holder.id, (run) => skipWorkflowPlanned(run, agentRunId, at)))
           return;
-      const skip = runs.controls.skipOf(agentRunId);
+      const skip = [...runs.controls.values()]
+        .map((control) => control.skips.get(agentRunId))
+        .find((candidate) => candidate !== undefined);
       if (skip) return yield* Deferred.succeed(skip, undefined).pipe(Effect.asVoid);
       return yield* new WorkflowNotFoundError({
         message: `No planned, queued or running workflow agent ${agentRunId}.`,

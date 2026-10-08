@@ -76,30 +76,18 @@ const classifyBash = (event: Extract<BackendEvent, { readonly type: "tool_starte
   };
 };
 
-type ToolCategory =
-  | "bash"
-  | "nativeAgent"
-  | "taskOutput"
-  | "toolSearch"
-  | "supervisorReport"
-  | "other";
-const toolCategory = (name: string): ToolCategory => {
-  switch (name) {
-    case "Bash":
-      return "bash";
-    case "Agent":
-    case "Task":
-      return "nativeAgent";
-    case "TaskOutput":
-      return "taskOutput";
-    case "ToolSearch":
-      return "toolSearch";
-    case "mcp__pi_subagents_supervisor__supervisor_submit_report":
-      return "supervisorReport";
-    default:
-      return "other";
-  }
-};
+const TOOL_CATEGORIES = {
+  Bash: "bash",
+  Agent: "nativeAgent",
+  Task: "nativeAgent",
+  TaskOutput: "taskOutput",
+  ToolSearch: "toolSearch",
+  mcp__pi_subagents_supervisor__supervisor_submit_report: "supervisorReport",
+} as const;
+type ToolCategory = (typeof TOOL_CATEGORIES)[keyof typeof TOOL_CATEGORIES] | "other";
+// A Map lookup, so tool names never resolve inherited object keys.
+const categoryByTool: ReadonlyMap<string, ToolCategory> = new Map(Object.entries(TOOL_CATEGORIES));
+const toolCategory = (name: string): ToolCategory => categoryByTool.get(name) ?? "other";
 
 interface ProbeObservation {
   scenario: Scenario;
@@ -256,7 +244,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
           "After the bounded work (or an unavailable-tool limitation), call mcp__pi_subagents_supervisor__supervisor_submit_report exactly once with a short report.",
         ].join(" "),
       });
-      yield* driver.preflight(launch);
+      yield* driver.preflight({ ...launch, closeOnReport: true });
       const backend = yield* driver.spawn(launch);
       const activity = yield* Deferred.make<boolean>();
       const finished = yield* Deferred.make<void>();

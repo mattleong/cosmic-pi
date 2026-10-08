@@ -1,19 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  isListMotion,
-  movementOffset,
-  nextListMotionIndex,
-} from "../src/manager/list-navigation.ts";
+import { nextListMotionIndex } from "../src/manager/list-navigation.ts";
 
 describe("list navigation", () => {
   const steps = { page: 8, half: 4 };
-
-  it("recognizes list motions and computes signed page offsets", () => {
-    expect(isListMotion("half-page-down")).toBe(true);
-    expect(isListMotion("confirm")).toBe(false);
-    expect(movementOffset("half-page-up", steps)).toBe(-4);
-    expect(movementOffset("full-page-down", steps)).toBe(8);
-  });
 
   it("clamps page motions and optionally wraps row motions", () => {
     expect(nextListMotionIndex("full-page-down", 7, 10, steps)).toBe(9);

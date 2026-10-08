@@ -11,7 +11,6 @@ import * as Scheduler from "effect/Scheduler";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
-import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import {
   contactParentFrame,
@@ -20,7 +19,6 @@ import {
   leaseCounts,
   localServiceFixture,
   request,
-  serviceLayer,
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
@@ -34,13 +32,12 @@ describe("SubagentService lifecycle stress", () => {
       Effect.gen(function* () {
         for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
           const leases = leaseCounts();
-          const fake = fakeChildLayer();
-          let projection: SubagentProjection | undefined;
-          const layer = serviceLayer(
-            { publish: (value) => void (projection = value) },
+          const { fake, projections, layer } = localServiceFixture(
+            {},
+            fakeChildLayer(),
             undefined,
             fakeWriterLeaseLayer({ counts: leases }),
-          ).pipe(Layer.provide(fake.layer));
+          );
           const owner = yield* Scope.fork(yield* Effect.scope);
           const context = yield* Layer.buildWithScope(layer, owner);
           const service = Context.get(context, SubagentService);
@@ -58,13 +55,13 @@ describe("SubagentService lifecycle stress", () => {
           const result = yield* Fiber.await(starting);
           if (cancelled) {
             expect(Exit.isFailure(result), `interruption checkpoint ${interruptAt}`).toBe(true);
-            expect(projection?.runs[0]?.state).toBe("stopped");
+            expect(projections.at(-1)?.runs[0]?.state).toBe("stopped");
             // A cancellation inside the driver's masked acquisition may already
             // own a backend; it must be released before compensation settles.
             expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
             expect(leases.release).toBe(1);
             const spawnedBeforeStop = fake.controls.length;
-            yield* service.stop(projection!.runs[0]!.id);
+            yield* service.stop(projections.at(-1)!.runs[0]!.id);
             expect(fake.controls).toHaveLength(spawnedBeforeStop);
           } else if (Exit.isSuccess(result)) yield* service.stop(result.value.id);
           else return yield* Effect.failCause(result.cause);
@@ -88,12 +85,9 @@ describe("SubagentService lifecycle stress", () => {
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>();
       const cleanupOrder: number[] = [];
-      const fake = fakeChildLayer(Effect.void, {
-        onRelease: (index) => cleanupOrder.push(index),
-      });
-      let projection: SubagentProjection | undefined;
-      const layer = serviceLayer({ publish: (value) => void (projection = value) }).pipe(
-        Layer.provide(fake.layer),
+      const { fake, projections, layer } = localServiceFixture(
+        {},
+        fakeChildLayer(Effect.void, { onRelease: (index) => cleanupOrder.push(index) }),
       );
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
@@ -102,7 +96,7 @@ describe("SubagentService lifecycle stress", () => {
         fake.controls[1]!.gateRelease(release);
         fake.controls[1]!.settle();
         yield* yieldUntil(
-          () => projection?.runs.find((run) => run.id === child.id)?.state === "completed",
+          () => projections.at(-1)?.runs.find((run) => run.id === child.id)?.state === "completed",
         );
         const stopping = yield* service.stop(parent.id).pipe(Effect.forkScoped);
         yield* TestClock.adjust("30 seconds");
@@ -125,22 +119,15 @@ describe("SubagentService lifecycle stress", () => {
       const spawnEntered = yield* Deferred.make<void>();
       const spawnGate = yield* Deferred.make<void>();
       const cleanupOrder: string[] = [];
-      const fake = fakeChildLayer(
-        Deferred.succeed(spawnEntered, undefined).pipe(Effect.andThen(Deferred.await(spawnGate))),
-        { onRelease: () => cleanupOrder.push("backend") },
-      );
-      let projection: SubagentProjection | undefined;
-      let publications = 0;
-      const layer = serviceLayer(
-        {
-          publish: (value) => {
-            projection = value;
-            publications++;
-          },
-        },
+      const { fake, projections, layer } = localServiceFixture(
+        {},
+        fakeChildLayer(
+          Deferred.succeed(spawnEntered, undefined).pipe(Effect.andThen(Deferred.await(spawnGate))),
+          { onRelease: () => cleanupOrder.push("backend") },
+        ),
         undefined,
         fakeWriterLeaseLayer({ onRelease: () => cleanupOrder.push("lease") }),
-      ).pipe(Layer.provide(fake.layer));
+      );
       const owner = yield* Scope.make();
       yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
       const context = yield* Layer.buildWithScope(layer, owner);
@@ -150,9 +137,9 @@ describe("SubagentService lifecycle stress", () => {
           .startSessionOwned(request({ writeIntent: "writer" }))
           .pipe(Effect.forkScoped);
         yield* Deferred.await(spawnEntered);
-        const id = projection!.runs[0]!.id;
+        const id = projections.at(-1)!.runs[0]!.id;
         const stopping = yield* service.stop(id).pipe(Effect.forkScoped);
-        yield* yieldUntil(() => projection?.runs[0]?.state === "stopping");
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopping");
         // Let the stop owner enter its spawn wait before owner shutdown interrupts it.
         yield* TestClock.adjust("30 seconds");
         const shutdown = yield* Scope.close(owner, Exit.void).pipe(Effect.forkScoped);
@@ -160,7 +147,7 @@ describe("SubagentService lifecycle stress", () => {
         expect(shutdown.pollUnsafe()).toBeUndefined();
         expect(cleanupOrder).toEqual([]);
         expect(fake.controls).toHaveLength(0);
-        const publicationsAtShutdown = publications;
+        const publicationsAtShutdown = projections.length;
         yield* Deferred.succeed(spawnGate, undefined);
         yield* Fiber.join(shutdown);
         // Shutdown itself is the ownership barrier, not a later join of callers.
@@ -168,7 +155,7 @@ describe("SubagentService lifecycle stress", () => {
         expect(fake.controls[0]!.released()).toBe(1);
         expect(cleanupOrder).toEqual(["backend", "lease"]);
         expect(fake.reclaimedRunIds).toEqual([id]);
-        expect(publications).toBe(publicationsAtShutdown);
+        expect(projections).toHaveLength(publicationsAtShutdown);
         yield* Fiber.await(starting);
         yield* Fiber.await(stopping);
       }).pipe(Effect.ensuring(Deferred.succeed(spawnGate, undefined)));
@@ -178,11 +165,7 @@ describe("SubagentService lifecycle stress", () => {
   it.effect(
     "isolates siblings and rejects new descendants through repeated overlapping subtree stops",
     () => {
-      const fake = fakeChildLayer();
-      let projection: SubagentProjection | undefined;
-      const layer = serviceLayer({ publish: (value) => void (projection = value) }).pipe(
-        Layer.provide(fake.layer),
-      );
+      const { fake, projections, layer } = localServiceFixture();
       return withService(layer, function* (service) {
         for (let cycle = 0; cycle < cycles; cycle++) {
           const release = yield* Deferred.make<void>();
@@ -208,7 +191,8 @@ describe("SubagentService lifecycle stress", () => {
             yield* yieldUntil(() => cancelledUpdates > 0);
             const stoppingParent = yield* service.stop(parent.id).pipe(Effect.forkScoped);
             yield* yieldUntil(
-              () => projection?.runs.find((run) => run.id === leaf.id)?.state === "stopping",
+              () =>
+                projections.at(-1)?.runs.find((run) => run.id === leaf.id)?.state === "stopping",
             );
             const stoppingChild = yield* service
               .stop(child.id)
@@ -244,7 +228,8 @@ describe("SubagentService lifecycle stress", () => {
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(stoppingChild)).state).toBe("stopped");
             yield* yieldUntil(
-              () => projection?.runs.find((run) => run.id === parent.id)?.state === "stopped",
+              () =>
+                projections.at(-1)?.runs.find((run) => run.id === parent.id)?.state === "stopped",
             );
             for (const id of [parent.id, child.id, leaf.id]) {
               expect(yield* service.status(id)).toMatchObject({

@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   cloneSessionProfileOverrideSeed,
   decodeSessionProfileOverrideSeed,
@@ -9,12 +9,12 @@ import {
 } from "../profiles/session-overrides.ts";
 
 const PROFILE_RELOAD_HANDOFF_KEY = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-const MAX_PROFILE_RELOAD_SESSION_KEY_LENGTH = 1_024;
 
-const isProfileReloadSessionKey = (value: string): boolean =>
-  Predicate.isString(value) &&
-  value.length >= 1 &&
-  value.length <= MAX_PROFILE_RELOAD_SESSION_KEY_LENGTH;
+const ProfileReloadSessionKeySchema = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(1_024),
+);
+const isProfileReloadSessionKey = Schema.is(ProfileReloadSessionKeySchema);
 
 interface ProfileReloadEnvelope {
   readonly version: 2;
@@ -28,12 +28,6 @@ export class IncompatibleProfileReloadHandoffError extends Schema.TaggedError<In
   { message: Schema.String },
 ) {}
 
-export interface ProfileReloadHandoff {
-  readonly capture: (sessionKey: string) => SessionProfileOverrideSeed | undefined;
-  readonly publish: (sessionKey: string, seed: SessionProfileOverrideSeed) => void;
-  readonly clear: (sessionKey?: string) => void;
-}
-
 interface ProfileReloadGlobalState {
   [PROFILE_RELOAD_HANDOFF_KEY]?: unknown;
 }
@@ -42,17 +36,14 @@ interface ProfileReloadGlobalState {
 const processState = (): typeof globalThis & ProfileReloadGlobalState =>
   globalThis as typeof globalThis & ProfileReloadGlobalState;
 
-const ProfileReloadEnvelopeInputSchema = Schema.Struct({
-  version: Schema.Literals([1, 2]),
-  sessionKey: Schema.String.check(
-    Schema.isNonEmpty(),
-    Schema.isMaxLength(MAX_PROFILE_RELOAD_SESSION_KEY_LENGTH),
-  ),
-  seed: Schema.Unknown,
-});
-const decodeEnvelope = Schema.decodeUnknownOption(ProfileReloadEnvelopeInputSchema, {
-  onExcessProperty: "error",
-});
+const decodeEnvelope = Schema.decodeUnknownOption(
+  Schema.Struct({
+    version: Schema.Literals([1, 2]),
+    sessionKey: ProfileReloadSessionKeySchema,
+    seed: Schema.Unknown,
+  }),
+  { onExcessProperty: "error" },
+);
 
 const deleteEnvelope = (): void => {
   try {
@@ -62,13 +53,12 @@ const deleteEnvelope = (): void => {
   }
 };
 
-const readEnvelopeValue = ():
-  | { readonly present: boolean; readonly value?: unknown }
-  | undefined => {
+/** The slot's data value, if any; an accessor or an unreadable slot reads as undefined. */
+const readEnvelopeValue = (): { readonly value?: unknown } | undefined => {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(processState(), PROFILE_RELOAD_HANDOFF_KEY);
-    if (!descriptor) return { present: false };
-    return "value" in descriptor ? { present: true, value: descriptor.value } : undefined;
+    if (!descriptor) return {};
+    return "value" in descriptor ? { value: descriptor.value } : undefined;
   } catch {
     return undefined;
   }
@@ -87,39 +77,32 @@ const writeEnvelope = (envelope: ProfileReloadEnvelope): void => {
   }
 };
 
-const readEnvelope = (sessionKey?: string): ProfileReloadEnvelope | undefined => {
+const readEnvelope = (
+  sessionKey?: string,
+): Pick<ProfileReloadEnvelope, "sessionKey" | "seed"> | undefined => {
   const slot = readEnvelopeValue();
   if (!slot) {
     deleteEnvelope();
     return undefined;
   }
-  if (!slot.present || slot.value === undefined) return undefined;
-  try {
-    const decoded = Option.getOrUndefined(decodeEnvelope(slot.value));
-    if (!decoded) {
-      deleteEnvelope();
-      return undefined;
-    }
+  if (slot.value === undefined) return undefined;
+  // The slot is shared by independently loaded modules, so a hostile value cannot escape decoding.
+  const decoded = invokeHostCallback(
+    () => Option.getOrUndefined(decodeEnvelope(slot.value)),
+    undefined,
+  );
+  if (decoded) {
     const seed = decodeSessionProfileOverrideSeed(decoded.seed);
-    if (!seed || (decoded.version === 2 && !seed.baseline)) {
-      if (decoded.sessionKey === sessionKey)
-        throw new IncompatibleProfileReloadHandoffError({
-          message:
-            "Subagents cannot restore this session's profile settings. Start a fresh Pi session to recover.",
-        });
-      deleteEnvelope();
-      return undefined;
-    }
-    return Object.freeze({
-      version: 2,
-      sessionKey: decoded.sessionKey,
-      seed,
-    });
-  } catch (error) {
-    if (error instanceof IncompatibleProfileReloadHandoffError) throw error;
-    deleteEnvelope();
-    return undefined;
+    if (seed && (decoded.version === 1 || seed.baseline))
+      return { sessionKey: decoded.sessionKey, seed };
+    if (decoded.sessionKey === sessionKey)
+      throw new IncompatibleProfileReloadHandoffError({
+        message:
+          "Subagents cannot restore this session's profile settings. Start a fresh Pi session to recover.",
+      });
   }
+  deleteEnvelope();
+  return undefined;
 };
 
 /**
@@ -139,15 +122,15 @@ export const profileReloadSessionKey = (ctx: ExtensionContext): string | undefin
  * Bridges a frozen override seed between the old and new extension module instances during `/reload`.
  * The slot is process-memory only, bound to one Pi session identity, and consumed after activation.
  */
-export const makeProfileReloadHandoff = (): ProfileReloadHandoff => ({
-  capture: (sessionKey) => {
+export const profileReloadHandoff = {
+  capture: (sessionKey: string): SessionProfileOverrideSeed | undefined => {
     if (!isProfileReloadSessionKey(sessionKey)) return undefined;
     const envelope = readEnvelope(sessionKey);
     return envelope?.sessionKey === sessionKey
       ? cloneSessionProfileOverrideSeed(envelope.seed)
       : undefined;
   },
-  publish: (sessionKey, seed) => {
+  publish: (sessionKey: string, seed: SessionProfileOverrideSeed): void => {
     try {
       if (!isProfileReloadSessionKey(sessionKey)) {
         deleteEnvelope();
@@ -166,7 +149,7 @@ export const makeProfileReloadHandoff = (): ProfileReloadHandoff => ({
       // Reload publication is best effort and must not fail session shutdown.
     }
   },
-  clear: (sessionKey) => {
+  clear: (sessionKey?: string): void => {
     try {
       if (sessionKey !== undefined && readEnvelope(sessionKey)?.sessionKey !== sessionKey) return;
       deleteEnvelope();
@@ -174,4 +157,4 @@ export const makeProfileReloadHandoff = (): ProfileReloadHandoff => ({
       // Reload cleanup is best effort and must not fail session lifecycle handling.
     }
   },
-});
+};

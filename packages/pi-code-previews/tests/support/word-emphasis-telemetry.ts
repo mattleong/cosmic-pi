@@ -1,11 +1,6 @@
 import type { DiffWordEmphasis } from "../../src/config/schema";
 import { splitLinesLimited } from "../../src/shared/text-lines";
-import {
-  collectChangedDiffBlock,
-  isChangedDiffLine,
-  parseDiffLine,
-  type ParsedDiffLine,
-} from "../../src/diff/parse";
+import { changedDiffBlocks, parseDiffLine, type ParsedDiffLine } from "../../src/diff/parse";
 import { analyzeChangedLineBlock } from "../../src/diff/word/change-block";
 import { shouldEmphasizeChangedPair } from "../../src/diff/word/emphasis";
 import type { WordChangeConfidence } from "../../src/diff/word/types";
@@ -25,18 +20,10 @@ export function wordEmphasisTelemetry(
   limit = Number.MAX_SAFE_INTEGER,
   wordEmphasis: DiffWordEmphasis = "smart",
 ): WordEmphasisTelemetry {
-  const lines = splitLinesLimited(diff, limit);
-  const parsedLines = lines.map(parseDiffLine);
+  const parsedLines = splitLinesLimited(diff, limit).map(parseDiffLine);
   const telemetry = emptyWordEmphasisTelemetry();
-
-  for (let i = 0; i < lines.length; i++) {
-    const parsed = parsedLines[i];
-    if (!parsed || !isChangedDiffLine(parsed)) continue;
-    const { block, end } = collectChangedDiffBlock(parsedLines, i);
-    addChangeBlockTelemetry(block, telemetry, wordEmphasis);
-    i = end - 1;
-  }
-
+  for (const [start, end] of changedDiffBlocks(parsedLines))
+    addChangeBlockTelemetry(parsedLines.slice(start, end), telemetry, wordEmphasis);
   return telemetry;
 }
 
@@ -53,7 +40,7 @@ function emptyWordEmphasisTelemetry(): WordEmphasisTelemetry {
 }
 
 function addChangeBlockTelemetry(
-  block: ParsedDiffLine[],
+  block: Array<ParsedDiffLine | null>,
   telemetry: WordEmphasisTelemetry,
   wordEmphasis: DiffWordEmphasis,
 ): void {

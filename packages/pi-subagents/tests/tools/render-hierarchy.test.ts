@@ -179,7 +179,7 @@ describe("hierarchical tool result rendering", () => {
     };
     const ordinary = signature(makeAwaitDetails(input));
 
-    for (const outcome of ["timedOut", "cancelled", "attentionRequired"] as const) {
+    for (const outcome of ["cancelled", "attentionRequired"] as const) {
       const details = makeAwaitDetails({ ...input, [outcome]: true });
       const expanded = text(details, { expanded: true });
 
@@ -261,12 +261,11 @@ describe("hierarchical tool result rendering", () => {
       status: "failed" as const,
       routeStatus: "unavailable" as const,
     };
-    const collapsed = renderStartReceiptComponent([failure], [entry], false, plainTheme)
+    const receipt = { startEntries: [entry], startFailures: [failure] };
+    const collapsed = renderStartReceiptComponent(receipt, false, plainTheme)
       .render(120)
       .join("\n");
-    const expanded = renderStartReceiptComponent([failure], [entry], true, plainTheme)
-      .render(120)
-      .join("\n");
+    const expanded = renderStartReceiptComponent(receipt, true, plainTheme).render(120).join("\n");
 
     expect(collapsed).not.toContain(failure.message);
     expect(expanded).toContain(failure.message);
@@ -284,6 +283,32 @@ describe("hierarchical tool result rendering", () => {
 
     expect(collapsed).not.toContain("failure tail");
     expect(expanded).toContain("failure tail");
+  });
+
+  it("lists pending delivery under its own expanded section, never under failed targets", () => {
+    const lines = render(
+      makeCompactToolDetails({
+        action: "send",
+        runs: [],
+        actionFailures: [
+          {
+            id: "pending-target",
+            code: "steer_outcome_uncertain",
+            message: "Acknowledgement is pending.",
+            pendingDelivery: true,
+          },
+          { id: "failed-target", code: "not_running", message: "Not running." },
+        ],
+      }),
+      { expanded: true },
+    );
+    // A section heading sits two columns in, above its four-column body.
+    const sectionOf = (id: string) => {
+      const row = lines.findIndex((line) => line.includes(id));
+      return lines.slice(0, row).findLast((line) => /^ {2}\S/u.test(line));
+    };
+    expect(sectionOf("pending-target")).not.toMatch(/fail/i);
+    expect(sectionOf("failed-target")).toMatch(/fail/i);
   });
 
   it("preserves truncated fallback output in expanded results", () => {

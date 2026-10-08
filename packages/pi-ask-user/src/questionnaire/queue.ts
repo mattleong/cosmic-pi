@@ -56,7 +56,7 @@ export const makeQuestionnaireQueue = Effect.gen(function* () {
     const close = Effect.uninterruptible(
       Effect.gen(function* () {
         if (yield* Ref.getAndSet(released, true)) return;
-        if (yield* Ref.get(state).pipe(Effect.map((current) => current.closed))) return;
+        if ((yield* Ref.get(state)).closed) return;
         if (!admitted.previous || (yield* Deferred.isDone(admitted.previous))) yield* drain;
         else yield* Effect.forkIn(Effect.interruptible(drain), scope);
       }),

@@ -209,15 +209,18 @@ describe("profile dashboard actions", () => {
 
 describe("internal dashboard dialogs", () => {
   const [up, down] = ["\u001b[A", "\u001b[B"];
+  const host = (height = 8) => ({
+    theme: plainTheme,
+    getHeight: () => height,
+    requestRender: vi.fn(),
+  });
   it("requires scrolling the complete replacement before confirmation", () => {
     const close = vi.fn();
     const dialog = new ProfileDashboardDialog({
-      theme: plainTheme,
+      ...host(),
       kind: "confirm",
       title: "Replace",
       body: Array.from({ length: 20 }, (_, index) => `profile ${index}`).join("\n"),
-      getHeight: () => 8,
-      requestRender: vi.fn(),
       close,
     });
     dialog.render(70);
@@ -231,11 +234,9 @@ describe("internal dashboard dialogs", () => {
   it("Copy and Rename text entry owns printable cancel bindings and arrows", () => {
     const close = vi.fn<(value: string | undefined) => void>();
     const dialog = new ProfileDashboardDialog({
-      theme: plainTheme,
+      ...host(),
       kind: "name",
       title: "Name",
-      getHeight: () => 8,
-      requestRender: vi.fn(),
       matchesKeybinding: (data, id) => data === "q" && id === "tui.select.cancel",
       close,
     });
@@ -251,12 +252,10 @@ describe("internal dashboard dialogs", () => {
   ] as const)("save dialog %s", (_case, projectTrusted, keys, scope, name) => {
     const close = vi.fn<(value: ProfileSetSaveDestination | undefined) => void>();
     const dialog = new ProfileDashboardDialog({
-      theme: plainTheme,
+      ...host(4),
       kind: "name",
       title: "Save",
       destination: { projectTrusted },
-      getHeight: () => 4,
-      requestRender: vi.fn(),
       matchesKeybinding: (data, id) =>
         (data === "j" && id === "tui.select.down") || (data === "q" && id === "tui.select.cancel"),
       close,
@@ -271,11 +270,9 @@ describe("internal dashboard dialogs", () => {
   it("raw Escape still cancels when configured matcher returns false", () => {
     const close = vi.fn();
     const dialog = new ProfileDashboardDialog({
-      theme: plainTheme,
+      ...host(),
       kind: "confirm",
       title: "Confirm",
-      getHeight: () => 8,
-      requestRender: vi.fn(),
       matchesKeybinding: () => false,
       close,
     });
@@ -316,7 +313,6 @@ const dashboard = () => {
       saveDraft,
       loadModelPicker: () => Promise.reject(new Error("unused")),
       supportedPiEfforts: () => undefined,
-      fastModeAvailable: () => false,
     },
   });
   component.focused = true;

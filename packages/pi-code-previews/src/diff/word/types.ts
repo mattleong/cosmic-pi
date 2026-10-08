@@ -1,7 +1,6 @@
-export type WordChangeRanges = {
-  removed: Array<[number, number]>;
-  added: Array<[number, number]>;
-};
+export type TextRange = [start: number, end: number];
+
+export type WordChangeRanges = { removed: TextRange[]; added: TextRange[] };
 
 export type WordChangeConfidence = "high" | "medium" | "low";
 

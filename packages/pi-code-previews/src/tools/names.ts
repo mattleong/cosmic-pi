@@ -19,8 +19,7 @@ export type CodePreviewToolName = (typeof ALL_CODE_PREVIEW_TOOLS)[number];
 const CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX = "tool:";
 
 export function isCodePreviewToolName(value: string): value is CodePreviewToolName {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  return (ALL_CODE_PREVIEW_TOOLS as readonly string[]).includes(value);
+  return ALL_CODE_PREVIEW_TOOLS.some((tool) => tool === value);
 }
 
 export function toolToggleId(tool: CodePreviewToolName): string {
@@ -39,12 +38,7 @@ export function parseCodePreviewTools(
 ): Set<CodePreviewToolName> | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) return undefined;
-  if (trimmed.toLowerCase() === "all") return new Set(ALL_CODE_PREVIEW_TOOLS);
   if (trimmed.toLowerCase() === "none") return new Set();
-  const enabled = new Set<CodePreviewToolName>();
-  for (const part of trimmed.split(/[\s,]+/)) {
-    const tool = part.trim();
-    if (isCodePreviewToolName(tool)) enabled.add(tool);
-  }
+  const enabled = new Set(trimmed.split(/[\s,]+/).filter(isCodePreviewToolName));
   return enabled.size > 0 ? enabled : undefined;
 }

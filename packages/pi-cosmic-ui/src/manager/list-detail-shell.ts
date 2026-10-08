@@ -16,7 +16,7 @@ import {
   type ListSelectionChange,
 } from "./list-detail.ts";
 
-export interface ListDetailShellState extends ListDetailMotionState {
+interface ListDetailShellState extends ListDetailMotionState {
   readonly selectedId: string | undefined;
   readonly layout: ManagerLayoutTier;
 }
@@ -170,12 +170,8 @@ export interface ListDetailField {
 export const detailFieldRows = (
   theme: Pick<Theme, "fg">,
   fields: ReadonlyArray<ListDetailField>,
-  minimumLabelWidth = 10,
 ): ReadonlyArray<string> => {
-  const labelWidth = Math.max(
-    minimumLabelWidth,
-    ...fields.map((field) => visibleWidth(field.label)),
-  );
+  const labelWidth = Math.max(10, ...fields.map((field) => visibleWidth(field.label)));
   return fields.map(
     (field) =>
       `${theme.fg("dim", padListDetailRow(field.label, labelWidth))}  ${theme.fg(field.tone ?? "text", field.value)}`,

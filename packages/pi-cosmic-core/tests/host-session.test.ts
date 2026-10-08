@@ -20,45 +20,21 @@ describe("project trust capture", () => {
   });
 });
 
-describe("notification boundary", () => {
-  it("contains hostile thenable inspection", () => {
+describe("best-effort callbacks", () => {
+  it("swallow throws and hostile then getters, reading a returned then exactly once", () => {
     const hostileThenable = new Proxy(
       {},
       {
-        has: (_target, property) => property === "then",
         get: (_target, property) => {
           if (property === "then") throw new Error("hostile then getter");
           return undefined;
         },
       },
     );
-
     expect(() =>
       notifyAtHostBoundary({ ui: { notify: () => hostileThenable } }, "message", "warning"),
     ).not.toThrow();
-  });
 
-  it("attaches a rejection handler to callable thenables", () => {
-    let rejectionContained = false;
-    const callableThenable = new Proxy(() => undefined, {
-      has: (_target, property) => property === "then",
-      get: (_target, property) =>
-        property === "then"
-          ? (_resolve: () => void, reject: (reason: Error) => void) => {
-              reject(new Error("rejected callable thenable"));
-              rejectionContained = true;
-            }
-          : undefined,
-    });
-
-    notifyAtHostBoundary({ ui: { notify: () => callableThenable } }, "message", "warning");
-
-    expect(rejectionContained).toBe(true);
-  });
-});
-
-describe("best-effort callbacks", () => {
-  it("swallows throws and reads a returned thenable's then exactly once", () => {
     let reads = 0;
     let handled = false;
     const thenable = new Proxy(
@@ -80,5 +56,23 @@ describe("best-effort callbacks", () => {
     ).not.toThrow();
     invokeBestEffort(() => thenable);
     expect({ reads, handled }).toEqual({ reads: 1, handled: true });
+  });
+
+  it("attaches a rejection handler to callable thenables", () => {
+    let rejectionContained = false;
+    const callableThenable = new Proxy(() => undefined, {
+      has: (_target, property) => property === "then",
+      get: (_target, property) =>
+        property === "then"
+          ? (_resolve: () => void, reject: (reason: Error) => void) => {
+              reject(new Error("rejected callable thenable"));
+              rejectionContained = true;
+            }
+          : undefined,
+    });
+
+    notifyAtHostBoundary({ ui: { notify: () => callableThenable } }, "message", "warning");
+
+    expect(rejectionContained).toBe(true);
   });
 });

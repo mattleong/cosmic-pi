@@ -1,5 +1,4 @@
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -41,48 +40,31 @@ const EnvelopeDiscriminant = Schema.Struct({
   method: Schema.optional(Schema.Unknown),
 });
 
-export type CodexEnvelope =
-  | {
-      readonly type: "response";
-      readonly id: string | number;
-      readonly result?: unknown;
-      readonly error?: { readonly code: number; readonly message: string; readonly data?: unknown };
-    }
-  | { readonly type: "notification"; readonly method: string; readonly params?: unknown }
-  | { readonly type: "server_request"; readonly id: string | number; readonly method: string };
-
 export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope")(function* <
   ValueInput,
 >(value: ValueInput) {
   const discriminant = yield* Schema.decodeUnknownEffect(EnvelopeDiscriminant)(value);
   if (discriminant.method !== undefined && discriminant.id !== undefined) {
     const request = yield* Schema.decodeUnknownEffect(ServerRequest)(value);
-    const envelope: CodexEnvelope = {
-      type: "server_request",
-      id: request.id,
-      method: request.method,
-    };
-    return envelope;
+    return { type: "server_request" as const, id: request.id, method: request.method };
   }
   if (discriminant.method !== undefined) {
     const notification = yield* Schema.decodeUnknownEffect(Notification)(value);
-    const envelope: CodexEnvelope = {
-      type: "notification",
+    return {
+      type: "notification" as const,
       method: notification.method,
       ...(notification.params !== undefined && { params: notification.params }),
     };
-    return envelope;
   }
   const response = yield* Schema.decodeUnknownEffect(Response)(value);
   if (response.result === undefined && response.error === undefined)
     yield* Schema.decodeUnknownEffect(Schema.Struct({ result: Schema.Unknown }))(value);
-  const envelope: CodexEnvelope = {
-    type: "response",
+  return {
+    type: "response" as const,
     id: response.id,
     ...(response.result !== undefined && { result: response.result }),
     ...(response.error !== undefined && { error: response.error }),
   };
-  return envelope;
 });
 
 export const InitializeResult = Schema.Struct({
@@ -203,45 +185,6 @@ const ErrorNotification = Schema.Struct({
   turnId: Schema.optional(Id),
 });
 
-export type CodexNotification =
-  | { readonly type: "turn_started"; readonly threadId: string; readonly turnId: string }
-  | {
-      readonly type: "item_started" | "item_completed";
-      readonly threadId: string;
-      readonly turnId: string;
-      readonly item: Schema.Schema.Type<typeof Item>;
-    }
-  | {
-      readonly type: "agent_delta";
-      readonly threadId: string;
-      readonly turnId: string;
-      readonly itemId: string;
-      readonly delta: string;
-    }
-  | {
-      readonly type: "usage";
-      readonly threadId: string;
-      readonly turnId: string;
-      readonly total: Schema.Schema.Type<typeof UsageBreakdown>;
-    }
-  | {
-      readonly type: "turn_completed";
-      readonly threadId: string;
-      readonly turnId: string;
-      readonly status: string;
-      readonly diagnostic?: string | undefined;
-    }
-  | {
-      readonly type: "native_activity";
-      readonly threadId: string;
-      readonly turnId: string;
-      readonly activityId: string;
-      readonly kind: string;
-      readonly state: "running" | "activity" | "failed" | "stopped";
-    }
-  | { readonly type: "warning"; readonly message: string }
-  | { readonly type: "ignored" };
-
 const normalizedWarning = (summary: string, details?: string | null): string => {
   const parts = [summary.trim(), details?.trim()]
     .filter((part): part is string => Boolean(part))
@@ -337,15 +280,13 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
       }
       case "turn/completed": {
         const value = yield* Schema.decodeUnknownEffect(TurnCompleted)(params);
-        const notification: CodexNotification = {
-          type: "turn_completed",
+        return {
+          type: "turn_completed" as const,
           threadId: value.threadId,
           turnId: value.turn.id,
           status: value.turn.status,
-          ...(value.turn.error &&
-            hasObjectRuntimeType(value.turn.error) && { diagnostic: value.turn.error.message }),
+          ...(value.turn.error && { diagnostic: value.turn.error.message }),
         };
-        return notification;
       }
       case "warning": {
         const value = yield* Schema.decodeUnknownEffect(Warning)(params);
@@ -374,25 +315,16 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
   },
 );
 
-export type CodexInitializeRequest = ReturnType<typeof initializeRequest>;
+export type CodexNotification = Effect.Success<ReturnType<typeof decodeCodexNotification>>;
+
 export type CodexInitializedNotification = ReturnType<typeof initializedNotification>;
-export type CodexThreadStartRequest = ReturnType<typeof threadStartRequest>;
-export type CodexTurnStartRequest = ReturnType<typeof turnStartRequest>;
-export type CodexTurnSteerRequest = ReturnType<typeof turnSteerRequest>;
-export type CodexTurnInterruptRequest = ReturnType<typeof turnInterruptRequest>;
-
-export interface CodexTextInput {
-  readonly type: "text";
-  readonly text: string;
-  readonly text_elements: ReadonlyArray<never>;
-}
-
-export type CodexRequest =
-  | CodexInitializeRequest
-  | CodexThreadStartRequest
-  | CodexTurnStartRequest
-  | CodexTurnSteerRequest
-  | CodexTurnInterruptRequest;
+export type CodexRequest = ReturnType<
+  | typeof initializeRequest
+  | typeof threadStartRequest
+  | typeof turnStartRequest
+  | typeof turnSteerRequest
+  | typeof turnInterruptRequest
+>;
 
 export const initializeRequest = (id: string) =>
   ({
@@ -435,9 +367,7 @@ export const threadStartRequest = (
     },
   }) as const;
 
-const input = (text: string): ReadonlyArray<CodexTextInput> => [
-  { type: "text", text, text_elements: [] },
-];
+const input = (text: string) => [{ type: "text", text, text_elements: [] }] as const;
 
 export const turnStartRequest = (
   id: string,

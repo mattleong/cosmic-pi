@@ -1,25 +1,19 @@
 import assert from "node:assert/strict";
-import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { opaqueFixture } from "pi-cosmic-core/testing";
 import { stripAnsi } from "pi-cosmic-core";
-import { afterEach, test } from "vitest";
+import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
   applyPresentationSettings,
   createToolPresentationHarness,
 } from "../../testing";
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
-import type {
-  CodePreviewRendererPresentation,
-  PreviewToolInfo,
-} from "../../src/application/renderer-contract";
+import type { CodePreviewRendererPresentation } from "../../src/application/renderer-contract";
 
 const name = "mcp__team_docs__find_page";
-const metadata = (
-  path = "builtin:mcp",
-  exposure: PreviewToolInfo["exposure"] = "direct",
-): PreviewToolInfo => ({
+const metadata = (path = "builtin:mcp", exposure: ToolInfo["exposure"] = "direct"): ToolInfo => ({
   name,
   description: "Public native tool metadata, no label or execution",
   parameters: opaqueFixture({ type: "object" }),
@@ -33,18 +27,11 @@ const session = (
   cwd: "/project",
   scheduleAnimation,
   selfShell: true,
+  enabledTools: [],
 });
-let restoreSettings = () => {};
-afterEach(() => restoreSettings());
-const settings = (style: "preview" | "compact", background: "off" | "on" | "border" = "off") => {
-  restoreSettings();
-  restoreSettings = applyPresentationSettings({
-    syntaxHighlighting: false,
-    toolCallTiming: false,
-    toolCallCollapsedStyle: style,
-    toolCallBackground: background,
-  });
-};
+const settings = (style: "preview" | "compact", background: "off" | "on" | "border" = "off") =>
+  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
+beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
 /** Like Pi's own MCP call: its label, then the arguments as key/value lines. */
 const native: ToolRenderers = {

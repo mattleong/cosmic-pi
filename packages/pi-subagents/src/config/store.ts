@@ -1,14 +1,19 @@
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { flow } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, makeConfigDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
 import {
-  MAX_PROFILE_CANDIDATES,
+  invokeHostCallback,
+  JsonDocumentStore,
+  makeConfigDocumentErrorFactory,
+  type JsonObject,
+} from "pi-cosmic-core";
+import {
+  isProfileId,
   PROFILE_IDS,
   type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
@@ -24,8 +29,9 @@ import {
   stableJson,
 } from "./profile-restore.ts";
 import {
-  decodeProfileCandidate,
+  decodeProfileRoute,
   decodeSubagentConfig,
+  decodeSubagentNesting,
   isLegacyConfigVersion,
   isProfileSetName,
   isSubagentFeatureToggle,
@@ -123,6 +129,12 @@ export interface SubagentFeatureTogglePatch extends SubagentConfigPatchBase {
   readonly enabled?: boolean | undefined;
 }
 
+type ConfigRead<A> = (
+  cwd: string,
+  agentDirectory: string,
+  projectTrusted: boolean,
+) => Effect.Effect<A, SubagentConfigStoreError>;
+
 type ConfigPatch<Patch, A = void> = (
   cwd: string,
   agentDirectory: string,
@@ -130,16 +142,8 @@ type ConfigPatch<Patch, A = void> = (
 ) => Effect.Effect<A, SubagentConfigStoreError>;
 
 export interface SubagentConfigStoreContract {
-  readonly load: (
-    cwd: string,
-    agentDirectory: string,
-    projectTrusted: boolean,
-  ) => Effect.Effect<ResolvedSubagentConfig, SubagentConfigStoreError>;
-  readonly inspect: (
-    cwd: string,
-    agentDirectory: string,
-    projectTrusted: boolean,
-  ) => Effect.Effect<SubagentConfigInspection, SubagentConfigStoreError>;
+  readonly load: ConfigRead<ResolvedSubagentConfig>;
+  readonly inspect: ConfigRead<SubagentConfigInspection>;
   readonly patchProfile: ConfigPatch<SubagentProfilePatch, JsonObject>;
   readonly restoreProfileDeclaration: ConfigPatch<SubagentProfileRestorePatch, JsonObject>;
   readonly patchDefaultProfileSet: ConfigPatch<SubagentDefaultProfileSetPatch>;
@@ -233,20 +237,30 @@ const routeJson = (
     : candidateJson(route as DeclaredProfileCandidate, version);
 };
 
-const own = (record: Readonly<JsonObject>, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(record, key);
+/** A copy of `container` with `key` set, or removed when `value` is undefined. */
+const withEntry = (
+  container: JsonObject[string] | undefined,
+  key: string,
+  value: JsonObject[string] | undefined,
+): JsonObject => {
+  const next = isRecord(container) ? { ...container } : {};
+  if (value === undefined) delete next[key];
+  else next[key] = value;
+  return next;
+};
 
 /** Migrates only fully valid legacy data: every legacy decode diagnostic is fatal. */
 const upgradeDocument = (
   current: JsonObject,
   path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (current.version === SUBAGENT_CONFIG_VERSION)
-    return { ...current, version: SUBAGENT_CONFIG_VERSION };
+): Effect.Effect<JsonObject, SubagentConfigStoreError> => {
+  if (current.version === SUBAGENT_CONFIG_VERSION) return Effect.succeed(current);
   if (decodeSubagentConfig(current, "migration").diagnostics.length > 0)
-    return mutationError(
-      path,
-      "Repair or remove every invalid legacy profile route before upgrading this document to version 6.",
+    return Effect.fail(
+      mutationError(
+        path,
+        "Repair or remove every invalid legacy profile route before upgrading this document to version 6.",
+      ),
     );
   const next: JsonObject = { version: SUBAGENT_CONFIG_VERSION };
   if (current.version === PREVIOUS_SUBAGENT_CONFIG_VERSION && current.nesting !== undefined)
@@ -258,327 +272,272 @@ const upgradeDocument = (
     );
     next.profileSets = { [MIGRATED_PROFILE_SET_NAME]: { profiles: Object.fromEntries(profiles) } };
   }
-  return next;
+  return Effect.succeed(next);
 };
 
 const currentProfileSets = (document: JsonObject): JsonObject =>
   isRecord(document.profileSets) ? document.profileSets : {};
 
-const applyLegacyProfilePatch = (current: JsonObject, patch: SubagentProfilePatch): JsonObject => {
-  const profiles = isRecord(current.profiles) ? { ...current.profiles } : {};
-  if (patch.route === undefined) delete profiles[patch.profile];
-  else profiles[patch.profile] = routeJson(patch.route, "legacy");
-  const next = { ...current };
-  if (Object.keys(profiles).length === 0) delete next.profiles;
-  else next.profiles = profiles;
-  return next;
-};
-
-const applyProfilePatch = (
+type ApplyPatch<Patch> = (
   current: JsonObject,
-  patch: SubagentProfilePatch,
+  patch: Patch,
   path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet) || !PROFILE_IDS.includes(patch.profile))
-    return mutationError(path, "Invalid profile target.");
-  const routeProperty = ownDataProperty(patch, "route");
-  if (!routeProperty.valid) return mutationError(path, "Invalid profile route.");
-  const captured = captureProfilePatchDeclaration(
-    routeProperty.present ? routeProperty.value : undefined,
-  );
-  if (!captured) return mutationError(path, "Invalid profile route.");
-  // SAFETY: The patch capture snapshots and canonically validates every candidate.
-  patch = { ...patch, route: captured.declaration as DeclaredProfileRoute | undefined };
-  const legacy = isLegacyConfigVersion(current.version);
-  if (legacy && patch.profileSet !== MIGRATED_PROFILE_SET_NAME)
-    return mutationError(path, "Legacy configuration can edit only its migrated default set.");
-  if (legacy && own(current, "profiles") && !isRecord(current.profiles))
-    return mutationError(
-      path,
-      "Repair the invalid legacy profiles container before upgrading this document.",
-    );
-  const prepared = legacy ? applyLegacyProfilePatch(current, patch) : current;
-  const upgraded = upgradeDocument(prepared, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const sets = { ...currentProfileSets(upgraded) };
-  const setValue = sets[patch.profileSet];
-  if (!isRecord(setValue)) {
-    if (patch.route === undefined) return upgraded;
-    return mutationError(path, "The selected profile set does not exist.");
-  }
-  const profiles = isRecord(setValue.profiles) ? { ...setValue.profiles } : {};
-  if (patch.route === undefined) delete profiles[patch.profile];
-  else profiles[patch.profile] = routeJson(patch.route);
-  sets[patch.profileSet] = { profiles };
-  return { ...upgraded, profileSets: sets };
-};
+) => Effect.Effect<JsonObject, SubagentConfigStoreError>;
 
-const applyProfileRestore = (
-  current: JsonObject,
-  patch: SubagentProfileRestorePatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet) || !PROFILE_IDS.includes(patch.profile))
-    return mutationError(path, "Invalid profile restore target.");
-  const captured = captureRestoreDeclaration(patch.declaration, patch.sourceVersion);
-  if (!captured)
-    return mutationError(path, "The opening profile declaration cannot be restored safely.");
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const sets = { ...currentProfileSets(upgraded) };
-  const selected = sets[patch.profileSet];
-  if (!own(sets, patch.profileSet) || !isRecord(selected))
-    return mutationError(path, "The selected profile set does not exist.");
-  if (own(selected, "profiles") && !isRecord(selected.profiles))
-    return mutationError(path, "The selected profiles container is invalid.");
-  const profiles = isRecord(selected.profiles) ? { ...selected.profiles } : {};
-  if (captured.declaration === undefined) delete profiles[patch.profile];
-  else
-    profiles[patch.profile] =
-      patch.sourceVersion === SUBAGENT_CONFIG_VERSION
+const applyProfilePatch: ApplyPatch<SubagentProfilePatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    if (!isProfileSetName(patch.profileSet) || !isProfileId(patch.profile))
+      return yield* mutationError(path, "Invalid profile target.");
+    const routeProperty = ownDataProperty(patch, "route");
+    const captured = routeProperty.valid
+      ? captureProfilePatchDeclaration(routeProperty.present ? routeProperty.value : undefined)
+      : undefined;
+    if (!captured) return yield* mutationError(path, "Invalid profile route.");
+    // SAFETY: The patch capture snapshots and canonically validates every candidate.
+    const route = captured.declaration as DeclaredProfileRoute | undefined;
+    const legacy = isLegacyConfigVersion(current.version);
+    if (legacy && patch.profileSet !== MIGRATED_PROFILE_SET_NAME)
+      return yield* mutationError(
+        path,
+        "Legacy configuration can edit only its migrated default set.",
+      );
+    if (legacy && Object.hasOwn(current, "profiles") && !isRecord(current.profiles))
+      return yield* mutationError(
+        path,
+        "Repair the invalid legacy profiles container before upgrading this document.",
+      );
+    // A legacy route is patched before migration, so the patch can repair an invalid route. An
+    // existing root `profiles` container is the migrated default set and is never dropped.
+    const prepared =
+      legacy && (route !== undefined || Object.hasOwn(current, "profiles"))
+        ? {
+            ...current,
+            profiles: withEntry(
+              current.profiles,
+              patch.profile,
+              route && routeJson(route, "legacy"),
+            ),
+          }
+        : current;
+    const upgraded = yield* upgradeDocument(prepared, path);
+    const sets = { ...currentProfileSets(upgraded) };
+    const setValue = sets[patch.profileSet];
+    if (!isRecord(setValue)) {
+      if (route === undefined) return upgraded;
+      return yield* mutationError(path, "The selected profile set does not exist.");
+    }
+    sets[patch.profileSet] = {
+      profiles: withEntry(setValue.profiles, patch.profile, route && routeJson(route)),
+    };
+    return { ...upgraded, profileSets: sets };
+  },
+);
+
+const applyProfileRestore: ApplyPatch<SubagentProfileRestorePatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    if (!isProfileSetName(patch.profileSet) || !isProfileId(patch.profile))
+      return yield* mutationError(path, "Invalid profile restore target.");
+    const captured = captureRestoreDeclaration(patch.declaration, patch.sourceVersion);
+    if (!captured)
+      return yield* mutationError(
+        path,
+        "The opening profile declaration cannot be restored safely.",
+      );
+    const upgraded = yield* upgradeDocument(current, path);
+    const sets = { ...currentProfileSets(upgraded) };
+    const selected = sets[patch.profileSet];
+    if (!Object.hasOwn(sets, patch.profileSet) || !isRecord(selected))
+      return yield* mutationError(path, "The selected profile set does not exist.");
+    if (Object.hasOwn(selected, "profiles") && !isRecord(selected.profiles))
+      return yield* mutationError(path, "The selected profiles container is invalid.");
+    const declaration =
+      captured.declaration === undefined || patch.sourceVersion === SUBAGENT_CONFIG_VERSION
         ? captured.declaration
         : migrateLegacyRouteJson(captured.declaration);
-  sets[patch.profileSet] = { ...selected, profiles };
-  return { ...upgraded, profileSets: sets };
-};
+    sets[patch.profileSet] = {
+      ...selected,
+      profiles: withEntry(selected.profiles, patch.profile, declaration),
+    };
+    return { ...upgraded, profileSets: sets };
+  },
+);
 
-const applyDefaultProfileSetPatch = (
-  current: JsonObject,
-  patch: SubagentDefaultProfileSetPatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const next = { ...upgraded };
-  if (patch.defaultProfileSet === undefined) {
-    delete next.defaultProfileSet;
-    return next;
-  }
-  if (!isProfileSetName(patch.defaultProfileSet))
-    return mutationError(path, "Invalid profile-set name.");
-  const sets = currentProfileSets(upgraded);
-  if (!own(sets, patch.defaultProfileSet) || !isRecord(sets[patch.defaultProfileSet]))
-    return mutationError(path, "The selected profile set does not exist.");
-  const decoded = decodeSubagentConfig(upgraded, "update");
-  if (
-    decoded.invalidProfileSets.includes(patch.defaultProfileSet) ||
-    !decoded.file.profileSets?.[patch.defaultProfileSet]
-  )
-    return mutationError(path, "The selected profile set is structurally invalid.");
-  if ((decoded.invalidProfileSetRoutes[patch.defaultProfileSet]?.length ?? 0) > 0)
-    return mutationError(path, "The selected profile set contains an invalid profile route.");
-  next.defaultProfileSet = patch.defaultProfileSet;
-  return next;
-};
+const applyDefaultProfileSetPatch: ApplyPatch<SubagentDefaultProfileSetPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    const upgraded = yield* upgradeDocument(current, path);
+    const name = patch.defaultProfileSet;
+    if (name === undefined) return withEntry(upgraded, "defaultProfileSet", undefined);
+    if (!isProfileSetName(name)) return yield* mutationError(path, "Invalid profile-set name.");
+    const sets = currentProfileSets(upgraded);
+    if (!Object.hasOwn(sets, name) || !isRecord(sets[name]))
+      return yield* mutationError(path, "The selected profile set does not exist.");
+    const decoded = decodeSubagentConfig(upgraded, "update");
+    // Structurally invalid sets are never decoded into `file.profileSets`.
+    if (!decoded.file.profileSets?.[name])
+      return yield* mutationError(path, "The selected profile set is structurally invalid.");
+    if (decoded.invalidProfileSetRoutes[name])
+      return yield* mutationError(
+        path,
+        "The selected profile set contains an invalid profile route.",
+      );
+    return withEntry(upgraded, "defaultProfileSet", name);
+  },
+);
 
-/** Captures one ordinary dense array without consulting an input iterator or invoking accessors. */
-const snapshotCandidateArray = <ValueInput>(
-  value: ValueInput,
-): ReadonlyArray<unknown> | undefined => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  if (Object.getOwnPropertyDescriptor(value, Symbol.iterator) !== undefined) return undefined;
-  const lengthProperty = ownDataProperty(value, "length");
-  const length = lengthProperty.valid && lengthProperty.present ? lengthProperty.value : undefined;
-  if (
-    !Predicate.isNumber(length) ||
-    !Number.isSafeInteger(length) ||
-    length < 0 ||
-    length > MAX_PROFILE_CANDIDATES
-  )
-    return undefined;
-  const snapshot: unknown[] = [];
-  for (let index = 0; index < length; index += 1) {
-    const element = ownDataProperty(value, String(index));
-    if (!element.valid || !element.present) return undefined;
-    snapshot.push(element.value);
-  }
-  return snapshot;
-};
-
+/** Copies a complete session snapshot without invoking accessors or iterators on its routes. */
 const snapshotProfilesJson = (
   routes: Readonly<Record<ProfileId, ProfileRoute>>,
   path: string,
-): JsonObject | SubagentConfigStoreError => {
-  try {
-    const keys = Reflect.ownKeys(routes);
-    if (
-      keys.length !== PROFILE_IDS.length ||
-      keys.some(
-        (key) => !Predicate.isString(key) || !PROFILE_IDS.some((profile) => profile === key),
-      )
-    )
-      return mutationError(path, "A session snapshot must contain exactly all seven profiles.");
-    const profiles: JsonObject = {};
-    for (const profile of PROFILE_IDS) {
-      const routeProperty = ownDataProperty(routes, profile);
-      const route = routeProperty.valid && routeProperty.present ? routeProperty.value : undefined;
-      if (!hasObjectRuntimeType(route) || route === null)
-        return mutationError(path, "The session snapshot contains an invalid profile route.");
-      const routeKeys = Reflect.ownKeys(route);
-      if (routeKeys.length !== 1 || routeKeys[0] !== "candidates")
-        return mutationError(path, "The session snapshot contains an invalid profile route.");
-      const candidatesProperty = ownDataProperty(route, "candidates");
-      const candidateInputs =
-        candidatesProperty.valid && candidatesProperty.present
-          ? snapshotCandidateArray(candidatesProperty.value)
-          : undefined;
-      if (!candidateInputs)
-        return mutationError(path, "The session snapshot contains an invalid profile route.");
-      if (candidateInputs.length === 0) {
-        profiles[profile] = "disabled";
-        continue;
-      }
-      const candidates: JsonObject[] = [];
-      for (let index = 0; index < candidateInputs.length; index += 1) {
-        const decoded = decodeProfileCandidate(candidateInputs[index]);
-        if (!decoded)
-          return mutationError(path, "The session snapshot contains an invalid profile route.");
-        candidates.push(candidateJson(decoded, "current"));
-      }
-      profiles[profile] = candidates;
-    }
-    return profiles;
-  } catch {
-    return mutationError(path, "The session snapshot contains an invalid profile route.");
+): Effect.Effect<JsonObject, SubagentConfigStoreError> => {
+  const invalidRoute = mutationError(
+    path,
+    "The session snapshot contains an invalid profile route.",
+  );
+  const keys = invokeHostCallback(() => Reflect.ownKeys(routes), undefined);
+  if (!keys) return Effect.fail(invalidRoute);
+  if (
+    keys.length !== PROFILE_IDS.length ||
+    !keys.every((key) => Predicate.isString(key) && isProfileId(key))
+  )
+    return Effect.fail(
+      mutationError(path, "A session snapshot must contain exactly all seven profiles."),
+    );
+  const profiles: JsonObject = {};
+  for (const profile of PROFILE_IDS) {
+    const field = ownDataProperty(routes, profile);
+    const route = field.valid && field.present ? decodeProfileRoute(field.value) : undefined;
+    if (!route) return Effect.fail(invalidRoute);
+    profiles[profile] =
+      route.candidates.length === 0
+        ? "disabled"
+        : route.candidates.map((candidate) => candidateJson(candidate, "current"));
   }
+  return Effect.succeed(profiles);
 };
 
-const applyCreateProfileSetFromSnapshot = (
-  current: JsonObject,
-  patch: SubagentCreateProfileSetFromSnapshotPatch,
+/** Adds one new set after the duplicate-name and set-count checks create and copy share. */
+const insertProfileSet = Effect.fnUntraced(function* (
+  upgraded: JsonObject,
+  name: string,
   path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet)) return mutationError(path, "Invalid profile-set name.");
-  const profiles = snapshotProfilesJson(patch.profiles, path);
-  if (profiles instanceof SubagentConfigStoreError) return profiles;
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
+  set: Effect.Effect<JsonObject, SubagentConfigStoreError>,
+) {
   const sets = { ...currentProfileSets(upgraded) };
-  if (own(sets, patch.profileSet))
-    return mutationError(path, "A profile set with that name exists.");
+  if (Object.hasOwn(sets, name))
+    return yield* mutationError(path, "A profile set with that name exists.");
+  const value = yield* set;
   if (Object.keys(sets).length >= MAX_PROFILE_SETS)
-    return mutationError(path, `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`);
-  sets[patch.profileSet] = { profiles };
+    return yield* mutationError(
+      path,
+      `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`,
+    );
+  sets[name] = value;
   return { ...upgraded, profileSets: sets };
-};
+});
 
-const applyCopyProfileSet = (
-  current: JsonObject,
-  patch: SubagentCopyProfileSetPatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.sourceProfileSet) || !isProfileSetName(patch.profileSet))
-    return mutationError(path, "Invalid profile-set name.");
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const sets = { ...currentProfileSets(upgraded) };
-  if (own(sets, patch.profileSet))
-    return mutationError(path, "A profile set with that name exists.");
-  const source = sets[patch.sourceProfileSet];
-  if (!isRecord(source)) return mutationError(path, "The source profile set does not exist.");
-  if (Object.keys(sets).length >= MAX_PROFILE_SETS)
-    return mutationError(path, `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`);
-  sets[patch.profileSet] = structuredClone(source);
-  return { ...upgraded, profileSets: sets };
-};
+const applyCreateProfileSetFromSnapshot: ApplyPatch<SubagentCreateProfileSetFromSnapshotPatch> =
+  Effect.fnUntraced(function* (current, patch, path) {
+    if (!isProfileSetName(patch.profileSet))
+      return yield* mutationError(path, "Invalid profile-set name.");
+    const profiles = yield* snapshotProfilesJson(patch.profiles, path);
+    const upgraded = yield* upgradeDocument(current, path);
+    return yield* insertProfileSet(upgraded, patch.profileSet, path, Effect.succeed({ profiles }));
+  });
 
-const applyRenameProfileSet = (
-  current: JsonObject,
-  patch: SubagentRenameProfileSetPatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet) || !isProfileSetName(patch.nextProfileSet))
-    return mutationError(path, "Invalid profile-set name.");
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const sets = { ...currentProfileSets(upgraded) };
-  const source = sets[patch.profileSet];
-  if (!isRecord(source)) return mutationError(path, "The selected profile set does not exist.");
-  if (patch.profileSet !== patch.nextProfileSet && own(sets, patch.nextProfileSet))
-    return mutationError(path, "A profile set with that name exists.");
-  if (patch.profileSet === patch.nextProfileSet) return upgraded;
-  delete sets[patch.profileSet];
-  sets[patch.nextProfileSet] = source;
-  return {
-    ...upgraded,
-    profileSets: sets,
-    ...(upgraded.defaultProfileSet === patch.profileSet && {
-      defaultProfileSet: patch.nextProfileSet,
-    }),
-  };
-};
+const applyCopyProfileSet: ApplyPatch<SubagentCopyProfileSetPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    if (!isProfileSetName(patch.sourceProfileSet) || !isProfileSetName(patch.profileSet))
+      return yield* mutationError(path, "Invalid profile-set name.");
+    const upgraded = yield* upgradeDocument(current, path);
+    const source = currentProfileSets(upgraded)[patch.sourceProfileSet];
+    return yield* insertProfileSet(
+      upgraded,
+      patch.profileSet,
+      path,
+      isRecord(source)
+        ? Effect.succeed(structuredClone(source))
+        : Effect.fail(mutationError(path, "The source profile set does not exist.")),
+    );
+  },
+);
 
-const applyDeleteProfileSet = (
-  current: JsonObject,
-  patch: SubagentDeleteProfileSetPatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet)) return mutationError(path, "Invalid profile-set name.");
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  if (upgraded.defaultProfileSet === patch.profileSet)
-    return mutationError(path, "Choose another default profile set or inherit before deleting it.");
-  const sets = { ...currentProfileSets(upgraded) };
-  if (!own(sets, patch.profileSet)) return upgraded;
-  delete sets[patch.profileSet];
-  const next = { ...upgraded };
-  if (Object.keys(sets).length === 0) delete next.profileSets;
-  else next.profileSets = sets;
-  return next;
-};
-
-const applyNestingPatch = (
-  current: JsonObject,
-  patch: SubagentNestingPatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const next = { ...upgraded };
-  if (patch.nesting === undefined) delete next.nesting;
-  else
-    next.nesting = {
-      maxDirectChildren: patch.nesting.maxDirectChildren,
-      maxDepth: patch.nesting.maxDepth,
+const applyRenameProfileSet: ApplyPatch<SubagentRenameProfileSetPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    if (!isProfileSetName(patch.profileSet) || !isProfileSetName(patch.nextProfileSet))
+      return yield* mutationError(path, "Invalid profile-set name.");
+    const upgraded = yield* upgradeDocument(current, path);
+    const sets = { ...currentProfileSets(upgraded) };
+    const source = sets[patch.profileSet];
+    if (!isRecord(source))
+      return yield* mutationError(path, "The selected profile set does not exist.");
+    if (patch.profileSet === patch.nextProfileSet) return upgraded;
+    if (Object.hasOwn(sets, patch.nextProfileSet))
+      return yield* mutationError(path, "A profile set with that name exists.");
+    delete sets[patch.profileSet];
+    sets[patch.nextProfileSet] = source;
+    return {
+      ...upgraded,
+      profileSets: sets,
+      ...(upgraded.defaultProfileSet === patch.profileSet && {
+        defaultProfileSet: patch.nextProfileSet,
+      }),
     };
-  return next;
-};
+  },
+);
 
-const applyWriterWorkspacePatch = (
-  current: JsonObject,
-  patch: SubagentWriterWorkspacePatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const next = { ...upgraded };
-  if (patch.writerWorkspaceMode === undefined) delete next.writerWorkspaceMode;
-  else if (!Schema.is(WriterWorkspaceModeSchema)(patch.writerWorkspaceMode))
-    return mutationError(path, "Invalid writer workspace mode.");
-  else next.writerWorkspaceMode = patch.writerWorkspaceMode;
-  return next;
-};
+const applyDeleteProfileSet: ApplyPatch<SubagentDeleteProfileSetPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    if (!isProfileSetName(patch.profileSet))
+      return yield* mutationError(path, "Invalid profile-set name.");
+    const upgraded = yield* upgradeDocument(current, path);
+    if (upgraded.defaultProfileSet === patch.profileSet)
+      return yield* mutationError(
+        path,
+        "Choose another default profile set or inherit before deleting it.",
+      );
+    const sets = currentProfileSets(upgraded);
+    if (!Object.hasOwn(sets, patch.profileSet)) return upgraded;
+    const remaining = withEntry(sets, patch.profileSet, undefined);
+    return withEntry(
+      upgraded,
+      "profileSets",
+      Object.keys(remaining).length === 0 ? undefined : remaining,
+    );
+  },
+);
 
-const applyFeatureTogglePatch = (
-  current: JsonObject,
-  patch: SubagentFeatureTogglePatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  const toggle = ownDataProperty(patch, "toggle");
-  if (!toggle.valid || !toggle.present || !isSubagentFeatureToggle(toggle.value))
-    return mutationError(path, "Invalid feature setting.");
-  const enabledProperty = ownDataProperty(patch, "enabled");
-  const enabled =
-    enabledProperty.valid && enabledProperty.present ? enabledProperty.value : undefined;
-  if (!enabledProperty.valid || (enabled !== undefined && !Predicate.isBoolean(enabled)))
-    return mutationError(path, "A feature setting must be true, false, or inherited.");
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const next = { ...upgraded };
-  if (Predicate.isBoolean(enabled)) next[toggle.value] = enabled;
-  else delete next[toggle.value];
-  return next;
-};
+const applyNestingPatch: ApplyPatch<SubagentNestingPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    const nesting = patch.nesting === undefined ? undefined : decodeSubagentNesting(patch.nesting);
+    if (patch.nesting !== undefined && !nesting)
+      return yield* mutationError(path, "Invalid nesting policy.");
+    return withEntry(yield* upgradeDocument(current, path), "nesting", nesting && { ...nesting });
+  },
+);
+
+const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    const upgraded = yield* upgradeDocument(current, path);
+    const mode = patch.writerWorkspaceMode;
+    if (mode !== undefined && !Schema.is(WriterWorkspaceModeSchema)(mode))
+      return yield* mutationError(path, "Invalid writer workspace mode.");
+    return withEntry(upgraded, "writerWorkspaceMode", mode);
+  },
+);
+
+const applyFeatureTogglePatch: ApplyPatch<SubagentFeatureTogglePatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    const toggle = ownDataProperty(patch, "toggle");
+    if (!toggle.valid || !toggle.present || !isSubagentFeatureToggle(toggle.value))
+      return yield* mutationError(path, "Invalid feature setting.");
+    const enabled = ownDataProperty(patch, "enabled");
+    const value = enabled.valid && enabled.present ? enabled.value : undefined;
+    if (!enabled.valid || (value !== undefined && !Predicate.isBoolean(value)))
+      return yield* mutationError(path, "A feature setting must be true, false, or inherited.");
+    const upgraded = yield* upgradeDocument(current, path);
+    return withEntry(upgraded, toggle.value, Predicate.isBoolean(value) ? value : undefined);
+  },
+);
 
 export const subagentConfigStoreLayer = Layer.effect(
   SubagentConfigStore,
@@ -590,125 +549,95 @@ export const subagentConfigStoreLayer = Layer.effect(
       project: path.join(cwd, CONFIG_DIR_NAME, SUBAGENT_CONFIG_BASENAME),
     });
 
-    const inspect: SubagentConfigStoreContract["inspect"] = (cwd, agentDirectory, projectTrusted) =>
-      Effect.gen(function* () {
-        const locations = paths(cwd, agentDirectory);
-        const read = (target: string) =>
-          documents.readObject(target).pipe(Effect.mapError(storeError("read", target)));
-        const globalRaw = yield* read(locations.global);
-        const projectRaw = projectTrusted ? yield* read(locations.project) : undefined;
-        const global = yield* decodeDocument(
-          globalRaw ?? { version: SUBAGENT_CONFIG_VERSION },
-          "global",
-          locations.global,
-        );
-        const project =
-          projectRaw === undefined
-            ? undefined
-            : yield* decodeDocument(projectRaw, "project", locations.project);
-        const config = resolveSubagentConfig({
+    const inspect = Effect.fn("SubagentConfigStore.inspect")(function* (
+      cwd: string,
+      agentDirectory: string,
+      projectTrusted: boolean,
+    ) {
+      const locations = paths(cwd, agentDirectory);
+      const read = (target: string) =>
+        documents.readObject(target).pipe(Effect.mapError(storeError("read", target)));
+      const globalRaw = yield* read(locations.global);
+      const projectRaw = projectTrusted ? yield* read(locations.project) : undefined;
+      const global = yield* decodeDocument(
+        globalRaw ?? { version: SUBAGENT_CONFIG_VERSION },
+        "global",
+        locations.global,
+      );
+      const project =
+        projectRaw === undefined
+          ? undefined
+          : yield* decodeDocument(projectRaw, "project", locations.project);
+      return {
+        config: resolveSubagentConfig({
           globalConfigPath: locations.global,
           projectConfigPath: locations.project,
           projectTrusted,
           global,
-          ...(project !== undefined && { project }),
-        });
-        return {
-          config,
-          ...(globalRaw !== undefined && { globalDocument: globalRaw }),
-          ...(projectRaw !== undefined && { projectDocument: projectRaw }),
-          global,
-          ...(project !== undefined && { project }),
-        };
+          project,
+        }),
+        ...(globalRaw !== undefined && { globalDocument: globalRaw }),
+        ...(projectRaw !== undefined && { projectDocument: projectRaw }),
+        global,
+        ...(project !== undefined && { project }),
+      };
+    });
+
+    const patchWithReceipt = <Patch extends SubagentConfigPatchBase>(
+      apply: ApplyPatch<Patch>,
+    ): ConfigPatch<Patch, JsonObject> =>
+      Effect.fn("SubagentConfigStore.patch")(function* (
+        cwd: string,
+        agentDirectory: string,
+        patch: Patch,
+      ) {
+        const locations = paths(cwd, agentDirectory);
+        const target = patch.scope === "global" ? locations.global : locations.project;
+        if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
+        return yield* documents
+          .modifyObject(target, (current) =>
+            Effect.gen(function* () {
+              const currentExists = yield* documents.exists(target);
+              const currentIsEmpty = Object.keys(current).length === 0;
+              if (
+                currentExists !== patch.expectedExists ||
+                (patch.expectedExists &&
+                  stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
+              )
+                return yield* conflictError(target);
+              if (!currentIsEmpty && !isSupportedConfigVersion(current.version))
+                return yield* unsupportedVersionError(target);
+              const base = currentIsEmpty ? { version: SUBAGENT_CONFIG_VERSION } : current;
+              const next = yield* apply(base, patch, target);
+              // A missing document is created only when the patch changes its version-6 default.
+              return stableJson(next) === stableJson(currentExists ? current : base)
+                ? { value: structuredClone(current), document: current, write: false }
+                : { value: structuredClone(next), document: next };
+            }),
+          )
+          .pipe(
+            Effect.catchTag("JsonDocumentError", () => Effect.fail(storeError("update", target)())),
+          );
       });
 
-    const load: SubagentConfigStoreContract["load"] = (cwd, agentDirectory, projectTrusted) =>
-      inspect(cwd, agentDirectory, projectTrusted).pipe(Effect.map((result) => result.config));
-
-    const patchWithReceipt =
-      <Patch extends SubagentConfigPatchBase>(
-        apply: (
-          current: JsonObject,
-          patch: Patch,
-          path: string,
-        ) => JsonObject | SubagentConfigStoreError,
-        missingIsNoop: (patch: Patch) => boolean = () => false,
-      ): ConfigPatch<Patch, JsonObject> =>
-      (cwd, agentDirectory, patch) =>
-        Effect.gen(function* () {
-          const locations = paths(cwd, agentDirectory);
-          const target = patch.scope === "global" ? locations.global : locations.project;
-          if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
-          return yield* documents
-            .modifyObject(target, (current) =>
-              Effect.gen(function* () {
-                const currentExists = yield* documents.exists(target);
-                const currentIsEmpty = Object.keys(current).length === 0;
-                if (
-                  currentExists !== patch.expectedExists ||
-                  (patch.expectedExists &&
-                    stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
-                )
-                  return yield* conflictError(target);
-                if (!currentIsEmpty && !isSupportedConfigVersion(current.version))
-                  return yield* unsupportedVersionError(target);
-                if (!currentExists && missingIsNoop(patch))
-                  return { value: structuredClone(current), document: current, write: false };
-                const base = currentIsEmpty ? { version: SUBAGENT_CONFIG_VERSION } : current;
-                const next = apply(base, patch, target);
-                if (next instanceof SubagentConfigStoreError) return yield* next;
-                return stableJson(next) === stableJson(current)
-                  ? { value: structuredClone(current), document: current, write: false }
-                  : { value: structuredClone(next), document: next };
-              }),
-            )
-            .pipe(
-              Effect.mapError((error) =>
-                error instanceof SubagentConfigStoreError ? error : storeError("update", target)(),
-              ),
-            );
-        });
-
     const patchVoid = <Patch extends SubagentConfigPatchBase>(
-      ...args: Parameters<typeof patchWithReceipt<Patch>>
-    ): ConfigPatch<Patch> => {
-      const patchDocument = patchWithReceipt(...args);
-      return (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch).pipe(Effect.asVoid);
-    };
+      apply: ApplyPatch<Patch>,
+    ): ConfigPatch<Patch> => flow(patchWithReceipt(apply), (receipt) => Effect.asVoid(receipt));
 
     return SubagentConfigStore.of({
-      load,
+      load: (cwd, agentDirectory, projectTrusted) =>
+        inspect(cwd, agentDirectory, projectTrusted).pipe(Effect.map((result) => result.config)),
       inspect,
-      patchProfile: patchWithReceipt(applyProfilePatch, (patch) => {
-        const route = ownDataProperty(patch, "route");
-        return route.valid && (!route.present || route.value === undefined);
-      }),
+      patchProfile: patchWithReceipt(applyProfilePatch),
       restoreProfileDeclaration: patchWithReceipt(applyProfileRestore),
-      patchDefaultProfileSet: patchVoid(
-        applyDefaultProfileSetPatch,
-        (patch) => patch.defaultProfileSet === undefined,
-      ),
+      patchDefaultProfileSet: patchVoid(applyDefaultProfileSetPatch),
       createProfileSetFromSnapshot: patchVoid(applyCreateProfileSetFromSnapshot),
       copyProfileSet: patchVoid(applyCopyProfileSet),
       renameProfileSet: patchVoid(applyRenameProfileSet),
-      deleteProfileSet: patchVoid(applyDeleteProfileSet, () => true),
-      patchWriterWorkspace: patchVoid(
-        applyWriterWorkspacePatch,
-        (patch) => patch.writerWorkspaceMode === undefined,
-      ),
-      patchNesting: patchVoid(applyNestingPatch, (patch) => patch.nesting === undefined),
-      patchFeatureToggle: patchVoid(applyFeatureTogglePatch, (patch) => {
-        const toggle = ownDataProperty(patch, "toggle");
-        const enabled = ownDataProperty(patch, "enabled");
-        return (
-          toggle.valid &&
-          toggle.present &&
-          isSubagentFeatureToggle(toggle.value) &&
-          enabled.valid &&
-          (!enabled.present || enabled.value === undefined)
-        );
-      }),
+      deleteProfileSet: patchVoid(applyDeleteProfileSet),
+      patchWriterWorkspace: patchVoid(applyWriterWorkspacePatch),
+      patchNesting: patchVoid(applyNestingPatch),
+      patchFeatureToggle: patchVoid(applyFeatureTogglePatch),
     });
   }),
 );

@@ -20,7 +20,6 @@ describe("OpenAI usage parsing", () => {
       sevenDayLeftPercent: 60,
       fiveHourResetInSeconds: 300,
       sevenDayResetInSeconds: 600,
-      isLimited: false,
     });
   });
 
@@ -50,7 +49,6 @@ describe("OpenAI usage parsing", () => {
       scope: "spark",
       fiveHourLeftPercent: 85,
       sevenDayLeftPercent: 65,
-      isLimited: true,
     });
   });
 
@@ -72,7 +70,6 @@ describe("OpenAI usage parsing", () => {
       scope: "spark",
       fiveHourLeftPercent: null,
       sevenDayLeftPercent: 70,
-      isLimited: true,
     });
   });
 });

@@ -1,11 +1,6 @@
 // Test lifecycle boundary intentionally uses Promise-shaped host callbacks and AbortController.
 import assert from "node:assert/strict";
-import {
-  withFileMutationQueue,
-  type ToolDefinition,
-  type ToolInfo,
-  type ToolRendererResolver,
-} from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
@@ -13,7 +8,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
-import { extensionApiFixture, makeLifecycleProbe, opaqueFixture } from "pi-cosmic-core/testing";
+import {
+  extensionApiFixture,
+  makeLifecycleProbe,
+  opaqueFixture,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import {
   captureCodePreviewSessionCapability,
@@ -30,6 +30,7 @@ import { setCodePreviewSettings, setCodePreviewSettingsProblems } from "../../sr
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { registerWritePreviewTool } from "../../src/tools/renderers/registration";
 import { effectTest, settle, step } from "../support/effect-test";
+import { builtinToolInfo } from "../support/renderer-host";
 import {
   executeWriteWithPreview,
   executeWriteWithPreviewEffect,
@@ -181,7 +182,6 @@ type HostContext = {
   isProjectTrusted?: unknown;
   ui: { notify(message: string, level: string): void | PromiseLike<void> };
 };
-type Handler = (event: Readonly<Record<never, never>>, ctx: HostContext) => void | Promise<void>;
 
 type HarnessOptions = {
   readonly load?: (
@@ -203,7 +203,6 @@ afterEach(() => {
 });
 
 function harness(options: HarnessOptions = {}) {
-  const handlers = new Map<string, Handler>();
   const notifications: string[] = [];
   const startupEvents: string[] = [];
   const runSignals: Array<AbortSignal | undefined> = [];
@@ -211,10 +210,7 @@ function harness(options: HarnessOptions = {}) {
   const syntaxThemes: string[] = [];
   const probe = makeLifecycleProbe("runtime-acquired", "runtime-released");
   let loadCalls = 0;
-  const resolvers: ToolRendererResolver[] = [];
-  const pi = extensionApiFixture({
-    registerToolRenderer: (resolver: ToolRendererResolver) => resolvers.push(resolver),
-    on: (name: string, handler: Handler) => handlers.set(name, handler),
+  const host = recordingExtensionHost(undefined, {
     getAllTools: () => [],
     getActiveTools: () => [],
     getCommands: () => [],
@@ -272,14 +268,16 @@ function harness(options: HarnessOptions = {}) {
     return value;
   };
   return {
-    pi,
-    handlers,
+    pi: host.pi,
+    handlers: host.handlers,
+    /** Runs every handler for `name`; a hostile context reaches them as Pi would pass it. */
+    dispatch: (name: string, ctx: HostContext = context()) => host.emit(name, opaqueFixture(ctx)),
     dependencies,
     context,
     notifications,
     startupEvents,
     syntaxThemes,
-    resolvers,
+    resolvers: host.toolRenderers,
     probe,
     counts: () => ({
       acquisitions: probe.acquired(),
@@ -306,30 +304,10 @@ function throwingGetter<Target extends object>(target: Target, property: string)
   });
 }
 
-function start(h: ReturnType<typeof harness>, ctx = h.context()): Promise<void> {
-  // SAFETY: The extension registers session_start before this helper is called.
-  return Promise.resolve(h.handlers.get("session_start")?.({}, ctx));
-}
-
-function shutdown(h: ReturnType<typeof harness>, ctx = h.context()): Promise<void> {
-  // SAFETY: The extension registers session_shutdown before this helper is called.
-  return Promise.resolve(h.handlers.get("session_shutdown")?.({}, ctx));
-}
-
-function builtinToolInfo(name: string): ToolInfo {
-  return {
-    name,
-    description: `${name} tool`,
-    parameters: opaqueFixture({}),
-    exposure: "direct",
-    sourceInfo: {
-      path: `builtin:${name}`,
-      source: "builtin",
-      scope: "temporary",
-      origin: "top-level",
-    },
-  };
-}
+const start = (h: ReturnType<typeof harness>, ctx = h.context()) =>
+  h.dispatch("session_start", ctx);
+const shutdown = (h: ReturnType<typeof harness>, ctx = h.context()) =>
+  h.dispatch("session_shutdown", ctx);
 
 effectTest("factory registers callbacks without acquiring the application Layer", function* () {
   const h = harness();
@@ -472,7 +450,7 @@ effectTest("a failed write hook keeps presentation and the session runtime live"
   const h = harness({ load: () => Effect.succeed(partialSettings), realRenderers: true });
   const attempts: string[] = [];
   Object.assign(h.pi, {
-    getAllTools: () => ["bash", "read", "write"].map(builtinToolInfo),
+    getAllTools: () => ["bash", "read", "write"].map((name) => builtinToolInfo(name)),
     registerTool: (tool: ToolDefinition) => {
       attempts.push(tool.name);
       if (tool.name === "write") throw new Error("host mutation failed");
@@ -498,33 +476,20 @@ effectTest(
       tools: ["write"],
     } satisfies CodePreviewSettings;
     const h = harness({ load: () => Effect.succeed(retrySettings), realRenderers: true });
+    const sourceInfo = {
+      path: "/extensions/pi-code-previews.ts",
+      source: "pi-code-previews",
+      scope: "user",
+      origin: "top-level",
+    } as const;
     let visible = builtinToolInfo("write");
     let attempts = 0;
     Object.assign(h.pi, {
       getAllTools: () => [visible],
-      getCommands: () => [
-        {
-          name: "code-previews",
-          source: "extension",
-          sourceInfo: {
-            path: "/extensions/pi-code-previews.ts",
-            source: "pi-code-previews",
-            scope: "user",
-            origin: "top-level",
-          },
-        },
-      ],
+      getCommands: () => [{ name: "code-previews", source: "extension", sourceInfo }],
       registerTool: (tool: ToolDefinition) => {
         attempts++;
-        visible = {
-          ...builtinToolInfo(tool.name),
-          sourceInfo: {
-            path: "/extensions/pi-code-previews.ts",
-            source: "pi-code-previews",
-            scope: "user",
-            origin: "top-level",
-          },
-        };
+        visible = { ...builtinToolInfo(tool.name), sourceInfo };
         if (attempts === 1) throw new Error("refresh failed after registry mutation");
       },
     });
@@ -575,8 +540,8 @@ for (const [name, sabotage] of captureFailures)
     const context = h.context();
     sabotage(context);
 
-    assert.doesNotThrow(() => h.handlers.get("session_start")?.({}, context));
-    yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
+    assert.doesNotThrow(() => h.dispatch("session_start", context));
+    yield* settle(() => h.dispatch("session_shutdown", context));
 
     assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
     assert.deepEqual(h.notifications, ["Code Previews couldn't start"]);
@@ -586,7 +551,7 @@ effectTest("hosts without renderer resolvers load idle and warn at session start
   const h = harness();
   const pi = extensionApiFixture({ ...h.pi, registerToolRenderer: undefined });
   yield* step(() => codePreviewsWithDependencies(pi, h.dependencies));
-  yield* settle(() => h.handlers.get("session_start")?.({}, h.context()));
+  yield* settle(() => h.dispatch("session_start"));
 
   assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
   assert.equal(h.notifications.length, 1);
@@ -646,8 +611,8 @@ effectTest("throwing notification callbacks cannot escape host capture failure",
     throw new Error("host notify failure");
   };
 
-  assert.doesNotThrow(() => h.handlers.get("session_start")?.({}, context));
-  yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
+  assert.doesNotThrow(() => h.dispatch("session_start", context));
+  yield* settle(() => h.dispatch("session_shutdown", context));
   assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
 });
 

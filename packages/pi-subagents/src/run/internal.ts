@@ -33,21 +33,19 @@ import type { WriterPoolEntry } from "./writer-pool.ts";
 export type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
 /**
- * Service-owned primitives shared by run modules. Cross-module operations are wired by
- * explicit name and typed from their producer; only launch receives the registry mutably.
+ * Service-owned primitives shared by run modules. Cross-module operations arrive as their
+ * producer objects or members typed from them; only launch receives the registry mutably.
  */
 export interface RunContext {
   /** Service scope for owner-scoped commits and background workers. */
   readonly ownerScope: Scope.Scope;
-  /** The shared lock guarding every RunRecord mutation; `*Locked` operations require it. */
+  /**
+   * The shared lock guarding every RunRecord mutation; `*Locked` operations require it. Every
+   * release rechecks start admission, so writers queued behind a cleared claim or finished
+   * cleanup retry even when nothing is published.
+   */
   readonly withLock: WithRunLock;
   readonly publish: Effect.Effect<void>;
-  /**
-   * Rechecks start admission after a release that publishes nothing, such as a cleared claim
-   * or finished cleanup, so writers queued behind it retry. Publishing and every run-lock
-   * release recheck too.
-   */
-  readonly recheckAdmission: Effect.Effect<void>;
   readonly records: ReadonlyMap<string, RunRecord>;
   /** One session-owned cross-process writer pool per canonical cwd digest. */
   readonly writerPools: Map<string, WriterPoolEntry>;
@@ -75,14 +73,11 @@ export interface CompletionGenerationRecord {
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
-  readonly retained: boolean;
 }
 
-export type AssignmentPhase = "preparing" | "issuing" | "running" | "reported";
-
-export interface AssignmentState {
+interface AssignmentState {
   readonly epoch: number;
-  phase: AssignmentPhase;
+  phase: "preparing" | "issuing" | "running" | "reported";
   readonly attemptToken: string;
   startedObserved: boolean;
   outcomeUncertain: boolean;
@@ -90,7 +85,7 @@ export interface AssignmentState {
   pendingRunSettled: false | { readonly terminal?: BackendAssistantTerminal | undefined };
 }
 
-export interface BackendReportWatermark {
+interface BackendReportWatermark {
   readonly assignmentEpoch: number;
   readonly sequence: number;
   readonly deliveryId: string;
@@ -109,7 +104,7 @@ export interface RunOwnership {
 }
 
 /** Exclusive owner of a run's first completion generation. */
-export interface RunOwnerClaim {
+interface RunOwnerClaim {
   readonly ownerId: string;
   readonly claimToken: string;
   readonly generation: number;
@@ -138,15 +133,13 @@ export interface RunRecord {
     | undefined;
   readonly activeTools: Map<string, string>;
   /** Runtime-native activity remains internal to this Pi run node. */
-  readonly nativeAgents: Map<string, { readonly kind: string }>;
-  nativeAgentTotal: number;
+  readonly nativeAgents: Set<string>;
   /** Resolves only after backend/process/writer cleanup is confirmed or quarantined. */
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
   /** Authoritative cleanup fact used by failed-start recovery and retry admission. */
   cleanupDisposition: "pending" | "confirmed" | "quarantined";
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
   retryClaim?: { readonly token: string } | undefined;
-  retryExhausted: boolean;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
   /** First accepted contract result of an assignment, as canonical JSON. */
@@ -195,7 +188,9 @@ export interface RunRecord {
   backendFailure?: SubagentError | undefined;
 }
 
-export const clearRunNativeActivity = (record: RunRecord): void => {
+/** Ends every tool and runtime-native agent of the current assignment; caller holds the lock. */
+export const clearRunActivity = (record: RunRecord): void => {
+  record.activeTools.clear();
   record.nativeAgents.clear();
   if (record.view.nativeActivity?.active)
     record.view = {
@@ -208,8 +203,7 @@ export const clearRunNativeActivity = (record: RunRecord): void => {
 export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRunView => {
   record.pauseRequested = false;
   record.pausedAssignmentEpoch = record.assignment.epoch;
-  record.activeTools.clear();
-  clearRunNativeActivity(record);
+  clearRunActivity(record);
   record.view = {
     ...record.view,
     state: "paused",
@@ -283,17 +277,14 @@ const unsupportedCapabilityMessage = (
 export const requireCapability = (
   record: RunRecord,
   capability: SubagentCapability,
-): Effect.Effect<void, UnsupportedSubagentCapabilityError> =>
-  hasSubagentCapability(record.view, capability)
-    ? Effect.void
-    : Effect.fail(
-        new UnsupportedSubagentCapabilityError({
-          backend: `${record.view.host}/${record.view.runtime}`,
-          capability,
-          message: unsupportedCapabilityMessage(
-            `${record.view.host}/${record.view.runtime}`,
-            capability,
-            record.view.id,
-          ),
-        }),
-      );
+): Effect.Effect<void, UnsupportedSubagentCapabilityError> => {
+  if (hasSubagentCapability(record.view, capability)) return Effect.void;
+  const backend = `${record.view.host}/${record.view.runtime}`;
+  return Effect.fail(
+    new UnsupportedSubagentCapabilityError({
+      backend,
+      capability,
+      message: unsupportedCapabilityMessage(backend, capability, record.view.id),
+    }),
+  );
+};

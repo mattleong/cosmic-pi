@@ -14,6 +14,7 @@ import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolu
 import { makeWorkflowHost } from "../boundary/host-workflow.ts";
 import { workflowAuthoringGuidePath } from "../boundary/workflow-authoring-guide.ts";
 import type { SubagentProfileService } from "../profiles/service.ts";
+import { clipWithMarker } from "../run/state.ts";
 import { workflowArgsSummary } from "../workflow/args.ts";
 import type {
   WorkflowArgsProblem,
@@ -54,7 +55,7 @@ import {
   WorkflowToolParameters,
   type WorkflowToolAction,
   type WorkflowToolDetails,
-  type WorkflowToolInputError,
+  WorkflowToolInputError,
   workflowToolAction,
 } from "./workflow-schema.ts";
 
@@ -107,8 +108,7 @@ ${workflowToolExample}`;
 
 const SAVED_LISTED = 20;
 const SAVED_TEXT_CHARS = 200;
-const savedText = (text: string): string =>
-  text.length > SAVED_TEXT_CHARS ? `${text.slice(0, SAVED_TEXT_CHARS - 1)}…` : text;
+const savedText = (text: string): string => clipWithMarker(text, SAVED_TEXT_CHARS, "…");
 
 /** Appends the saved workflows a session can start by name, like Claude Code's workflow list. */
 export const workflowToolDescription = (
@@ -178,26 +178,20 @@ const argsMismatchMessage = (problems: ReadonlyArray<WorkflowArgsProblem> = []):
   return `${head}${clipText(first.problem, ISSUE_MESSAGE_MAX_CHARS - head.length - more.length)}${more}`;
 };
 
-const requestMessage = (error: WorkflowRequestError): string => {
-  switch (error.code) {
-    case "resume_running":
-      return "The run to resume is still running";
-    case "resume_running_elsewhere":
-      return "The run to resume is still running in another Pi process";
-    case "resume_unrecorded":
-      return "The run to resume left no run record";
-    case "resume_unknown":
-      return "The run to resume isn't known to this session";
-    case "resume_other_session":
-      return "The run to resume belongs to another session";
-    case "resume_unreadable":
-      return "The run to resume couldn't be read";
-    case "args_too_large":
-      return "Workflow args are larger than 64 KiB";
-    case "args_mismatch":
-      return argsMismatchMessage(error.argsProblems);
-  }
-};
+const REQUEST_MESSAGES = {
+  resume_running: "The run to resume is still running",
+  resume_running_elsewhere: "The run to resume is still running in another Pi process",
+  resume_unrecorded: "The run to resume left no run record",
+  resume_unknown: "The run to resume isn't known to this session",
+  resume_other_session: "The run to resume belongs to another session",
+  resume_unreadable: "The run to resume couldn't be read",
+  args_too_large: "Workflow args are larger than 64 KiB",
+} as const satisfies Record<Exclude<WorkflowRequestError["code"], "args_mismatch">, string>;
+
+const requestMessage = (error: WorkflowRequestError): string =>
+  error.code === "args_mismatch"
+    ? argsMismatchMessage(error.argsProblems)
+    : REQUEST_MESSAGES[error.code];
 
 /** Where a script names in compact messages: `Script` inline, or its file's name. */
 const INLINE_SCRIPT = "Script";
@@ -304,7 +298,8 @@ const executeWorkflowTool = <Args>(
   },
 ) =>
   Effect.gen(function* () {
-    const request = yield* decodeWorkflowToolRequest(args);
+    const request = decodeWorkflowToolRequest(args);
+    if (request instanceof WorkflowToolInputError) return yield* request;
     const workflows = yield* WorkflowService;
     switch (request.action) {
       case "start": {
@@ -365,16 +360,15 @@ export function registerWorkflowTool(
     parameters: WorkflowToolParameters,
     execute: (_id, args, signal, _onUpdate, ctx) =>
       runtime.run(executeWorkflowTool(pi, ctx, runtime.environment, args), signal),
-    renderCall: (args, theme, context) => renderWorkflowCall(args, theme, context),
-    renderResult: (result, options, theme, context) =>
-      renderWorkflowResult(result, options, theme, context),
+    renderCall: renderWorkflowCall,
+    renderResult: renderWorkflowResult,
   });
   pi.registerTool(
     shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       compactSummary: workflowCompactSummary,
       expandedContent: {
-        renderCall: (args, theme) => renderWorkflowInput(args, theme),
+        renderCall: renderWorkflowInput,
         renderResult: (result, _options, theme) => renderWorkflowOutput(result, theme),
       },
     }),

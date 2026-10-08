@@ -152,22 +152,17 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
   const owners = new Map<string, OwnerEntry>();
 
   const checkOwnerLocked = (owner: OwnedRunStart) =>
-    Effect.suspend(() => {
+    Effect.gen(function* () {
       if (owners.get(owner.ownerId)?.open !== true)
-        return Effect.fail(
-          invalidRequest(
-            "workflow_owner_closed",
-            `Workflow ${owner.ownerId} no longer admits subagents.`,
-          ),
+        return yield* invalidRequest(
+          "workflow_owner_closed",
+          `Workflow ${owner.ownerId} no longer admits subagents.`,
         );
       if (owner.runId !== undefined && (records.has(owner.runId) || !isAllocatedRunId(owner.runId)))
-        return Effect.fail(
-          invalidRequest(
-            "owned_run_id_unavailable",
-            `Run id ${owner.runId} was not reserved by this session or is already in use.`,
-          ),
+        return yield* invalidRequest(
+          "owned_run_id_unavailable",
+          `Run id ${owner.runId} was not reserved by this session or is already in use.`,
         );
-      return Effect.void;
     });
 
   /** The record whose exact generation this handle still owns; caller holds the lock. */
@@ -200,12 +195,6 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     };
   };
 
-  const handBackLocked = (record: RunRecord, handle: OwnedRunHandle): void => {
-    if (releaseCompletionClaim(record, handle.generation, handle.claimToken))
-      delivery.wakeCompletionLocked();
-    relinquishLocked(record);
-  };
-
   /** Whether someone stopped the owned run; caller holds the lock. */
   const stoppedLocked = (handle: OwnedRunHandle): boolean => {
     const record = ownedRecordLocked(handle);
@@ -231,34 +220,30 @@ export function makeRunOwnedRuns(dependencies: RunOwnedRunsDependencies) {
     const payload = record.completionGenerations.get(handle.generation);
     const unreadWriterReport =
       payload?.outcome === "completed" && record.view.writeIntent === "writer";
-    if (isLive(record) || unreadWriterReport) handBackLocked(record, handle);
-    else consumeLocked(record, handle);
+    if (!isLive(record) && !unreadWriterReport) return consumeLocked(record, handle);
+    if (releaseCompletionClaim(record, handle.generation, handle.claimToken))
+      delivery.wakeCompletionLocked();
+    relinquishLocked(record);
   };
-
-  const stopLive = (handle: OwnedRunHandle) =>
-    withLock(
-      Effect.sync(() => {
-        const record = ownedRecordLocked(handle);
-        return record !== undefined && isLive(record);
-      }),
-    ).pipe(
-      Effect.flatMap((live) =>
-        live
-          ? stop(handle.runId).pipe(
-              Effect.asVoid,
-              Effect.catch((error) =>
-                Effect.logWarning(`Could not stop owned subagent: ${error.message}`).pipe(
-                  Effect.annotateLogs("runId", handle.runId),
-                ),
-              ),
-            )
-          : Effect.void,
-      ),
-    );
 
   /** Stops a live run, then releases its report; an unread writer report goes to the root. */
   const retire = (handle: OwnedRunHandle) =>
-    stopLive(handle).pipe(Effect.andThen(withLock(Effect.sync(() => releaseLocked(handle)))));
+    stop(handle.runId).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(`Could not stop owned subagent: ${error.message}`).pipe(
+          Effect.annotateLogs("runId", handle.runId),
+        ),
+      ),
+      Effect.when(
+        withLock(
+          Effect.sync(() => {
+            const record = ownedRecordLocked(handle);
+            return record !== undefined && isLive(record);
+          }),
+        ),
+      ),
+      Effect.andThen(withLock(Effect.sync(() => releaseLocked(handle)))),
+    );
 
   const openOwner: OwnedRunCoordinatorContract["openOwner"] = (ownerId) =>
     withLock(

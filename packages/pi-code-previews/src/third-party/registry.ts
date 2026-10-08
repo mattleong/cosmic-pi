@@ -1,14 +1,11 @@
-import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
-import type {
-  CodePreviewRendererAppearance,
-  PreviewToolInfo,
-} from "../application/renderer-contract";
+import type { ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { webAccessAdapter } from "./web-access/render";
 
 /** Presentation-only adapters. No execution definitions, discovery I/O, or activation hooks. */
 export interface ThirdPartyAdapter {
   readonly names: readonly string[];
-  admits(tool: PreviewToolInfo): boolean;
+  admits(tool: ToolInfo): boolean;
   create(
     name: string,
     downstream: ToolRenderers | undefined,
@@ -24,7 +21,7 @@ export function isThirdPartyPreviewName(name: string): boolean {
 }
 
 /** Missing or duplicate public metadata never establishes external ownership, even in replay. */
-export function thirdPartyAdapter(name: string, tool: PreviewToolInfo | undefined) {
+export function thirdPartyAdapter(name: string, tool: ToolInfo | undefined) {
   if (!tool || tool.name !== name) return undefined;
   const matches = adapters.filter(
     (adapter) => adapter.names.includes(name) && adapter.admits(tool),

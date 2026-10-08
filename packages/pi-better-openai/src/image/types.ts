@@ -3,11 +3,10 @@ import * as Schema from "effect/Schema";
 import {
   IMAGE_OUTPUT_FORMATS,
   IMAGE_SAVE_MODES,
+  ImageOutputFormatSchema,
+  ImageSaveModeSchema,
   type ImageOutputFormat,
-  type ImageSaveMode,
 } from "../config/schema.ts";
-
-export { IMAGE_OUTPUT_FORMATS, IMAGE_SAVE_MODES, type ImageOutputFormat, type ImageSaveMode };
 
 export const IMAGE_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] as const;
 export const ImageModelSchema = Schema.Literals(IMAGE_MODELS);
@@ -70,8 +69,8 @@ export const ToolParamsSchema = Schema.Struct({
   ),
   model: Schema.optional(boundedString(MODEL_MAX_LENGTH)),
   imageModel: Schema.optional(ImageModelSchema),
-  outputFormat: Schema.optional(Schema.Literals(IMAGE_OUTPUT_FORMATS)),
-  save: Schema.optional(Schema.Literals(IMAGE_SAVE_MODES)),
+  outputFormat: Schema.optional(ImageOutputFormatSchema),
+  save: Schema.optional(ImageSaveModeSchema),
   saveDir: Schema.optional(boundedString(PATH_MAX_LENGTH)),
 });
 export type ToolParams = typeof ToolParamsSchema.Type;

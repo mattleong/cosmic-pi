@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { hasControlCharacter } from "pi-cosmic-core";
-import { InvalidSubagentRequestError } from "./errors.ts";
+import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import type { StartSubagentRequest } from "./model.ts";
 
@@ -25,7 +25,7 @@ export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 export const SUBAGENT_RESULT_TOOL_NAME = "subagent_result";
 
 /** External competing orchestrators stay disabled, independent of the installed backend adapters. */
-export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES = [
+export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT = [
   "herdr_agent_start",
   "herdr_agent_list",
   "herdr_agent_status",
@@ -35,10 +35,7 @@ export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES = [
   "herdr_agent_stop",
   "workflow",
   "workflow_control",
-] as const;
-
-export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT =
-  PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES.join(",");
+].join(",");
 
 const MAX_INHERITED_PI_TOOL_COUNT = 256;
 const MAX_INHERITED_PI_TOOL_NAME_CHARS = 128;
@@ -49,11 +46,10 @@ const isCompetingOrchestratorTool = (name: string): boolean =>
   name.startsWith("herdr_agent_") || name === "workflow" || name.startsWith("workflow_");
 
 const unrepresentableToolSnapshot = () =>
-  new InvalidSubagentRequestError({
-    code: "pi_active_tools_unrepresentable",
-    message:
-      "The root Pi active-tool list cannot be represented safely for a child process. Disable malformed or excessive tools and retry.",
-  });
+  invalidRequest(
+    "pi_active_tools_unrepresentable",
+    "The root Pi active-tool list cannot be represented safely for a child process. Disable malformed or excessive tools and retry.",
+  );
 
 const isCliRepresentableToolName = (name: string): boolean =>
   name.length > 0 &&
@@ -97,16 +93,13 @@ export const validateParentMessage = (
   emptyMessage: string,
 ): Effect.Effect<string, InvalidSubagentRequestError> => {
   const normalized = message.trim();
-  if (!normalized)
-    return Effect.fail(
-      new InvalidSubagentRequestError({ code: "message_required", message: emptyMessage }),
-    );
+  if (!normalized) return Effect.fail(invalidRequest("message_required", emptyMessage));
   if (normalized.length > MAX_PARENT_MESSAGE_CHARS)
     return Effect.fail(
-      new InvalidSubagentRequestError({
-        code: "message_too_large",
-        message: `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
-      }),
+      invalidRequest(
+        "message_too_large",
+        `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
+      ),
     );
   return Effect.succeed(normalized);
 };

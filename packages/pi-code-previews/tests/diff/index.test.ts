@@ -3,20 +3,19 @@ import { generateDiffString } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, test } from "vitest";
 import { applyPresentationSettings } from "../../testing";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { plainTheme, stripAnsi } from "../support/render";
 import { renderedWordEmphasisSpans } from "../support/rendered-word-emphasis";
 import { FullWidthDiffText } from "../../src/diff/full-width-text";
 import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../src/diff/render";
 import { summarizeDiff } from "../../src/diff/summary";
 import { parseDiffLine } from "../../src/diff/parse";
-import { changedRanges, changedRangesWithConfidence } from "../../src/diff/word/emphasis";
+import { changedRangesWithConfidence } from "../../src/diff/word/emphasis";
 
 beforeEach(() => applyPresentationSettings({}));
 
 /** Rendered emphasis spans per line, with the limit covering every diff line. */
-const emphasisSpans = (diff: string, onInvalidate?: () => void) =>
-  renderSyntaxHighlightedDiff(diff, undefined, plainTheme, diff.split("\n").length, onInvalidate)
+const emphasisSpans = (diff: string) =>
+  renderSyntaxHighlightedDiff(diff, undefined, plainTheme, diff.split("\n").length)
     .split("\n")
     .map(renderedWordEmphasisSpans);
 
@@ -55,6 +54,16 @@ test("parseDiffLine accepts standard body lines but not file headers", () => {
   });
   assert.equal(parseDiffLine("--- a/file.ts"), null);
   assert.equal(parseDiffLine("+++ b/file.ts"), null);
+});
+
+test("parseDiffLine keeps a row's number when its content holds a lone line separator", () => {
+  // Rows are split on "\n" only, so a carriage return or Unicode separator is content.
+  for (const separator of ["\r", "\u2028", "\u2029"])
+    assert.deepEqual(parseDiffLine(` 12 prog${separator}done`), {
+      kind: " ",
+      lineNumber: "12",
+      content: `prog${separator}done`,
+    });
 });
 
 test("Pi's skipped-context marker parses as a gap, not a context row", () => {
@@ -132,28 +141,6 @@ test("word emphasis marks low-overlap one-to-one changed pairs instead of skippi
   assert.ok(spans[1]?.some((span) => span.includes("block")));
 });
 
-test("word emphasis narrows similar single-token edits", () => {
-  assert.deepEqual(changedRanges("value1000", "value1001", "all"), {
-    removed: [[8, 9]],
-    added: [[8, 9]],
-  });
-  assert.deepEqual(changedRanges("color", "colour", "all"), {
-    removed: [],
-    added: [[4, 5]],
-  });
-});
-
-test("word emphasis keeps unicode refinements on text boundaries", () => {
-  assert.deepEqual(changedRanges("a\u0301Value", "a\u0302Value", "all"), {
-    removed: [[0, 2]],
-    added: [[0, 2]],
-  });
-  assert.deepEqual(changedRanges("𐐀a", "𐐁a", "all"), {
-    removed: [[0, 2]],
-    added: [[0, 2]],
-  });
-});
-
 test("word emphasis skips low-confidence positional pairs inside larger blocks", () => {
   const diff = [
     "-1 const total = calculateTotal(items);",
@@ -183,7 +170,7 @@ test("word emphasis skips ambiguous positional fallback above pairing threshold"
 
 test("word emphasis can be disabled", () => {
   const diff = "-1 const value = oldValue;\n+1 const value = newValue;";
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "off" });
+  applyPresentationSettings({ wordEmphasis: "off" });
   assert.deepEqual(emphasisSpans(diff).flat(), []);
 });
 
@@ -195,12 +182,10 @@ test("word emphasis ranges stay aligned when indentation changes", () => {
   assert.ok(spans[1]?.some((span) => span.includes("end")));
 });
 
-test("word emphasis is applied synchronously for large changed lines", () => {
+test("word emphasis marks large changed lines", () => {
   const shared = Array.from({ length: 300 }, (_, index) => `token${index}`).join(" ");
   const diff = `-1 ${shared} oldValue ${shared}\n+1 ${shared} newValue ${shared}`;
-  let invalidations = 0;
-  const spans = emphasisSpans(diff, () => invalidations++).flat();
-  assert.equal(invalidations, 0);
+  const spans = emphasisSpans(diff).flat();
   assert.ok(spans.some((span) => span.includes("old")));
   assert.ok(spans.some((span) => span.includes("new")));
 });
@@ -208,7 +193,7 @@ test("word emphasis is applied synchronously for large changed lines", () => {
 test("word range emphasis returns changed spans for unrelated token-heavy lines", () => {
   const before = Array.from({ length: 400 }, (_, index) => `before_${index}`).join(" ");
   const after = Array.from({ length: 400 }, (_, index) => `after_${index}`).join(" ");
-  const ranges = changedRanges(before, after, "smart");
+  const ranges = changedRangesWithConfidence(before, after, "smart");
   assert.deepEqual(ranges.removed, [[0, before.length]]);
   assert.deepEqual(ranges.added, [[0, after.length]]);
 });

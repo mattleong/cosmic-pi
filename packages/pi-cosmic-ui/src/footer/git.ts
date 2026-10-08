@@ -14,23 +14,20 @@ const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 
 export function parseGitStatus(output: string): FooterGitStatus | undefined {
   const lines = output.split(/\r?\n/).filter(Boolean);
-  if (!lines.some((line) => line.startsWith("## "))) return undefined;
+  const header = lines.find((line) => line.startsWith("## "));
+  if (header === undefined) return undefined;
 
   const status: FooterGitStatus = {
     staged: 0,
     modified: 0,
     untracked: 0,
     conflicts: 0,
-    ahead: 0,
-    behind: 0,
+    ahead: Number(header.match(/\bahead (\d+)/)?.[1] ?? 0),
+    behind: Number(header.match(/\bbehind (\d+)/)?.[1] ?? 0),
     linesAdded: 0,
     linesRemoved: 0,
     linesChanged: 0,
   };
-
-  const header = lines.find((line) => line.startsWith("## ")) ?? "";
-  status.ahead = Number(header.match(/\bahead (\d+)/)?.[1] ?? 0);
-  status.behind = Number(header.match(/\bbehind (\d+)/)?.[1] ?? 0);
 
   for (const line of lines) {
     if (line.startsWith("## ") || line.length < 2) continue;

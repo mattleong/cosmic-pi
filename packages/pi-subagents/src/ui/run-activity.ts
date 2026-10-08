@@ -1,8 +1,6 @@
 import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent, synchronousNow } from "pi-cosmic-core";
 import {
-  hasSubagentCapability,
-  hasUnresolvedSteeringDelivery,
   isActiveRunState,
   isParentActionRequiredRun,
   isTerminalRunState,
@@ -16,12 +14,19 @@ import {
   type WorkflowRunView,
 } from "../workflow/model.ts";
 import {
-  emptyActivityPresentation,
+  EMPTY_ACTIVITY_PRESENTATION,
   type SubagentActivityPresentationSnapshot,
 } from "./activity-panel.ts";
 import { withActivityRevision } from "./activity-revision.ts";
 import { runActivityDetail } from "./run-activity-detail.ts";
 import { formatRunRoute } from "./run-presentation.ts";
+import {
+  canInterruptRun,
+  canRenameRun,
+  canResumeRun,
+  runMessageMode,
+  type RunMessageMode,
+} from "./run-state.ts";
 import { projectFleetTree } from "./run-tree-rows.ts";
 import {
   activityReasonLine,
@@ -103,36 +108,23 @@ function memberAttention(run: SubagentRunView, call: WorkflowAgentView | undefin
     : attention;
 }
 
-function messageAction(run: SubagentRunView) {
-  if (run.writeAdmissionPaused) return [];
-  if (
-    run.state === "waiting_for_parent" &&
-    run.question &&
-    hasSubagentCapability(run, "parent-contact")
-  )
-    return [{ id: "reply", label: "Reply", handoff: true as const }];
-  if (hasUnresolvedSteeringDelivery(run)) return [];
-  if (run.state === "reported" && run.closeOnReport === false)
-    return [{ id: "message", label: "Next assignment", handoff: true as const }];
-  return run.state === "running" && hasSubagentCapability(run, "steer")
-    ? [{ id: "message", label: "Message", handoff: true as const }]
-    : [];
-}
+/** An action that hands off to its own input. */
+const handoff = (id: string, label: string) => ({ id, label, handoff: true as const });
+
+const MESSAGE_ACTIONS = {
+  reply: handoff("reply", "Reply"),
+  guidance: handoff("message", "Message"),
+} satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
 /**
- * A paused owned run continues its owned assignment. A completed one stays with its workflow until
- * the workflow ends, because the root refuses a resume whose result only the root would receive.
+ * The actions a run offers; `owned`: a running workflow still owns it. Unlike the fleet, Activity
+ * offers stop to a stopping run, which joins its cleanup; paused file access withholds resume and
+ * messages; and a reply needs its question. A paused owned run continues its owned assignment, but
+ * a completed one stays with its workflow until the workflow ends, because the root refuses a
+ * resume whose result only the root would receive.
  */
-function resumeAction(run: SubagentRunView, owned: boolean) {
-  const resumable = run.state === "paused" || (run.state === "completed" && !owned);
-  return resumable && !run.writeAdmissionPaused && hasSubagentCapability(run, "resume")
-    ? [{ id: "resume", label: "Resume", handoff: true as const }]
-    : [];
-}
-
-/** The actions a run offers; `owned`: a running workflow still owns it. */
 export function runActions(run: SubagentRunView, title: string, owned: boolean) {
-  const unresolved = hasUnresolvedSteeringDelivery(run);
+  const mode = run.writeAdmissionPaused ? undefined : runMessageMode(run);
   return [
     ...(isActiveRunState(run.state)
       ? [
@@ -144,9 +136,7 @@ export function runActions(run: SubagentRunView, title: string, owned: boolean) 
           },
         ]
       : []),
-    ...((run.state === "running" || run.state === "waiting_for_parent") &&
-    hasSubagentCapability(run, "interrupt") &&
-    !unresolved
+    ...(canInterruptRun(run)
       ? [
           {
             id: "interrupt",
@@ -156,12 +146,11 @@ export function runActions(run: SubagentRunView, title: string, owned: boolean) 
           },
         ]
       : []),
-    ...resumeAction(run, owned),
-    ...messageAction(run),
-    ...(hasSubagentCapability(run, "rename-display") &&
-    !["starting", "stopping", "stopped", "failed"].includes(run.state)
-      ? [{ id: "rename", label: "Rename", handoff: true as const }]
+    ...(canResumeRun(run) && !run.writeAdmissionPaused && !(owned && run.state === "completed")
+      ? [handoff("resume", "Resume")]
       : []),
+    ...(mode && (mode !== "reply" || run.question) ? [MESSAGE_ACTIONS[mode]] : []),
+    ...(canRenameRun(run) ? [handoff("rename", "Rename")] : []),
   ];
 }
 
@@ -204,11 +193,11 @@ const workflowPlacement = (run: SubagentRunView, owned: boolean) =>
 
 export function subagentActivityItems(
   projection: SubagentProjection,
-  presentation: SubagentActivityPresentationSnapshot = emptyActivityPresentation(),
+  presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
   workflowSnapshot: WorkflowActivitySnapshot = EMPTY_WORKFLOWS,
 ): readonly ActivityItem[] {
   const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
-  const rows = projectFleetTree(projection.runs, "root", new Set()).rows;
+  const rows = projectFleetTree(projection.runs, "root").rows;
   // Placeholders fill the slots runs leave.
   const workflows = workflowActivityItems({
     runs: workflowSnapshot.runs,
@@ -285,9 +274,7 @@ export function subagentActivityDetail(
   workflows: WorkflowActivitySnapshot = EMPTY_WORKFLOWS,
   now: number = synchronousNow(),
 ): string | undefined {
-  const run = projectFleetTree(projection.runs, "root", new Set()).rows.find(
-    (row) => row.run.id === id,
-  )?.run;
+  const run = projectFleetTree(projection.runs, "root").rows.find((row) => row.run.id === id)?.run;
   if (!run) return workflowDetail(workflows, id, projection, now);
   const owned = isOwnedByLiveWorkflow(run, liveWorkflowIds(workflows));
   return runActivityDetail(run, {

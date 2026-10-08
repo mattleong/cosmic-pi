@@ -46,7 +46,6 @@ export const SupervisorAuthTokenSchema = Schema.String.check(
   Schema.isMaxLength(SUPERVISOR_AUTH_TOKEN_CHARS),
   Schema.isPattern(TOKEN_PATTERN),
 ).pipe(Schema.brand("SupervisorAuthToken"));
-export type SupervisorAuthToken = Schema.Schema.Type<typeof SupervisorAuthTokenSchema>;
 
 export const SupervisorDeliveryIdSchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -59,11 +58,14 @@ export const SupervisorAssignmentEpochSchema = Schema.Number.check(
   Schema.isInt(),
   Schema.isGreaterThan(0),
 );
-export const SupervisorMessageSchema = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
-  Schema.isPattern(NONBLANK_PATTERN),
-);
+/** Bounded text with at least one non-whitespace character. */
+const nonblankText = (maximum: number) =>
+  Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(maximum),
+    Schema.isPattern(NONBLANK_PATTERN),
+  );
+export const SupervisorMessageSchema = nonblankText(MAX_SUPERVISOR_MCP_MESSAGE_CHARS);
 /** How a child tool returns its parent's reply, for every child transport. */
 export const PARENT_REPLY_PREFIX = "Parent reply: ";
 
@@ -71,11 +73,7 @@ export const SupervisorReplySchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),
 );
-export const SupervisorReportTextSchema = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(MAX_SUPERVISOR_MCP_REPORT_CHARS),
-  Schema.isPattern(NONBLANK_PATTERN),
-);
+export const SupervisorReportTextSchema = nonblankText(MAX_SUPERVISOR_MCP_REPORT_CHARS);
 export const SupervisorChannelConfigSchema = Schema.Struct({
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
   runId: SupervisorRunIdSchema,

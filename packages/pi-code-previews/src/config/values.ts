@@ -2,13 +2,7 @@ import * as Predicate from "effect/Predicate";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeTolerantFields, type TolerantFieldDiagnostic } from "pi-cosmic-core";
-import {
-  ALL_CODE_PREVIEW_TOOLS,
-  parseCodePreviewTools,
-  parseToolToggleId,
-  type CodePreviewToolName,
-} from "../tools/names";
-import { formatToolsSettingValue } from "../tools/policy";
+import { ALL_CODE_PREVIEW_TOOLS, parseCodePreviewTools } from "../tools/names";
 import {
   CodePreviewSettingsSchema,
   type CodePreviewEditableSettingId,
@@ -17,16 +11,15 @@ import {
 import { cloneCodePreviewSettings } from "./state";
 
 export const ON_OFF_VALUES = ["on", "off"] as const;
-export type OnOffValue = (typeof ON_OFF_VALUES)[number];
 
 const MAX_SETTINGS_DIAGNOSTICS = 16;
 
-export interface NormalizedCodePreviewSettings {
+interface NormalizedCodePreviewSettings {
   readonly settings: CodePreviewSettings;
   readonly diagnostics: readonly TolerantFieldDiagnostic[];
 }
 
-export function formatOnOff(value: boolean): OnOffValue {
+export function formatOnOff(value: boolean): (typeof ON_OFF_VALUES)[number] {
   return value ? "on" : "off";
 }
 
@@ -35,7 +28,6 @@ export function formatSettingValue(
   id: CodePreviewEditableSettingId,
 ): string {
   if (id === "resetToDefaults") return "keep current";
-  if (id === "tools") return formatToolsSettingValue(settings.tools);
   const value = settings[id];
   if (Predicate.isBoolean(value)) return formatOnOff(value);
   return String(value);
@@ -89,20 +81,6 @@ export function updateSetting(
     // SAFETY: The own-property check narrows id to a field in the authoritative settings schema.
     const key = id as keyof CodePreviewSettings;
     parseAndApplyUiSetting(next, key, value);
-  } else {
-    const tool = parseToolToggleId(id);
-    if (tool) next.tools = updateToolToggle(current.tools, tool, value);
   }
   return next;
-}
-
-function updateToolToggle(
-  currentTools: CodePreviewToolName[],
-  tool: CodePreviewToolName,
-  value: string,
-): CodePreviewToolName[] {
-  const enabled = new Set(currentTools);
-  if (value === "on") enabled.add(tool);
-  else if (value === "off") enabled.delete(tool);
-  return ALL_CODE_PREVIEW_TOOLS.filter((candidate) => enabled.has(candidate));
 }

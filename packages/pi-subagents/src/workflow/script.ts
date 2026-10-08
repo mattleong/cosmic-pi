@@ -5,7 +5,6 @@ import {
   type Literal,
   type Node,
   type ObjectExpression,
-  type Program,
   type Property,
   type UnaryExpression,
 } from "acorn";
@@ -14,13 +13,12 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { sha256Text } from "pi-cosmic-core";
 import { compileWorkflowArgs, type WorkflowArgsContract } from "./args.ts";
-import { WORKFLOW_PHASE_TITLE_MAX_CHARS } from "./model.ts";
+import { NonEmptyText, WORKFLOW_PHASE_TITLE_MAX_CHARS } from "./model.ts";
 
 /** Workflow scripts are model-authored programs, never bulk data. */
 export const WORKFLOW_SCRIPT_MAX_CHARS = 256 * 1024;
-export const WORKFLOW_PHASE_LIMIT = 64;
+const WORKFLOW_PHASE_LIMIT = 64;
 /** Planned agents one meta phase may declare. */
 export const WORKFLOW_PHASE_AGENT_LIMIT = 64;
 /** Planned agents one script may declare across its phases. */
@@ -38,16 +36,13 @@ export class WorkflowScriptError extends Schema.TaggedError<WorkflowScriptError>
   { message: Schema.String, syntax: Schema.optional(WorkflowSyntaxProblem) },
 ) {}
 
-const Text = (maximum: number) =>
-  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
-
 /**
  * An agent a phase plans to run: a label, or a label with its profile. It starts nothing and sets
  * no options, but the user can skip it before it starts.
  */
 const WorkflowPlannedAgentSchema = Schema.Union([
-  Text(80),
-  Schema.Struct({ label: Text(80), profile: Schema.optional(Text(80)) }),
+  NonEmptyText(80),
+  Schema.Struct({ label: NonEmptyText(80), profile: Schema.optional(NonEmptyText(80)) }),
 ]);
 
 /**
@@ -61,16 +56,16 @@ const PhaseTitle = Schema.String.pipe(Schema.decode(SchemaTransformation.trim())
 
 const WorkflowPhaseSchema = Schema.Struct({
   title: PhaseTitle,
-  detail: Schema.optional(Text(1_000)),
+  detail: Schema.optional(NonEmptyText(1_000)),
   agents: Schema.optional(
     Schema.Array(WorkflowPlannedAgentSchema).check(Schema.isMaxLength(WORKFLOW_PHASE_AGENT_LIMIT)),
   ),
 });
 
-export const WorkflowMetaSchema = Schema.Struct({
-  name: Text(80),
-  description: Text(1_000),
-  whenToUse: Schema.optional(Text(1_000)),
+const WorkflowMetaSchema = Schema.Struct({
+  name: NonEmptyText(80),
+  description: NonEmptyText(1_000),
+  whenToUse: Schema.optional(NonEmptyText(1_000)),
   phases: Schema.optional(
     Schema.Array(WorkflowPhaseSchema).check(Schema.isMaxLength(WORKFLOW_PHASE_LIMIT)),
   ),
@@ -86,7 +81,10 @@ export interface WorkflowPlannedAgentSpec {
   readonly phase: string;
   readonly label: string;
   readonly profile?: string | undefined;
-  /** The nested workflow() whose meta declares it, by name; absent for the run's own script. */
+  /**
+   * The nested workflow() whose meta declares it, by name; absent for the run's own script. Only
+   * calls made in that workflow claim it outside a phase.
+   */
   readonly workflow?: string | undefined;
 }
 
@@ -105,16 +103,13 @@ export const workflowPlannedAgents = (
 
 /** Why the declared planned agents are invalid beyond their shape, if they are. */
 const plannedAgentsProblem = (meta: WorkflowMeta): string | undefined => {
-  const phases = meta.phases ?? [];
-  const planned = phases.flatMap((phase) => workflowPlannedAgents(phase));
+  const planned = (meta.phases ?? []).flatMap((phase) => workflowPlannedAgents(phase));
   if (planned.length > WORKFLOW_SCRIPT_AGENT_LIMIT)
     return `Invalid meta: phases declare ${planned.length} planned agents; a script can declare at most ${WORKFLOW_SCRIPT_AGENT_LIMIT}.`;
-  const blank = phases.findIndex((phase) =>
-    workflowPlannedAgents(phase).some((agent) => agent.label === ""),
-  );
-  return blank === -1
+  const blank = planned.find((agent) => agent.label === "");
+  return blank === undefined
     ? undefined
-    : `Invalid meta: planned agent labels can't be blank, in phase "${phases[blank]?.title}".`;
+    : `Invalid meta: planned agent labels can't be blank, in phase "${blank.phase}".`;
 };
 
 export interface WorkflowScript {
@@ -125,7 +120,6 @@ export interface WorkflowScript {
   readonly source: string;
   /** The script with `export` removed from its meta declaration; line and column positions are unchanged. */
   readonly body: string;
-  readonly sha256: string;
 }
 
 const decodeMeta = Schema.decodeUnknownEffect(WorkflowMetaSchema, { onExcessProperty: "error" });
@@ -149,8 +143,8 @@ const decodeScalar = Schema.decodeUnknownOption(
 const propertyKey = (key: Expression): string | undefined =>
   key.type === "Identifier"
     ? key.name
-    : key.type === "Literal"
-      ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.String)(key.value))
+    : key.type === "Literal" && Predicate.isString(key.value)
+      ? key.value
       : undefined;
 
 const scalarLiteral = (node: Literal): Evaluated =>
@@ -160,10 +154,8 @@ const scalarLiteral = (node: Literal): Evaluated =>
 
 const negativeLiteral = (node: UnaryExpression): Evaluated => {
   if (node.operator !== "-" || node.argument.type !== "Literal") return NOT_LITERAL;
-  return Option.match(Schema.decodeUnknownOption(Schema.Finite)(node.argument.value), {
-    onNone: (): Evaluated => NOT_LITERAL,
-    onSome: (value) => -value,
-  });
+  const value = node.argument.value;
+  return Predicate.isNumber(value) && Number.isFinite(value) ? -value : NOT_LITERAL;
 };
 
 function arrayLiteral(node: ArrayExpression): Evaluated {
@@ -222,10 +214,10 @@ const isModuleDeclaration = (node: Node): boolean =>
   node.type === "ExportDefaultDeclaration" ||
   node.type === "ExportAllDeclaration";
 
+const SyntaxPosition = Schema.Struct({ line: Schema.Finite, column: Schema.Finite });
+
 /** The position acorn's syntax error carries beside its message; its column counts from 0. */
-const decodeSyntaxPosition = Schema.decodeUnknownOption(
-  Schema.Struct({ loc: Schema.Struct({ line: Schema.Finite, column: Schema.Finite }) }),
-);
+const decodeSyntaxPosition = Schema.decodeUnknownOption(Schema.Struct({ loc: SyntaxPosition }));
 
 const EXCERPT_BEFORE = 60;
 const EXCERPT_AFTER = 40;
@@ -244,33 +236,25 @@ const syntaxExcerpt = (source: string, line: number, column: number): string => 
   return `\n  ${lead}${text.slice(from, to)}${tail}\n  ${" ".repeat(lead.length + column - from)}^`;
 };
 
-function parseProgram(source: string): Program {
-  try {
-    return parse(source, {
-      ecmaVersion: "latest",
-      sourceType: "module",
-      allowAwaitOutsideFunction: true,
-      allowReturnOutsideFunction: true,
-      locations: true,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const position = Option.getOrUndefined(decodeSyntaxPosition(error))?.loc;
-    const line = position?.line;
-    // Fits both a slip, such as an unclosed bracket, and TypeScript syntax.
-    const near = line === undefined ? "" : ` near line ${line}`;
-    const excerpt =
-      position === undefined ? "" : syntaxExcerpt(source, position.line, position.column);
-    throw new WorkflowScriptError({
-      message: `SyntaxError: ${message}. Check the syntax${near} (scripts are plain JavaScript, without TypeScript types).${excerpt}`,
-      syntax: {
-        // Acorn ends its message with the position, which `line` carries instead.
-        reason: message.replace(/\s*\(\d+:\d+\)$/u, ""),
-        ...(line !== undefined && { line }),
-      },
-    });
-  }
-}
+/** Why the parser rejected the script, where, and the code around it. */
+const syntaxError = (
+  source: string,
+  message: string,
+  position: typeof SyntaxPosition.Type | undefined,
+): WorkflowScriptError => {
+  // Fits both a slip, such as an unclosed bracket, and TypeScript syntax.
+  const near = position === undefined ? "" : ` near line ${position.line}`;
+  const excerpt =
+    position === undefined ? "" : syntaxExcerpt(source, position.line, position.column);
+  return new WorkflowScriptError({
+    message: `SyntaxError: ${message}. Check the syntax${near} (scripts are plain JavaScript, without TypeScript types).${excerpt}`,
+    syntax: {
+      // Acorn ends its message with the position, which `line` carries instead.
+      reason: message.replace(/\s*\(\d+:\d+\)$/u, ""),
+      ...(position !== undefined && { line: position.line }),
+    },
+  });
+};
 
 /**
  * Validates a workflow script before anything runs: plain JavaScript that begins with a
@@ -285,11 +269,20 @@ export const parseWorkflowScript = (
         message: `Workflow scripts are limited to ${WORKFLOW_SCRIPT_MAX_CHARS} characters.`,
       });
     const program = yield* Effect.try({
-      try: () => parseProgram(source),
+      try: () =>
+        parse(source, {
+          ecmaVersion: "latest",
+          sourceType: "module",
+          allowAwaitOutsideFunction: true,
+          allowReturnOutsideFunction: true,
+          locations: true,
+        }),
       catch: (error) =>
-        error instanceof WorkflowScriptError
-          ? error
-          : new WorkflowScriptError({ message: String(error) }),
+        syntaxError(
+          source,
+          error instanceof Error ? error.message : String(error),
+          Option.getOrUndefined(decodeSyntaxPosition(error))?.loc,
+        ),
     });
     const [first, ...rest] = program.body;
     const declaration =
@@ -335,5 +328,5 @@ export const parseWorkflowScript = (
           );
     // Keep `const meta` so the script can read it; blanking `export` keeps every position intact.
     const body = `${source.slice(0, first.start)}${" ".repeat("export".length)}${source.slice(first.start + "export".length)}`;
-    return { meta, source, body, sha256: sha256Text(source), ...(args && { args }) };
+    return { meta, source, body, ...(args && { args }) };
   });

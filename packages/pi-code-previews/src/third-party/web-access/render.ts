@@ -1,4 +1,5 @@
-import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { constUndefined, constVoid } from "effect/Function";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
@@ -28,14 +29,6 @@ export const webAccessAdapter = {
 } satisfies ThirdPartyAdapter;
 
 type Context = ToolRenderContext<any, any>;
-
-function argumentsText<Args>(args: Args): string {
-  return invokeHostCallback(() => JSON.stringify(args, null, 2) ?? "", "");
-}
-
-function rawOutput(result: AgentToolResult<unknown>, context: Context): string {
-  return getFallbackResultText(result.content, context.showImages);
-}
 
 /** No provider imports or execution access. Pi retains image rendering and all result objects. */
 export function createWebAccessRenderers(
@@ -79,47 +72,35 @@ export function createWebAccessRenderers(
       return fallback;
     }
     let broken = false;
+    /** The first throw retires the body for this component; later calls use the fallback. */
+    const guarded = <A>(run: () => A, otherwise: () => A): A => {
+      if (!broken)
+        try {
+          return run();
+        } catch {
+          broken = true;
+          markFailed();
+        }
+      return otherwise();
+    };
     const component: Component = {
-      render(width) {
-        if (!broken) {
-          try {
-            return body.render(width);
-          } catch {
-            broken = true;
-            markFailed();
-          }
-        }
-        return fallback.render(width);
-      },
+      render: (width) =>
+        guarded(
+          () => body.render(width),
+          () => fallback.render(width),
+        ),
       invalidate() {
-        if (!broken) {
-          try {
-            body.invalidate();
-          } catch {
-            broken = true;
-            markFailed();
-          }
-        }
+        guarded(() => body.invalidate(), constVoid);
         fallback.invalidate();
       },
-      handleMouse(event) {
-        if (!broken) {
-          try {
-            return body.handleMouse?.(event);
-          } catch {
-            broken = true;
-            markFailed();
-          }
-        }
-        return undefined;
-      },
+      handleMouse: (event) => guarded(() => body.handleMouse?.(event), constUndefined),
     };
     if (original) originals.set(component, original);
     return component;
   }
 
   const renderCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-    const full = argumentsText(args);
+    const full = invokeHostCallback(() => JSON.stringify(args, null, 2) ?? "", "");
     const subject = webAccessSubject(name, args);
     const fallback = context.expanded
       ? new Text(escapeControlChars(`${label}\nArguments\n${full}`), 0, 0)
@@ -145,7 +126,7 @@ export function createWebAccessRenderers(
     theme,
     context,
   ) => {
-    const raw = rawOutput(result, context);
+    const raw = getFallbackResultText(result.content, context.showImages);
     const fallback = options.expanded ? new Text(escapeControlChars(raw), 0, 0) : plainRows(raw, 5);
     return compose(
       "result",

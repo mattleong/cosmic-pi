@@ -21,6 +21,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { selectCompactChildren } from "../preview/compact-children";
 import { nativeArgumentPreview, safeNativeArgumentText } from "./native-codemode-args";
 import { nativeCodemodeCallSubject } from "./native-codemode-subject";
+import { visibleDiagnosticLine } from "./native-safe-content";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
 import {
   createNativeDiscoveryProjector,
@@ -43,12 +44,33 @@ function issue(code: string, text: string): CompactIssue {
 function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): CompactChild {
   const preview = nativeArgumentPreview(call.args);
   const target = nativeCodemodeCallSubject(call.name, preview, cwd);
+  const issues: CompactIssue[] = [];
+  if (target.label || call.name.startsWith("mcp__"))
+    issues.push({
+      code: "native-call-name",
+      severity: "info",
+      message: "Registered tool",
+      detail: sanitizeDiagnosticContent(call.name),
+    });
+  if (call.status === "error")
+    issues.push(issue("native-child-error", call.error ?? "The nested call failed"));
+  if (call.args)
+    issues.push({
+      code: "native-call-args",
+      severity: "info",
+      message: "Arguments preview",
+      detail:
+        preview?.text ??
+        (nativeModelCalls.has(call.name)
+          ? safeNativeArgumentText(call.args)
+          : "Argument preview is unavailable"),
+    });
   const entry: CompactChild = {
     ...target,
     label: sanitizeDiagnosticError(target.label ?? call.name, { maximumLength: 100 }),
     showTiming: true,
     showShortTiming: true,
-    subject: target.subject ? sanitizeDiagnosticError(target.subject, { maximumLength: 200 }) : "",
+    subject: visibleDiagnosticLine(target.subject ?? "", 200),
     // Native dispatch return remains semantically neutral, even with a completion checkmark.
     status:
       call.status === "ok"
@@ -56,35 +78,7 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
         : phase === "settled" && call.status === "running"
           ? "uncertain"
           : call.status,
-    issues: [
-      ...(target.label || call.name.startsWith("mcp__")
-        ? [
-            {
-              code: "native-call-name",
-              severity: "info" as const,
-              message: "Registered tool",
-              detail: sanitizeDiagnosticContent(call.name),
-            },
-          ]
-        : []),
-      ...(call.status === "error"
-        ? [issue("native-child-error", call.error ?? "The nested call failed")]
-        : []),
-      ...(call.args
-        ? [
-            {
-              code: "native-call-args",
-              severity: "info" as const,
-              message: "Arguments preview",
-              detail:
-                preview?.text ??
-                (nativeModelCalls.has(call.name)
-                  ? safeNativeArgumentText(call.args)
-                  : "Argument preview is unavailable"),
-            },
-          ]
-        : []),
-    ],
+    issues,
   };
   if (call.status === "ok") entry.returnedCheckmark = true;
   if (call.durationMs !== undefined) entry.durationMs = call.durationMs;
@@ -181,8 +175,7 @@ export const nativeCodemodeSummary =
     };
     if (phase !== "settled") return summary;
     if (!header) return undefined;
-    const failed = header === "failed";
-    if (failed) {
+    if (header === "failed") {
       // Native details do not expose a typed stop reason. Even a final native error block
       // can contain a guest-controlled Error.name/stack, so text cannot prove cancellation.
       // Pi appends its error block after all guest output; only its own notes, such as one
@@ -205,34 +198,17 @@ export const nativeCodemodeSummary =
       );
       return { ...summary, outcome: "error", issues: explained ? issues : [failure, ...issues] };
     }
+    const uncertain = (code: string, message: string): CompactSummary => ({
+      ...summary,
+      outcome: "uncertain",
+      issues: [{ code, severity: "warning", message }, ...issues],
+    });
     // An error flag contradicting the completion header is not successful native execution.
     if (context.isError || result.isError)
-      return {
-        ...summary,
-        outcome: "uncertain",
-        issues: [
-          {
-            code: "native-outcome-uncertain",
-            severity: "warning",
-            message: "Script completion could not be confirmed",
-          },
-          ...issues,
-        ],
-      };
+      return uncertain("native-outcome-uncertain", "Script completion could not be confirmed");
     if (!complete) return { ...summary, outcome: "uncertain" };
     if (calls.some((call) => call.status === "running" || call.status === "cancelled"))
-      return {
-        ...summary,
-        outcome: "uncertain",
-        issues: [
-          {
-            code: "native-call-outcome-uncertain",
-            severity: "warning",
-            message: "Some call outcomes are unconfirmed",
-          },
-          ...issues,
-        ],
-      };
+      return uncertain("native-call-outcome-uncertain", "Some call outcomes are unconfirmed");
     return {
       ...summary,
       outcome: calls.some((call) => call.status === "error") ? "warning" : "success",

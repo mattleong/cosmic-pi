@@ -1,13 +1,18 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, Component } from "@earendil-works/pi-tui";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { describe, expect, vi } from "vitest";
-import { extensionContextFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
 import {
   fleetManagerActionsFixture,
   makeProfileSettingsInspection,
+  openRegisteredFleet,
 } from "./fixtures/profile-settings-inspection.ts";
 import { PROFILE_IDS } from "../src/profiles/model.ts";
 import { SubagentConfigStoreError } from "../src/config/store.ts";
@@ -22,64 +27,38 @@ import {
 } from "../src/settings/controller.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
-import {
-  SubagentFleetComponent,
-  type FleetMessageDelivery,
-  type FleetNoticeKind,
-} from "../src/ui/fleet.ts";
+import type { FleetMessageDelivery, FleetNoticeKind } from "../src/ui/fleet.ts";
 import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
 
+/** Global and Project documents with a shared `common` set and a default set each. */
 const inspection = (globalDefault = "global"): ProfileSettingsInspection => {
-  const globalDocument = {
+  const document = (defaultProfileSet: string, own: string) => ({
     version: 6,
-    defaultProfileSet: globalDefault,
-    profileSets: {
-      common: { profiles: {} },
-      global: { profiles: {} },
-    },
-  };
-  const projectDocument = {
-    version: 6,
-    defaultProfileSet: "project",
-    profileSets: {
-      common: { profiles: {} },
-      project: { profiles: {} },
-    },
-  };
+    defaultProfileSet,
+    profileSets: { common: { profiles: {} }, [own]: { profiles: {} } },
+  });
   return makeProfileSettingsInspection({
-    globalDocument,
-    projectDocument,
+    globalDocument: document(globalDefault, "global"),
+    projectDocument: document("project", "project"),
     projectTrusted: true,
   });
 };
 
-const invalidSourceInspection = (): ProfileSettingsInspection => {
-  const globalDocument = {
-    version: 6,
-    defaultProfileSet: "missing",
-    profileSets: { valid: { profiles: {} } },
-  };
-  return makeProfileSettingsInspection({
-    globalDocument,
+const untrustedInspection = (defaultProfileSet: string | [], profileSet: string) =>
+  makeProfileSettingsInspection({
+    globalDocument: {
+      version: 6,
+      defaultProfileSet,
+      profileSets: { [profileSet]: { profiles: {} } },
+    },
     projectTrusted: false,
   });
-};
-
-const malformedGlobalDefaultInspection = (): ProfileSettingsInspection => {
-  const globalDocument = {
-    version: 6,
-    defaultProfileSet: [],
-    profileSets: { common: { profiles: {} } },
-  };
-  return makeProfileSettingsInspection({
-    globalDocument,
-    projectTrusted: false,
-  });
-};
+const invalidSourceInspection = () => untrustedInspection("missing", "valid");
+const malformedGlobalDefaultInspection = () => untrustedInspection([], "common");
 
 const atSessionRevision = (
   value: ProfileSettingsInspection,
@@ -102,9 +81,7 @@ const actions = (value: ProfileSettingsInspection) =>
     patchNesting: vi.fn(() => Promise.resolve()),
     patchFeatureToggle: vi.fn(() => Promise.resolve()),
     patchSessionFeatureToggle: vi.fn(() => Promise.resolve()),
-    inspectWriterWorkspace: vi.fn(() =>
-      Promise.resolve({ mode: "worktree" as const, canSwitch: true }),
-    ),
+    inspectWriterWorkspace: vi.fn(() => Promise.resolve({ mode: "worktree" as const })),
     setWriterWorkspaceMode: vi.fn(() => Promise.resolve()),
     patchSessionProfile: vi.fn(() => Promise.resolve(value.session)),
     replaceSessionProfiles: vi.fn(() => Promise.resolve(value.session)),
@@ -143,13 +120,7 @@ const setup = (
   const managerActions = actions(options.value ?? inspection());
   // These command tests never open the fleet manager, so the bridge is never read.
   registerSubagentManagerCommand(pi, opaqueFixture({}), managerActions);
-  const ui = {
-    notify: vi.fn(),
-    confirm: vi.fn().mockResolvedValue(true),
-    input: vi.fn().mockResolvedValue(undefined),
-    select: vi.fn().mockResolvedValue(undefined),
-    custom: vi.fn(custom),
-  };
+  const ui = { notify: vi.fn(), custom: vi.fn(custom) };
   const ctx = extensionContextFixture({
     cwd: "/repo",
     signal: undefined,
@@ -203,10 +174,10 @@ const closeDashboard = function* (fixture: ReturnType<typeof setup>, running: Pr
   yield* step(() => running);
   expect(fixture.ui.custom).toHaveBeenCalledTimes(1);
 };
-const saveSnapshot = function* (fixture: ReturnType<typeof setup>, name = "snapshot") {
+const saveSnapshot = function* (fixture: ReturnType<typeof setup>) {
   press(fixture, "s");
   yield* step(settleHostPromises);
-  press(fixture, ...name, "\r");
+  press(fixture, ..."snapshot", "\r");
   yield* step(settleHostPromises);
 };
 const useSelectedSet = function* (fixture: ReturnType<typeof setup>, beforeConfirm?: () => void) {
@@ -218,6 +189,28 @@ const useSelectedSet = function* (fixture: ReturnType<typeof setup>, beforeConfi
   yield* step(settleHostPromises);
 };
 const makeDefault = (fixture: ReturnType<typeof setup>) => press(fixture, "k", "?", "\r");
+/** Settings and dashboard work belong to this activation until the test replaces it. */
+const replaceableActivation = (fixture: ReturnType<typeof setup>) => {
+  const activation = new AbortController();
+  const runs = vi.fn();
+  vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+    isCurrent: () => !activation.signal.aborted,
+    run: (effect, signal) => {
+      runs();
+      return Effect.runPromise(effect, { signal: AbortSignal.any([signal, activation.signal]) });
+    },
+  });
+  return { replace: () => activation.abort(), runs };
+};
+/** Runs a side effect as the next profile inspection starts. */
+const onNextInspection = (fixture: ReturnType<typeof setup>, sideEffect: () => void) => {
+  const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
+  const configured = inspect.getMockImplementation()!;
+  inspect.mockImplementationOnce((trusted) => {
+    sideEffect();
+    return configured(trusted);
+  });
+};
 
 describe("profile settings controller", () => {
   effectTest("completes profile deep links and rejects unknown or extra arguments", function* () {
@@ -256,18 +249,11 @@ describe("profile settings controller", () => {
     "activation shutdown closes an open dashboard dialog without further input",
     function* () {
       const fixture = setup();
-      const activation = new AbortController();
-      vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
-        isCurrent: () => !activation.signal.aborted,
-        run: (effect, signal) =>
-          Effect.runPromise(effect, {
-            signal: AbortSignal.any([signal, activation.signal]),
-          }),
-      });
+      const activation = replaceableActivation(fixture);
       const running = yield* openDashboard(fixture);
       press(fixture, "s");
       yield* step(settleHostPromises);
-      activation.abort();
+      activation.replace();
       yield* step(() => running);
       expect(fixture.overlays[0]?.render(80)).toEqual([]);
       expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
@@ -280,19 +266,12 @@ describe("profile settings controller", () => {
       const fixture = setup();
       const host = fakeCustomSurfaceHost({ theme: plainTheme, columns: 120, rows: 30 });
       fixture.ui.custom.mockImplementation(host.ctx.ui.custom);
-      const activation = new AbortController();
-      vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
-        isCurrent: () => !activation.signal.aborted,
-        run: (effect, signal) =>
-          Effect.runPromise(effect, {
-            signal: AbortSignal.any([signal, activation.signal]),
-          }),
-      });
+      const activation = replaceableActivation(fixture);
       const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
       yield* step(() => vi.waitFor(() => expect(fixture.ui.custom).toHaveBeenCalledOnce()));
       const questionnaire = { render: () => ["questionnaire"], invalidate() {} };
       host.showUnrelated(questionnaire);
-      activation.abort();
+      activation.replace();
       yield* step(settleHostPromises);
       expect(host.doneCalls).toBe(0);
       host.mount();
@@ -327,29 +306,25 @@ describe("profile settings controller", () => {
     yield* closeDashboard(fixture, running);
   });
 
-  effectTest("does not open or refresh after its inspection owner is replaced", function* () {
-    const fixture = setup();
-    const pending = Deferred.makeUnsafe<ProfileSettingsInspection>();
-    let current = true;
-    const submitted = vi.fn();
-    const run = <A>(effect: Effect.Effect<A>, signal: AbortSignal) => {
-      submitted();
-      return Effect.runPromise(effect, { signal });
-    };
-    vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
-      isCurrent: () => current,
-      run,
-    });
-    vi.mocked(fixture.managerActions.inspectProfiles).mockImplementation(() =>
-      Effect.runPromise(Deferred.await(pending)),
+  for (const outcome of ["settles", "fails"] as const)
+    effectTest(
+      `stays closed and quiet when a replaced owner's inspection ${outcome}`,
+      function* () {
+        const fixture = setup();
+        const activation = replaceableActivation(fixture);
+        const pending = deferredPromise<ProfileSettingsInspection>();
+        vi.mocked(fixture.managerActions.inspectProfiles).mockReturnValue(pending.promise);
+        const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
+        activation.replace();
+        if (outcome === "settles") pending.resolve(inspection());
+        else pending.reject(new Error("Subagents session was replaced."));
+        yield* step(() => running);
+        expect(fixture.overlays).toEqual([]);
+        expect(activation.runs).not.toHaveBeenCalled();
+        // A replaced session's stale context cannot report its own replacement.
+        expect(fixture.ui.notify).not.toHaveBeenCalled();
+      },
     );
-    const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
-    current = false;
-    Deferred.doneUnsafe(pending, Effect.succeed(inspection()));
-    yield* step(() => running);
-    expect(fixture.overlays).toEqual([]);
-    expect(submitted).not.toHaveBeenCalled();
-  });
 
   effectTest("disposal aborts the dashboard model refresh and is idempotent", function* () {
     const fixture = setup();
@@ -471,16 +446,16 @@ describe("profile settings controller", () => {
       const fixture = setup();
       const running =
         action === "snapshot" ? yield* openDashboard(fixture) : yield* openLibrary(fixture);
-      const pending = Deferred.makeUnsafe<ProfileSettingsInspection>();
+      const pending = deferredPromise<ProfileSettingsInspection>();
       const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
       inspect.mockClear();
-      inspect.mockImplementationOnce(() => Effect.runPromise(Deferred.await(pending)));
+      inspect.mockReturnValueOnce(pending.promise);
       if (action === "snapshot") yield* saveSnapshot(fixture);
       else makeDefault(fixture);
       yield* step(settleHostPromises);
       expect(inspect).toHaveBeenCalledTimes(1);
       fixture.setProjectTrusted(false);
-      Deferred.doneUnsafe(pending, Effect.succeed(inspection()));
+      pending.resolve(inspection());
       yield* step(settleHostPromises);
       expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
       expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
@@ -629,7 +604,6 @@ describe("profile settings controller", () => {
     const fixture = setup();
     vi.mocked(fixture.managerActions.inspectWriterWorkspace).mockResolvedValue({
       mode: "worktree",
-      canSwitch: false,
       blockedReason: "Unresolved workspace ws-1 remains at /private/tmp/ws-1.",
       blockedCode: "unresolved-workspace",
     });
@@ -660,14 +634,10 @@ describe("profile settings controller", () => {
 
   effectTest("a change from a replaced session cannot change its successor", function* () {
     const fixture = setup();
-    let current = true;
-    vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
-      isCurrent: () => current,
-      run: (effect, signal) => Effect.runPromise(effect, { signal }),
-    });
+    const activation = replaceableActivation(fixture);
     vi.mocked(fixture.managerActions.inspectWriterWorkspace).mockImplementationOnce(() => {
-      current = false;
-      return Promise.resolve({ mode: "worktree", canSwitch: true });
+      activation.replace();
+      return Promise.resolve({ mode: "worktree" });
     });
     yield* step(() => fixture.settings("writerWorkspace shared-checkout"));
     expect(fixture.managerActions.setWriterWorkspaceMode).not.toHaveBeenCalled();
@@ -705,14 +675,71 @@ describe("profile settings controller", () => {
 
   effectTest("rechecks Project trust before a Project nesting write", function* () {
     const fixture = setup();
-    const inspect = fixture.managerActions.inspectProfiles;
-    vi.mocked(fixture.managerActions.inspectProfiles).mockImplementationOnce((trusted) => {
-      fixture.setProjectTrusted(false);
-      return vi.mocked(inspect).getMockImplementation()!(trusted);
-    });
+    onNextInspection(fixture, () => fixture.setProjectTrusted(false));
     yield* step(() => fixture.settings("project maxDepth 2"));
     expect(fixture.managerActions.patchNesting).not.toHaveBeenCalled();
     expect(fixture.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
+  });
+
+  effectTest(
+    "fills a saved scope's other limit from what it inherits, never the session's",
+    function* () {
+      const fixture = setup({
+        value: makeProfileSettingsInspection(
+          {
+            globalDocument: { version: 6, nesting: { maxDirectChildren: 6, maxDepth: 1 } },
+            projectDocument: { version: 6 },
+            projectTrusted: true,
+          },
+          { revision: 0, overrides: {}, nesting: { maxDirectChildren: 2, maxDepth: 3 } },
+        ),
+      });
+      yield* step(() => fixture.settings("project maxDepth 4"));
+      yield* step(() => fixture.settings("global maxDepth 5"));
+      expect(
+        vi.mocked(fixture.managerActions.patchNesting).mock.calls.map(([patch]) => patch.nesting),
+      ).toEqual([
+        { maxDirectChildren: 6, maxDepth: 4 },
+        { maxDirectChildren: 6, maxDepth: 5 },
+      ]);
+      const unset = setup({ value: makeProfileSettingsInspection({ projectTrusted: false }) });
+      yield* step(() => unset.settings("global maxDepth 5"));
+      expect(vi.mocked(unset.managerActions.patchNesting).mock.calls[0]?.[0].nesting).toEqual({
+        maxDirectChildren: 12,
+        maxDepth: 5,
+      });
+    },
+  );
+
+  effectTest("reports only the scopes its own inspection could read", function* () {
+    const fixture = setup({ trusted: false });
+    onNextInspection(fixture, () => fixture.setProjectTrusted(true));
+    yield* step(() => fixture.settings("status"));
+    const [report] = fixture.ui.notify.mock.calls.at(-1) ?? [];
+    expect(report).toContain("global:");
+    expect(report).not.toMatch(/^\s*project:/mu);
+  });
+
+  effectTest("restores a picker row whose change was refused", function* () {
+    const fixture = setup();
+    vi.mocked(fixture.managerActions.setWriterWorkspaceMode).mockRejectedValueOnce(
+      new Error("Writer reservation acquired"),
+    );
+    const running = fixture.settings("");
+    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
+    const workspaceRow = () =>
+      fixture.overlays[0]?.render(120).find((line) => line.includes("Writer workspace"));
+    expect(workspaceRow()).toContain("worktree");
+    press(fixture, " ");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.setWriterWorkspaceMode).toHaveBeenCalledWith("shared-checkout");
+    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
+    expect(workspaceRow()).toContain("worktree");
+    press(fixture, " ");
+    yield* step(settleHostPromises);
+    expect(workspaceRow()).toContain("shared-checkout");
+    press(fixture, "\u001b");
+    yield* step(() => running);
   });
 });
 
@@ -803,11 +830,7 @@ describe("feature switch settings", () => {
     expect(untrusted.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "warning");
 
     const revoked = setup();
-    const inspect = revoked.managerActions.inspectProfiles;
-    vi.mocked(inspect).mockImplementationOnce((trusted) => {
-      revoked.setProjectTrusted(false);
-      return vi.mocked(inspect).getMockImplementation()!(trusted);
-    });
+    onNextInspection(revoked, () => revoked.setProjectTrusted(false));
     yield* step(() => revoked.settings("project ultracode false"));
     expect(revoked.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(revoked.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
@@ -829,16 +852,8 @@ describe("feature switch settings", () => {
 
   effectTest("a change from a replaced session cannot reach its successor", function* () {
     const fixture = setup();
-    let current = true;
-    vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
-      isCurrent: () => current,
-      run: (effect, signal) => Effect.runPromise(effect, { signal }),
-    });
-    const inspect = fixture.managerActions.inspectProfiles;
-    vi.mocked(inspect).mockImplementationOnce((trusted) => {
-      current = false;
-      return vi.mocked(inspect).getMockImplementation()!(trusted);
-    });
+    const activation = replaceableActivation(fixture);
+    onNextInspection(fixture, activation.replace);
     yield* step(() => fixture.settings("global ultracode false"));
     expect(fixture.managerActions.patchFeatureToggle).not.toHaveBeenCalled();
     expect(fixture.ui.notify).not.toHaveBeenCalled();
@@ -846,58 +861,19 @@ describe("feature switch settings", () => {
 });
 
 describe("root /subagents fleet actions", () => {
-  const question = { requestId: "q", message: "Which file?", createdAt: 1 };
+  const question = { requestId: "q", message: "Which file?" };
   const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
     view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
 
   /** Opens the registered root fleet over a fixed projection and the supplied manager actions. */
-  const openFleet = function* (run: SubagentRunView, overrides: Partial<FleetManagerActions>) {
-    let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
-    const pi = extensionApiFixture({
-      registerCommand: (
-        _name: string,
-        definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
-      ) => {
-        command = definition.handler;
-      },
-    });
-    const managerActions = fleetManagerActionsFixture(overrides);
-    const bridge = opaqueFixture({
-      get: () => projectionOf([run]),
-      subscribe: () => () => undefined,
-    });
-    registerSubagentManagerCommand(pi, bridge, managerActions);
-    const overlays: Component[] = [];
-    const { custom } = mountingCustomUi(plainTheme, (created) => overlays.push(created), {
-      columns: 120,
-      rows: 30,
-    });
-    const ctx = extensionContextFixture({
-      cwd: "/repo",
-      signal: undefined,
-      hasUI: true,
-      mode: "tui",
-      ui: { notify: vi.fn(), custom },
-    });
-    const running = command?.("", ctx) ?? Promise.resolve();
-    yield* step(() => vi.waitFor(() => expect(overlays).toHaveLength(1)));
-    const fleet = overlays[0];
-    if (!(fleet instanceof SubagentFleetComponent)) throw new Error("Expected the root fleet.");
-    const settled = function* () {
-      yield* step(() =>
-        vi.waitFor(() => {
-          expect(fleet.noticeKind).toBeDefined();
-          expect(fleet.noticeKind).not.toBe("info");
-        }),
-      );
-      return fleet.noticeKind;
-    };
-    const close = function* () {
-      fleet.handleInput("\u001b");
-      yield* step(() => running);
-    };
-    return { fleet, settled, close };
-  };
+  const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) =>
+    openRegisteredFleet((pi) =>
+      registerSubagentManagerCommand(
+        pi,
+        opaqueFixture({ get: () => projectionOf([run]), subscribe: () => () => undefined }),
+        fleetManagerActionsFixture(overrides),
+      ),
+    );
 
   const sendOutcomes: ReadonlyArray<
     readonly [string, () => Promise<FleetMessageDelivery>, FleetNoticeKind]
@@ -910,8 +886,8 @@ describe("root /subagents fleet actions", () => {
     effectTest(`routes guidance to send and shows ${label}`, function* () {
       const send = vi.fn((_id: string, _message: string) => outcome());
       const reply = vi.fn((): Promise<void> => Promise.resolve());
-      const { fleet, settled, close } = yield* openFleet(topLevel(), { send, reply });
-      for (const key of ["m", "h", "i", "\r"]) fleet.handleInput(key);
+      const { press, settled, close } = yield* openFleet(topLevel(), { send, reply });
+      press("m", "h", "i", "\r");
       expect(yield* settled()).toBe(expected);
       expect(send).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledWith("child", "hi");
@@ -922,11 +898,11 @@ describe("root /subagents fleet actions", () => {
   effectTest("routes a parent-question reply to reply and reports its success", function* () {
     const send = vi.fn((): Promise<FleetMessageDelivery> => Promise.resolve("pending"));
     const reply = vi.fn((_id: string, _message: string): Promise<void> => Promise.resolve());
-    const { fleet, settled, close } = yield* openFleet(
+    const { press, settled, close } = yield* openFleet(
       topLevel({ state: "waiting_for_parent", question }),
       { send, reply },
     );
-    for (const key of ["m", "o", "k", "\r"]) fleet.handleInput(key);
+    press("m", "o", "k", "\r");
     expect(yield* settled()).toBe("success");
     expect(reply).toHaveBeenCalledWith("child", "ok");
     expect(send).not.toHaveBeenCalled();

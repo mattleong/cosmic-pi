@@ -4,7 +4,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
-import { createForkedSession, type ChildLaunchRequest } from "../src/boundary/child-process.ts";
+import { createForkedSession } from "../src/boundary/child-process.ts";
+import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs } from "./support/node-builtins.ts";
 
 const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -15,22 +16,14 @@ const tool = {
   parameters: { type: "object" },
 };
 
-const forkRequest = (directory: string, parent: SessionManager): ChildLaunchRequest => ({
-  runId: "fork-test",
-  name: "fork",
-  cwd: directory,
-  context: "fork",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  model: "faux/faux",
-  effort: "off",
-  activeTools: ["read"],
-  projectTrusted: false,
-  parentSessionId: parent.getSessionId(),
-  parentSessionFile: parent.getSessionFile()!,
-  parentLeafId: parent.getLeafId()!,
-  systemPrompt: "child-owned prompt",
-});
+const forkRequest = (directory: string, parent: SessionManager) =>
+  backendLaunch({
+    cwd: directory,
+    context: "fork",
+    parentSessionId: parent.getSessionId(),
+    parentSessionFile: parent.getSessionFile()!,
+    parentLeafId: parent.getLeafId()!,
+  });
 
 describe("forked Pi transcript", () => {
   it.live(

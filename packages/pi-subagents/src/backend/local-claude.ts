@@ -1,36 +1,27 @@
 // Synthetic stream-input UUIDs are plain-crypto identity, not Effect resources.
 import { synchronousRandomUuid } from "pi-cosmic-core";
-import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
-import { deliverTerminalReport } from "./terminal-report-delivery.ts";
 import {
   makeLocalClaudeInputDelivery,
   userContentDigest,
   type PendingUserReplay,
 } from "./local-claude-input-delivery.ts";
 import * as Stream from "effect/Stream";
-import type {
-  LocalCliProcessContract,
-  LocalCliProcessHandle,
-} from "../boundary/local-cli-process.ts";
+import type { LocalCliProcessHandle } from "../boundary/local-cli-process.ts";
 import type { LocalClaudeDebugEntry } from "../boundary/local-claude-debug.ts";
 import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
-import type {
-  SupervisorChannelHandle,
-  SupervisorChannelContract,
-} from "../boundary/supervisor-channel.ts";
+import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
 import { processError, type SubagentError } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
-import { classifyLocalCliInterruptOwnership } from "./local-cli-interruption.ts";
+import { makeLocalCliInterrupts, type LocalCliInterrupt } from "./local-cli-interruption.ts";
 import {
   toBackendExit,
-  type BackendDriver,
   type BackendEvent,
   type BackendLaunchRequest,
+  type BackendReport,
 } from "./model.ts";
 import {
   claudeLeadingTagDiagnostic,
@@ -42,7 +33,6 @@ import {
   isSameClaudeSession,
   makeClaudeResultCorrelation,
   uncorrelatedClaudeUserMessage,
-  usageComponentsTotal,
   type ClaudeSentContentMatch,
   type ClaudeSentUserKind,
   type ClaudeUserDiagnosticContext,
@@ -50,14 +40,10 @@ import {
 } from "./local-claude-correlation.ts";
 import { makeLocalClaudeReportDelivery } from "./local-claude-report-delivery.ts";
 import { makeLocalClaudeDiagnostics } from "./local-claude-diagnostics.ts";
-import { makeLocalClaudeUsage } from "./local-claude-usage.ts";
-import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
-import {
-  correlatedRequest,
-  supervisorError,
-  unsupported as unsupportedCapability,
-} from "./driver-shared.ts";
-import { startLocalCli } from "./local-cli-startup.ts";
+import { makeLocalClaudeUsage, usageComponentsTotal } from "./local-claude-usage.ts";
+import { makeLocalCliEventIngress } from "./local-cli-events.ts";
+import { correlatedRequest, supervisorError } from "./driver-shared.ts";
+import { deliverTerminalReport, makeLocalCliBackendDriver } from "./local-cli-driver.ts";
 import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
 import {
   CLAUDE_INTERRUPT_MARKER,
@@ -75,7 +61,6 @@ import {
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
 
-const EVENT_CAPACITY = 512;
 const CONTROL_TIMEOUT = "10 seconds";
 const MCP_READY_ATTEMPTS = 100;
 const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
@@ -90,13 +75,7 @@ type ClaudeControlResponseEvent = Extract<
   ClaudeProtocolEvent,
   { readonly type: "control_response" }
 >;
-
-const unsupported = (capability: string) =>
-  unsupportedCapability(
-    "local/claude",
-    capability,
-    `Local Claude Code does not provide a confirmable ${capability} operation.`,
-  );
+type UserDecision = Extract<LocalClaudeDebugEntry, { readonly kind: "user-decision" }>["decision"];
 
 interface PendingControl {
   readonly operation: string;
@@ -106,19 +85,12 @@ interface PendingControl {
 const sentKindForOperation = (operation: PendingUserReplay["operation"]): ClaudeSentUserKind =>
   operation === "initialize" ? "probe" : operation === "start" ? "assignment" : "steer";
 
-interface PendingInterrupt {
+/** Completed by the correlated replay marker plus aborted result pair. */
+interface PendingInterrupt extends LocalCliInterrupt {
   readonly requestId: string;
-  readonly epoch: number;
   readonly response: Deferred.Deferred<unknown, SubagentError>;
-  readonly terminal: Deferred.Deferred<void, SubagentError>;
   markerSeen: boolean;
   resultSeen: boolean;
-  /**
-   * Set when the public interrupt call timed out with an uncertain outcome. The
-   * lifecycle then remains exactly owned: a late correlated marker+result pair
-   * settles the assignment through `run_settled` instead of a protocol error.
-   */
-  abandoned: boolean;
 }
 
 const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(function* (
@@ -127,9 +99,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   supervisor: SupervisorChannelHandle,
 ) {
   const scope = yield* Scope.Scope;
-  const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
-  const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
-    events,
+  const { events, offer, release, acknowledge } = yield* makeLocalCliEventIngress(
     child.acknowledge,
   );
   const controlResponses = new Map<string, PendingControl>();
@@ -142,8 +112,12 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   const correlation = makeClaudeResultCorrelation();
   const usage = makeLocalClaudeUsage();
   const reports = makeLocalClaudeReportDelivery(offer);
-  let pendingInterrupt: PendingInterrupt | undefined;
   let assignmentEpoch = 0;
+  const interrupts = makeLocalCliInterrupts<PendingInterrupt>(
+    "Claude",
+    { offer, release },
+    () => assignmentEpoch,
+  );
   let nextControlId = 1;
   let initializationStarted = false;
   let nativeSessionId: string | undefined;
@@ -190,18 +164,18 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         supervisor.acceptedReportForEpoch(epoch).pipe(
           Effect.flatMap((report) =>
             report?.assignmentEpoch === epoch
-              ? inputs
-                  .acceptReport(epoch)
-                  .pipe(
-                    Effect.andThen(reports.forwardReport({ type: "report", ...report })),
-                    Effect.as(true),
-                  )
+              ? forwardAcceptedReport(report).pipe(Effect.as(true))
               : Effect.succeed(false),
           ),
           Effect.orElseSucceed(() => false),
         ),
     },
   );
+  /** Settles any guidance the accepted report outran, then forwards the report itself. */
+  const forwardAcceptedReport = (report: BackendReport) =>
+    inputs
+      .acceptReport(report.assignmentEpoch)
+      .pipe(Effect.andThen(reports.forwardReport({ type: "report", ...report })));
 
   const cancelPending = (error: SubagentError) => {
     inputs.cancel(error);
@@ -209,11 +183,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
     controlResponses.clear();
     Deferred.doneUnsafe(nativeInitialization, Effect.fail(error));
-    if (pendingInterrupt) {
-      // Transport closure is a safe boundary for clearing interrupt ownership.
-      Deferred.doneUnsafe(pendingInterrupt.terminal, Effect.fail(error));
-      pendingInterrupt = undefined;
-    }
+    interrupts.cancel(error);
     toolNames.clear();
     nativeToolNames.clear();
     correlation.clear();
@@ -221,13 +191,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     supervisor.cancelPending(error.message);
   };
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
+    Effect.sync(() =>
       cancelPending(
         processError("close", "local_claude_closed", "Local Claude Code backend closed."),
-      );
-      acknowledgeAll();
-      Queue.endUnsafe(events);
-    }),
+      ),
+    ),
   );
 
   const handleSupervisorEvent = (event: SupervisorEvent) =>
@@ -278,18 +246,20 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     return release(raw);
   };
 
+  /** The event names the initialized native session, rather than merely not contradicting it. */
+  const isExactSession = (event: ClaudeUserProtocolEvent): boolean =>
+    event.sessionId !== undefined && event.sessionId === nativeSessionId;
+
   const isReplayConfirmation = (
     event: ClaudeUserProtocolEvent,
     pending: PendingUserReplay,
-    sameSession: boolean,
   ): boolean =>
     // Exact UUID correlation only; content identity is diagnostic evidence and
     // never authorizes a replay.
     event.isReplay &&
     event.uuid !== undefined &&
     event.uuid === pending.uuid &&
-    sameSession &&
-    claudeSessionDiagnostic(event.sessionId, nativeSessionId) === "match";
+    isExactSession(event);
 
   const isInterruptMarker = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
     event.isReplay &&
@@ -304,7 +274,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       replay !== undefined &&
       // Only Claude's origin label rules out pending adapter input replayed without its UUID.
       (replay === "labelled" || inputs.pending === undefined) &&
-      claudeSessionDiagnostic(event.sessionId, nativeSessionId) === "match" &&
+      isExactSession(event) &&
       assignmentEpoch > 0 &&
       correlation.hasOutstandingAssignment(assignmentEpoch)
     );
@@ -325,17 +295,16 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     ((event.isSynthetic && isInternalReplayOrigin(event.originKind, event.originSubkind)) ||
       claudeTaskNotificationReplay(event) !== undefined);
 
-  const isKnownReplay = (event: ClaudeUserProtocolEvent, sameSession: boolean): boolean =>
+  const isKnownReplay = (event: ClaudeUserProtocolEvent): boolean =>
     // A delayed or duplicate replay of an input this handle already
     // confirmed is safely acknowledged only inside the native session.
     event.uuid !== undefined &&
     correlation.hasSentUuid(event.uuid) &&
     (event.isReplay || isInternalReplayOrigin(event.originKind, event.originSubkind)) &&
-    sameSession &&
-    claudeSessionDiagnostic(event.sessionId, nativeSessionId) === "match";
+    isExactSession(event);
 
   const pendingDiagnostic = (): ClaudeUserDiagnosticContext["pending"] =>
-    inputs.pending?.operation ?? (pendingInterrupt ? "interrupt" : "none");
+    inputs.pending?.operation ?? (interrupts.current ? "interrupt" : "none");
 
   const contentMatch = (event: ClaudeUserProtocolEvent): ClaudeSentContentMatch => {
     const digest = userContentDigest(event.text);
@@ -366,7 +335,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   const recordUserDecision = (
     event: ClaudeUserProtocolEvent,
     sequence: number,
-    decision: Extract<LocalClaudeDebugEntry, { readonly kind: "user-decision" }>["decision"],
+    decision: UserDecision,
     report: ClaudeUserDiagnosticContext["report"],
   ) => {
     if (!child.claudeDebug) return Effect.void;
@@ -441,14 +410,12 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   offer(
                     {
                       type: "warning",
-                      source: "runtime-extension",
                       message: `${message} The accepted supervisor report was preserved.`,
                     },
                     raw,
                   ),
                 ),
-                Effect.andThen(inputs.acceptReport(report.assignmentEpoch)),
-                Effect.andThen(reports.forwardReport({ type: "report", ...report })),
+                Effect.andThen(forwardAcceptedReport(report)),
               ),
             ),
           );
@@ -457,7 +424,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     );
   };
 
-  /** Records one half of the interrupt evidence; the marker+result pair settles it. */
+  /** Records one half of the interrupt evidence; the marker+result pair completes it. */
   const observeInterruptEvidence = (
     interrupt: PendingInterrupt,
     evidence: "markerSeen" | "resultSeen",
@@ -465,100 +432,81 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   ) =>
     Effect.suspend(() => {
       interrupt[evidence] = true;
-      if (interrupt.markerSeen && interrupt.resultSeen) {
-        if (interrupt.abandoned) {
-          pendingInterrupt = undefined;
-          return offer({ type: "run_settled", assignmentEpoch: interrupt.epoch }, raw);
-        }
-        Deferred.doneUnsafe(interrupt.terminal, Effect.void);
-      }
-      return release(raw);
+      return interrupt.markerSeen && interrupt.resultSeen
+        ? interrupts.complete(interrupt, raw)
+        : release(raw);
     });
 
   const onUser = (event: ClaudeUserProtocolEvent, raw: LocalCliWireEvent, sequence: number) => {
     const sameSession = isSameClaudeSession(event.sessionId, nativeSessionId);
     const pending = inputs.pending;
-    const interrupt = pendingInterrupt;
+    const interrupt = interrupts.current;
+    const decide = (decision: UserDecision, action: Effect.Effect<void>) =>
+      recordUserDecision(event, sequence, decision, "none").pipe(Effect.andThen(action));
     if (event.parentToolUseId !== undefined) {
       // --forward-subagent-text emits nested assistant/user frames with
       // parent_tool_use_id. Text-only user frames are activity, while their tool
       // results retain the nested tool lifecycle used by write-claim observation.
       if (assignmentEpoch <= 0 || !sameSession)
         return rejectUncorrelatedUser(event, raw, sequence, "none");
-      return recordUserDecision(event, sequence, "native-forward", "none").pipe(
-        Effect.andThen(
-          event.toolResults.length > 0
-            ? handleToolResults(event.toolResults, raw)
-            : offer({ type: "activity", assignmentEpoch }, raw),
-        ),
+      return decide(
+        "native-forward",
+        event.toolResults.length > 0
+          ? handleToolResults(event.toolResults, raw)
+          : offer({ type: "activity", assignmentEpoch }, raw),
       );
     }
-    if (pending && isReplayConfirmation(event, pending, sameSession)) {
-      return recordUserDecision(event, sequence, "pending-confirmation", "none").pipe(
-        Effect.andThen(
-          Effect.suspend(() => {
-            if (inputs.pending !== pending || inputs.failure) return release(raw);
-            correlation.rememberSentUuid(pending.uuid, {
-              contentDigest: pending.contentDigest,
-              kind: sentKindForOperation(pending.operation),
-            });
-            if (pending.resultKind)
-              correlation.register(
-                { uuid: pending.uuid, kind: pending.resultKind, epoch: pending.epoch },
-                usage.baseline(),
-              );
-            return inputs
-              .confirm(pending)
-              .pipe(
-                Effect.andThen(
-                  pending.emitRunStarted
-                    ? offer({ type: "run_started", assignmentEpoch: pending.epoch }, raw)
-                    : release(raw),
-                ),
-              );
-          }),
-        ),
+    if (pending && isReplayConfirmation(event, pending)) {
+      return decide(
+        "pending-confirmation",
+        Effect.suspend(() => {
+          if (inputs.pending !== pending || inputs.failure) return release(raw);
+          correlation.rememberSentUuid(pending.uuid, {
+            contentDigest: pending.contentDigest,
+            kind: sentKindForOperation(pending.operation),
+          });
+          if (pending.resultKind)
+            correlation.register(
+              { uuid: pending.uuid, kind: pending.resultKind, epoch: pending.epoch },
+              usage.baseline(),
+            );
+          return inputs
+            .confirm(pending)
+            .pipe(
+              Effect.andThen(
+                pending.emitRunStarted
+                  ? offer({ type: "run_started", assignmentEpoch: pending.epoch }, raw)
+                  : release(raw),
+              ),
+            );
+        }),
       );
     }
     if (interrupt && isInterruptMarker(event, sameSession))
-      return recordUserDecision(event, sequence, "interrupt-marker", "none").pipe(
-        Effect.andThen(observeInterruptEvidence(interrupt, "markerSeen", raw)),
+      return decide("interrupt-marker", observeInterruptEvidence(interrupt, "markerSeen", raw));
+    if (isSyntheticSubturn(event, sameSession))
+      return decide(
+        isQueuedTaskNotificationReplay(event) ? "queued-task-notification" : "synthetic-subturn",
+        Effect.suspend(() => {
+          // Claude-owned task notifications and auto-continuations are
+          // causal subturns of the active assignment. Older frames may omit
+          // their UUID; command-queue replays omit the synthetic flag, and
+          // 2.1.259 also omitted the origin. A private identity owns the
+          // result FIFO.
+          const syntheticUuid = event.uuid ?? `synthetic:${synchronousRandomUuid()}`;
+          if (event.uuid !== undefined) correlation.rememberInternalReplayUuid(event.uuid);
+          correlation.register(
+            { uuid: syntheticUuid, kind: "synthetic", epoch: assignmentEpoch },
+            usage.baseline(),
+          );
+          return offer({ type: "activity", assignmentEpoch }, raw);
+        }),
       );
-    if (isSyntheticSubturn(event, sameSession)) {
-      const decision = isQueuedTaskNotificationReplay(event)
-        ? "queued-task-notification"
-        : "synthetic-subturn";
-      return recordUserDecision(event, sequence, decision, "none").pipe(
-        Effect.andThen(
-          Effect.suspend(() => {
-            // Claude-owned task notifications and auto-continuations are
-            // causal subturns of the active assignment. Older frames may omit
-            // their UUID; command-queue replays omit the synthetic flag, and
-            // 2.1.259 also omitted the origin. A private identity owns the
-            // result FIFO.
-            const syntheticUuid = event.uuid ?? `synthetic:${synchronousRandomUuid()}`;
-            if (event.uuid !== undefined) correlation.rememberInternalReplayUuid(event.uuid);
-            correlation.register(
-              { uuid: syntheticUuid, kind: "synthetic", epoch: assignmentEpoch },
-              usage.baseline(),
-            );
-            return offer({ type: "activity", assignmentEpoch }, raw);
-          }),
-        ),
-      );
-    }
     if (isKnownInternalReplay(event, sameSession))
-      return recordUserDecision(event, sequence, "known-internal-replay", "none").pipe(
-        Effect.andThen(release(raw)),
-      );
+      return decide("known-internal-replay", release(raw));
     if (event.toolResults.length > 0)
-      return recordUserDecision(event, sequence, "tool-results", "none").pipe(
-        Effect.andThen(handleToolResults(event.toolResults, raw)),
-      );
-    if (isKnownReplay(event, sameSession))
-      return recordUserDecision(event, sequence, "known-replay", "none").pipe(
-        Effect.andThen(release(raw)),
-      );
+      return decide("tool-results", handleToolResults(event.toolResults, raw));
+    if (isKnownReplay(event)) return decide("known-replay", release(raw));
     return handleUncorrelatedTopLevelUser(event, raw, sequence);
   };
 
@@ -608,7 +556,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       if (inconsistent)
         yield* offer({
           type: "warning",
-          source: "runtime-extension",
           message:
             "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
         });
@@ -640,7 +587,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     const warn = inconsistent
       ? offer({
           type: "warning",
-          source: "runtime-extension",
           message:
             "Claude reported a regressing cumulative result usage total; accounting stays monotone and the regression was ignored.",
         })
@@ -725,15 +671,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   ? offer(
                       {
                         type: "warning",
-                        source: "runtime-extension",
                         message:
                           "Claude emitted a native result error after exact supervisor report acceptance; the accepted report was preserved.",
                       },
                       raw,
-                    ).pipe(
-                      Effect.andThen(inputs.acceptReport(expectation.epoch)),
-                      Effect.andThen(reports.forwardReport({ type: "report", ...report })),
-                    )
+                    ).pipe(Effect.andThen(forwardAcceptedReport(report)))
                   : reject,
             }),
           )
@@ -752,7 +694,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     );
     // An interrupted assignment result: the exact native aborted-stream failure for
     // the pending interrupt's epoch (or an uncorrelated pinned frame), in this session.
-    const interrupt = pendingInterrupt;
+    const interrupt = interrupts.current;
     const interruptedResult =
       interrupt !== undefined &&
       event.isError &&
@@ -760,9 +702,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       event.stopReason === "aborted_streaming" &&
       ((event.userMessageUuid === undefined && expectation === undefined) ||
         (expectation?.kind === "assignment" && expectation.epoch === interrupt.epoch)) &&
-      (event.sessionId === undefined ||
-        nativeSessionId === undefined ||
-        event.sessionId === nativeSessionId);
+      isSameClaudeSession(event.sessionId, nativeSessionId);
     if (interruptedResult)
       return reconcileResultUsage(event, expectation).pipe(
         Effect.andThen(reports.observeNativeResult(interrupt.epoch)),
@@ -793,8 +733,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         return diagnostics
           .observe("protocol-error")
           .pipe(Effect.andThen(offer({ type: "protocol_error", message: raw.message }, raw)));
-      if (raw.type === "exit")
-        return diagnostics.observe("exit").pipe(Effect.andThen(release(raw)));
       return decodeClaudeProtocolEvent(raw.value).pipe(
         Effect.flatMap((event) => {
           const recordInbound =
@@ -845,13 +783,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     assignmentEpoch <= 0
       ? Effect.void
       : supervisor.acceptedReportForEpoch(assignmentEpoch).pipe(
-          Effect.flatMap((report) =>
-            report
-              ? inputs
-                  .acceptReport(report.assignmentEpoch)
-                  .pipe(Effect.andThen(reports.forwardReport({ type: "report", ...report })))
-              : Effect.void,
-          ),
+          Effect.flatMap((report) => (report ? forwardAcceptedReport(report) : Effect.void)),
           Effect.catch(() =>
             offer({
               type: "protocol_error",
@@ -864,7 +796,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
 
   yield* Stream.fromQueue(child.events).pipe(
     Stream.runForEach(consumeRaw),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.ensuring(
       deliverTerminalReport(
         events,
@@ -888,7 +820,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   );
   yield* Stream.fromQueue(supervisor.events).pipe(
     Stream.runForEach(handleSupervisorEvent),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.forkScoped,
   );
 
@@ -986,7 +918,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           : "Claude Code did not provide a native session identity.",
       );
 
-    let supervisorReady = false;
     for (let attempt = 0; attempt < MCP_READY_ATTEMPTS; attempt += 1) {
       const status = yield* requestControl("mcp_status", claudeMcpStatusFrame).pipe(
         Effect.flatMap((value) =>
@@ -1006,113 +937,47 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       );
       if (server?.status === "connected") {
         const inventory = new Set(server.tools?.map((tool) => tool.name) ?? []);
-        if (SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool))) {
-          supervisorReady = true;
-          break;
-        }
-        return yield* processError(
-          "initialize",
-          "claude_supervisor_tools_missing",
-          "Claude Code connected the private supervisor MCP server without its mandatory tool inventory.",
-        );
+        if (!SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool)))
+          return yield* processError(
+            "initialize",
+            "claude_supervisor_tools_missing",
+            "Claude Code connected the private supervisor MCP server without its mandatory tool inventory.",
+          );
+        return { model: native.model, effort: request.effort, sessionId: native.sessionId };
       }
       if (server && server.status !== "pending" && server.status !== "connecting") break;
       yield* Effect.sleep("50 millis");
     }
-    if (!supervisorReady)
-      return yield* processError(
-        "initialize",
-        "claude_supervisor_mcp_unavailable",
-        "Claude Code did not connect the mandatory pi_subagents_supervisor MCP server.",
-      );
-    return {
-      model: native.model,
-      effort: request.effort,
-      sessionId: native.sessionId,
-    };
+    return yield* processError(
+      "initialize",
+      "claude_supervisor_mcp_unavailable",
+      "Claude Code did not connect the mandatory pi_subagents_supervisor MCP server.",
+    );
   });
 
-  const interrupt = Effect.acquireUseRelease(
-    Effect.sync(() => {
-      if (inputs.pending || inputs.failure)
-        return {
-          lifecycle: undefined,
-          error: processError(
+  const interrupt = interrupts.run({
+    blocked: () =>
+      inputs.pending || inputs.failure
+        ? processError(
             "interrupt",
             "interrupt_not_sent",
             "Claude stream-input acknowledgement remains unresolved; cancel_queued interruption could discard owned guidance. Do not resend; wait or stop the run.",
-          ),
-        } as const;
-      if (pendingInterrupt)
-        return {
-          lifecycle: undefined,
-          error: processError(
-            "interrupt",
-            "interrupt_not_sent",
-            pendingInterrupt.abandoned
-              ? "A previous Claude interrupt lifecycle is still unresolved; a second interrupt would be ambiguously correlated."
-              : "Another Claude interrupt lifecycle is already pending.",
-          ),
-        } as const;
+          )
+        : undefined,
+    make: (base) => {
       const requestId = `interrupt-${nextControlId++}`;
-      const lifecycle: PendingInterrupt = {
-        requestId,
-        epoch: assignmentEpoch,
-        response: Deferred.makeUnsafe<unknown, SubagentError>(),
-        terminal: Deferred.makeUnsafe<void, SubagentError>(),
-        markerSeen: false,
-        resultSeen: false,
-        abandoned: false,
-      };
-      pendingInterrupt = lifecycle;
-      controlResponses.set(requestId, { operation: "interrupt", deferred: lifecycle.response });
-      return { lifecycle } as const;
-    }),
-    (acquired) => {
-      if (!acquired.lifecycle) return Effect.fail(acquired.error);
-      const lifecycle = acquired.lifecycle;
-      const response = sendControl("interrupt", claudeInterruptFrame(lifecycle.requestId)).pipe(
-        Effect.andThen(Deferred.await(lifecycle.response)),
-      );
-      return Effect.all([response, Deferred.await(lifecycle.terminal)], {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: CONTROL_TIMEOUT,
-          orElse: () =>
-            Effect.fail(
-              processError(
-                "interrupt",
-                "interrupt_outcome_uncertain",
-                "Claude interrupt did not complete its correlated response, replay marker, and aborted result lifecycle; it will not be retried.",
-              ),
-            ),
-        }),
-      );
+      const response = Deferred.makeUnsafe<unknown, SubagentError>();
+      controlResponses.set(requestId, { operation: "interrupt", deferred: response });
+      return { ...base, requestId, response, markerSeen: false, resultSeen: false };
     },
-    (acquired, exit) =>
-      Effect.suspend(() => {
-        if (!acquired.lifecycle) return Effect.void;
-        controlResponses.delete(acquired.lifecycle.requestId);
-        if (pendingInterrupt !== acquired.lifecycle) return Effect.void;
-        // An uncertain or cancelled interrupt retains exact lifecycle ownership:
-        // a late correlated marker+result pair then pauses through run_settled.
-        // Definite success or definite rejection releases ownership immediately.
-        const ownership = classifyLocalCliInterruptOwnership(exit);
-        if (ownership === "release") {
-          pendingInterrupt = undefined;
-          return Effect.void;
-        }
-        acquired.lifecycle.abandoned = true;
-        // The marker/result pair may already be complete while only the control
-        // response is missing. Emit settlement now or no later native event would
-        // remain to resolve the orchestration-level pending pause.
-        if (!acquired.lifecycle.markerSeen || !acquired.lifecycle.resultSeen) return Effect.void;
-        pendingInterrupt = undefined;
-        return offer({ type: "run_settled", assignmentEpoch: acquired.lifecycle.epoch });
-      }),
-  );
+    respond: (lifecycle) =>
+      sendControl("interrupt", claudeInterruptFrame(lifecycle.requestId)).pipe(
+        Effect.andThen(Deferred.await(lifecycle.response)),
+      ),
+    timeoutMessage:
+      "Claude interrupt did not complete its correlated response, replay marker, and aborted result lifecycle; it will not be retried.",
+    onRelease: (lifecycle) => controlResponses.delete(lifecycle.requestId),
+  });
 
   return {
     pid: child.pid,
@@ -1138,10 +1003,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         ),
       steer: (message: string) => inputs.send(message, assignmentEpoch, "steer"),
       interrupt,
-      renameDisplay: () => Effect.fail(unsupported("rename-display")),
-      reply: (requestId: string, message: string) =>
-        supervisor.reply(requestId, message).pipe(Effect.mapError(supervisorError("reply"))),
-      notifyPeers: () => Effect.fail(unsupported("peer-notice")),
     },
     acknowledge,
     terminate: child.terminate,
@@ -1149,17 +1010,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   };
 });
 
-export const makeLocalClaudeBackendDriver = (
-  processes: LocalCliProcessContract,
-  supervisors: SupervisorChannelContract,
-): BackendDriver => ({
-  host: "local",
-  runtime: "claude",
-  capabilities: ["steer", "interrupt", "parent-contact"],
-  supportsContext: (context) => context === "fresh",
-  preflight: (request) => processes.preflight({ runtime: "claude", ...request }),
-  spawn: (request) =>
-    Effect.flatMap(startLocalCli("claude", request, processes, supervisors), (startup) =>
-      makeLocalClaudeHandle(startup.launch, startup.child, startup.supervisor),
-    ),
-});
+export const makeLocalClaudeBackendDriver = makeLocalCliBackendDriver(
+  "claude",
+  (capability) => `Local Claude Code does not provide a confirmable ${capability} operation.`,
+  makeLocalClaudeHandle,
+);

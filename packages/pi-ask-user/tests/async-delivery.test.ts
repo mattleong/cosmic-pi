@@ -120,34 +120,22 @@ effectIt.effect(
     }),
 );
 
-effectIt.effect(
-  "a failed provenance append cannot queue a message without its branch receipt",
-  () =>
+// A failed provenance append cannot queue a message without its branch receipt.
+effectIt.effect.each(["appendEntry", "sendMessage"] as const)(
+  "a throwing %s produces a redacted typed failure",
+  (failing) =>
     Effect.gen(function* () {
       const sendMessage = vi.fn();
       const pi: ExtensionAPI = opaque({
+        appendEntry: vi.fn(),
         sendMessage,
-        appendEntry: () => {
-          throw new Error("unavailable");
+        [failing]: () => {
+          throw new Error("secret-raw-error");
         },
       });
-      expect(
-        yield* Effect.flip(makeAsyncDelivery(pi, "generation", () => true)(snapshot)),
-      ).toMatchObject({ operation: "deliver" });
-      expect(sendMessage).not.toHaveBeenCalled();
+      const error = yield* Effect.flip(makeAsyncDelivery(pi, "generation", () => true)(snapshot));
+      expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "deliver" });
+      expect(`${error.message} ${error.operation}`).not.toContain("secret-raw-error");
+      if (failing === "appendEntry") expect(sendMessage).not.toHaveBeenCalled();
     }),
-);
-
-effectIt.effect("a throwing sender produces a redacted typed failure", () =>
-  Effect.gen(function* () {
-    const pi: ExtensionAPI = opaque({
-      appendEntry: vi.fn(),
-      sendMessage: () => {
-        throw new Error("secret-raw-error");
-      },
-    });
-    const error = yield* Effect.flip(makeAsyncDelivery(pi, "generation", () => true)(snapshot));
-    expect(error).toMatchObject({ _tag: "AskUserHostError", operation: "deliver" });
-    expect(`${error.message} ${error.operation}`).not.toContain("secret-raw-error");
-  }),
 );

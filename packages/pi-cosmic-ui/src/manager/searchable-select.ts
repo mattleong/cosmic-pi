@@ -18,8 +18,7 @@ import {
   pageSteps,
   type FullScreenSelectionKeybindingId,
 } from "./keymap.ts";
-import { filterReservedKeyLabel, filterTextInputKeyLabel } from "./key-labels.ts";
-import { fullScreenSettingsHint } from "./settings-adapter.ts";
+import { configuredKeyLabels, TEXT_INPUT_KEY_LABELS } from "./key-labels.ts";
 import { focusedField } from "./style.ts";
 
 export const managerSelectTheme = (theme: Theme): ConstructorParameters<typeof SelectList>[2] => ({
@@ -42,16 +41,14 @@ export interface SearchableSelectPageChoice<A> {
   readonly tone?: Parameters<Theme["fg"]>[0] | undefined;
 }
 
-export type SettingsSelectKeybindingId = FullScreenSelectionKeybindingId;
-
 export interface SearchableSelectHostOptions {
   readonly getHeight: () => number;
   readonly requestRender: () => void;
   readonly matchesKeybinding?:
-    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | ((data: string, id: FullScreenSelectionKeybindingId) => boolean)
     | undefined;
   readonly keybindingLabel?:
-    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
+    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
     | undefined;
 }
 
@@ -72,7 +69,7 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly cancel: () => void;
 }
 
-export interface SearchableSelectSearchState {
+interface SearchableSelectSearchState {
   readonly query: string;
   readonly active: boolean;
 }
@@ -201,25 +198,24 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       case "confirm":
       case "forward": {
         const choice = this.selectedChoice();
-        if (choice?.enabled !== false) {
-          if (choice) {
-            this.selectedIdentity = choice.value;
-            this.options.select(choice.payload);
-          } else
-            this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
-        } else
+        if (!choice)
+          this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
+        else if (choice.enabled === false)
           this.feedback =
             choice.disabledReason ?? `${choice.item.label || choice.value} is unavailable.`;
+        else {
+          this.selectedIdentity = choice.value;
+          this.options.select(choice.payload);
+        }
         break;
       }
       case "search":
         this.setSearchMode(true);
         break;
-      case "help": {
+      case "help":
         this.alternateHelp = !this.alternateHelp;
         this.list = this.buildList();
         break;
-      }
     }
   }
 
@@ -229,16 +225,14 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       matchesKeybinding: this.options.matchesKeybinding,
     });
     if (resolution?._tag === "Action") {
-      const currentChoice = this.selectedChoice();
-      const current = currentChoice ? this.filtered.indexOf(currentChoice) : 0;
-      const length = this.filtered.length;
       if (isListMotion(resolution.action)) {
-        if (length > 0) {
+        if (this.filtered.length > 0) {
+          const currentChoice = this.selectedChoice();
           this.list.setSelectedIndex(
             nextListMotionIndex(
               resolution.action,
-              current,
-              length,
+              currentChoice ? this.filtered.indexOf(currentChoice) : 0,
+              this.filtered.length,
               pageSteps(this.listHeight - 1),
               true,
             ),
@@ -279,29 +273,33 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     this.feedback = undefined;
   }
 
+  /** Configured key labels, minus keys that the current mode keeps for typing or shortcuts. */
+  private keys() {
+    return configuredKeyLabels(
+      this.options.keybindingLabel,
+      this.searchMode ? TEXT_INPUT_KEY_LABELS : FULL_SCREEN_NAVIGATION_SHORTCUTS,
+    );
+  }
+
+  /** While searching, cancel either leaves search or closes the page. */
+  private searchCancel(): string {
+    const verb = this.options.cancelBehavior === "close" ? "Cancel" : "Done";
+    return `${this.keys().key("tui.select.cancel", "Esc")} ${verb}`;
+  }
+
   private footer(inner: number): string {
-    const key = (id: SettingsSelectKeybindingId, fallback: string): string => {
-      const label = this.options.keybindingLabel?.(id, fallback) || fallback;
-      return this.searchMode
-        ? filterTextInputKeyLabel(label, fallback)
-        : filterReservedKeyLabel(label, FULL_SCREEN_NAVIGATION_SHORTCUTS, fallback);
-    };
+    const { key, movement, navigation: normalNavigation } = this.keys();
     const confirm = key("tui.select.confirm", "Enter");
     const cancel = key("tui.select.cancel", "Esc");
-    const configuredNavigation = this.options.keybindingLabel
-      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-      : undefined;
-    const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
-    const searchNavigation = configuredNavigation ?? "↑/↓";
+    const searchNavigation = movement ?? "↑/↓";
     const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
-    const searchCancel = this.options.cancelBehavior === "close" ? "Cancel" : "Done";
     return this.searchMode
       ? renderResponsiveManagerFooter(inner, [
           [
             `Type to filter · ${searchNavigation} Navigate`,
-            `${confirm} Select · ${cancel} ${searchCancel}`,
+            `${confirm} Select · ${this.searchCancel()}`,
           ],
-          [`${confirm} Select`, `${cancel} ${searchCancel}`],
+          [`${confirm} Select`, this.searchCancel()],
         ])
       : this.alternateHelp
         ? renderResponsiveManagerFooter(inner, [
@@ -376,7 +374,10 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       );
       const searchLines = this.searchMode
         ? [
-            theme.fg("dim", fullScreenSettingsHint({ searching: true })),
+            theme.fg(
+              "dim",
+              `Type to filter · ${this.keys().key("tui.select.confirm", "Enter")} Select · ${this.searchCancel()}`,
+            ),
             ...this.input.render(Math.max(1, inner)).map((line) => focusedField(theme, line)),
           ]
         : [];

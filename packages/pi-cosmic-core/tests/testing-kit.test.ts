@@ -4,7 +4,12 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { nodeFsPromises as fs } from "../src/platform/node-builtins.ts";
-import { deferredPromise, killChild, spawnIpcChild, temporaryDirectory } from "../testing.ts";
+import { deferredPromise, spawnIpcChild, temporaryDirectory } from "../testing.ts";
+import { killChild } from "../src/testing/ipc-child.ts";
+
+const childFixture = fileURLToPath(
+  new URL("./fixtures/cross-process-lock-child.ts", import.meta.url),
+);
 
 it.effect("settles a deferred promise once, with the exact value or error", () =>
   Effect.gen(function* () {
@@ -33,11 +38,9 @@ it.live("records IPC messages from spawn and removes the temporary directory wit
     const directory = yield* Effect.scoped(
       Effect.gen(function* () {
         const directory = yield* temporaryDirectory("cosmic-kit-test-");
-        const child = yield* spawnIpcChild(
-          fileURLToPath(new URL("./fixtures/cross-process-lock-child.ts", import.meta.url)),
-          [directory, "home"],
-          { timeout: "10 seconds" },
-        );
+        const child = yield* spawnIpcChild(childFixture, [directory, "exit"], {
+          timeout: "10 seconds",
+        });
         yield* child.exited;
         // Both messages arrived before these waits began.
         yield* child.wait("attempting");
@@ -61,11 +64,9 @@ it.live("explains a wait that times out with what the child sent and how it exit
   Effect.scoped(
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory("cosmic-kit-test-");
-      const child = yield* spawnIpcChild(
-        fileURLToPath(new URL("./fixtures/cross-process-lock-child.ts", import.meta.url)),
-        [directory, "home"],
-        { timeout: "1 second" },
-      );
+      const child = yield* spawnIpcChild(childFixture, [directory, "exit"], {
+        timeout: "1 second",
+      });
       yield* child.exited;
       const exit = yield* Effect.exit(child.wait("never-sent"));
       const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;

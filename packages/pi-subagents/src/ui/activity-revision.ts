@@ -2,7 +2,7 @@ import type { ActivityItem } from "pi-cosmic-ui/activity";
 import { sha256Text } from "pi-cosmic-core";
 
 /** An item before its revision is stamped; distributes over the status variants. */
-export type UnrevisionedItem<Item extends ActivityItem = ActivityItem> = Item extends ActivityItem
+type UnrevisionedItem<Item extends ActivityItem = ActivityItem> = Item extends ActivityItem
   ? Omit<Item, "revision">
   : never;
 

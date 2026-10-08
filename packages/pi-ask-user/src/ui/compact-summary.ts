@@ -157,11 +157,9 @@ function deliveryFailed(failed: readonly QuestionnaireState[]): CompactIssue | u
   };
 }
 
-interface ClassifiedRow {
+type ClassifiedRow = Pick<ReplayedSnapshot, "delivery" | "outcome"> & {
   readonly state: QuestionnaireState;
-  readonly delivery: ReplayedSnapshot["delivery"];
-  readonly outcome?: ReplayedOutcome | undefined;
-}
+};
 
 const classified = <Row extends { readonly state: QuestionnaireState | undefined }>(
   row: Row,

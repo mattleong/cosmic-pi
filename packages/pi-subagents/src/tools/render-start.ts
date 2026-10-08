@@ -14,17 +14,16 @@ import {
   clipToWidth,
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
-import { clipWithMarker } from "../run/state.ts";
-import { formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
+import { duplicateRunNames, formatRunRoute, shortRunId } from "../ui/run-presentation.ts";
+import { failureRecovery } from "./compact-action-failures.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
-import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
+import { boundedLine, failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
   renderToolHeader,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import { failureRecovery } from "./render-management.ts";
 import type { SubagentStartFailure } from "./model.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 
@@ -45,27 +44,14 @@ export const renderSubagentStartCall = (
   contentOnly = false,
   context?: { readonly state: object },
 ): Component => {
-  const requested = agents
+  const title =
+    agents.length === 0 ? "Start subagents" : `Start ${countLabel(agents.length, "subagent")}`;
+  const subtitle = agents
     .map((agent, index) => `${requestedName(agent, index)} [${requestedProfile(agent)}]`)
     .join(", ");
   const container = new Container();
   if (!contentOnly) {
-    container.addChild(
-      new Text(
-        renderToolHeader(
-          {
-            title:
-              agents.length === 0
-                ? "Start subagents"
-                : `Start ${countLabel(agents.length, "subagent")}`,
-            subtitle: requested,
-          },
-          theme,
-        ),
-        0,
-        0,
-      ),
-    );
+    container.addChild(new Text(renderToolHeader({ title, subtitle }, theme), 0, 0));
     if (context) container.addChild(previewIssuesSlot(context));
   }
   if (!expanded) {
@@ -75,26 +61,9 @@ export const renderSubagentStartCall = (
     return container;
   }
   for (const [index, agent] of agents.entries()) {
-    container.addChild(
-      new Text(
-        theme.fg(
-          "toolOutput",
-          `${requestedName(agent, index)} · ${requestedProfile(agent)} · route/model selected at launch`,
-        ),
-        0,
-        0,
-      ),
-    );
-    container.addChild(
-      new Text(
-        theme.fg(
-          "dim",
-          `  Task: ${clipWithMarker(sanitizeTerminalLine(agent.task), 512, "… [truncated]")}`,
-        ),
-        0,
-        0,
-      ),
-    );
+    const request = `${requestedName(agent, index)} · ${requestedProfile(agent)} · route/model selected at launch`;
+    container.addChild(new Text(theme.fg("toolOutput", request), 0, 0));
+    container.addChild(new Text(theme.fg("dim", `  Task: ${boundedLine(agent.task, 512)}`), 0, 0));
   }
   return container;
 };
@@ -207,10 +176,7 @@ const launchFailureSection = (
     `${sanitizeTerminalLine(entry.name)} couldn't start`,
     new Text(
       [
-        theme.fg(
-          "toolOutput",
-          clipWithMarker(sanitizeTerminalLine(failure.message), 2_048, "… [truncated]"),
-        ),
+        theme.fg("toolOutput", boundedLine(failure.message, 2_048)),
         ...(failure.admittedRun
           ? [theme.fg("dim", formatFailedStartRecovery(failure.admittedRun))]
           : []),
@@ -228,19 +194,14 @@ const launchFailureSection = (
     ),
   );
 
-const sharedEntryNames = (entries: ReadonlyArray<SubagentStartEntry>): ReadonlySet<string> => {
-  const seen = new Set<string>();
-  const shared = new Set<string>();
-  for (const entry of entries) (seen.has(entry.name) ? shared : seen).add(entry.name);
-  return shared;
-};
-
 /** Collapsed receipts list this many launches; the call's affordance reveals the rest. */
 const COLLAPSED_ROWS = 6;
 
 export const renderStartReceiptComponent = (
-  failures: ReadonlyArray<SubagentStartFailure>,
-  entries: ReadonlyArray<SubagentStartEntry>,
+  receipt: {
+    readonly startEntries: ReadonlyArray<SubagentStartEntry>;
+    readonly startFailures?: ReadonlyArray<SubagentStartFailure> | undefined;
+  },
   expanded: boolean,
   theme: Theme,
   partial = false,
@@ -248,13 +209,12 @@ export const renderStartReceiptComponent = (
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
+    const entries = receipt.startEntries;
     const started = entries.filter((entry) => entry.status === "started").length;
-    const sharedNames = sharedEntryNames(entries);
-    const failureOf = (entry: SubagentStartEntry) =>
-      failures.find((failure) => failure.index === entry.index);
+    const sharedNames = duplicateRunNames(entries);
     const shown = expanded ? entries : entries.slice(0, COLLAPSED_ROWS);
     const rows = shown.flatMap((entry) => {
-      const failure = failureOf(entry);
+      const failure = receipt.startFailures?.find((candidate) => candidate.index === entry.index);
       const row = receiptRow(entry, safeWidth, theme, { expanded, sharedNames, failure });
       if (!expanded) return row;
       const fallback =

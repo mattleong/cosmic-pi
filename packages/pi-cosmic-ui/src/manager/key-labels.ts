@@ -27,19 +27,13 @@ const MODIFIER_LABELS = new Map(
   }),
 );
 
-export const formatFullScreenKeyId = (value: string): string => {
+const formatFullScreenKeyId = (value: string): string => {
   const parts = value.split("+");
   const base = parts.pop() ?? value;
   const modifiers = parts.map((part) => MODIFIER_LABELS.get(part) ?? `${part}-`).join("");
   const label = SPECIAL_KEY_LABELS.get(base) ?? base;
   return `${modifiers}${parts.includes("shift") && base.length === 1 ? label.toUpperCase() : label}`;
 };
-
-export const fullScreenKeybindingLabel = (
-  id: FullScreenSelectionKeybindingId,
-  fallback: string,
-  getKeys?: ((id: FullScreenSelectionKeybindingId) => ReadonlyArray<string>) | undefined,
-): string => getKeys?.(id).map(formatFullScreenKeyId).join("/") || fallback;
 
 /** Pi's keybindings as full-screen manager options. Labels fall back without `getKeys`. */
 export const fullScreenKeybindingOptions = (keybindings: {
@@ -49,9 +43,9 @@ export const fullScreenKeybindingOptions = (keybindings: {
   matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
     keybindings.matches(data, id),
   keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
-    fullScreenKeybindingLabel(id, fallback, (key) =>
-      Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(key) : [],
-    ),
+    (Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(id) : [])
+      .map(formatFullScreenKeyId)
+      .join("/") || fallback,
 });
 
 const SHIFT_LABEL_PREFIX = "⇧";
@@ -67,7 +61,7 @@ const SHIFT_LABEL_PREFIX = "⇧";
  * redesign, so such labels are deliberately returned unchanged instead of being parsed
  * unsafely. Returns the fallback when nothing is left to show.
  */
-export const filterReservedKeyLabel = (
+const filterReservedKeyLabel = (
   label: string,
   reservedKeys: ReadonlySet<string>,
   fallback: string,
@@ -84,12 +78,26 @@ export const filterReservedKeyLabel = (
   return parts.filter((part) => !collides(part)).join("/") || fallback;
 };
 
-// Text input owns printable keys even when they are configured as selection bindings.
-const TEXT_INPUT_KEY_LABELS = new Set([
+/** Text input owns printable keys even when they are configured as selection bindings. */
+export const TEXT_INPUT_KEY_LABELS: ReadonlySet<string> = new Set([
   ...Array.from({ length: 95 }, (_, index) => String.fromCharCode(index + 32)),
   "Space",
   "⇧Space",
 ]);
 
-export const filterTextInputKeyLabel = (label: string, fallback: string): string =>
-  filterReservedKeyLabel(label, TEXT_INPUT_KEY_LABELS, fallback);
+/**
+ * Hint labels for configured selection keys, each minus the `reserved` keys its screen keeps
+ * for typing or shortcuts. `movement` is the configured up/down pair, absent without
+ * configured labels, and `navigation` adds it after the screen's own j/k.
+ */
+export const configuredKeyLabels = (
+  keybindingLabel: ((id: FullScreenSelectionKeybindingId, fallback: string) => string) | undefined,
+  reserved: ReadonlySet<string>,
+) => {
+  const key = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
+    filterReservedKeyLabel(keybindingLabel?.(id, fallback) || fallback, reserved, fallback);
+  const movement = keybindingLabel
+    ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+    : undefined;
+  return { key, movement, navigation: movement ? `j/k · ${movement}` : "j/k" };
+};

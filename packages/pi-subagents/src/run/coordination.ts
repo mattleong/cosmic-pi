@@ -1,8 +1,7 @@
 import * as Effect from "effect/Effect";
 import type { RunRecord } from "./internal.ts";
 import { hasSubagentCapability, isActiveRunState } from "./model.ts";
-import { safeTextPrefix } from "./state.ts";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel, safeTextPrefix } from "pi-cosmic-core";
 
 const MAX_NOTICE_CLAIMS_PER_RUN = 8;
 const MAX_NOTICE_CLAIM_CHARS = 512;
@@ -50,22 +49,22 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
 
 export const makeRunPeerNotifier =
   (records: ReadonlyMap<string, RunRecord>) =>
-  (changedRunId: string): Effect.Effect<void> => {
-    const recipients = [...records.values()].flatMap((record) => {
-      const process = record.process;
-      return process &&
-        isActiveRunState(record.view.state) &&
-        hasSubagentCapability(record.view, "peer-notice")
-        ? [{ record, process }]
-        : [];
-    });
-    return Effect.forEach(
-      recipients,
-      ({ record, process }) =>
-        process.controls.notifyPeers(peerNoticeText(records.values(), record.view.id)).pipe(
-          Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
-          Effect.catch(() => Effect.void),
-        ),
-      { concurrency: 8, discard: true },
-    ).pipe(Effect.annotateLogs("changedRunId", changedRunId), Effect.asVoid);
-  };
+  (changedRunId: string): Effect.Effect<void> =>
+    // Recipients are read when the notices run, not when the effect is built.
+    Effect.suspend(() =>
+      Effect.forEach(
+        [...records.values()].flatMap((record) => {
+          const process = record.process;
+          return process &&
+            isActiveRunState(record.view.state) &&
+            hasSubagentCapability(record.view, "peer-notice")
+            ? [{ record, process }]
+            : [];
+        }),
+        ({ record, process }) =>
+          process.controls
+            .notifyPeers(peerNoticeText(records.values(), record.view.id))
+            .pipe(Effect.timeout("1 second"), Effect.ignore),
+        { concurrency: 8, discard: true },
+      ),
+    ).pipe(Effect.annotateLogs("changedRunId", changedRunId));

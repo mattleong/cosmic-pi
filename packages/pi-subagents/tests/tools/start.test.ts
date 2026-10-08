@@ -125,7 +125,7 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest("resolves authenticated child starts without a classifier dependency", function* () {
+  effectTest("resolves authenticated child starts through the caller's session", function* () {
     const callers: Array<readonly [string, string | undefined]> = [];
     const service = subagentServiceDouble({
       startSessionOwnedFrom: (callerRunId, request) =>
@@ -133,9 +133,6 @@ describe("subagent tool", () => {
           callers.push([callerRunId, request.profile]);
           return view({ id: `child-${callers.length}`, profile: request.profile });
         }),
-    });
-    const classifierCall = vi.fn(() => {
-      throw new Error("Profile selection must not consult classifiers");
     });
     const proxied = yield* executeSubagentActionEffect(
       extensionApiFixture({
@@ -153,14 +150,7 @@ describe("subagent tool", () => {
         },
       },
       undefined,
-      extensionContextFixture({
-        ...context,
-        modelRegistry: {
-          ...context.modelRegistry,
-          getAvailableOfType: classifierCall,
-          classify: classifierCall,
-        },
-      }),
+      context,
       "authenticated-caller",
     ).pipe(
       Effect.provideService(SubagentService, service),
@@ -172,7 +162,6 @@ describe("subagent tool", () => {
       ["authenticated-caller", "scout"],
       ["authenticated-caller", "generalist"],
     ]);
-    expect(classifierCall).not.toHaveBeenCalled();
     expect(proxied.usage).toBeUndefined();
     expect(decodeSubagentProxyResult(encodeSubagentProxyPayload(proxied) ?? "")).toBeDefined();
   });
@@ -264,26 +253,6 @@ describe("subagent tool", () => {
         skippedCandidates: [{ candidateIndex: 0, code: "write_claims_read_only" }],
       },
     });
-  });
-
-  effectTest("does not request confirmation when launches use profile routing", function* () {
-    const confirm = vi.fn(() => Promise.resolve(true));
-    const requests: StartSubagentRequest[] = [];
-
-    yield* invokeOptionalTool(
-      startTool(requests),
-      { agents: [{ task: "Inspect auth", profile: "scout" }] },
-      {
-        context: extensionContextFixture({
-          ...context,
-          ui: { confirm },
-        }),
-      },
-    );
-
-    expect(confirm).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.selection?.source).toBe("profile-parent-candidate");
   });
 
   effectTest("uses one active session override for discovery and launch provenance", function* () {

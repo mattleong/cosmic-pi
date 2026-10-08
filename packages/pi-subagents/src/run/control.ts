@@ -1,10 +1,9 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import { hasSubagentCapability, isTerminalRunState, type SubagentRunView } from "./model.ts";
 import {
-  clearRunNativeActivity,
+  clearRunActivity,
   commitRunPauseLocked,
   requireCapability,
   type RunContext,
@@ -14,15 +13,10 @@ import {
   invalidRequest,
   type InvalidSubagentRequestError,
   isOutcomeUncertain,
+  processError,
   type SubagentError,
   SubagentProcessError,
 } from "./errors.ts";
-import { hasRetainedAssignmentCapacity } from "./completion.ts";
-import {
-  beginNextAssignmentLocked,
-  isCurrentIssuingAssignment,
-  type RunAssignment,
-} from "./assignment.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
@@ -32,21 +26,13 @@ import { runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
-/** Service-owned turn-input admission. */
-export interface RunTurnInputAdmission {
-  /** Called only while the service state lock is held. */
+export interface RunControlDependencies extends RunContext {
+  /** Service-owned turn-input admission; called only while the service state lock is held. */
   readonly admitTurnInput: (record: RunRecord) => void;
   readonly releaseTurnInput: (record: RunRecord) => Effect.Effect<void>;
   /** Called only while the service state lock is held. */
   readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
-}
-
-export interface RunControlDependencies extends RunContext, RunTurnInputAdmission {
-  readonly steerBackend: RunProcessControls["steer"];
-  readonly submitPrompt: RunAssignment["submitPrompt"];
-  readonly retainUncertainAssignment: RunAssignment["retainUncertainAssignment"];
-  readonly interruptBackend: RunProcessControls["interrupt"];
-  readonly renameBackend: RunProcessControls["renameDisplay"];
+  readonly processControls: RunProcessControls;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
   readonly settle: RunSettlement["settle"];
 }
@@ -56,15 +42,10 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     ownerScope,
     withLock,
     requireRecord,
-    steerBackend,
-    submitPrompt,
-    allocateAssignmentAttemptToken,
-    retainUncertainAssignment,
-    interruptBackend,
+    processControls,
     admitTurnInput,
     releaseTurnInput,
     claimTurnInputDrain,
-    renameBackend,
     publish,
     sendPeerNotices,
     closeRecordScope,
@@ -98,13 +79,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const finalizeGuidance = (
     record: RunRecord,
     message: string,
-    allowReported: boolean,
   ): Effect.Effect<SubagentRunView, InvalidSubagentRequestError> =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       return yield* withLock(
         Effect.gen(function* () {
-          if (allowReported && record.view.state === "reported") return snapshotView(record.view);
           if (record.view.state !== "running")
             return yield* invalidRequest(
               "guidance_outcome_uncertain",
@@ -125,142 +104,51 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const normalized = yield* validateParentMessage(message, "Guidance message is required.");
-      const selected = yield* Effect.uninterruptibleMask(() =>
-        Effect.gen(function* () {
-          const selected = yield* withLock(
-            Effect.gen(function* () {
-              const selected = yield* requireRecord(id);
-              if (selected.view.state === "waiting_for_parent")
-                return yield* invalidRequest(
-                  "run_waiting_for_parent",
-                  `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
-                );
-              if (selected.replyPendingRequestId)
-                return yield* invalidRequest(
-                  "reply_in_flight",
-                  `Subagent ${id} already has a parent reply in flight.`,
-                );
-              if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
-                if (!hasRetainedAssignmentCapacity(selected))
-                  return yield* invalidRequest(
-                    "report_delivery_backlog",
-                    `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
-                  );
-                const attemptToken = allocateAssignmentAttemptToken();
-                const previous = {
-                  view: snapshotView(selected.view),
-                  latestAssistantText: selected.latestAssistantText,
-                  warningSlots: { ...selected.warningSlots },
-                  assignment: { ...selected.assignment },
-                  activeTools: [...selected.activeTools.entries()] as const,
-                  pauseRequested: selected.pauseRequested,
-                  pauseOutcome: selected.pauseOutcome,
-                  replyPendingRequestId: selected.replyPendingRequestId,
-                };
-                beginNextAssignmentLocked(selected, attemptToken, yield* Clock.currentTimeMillis, {
-                  finalText: undefined,
-                  progress: undefined,
-                });
-                yield* publish;
-                return {
-                  record: selected,
-                  retained: true as const,
-                  previous,
-                  attemptToken,
-                };
-              }
-              // A retained report starts a new assignment through `controls.start`; it is not
-              // active-turn steering and does not rely on the backend's `steer` capability.
-              yield* requireCapability(selected, "steer");
-              if (selected.view.state === "paused" || selected.view.state === "completed") {
-                const recovery = hasSubagentCapability(selected.view, "resume")
-                  ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
-                  : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
-                return yield* invalidRequest(
-                  "run_not_running",
-                  `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
-                );
-              }
-              if (selected.view.state === "starting")
-                return yield* invalidRequest(
-                  "run_starting",
-                  `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
-                );
-              if (selected.view.state !== "running")
-                return yield* invalidRequest(
-                  "run_not_running",
-                  `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
-                );
-              if (selected.pauseRequested)
-                return yield* invalidRequest(
-                  "interrupt_in_flight",
-                  `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
-                );
-              return { record: selected, retained: false as const };
-            }),
-          );
-          if (!selected.retained) return selected;
-
-          const record = selected.record;
-          const commit = Effect.gen(function* () {
-            yield* submitPrompt(record, normalized, "resume", selected.attemptToken).pipe(
-              Effect.tapError((error) => {
-                if (error._tag === "SubagentProcessError" && isOutcomeUncertain(error))
-                  return retainUncertainAssignment(record, selected.attemptToken, error.message);
-                return withLock(
-                  Effect.gen(function* () {
-                    if (!isCurrentIssuingAssignment(record, selected.attemptToken)) return;
-                    const sessionEvents = record.view.sessionEvents;
-                    record.view = {
-                      ...selected.previous.view,
-                      sessionEvents,
-                      usage: record.view.usage,
-                    };
-                    record.latestAssistantText = selected.previous.latestAssistantText;
-                    record.warningSlots = selected.previous.warningSlots;
-                    record.assignment = selected.previous.assignment;
-                    record.activeTools.clear();
-                    for (const [toolCallId, toolName] of selected.previous.activeTools)
-                      record.activeTools.set(toolCallId, toolName);
-                    record.pauseRequested = selected.previous.pauseRequested;
-                    record.pauseOutcome = selected.previous.pauseOutcome;
-                    record.replyPendingRequestId = selected.previous.replyPendingRequestId;
-                    yield* publish;
-                  }),
-                );
-              }),
-            );
-            return yield* finalizeGuidance(record, normalized, true);
-          });
-          const commitFiber = yield* commit.pipe(
-            Effect.forkIn(ownerScope, { startImmediately: true }),
-          );
-          return { ...selected, commitFiber };
-        }),
-      );
-      if (selected.retained) return yield* Fiber.join(selected.commitFiber);
-
-      const record = selected.record;
       return yield* Effect.acquireUseRelease(
         withLock(
           Effect.gen(function* () {
-            const current = yield* requireRecord(id);
-            if (current !== record || current.view.state !== "running")
+            const selected = yield* requireRecord(id);
+            if (selected.view.state === "waiting_for_parent")
+              return yield* invalidRequest(
+                "run_waiting_for_parent",
+                `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
+              );
+            if (selected.replyPendingRequestId)
+              return yield* invalidRequest(
+                "reply_in_flight",
+                `Subagent ${id} already has a parent reply in flight.`,
+              );
+            yield* requireCapability(selected, "steer");
+            if (selected.view.state === "paused" || selected.view.state === "completed") {
+              const recovery = hasSubagentCapability(selected.view, "resume")
+                ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
+                : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
               return yield* invalidRequest(
                 "run_not_running",
-                `Subagent ${id} is ${current.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+                `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
               );
-            if (current.pauseRequested)
+            }
+            if (selected.view.state === "starting")
+              return yield* invalidRequest(
+                "run_starting",
+                `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
+              );
+            if (selected.view.state !== "running")
+              return yield* invalidRequest(
+                "run_not_running",
+                `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+              );
+            if (selected.pauseRequested)
               return yield* invalidRequest(
                 "interrupt_in_flight",
                 `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
               );
-            admitTurnInput(current);
-            return current;
+            admitTurnInput(selected);
+            return selected;
           }),
         ),
         (admitted) =>
-          steerBackend(admitted, normalized).pipe(
+          processControls.steer(admitted, normalized).pipe(
             Effect.tapError((error) =>
               error._tag === "SubagentProcessError" &&
               isOutcomeUncertain(error) &&
@@ -268,7 +156,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 ? retainControlWarning(admitted, error.message)
                 : Effect.void,
             ),
-            Effect.andThen(finalizeGuidance(admitted, normalized, false)),
+            Effect.andThen(finalizeGuidance(admitted, normalized)),
           ),
         releaseTurnInput,
       );
@@ -321,17 +209,17 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             // A pre-send failure proves the reply never reached the transport, so the
             // question rolls back for an immediate retry instead of surfacing ambiguity.
             if (error.code === "transport_not_sent")
-              return new SubagentProcessError({
-                operation: "reply",
-                code: "reply_send_failed",
-                message: `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
-              });
+              return processError(
+                "reply",
+                "reply_send_failed",
+                `The reply to subagent ${id} was not sent; the question remains open for a retry. (${error.message})`,
+              );
             return error.code === "transport_outcome_uncertain"
-              ? new SubagentProcessError({
-                  operation: "reply",
-                  code: "reply_outcome_uncertain",
-                  message: `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
-                })
+              ? processError(
+                  "reply",
+                  "reply_outcome_uncertain",
+                  `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
+                )
               : error;
           }),
           Effect.andThen(Clock.currentTimeMillis),
@@ -412,7 +300,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         Effect.gen(function* () {
           yield* Deferred.await(turnInputsDrained);
           yield* Effect.raceFirst(
-            interruptBackend(record),
+            processControls.interrupt(record),
             Deferred.await(pauseOutcome).pipe(Effect.asVoid),
           ).pipe(
             Effect.catch((error) =>
@@ -427,11 +315,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                     record.pauseOutcome = undefined;
                   }
                   if (responseTimedOut)
-                    return yield* new SubagentProcessError({
-                      operation: "interrupt",
-                      code: "interrupt_outcome_uncertain",
-                      message: `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply. Inspect with subagent_status before retrying.`,
-                    });
+                    return yield* processError(
+                      "interrupt",
+                      "interrupt_outcome_uncertain",
+                      `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply. Inspect with subagent_status before retrying.`,
+                    );
                   return yield* error;
                 }),
               ),
@@ -455,6 +343,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         }),
     );
 
+  const renameLocked = (record: RunRecord, name: string) => {
+    record.launch = { ...record.launch, name };
+    record.view = { ...record.view, name };
+    return publish.pipe(Effect.as(snapshotView(record.view)));
+  };
+
   const rename = (id: string, rawName: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const name = sanitizeName(rawName);
@@ -468,41 +362,30 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               "rename_state_invalid",
               `Subagent ${id} cannot be renamed while stopping.`,
             );
-          if (
-            record.view.state !== "running" &&
-            record.view.state !== "waiting_for_parent" &&
-            record.view.state !== "paused" &&
-            record.view.state !== "reported"
-          ) {
-            record.launch = { ...record.launch, name };
-            record.view = { ...record.view, name };
-            yield* publish;
-            return { record, localView: snapshotView(record.view) };
-          }
-          return { record };
+          // A live backend renames its own session first; any other run renames locally.
+          return record.view.state === "running" ||
+            record.view.state === "waiting_for_parent" ||
+            record.view.state === "paused"
+            ? { record }
+            : { record, localView: yield* renameLocked(record, name) };
         }),
       );
-      if (selected.localView) {
-        yield* sendPeerNotices(id);
-        return selected.localView;
-      }
-      yield* renameBackend(selected.record, name);
-      const view = yield* withLock(
-        Effect.gen(function* () {
-          if (
-            selected.record.view.state === "stopping" ||
-            isTerminalRunState(selected.record.view.state)
-          )
-            return yield* invalidRequest(
-              "rename_outcome_uncertain",
-              `Subagent ${id} stopped before rename completed.`,
-            );
-          selected.record.launch = { ...selected.record.launch, name };
-          selected.record.view = { ...selected.record.view, name };
-          yield* publish;
-          return snapshotView(selected.record.view);
-        }),
-      );
+      if (!selected.localView) yield* processControls.renameDisplay(selected.record, name);
+      const view =
+        selected.localView ??
+        (yield* withLock(
+          Effect.gen(function* () {
+            if (
+              selected.record.view.state === "stopping" ||
+              isTerminalRunState(selected.record.view.state)
+            )
+              return yield* invalidRequest(
+                "rename_outcome_uncertain",
+                `Subagent ${id} stopped before rename completed.`,
+              );
+            return yield* renameLocked(selected.record, name);
+          }),
+        ));
       yield* sendPeerNotices(id);
       return view;
     });
@@ -510,40 +393,35 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const stop = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
     runSessionOwned(
       ownerScope,
-      Effect.gen(function* () {
-        const stopError = new SubagentProcessError({
-          operation: "stop",
-          message: `Subagent ${id} was stopped.`,
-        });
-        return yield* withLock(
-          Effect.gen(function* () {
-            const selected = yield* requireRecord(id);
-            if (isTerminalRunState(selected.view.state))
-              return {
-                record: selected,
-                cleanupRequired: selected.cleanupPending,
-                preserveOutcome: true,
-              };
-            // Overlapping subtree traversals must join descendant cleanup before
-            // closing an ancestor, even when another stop already claimed it.
-            if (selected.view.state === "stopping")
-              return { record: selected, cleanupRequired: true as const };
-            selected.stoppedByParent = true;
-            selected.cleanupPending = true;
-            selected.activeTools.clear();
-            clearRunNativeActivity(selected);
-            selected.view = {
-              ...selected.view,
-              state: "stopping",
-              question: undefined,
-              currentTool: undefined,
+      withLock(
+        Effect.gen(function* () {
+          const selected = yield* requireRecord(id);
+          if (isTerminalRunState(selected.view.state))
+            return {
+              record: selected,
+              cleanupRequired: selected.cleanupPending,
+              preserveOutcome: true,
             };
-            selected.process?.cancelPending(stopError);
-            yield* publish;
+          // Overlapping subtree traversals must join descendant cleanup before
+          // closing an ancestor, even when another stop already claimed it.
+          if (selected.view.state === "stopping")
             return { record: selected, cleanupRequired: true as const };
-          }),
-        );
-      }),
+          selected.stoppedByParent = true;
+          selected.cleanupPending = true;
+          clearRunActivity(selected);
+          selected.view = {
+            ...selected.view,
+            state: "stopping",
+            question: undefined,
+            currentTool: undefined,
+          };
+          selected.process?.cancelPending(
+            new SubagentProcessError({ operation: "stop", message: `Subagent ${id} was stopped.` }),
+          );
+          yield* publish;
+          return { record: selected, cleanupRequired: true as const };
+        }),
+      ),
       ({ record, cleanupRequired, preserveOutcome }) =>
         cleanupRequired
           ? closeRecordScope(record).pipe(

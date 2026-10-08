@@ -16,24 +16,14 @@ export function formatDiffLineNumber(lineNumber: string, width: number): string 
 }
 
 export function parseDiffLine(line: string): ParsedDiffLine | null {
-  const numbered = line.match(/^([+\- ])(\s*\d+)\s(.*)$/);
-  if (numbered) {
-    const [, kind, lineNumber, content] = numbered;
-    if (
-      (kind !== "+" && kind !== "-" && kind !== " ") ||
-      lineNumber === undefined ||
-      content === undefined
-    )
-      return null;
-    return { kind, lineNumber, content };
-  }
-
   if (line.startsWith("+++") || line.startsWith("---")) return null;
   // Pi's numbered diffs mark skipped context with a blank number column and "...".
   if (/^ {2,}\.\.\.$/u.test(line)) return null;
-  const prefix = line[0];
-  if (prefix !== "+" && prefix !== "-" && prefix !== " ") return null;
-  return { kind: prefix, lineNumber: "", content: line.slice(1) };
+  const kind = line[0];
+  if (kind !== "+" && kind !== "-" && kind !== " ") return null;
+  // Rows are already split on "\n"; a lone CR, U+2028 or U+2029 is content (dotAll).
+  const [, lineNumber = "", content = line.slice(1)] = /^.(\s*\d+)\s(.*)$/su.exec(line) ?? [];
+  return { kind, lineNumber, content };
 }
 
 export function isAddedDiffLine(line: ParsedDiffLine | null): line is AddedDiffLine {
@@ -44,21 +34,24 @@ export function isRemovedDiffLine(line: ParsedDiffLine | null): line is RemovedD
   return line?.kind === "-";
 }
 
-export function isChangedDiffLine(line: ParsedDiffLine): line is AddedDiffLine | RemovedDiffLine {
-  return line.kind === "+" || line.kind === "-";
+/** Maximal `[start, end)` runs of consecutive parsed lines that share a defined key. */
+export function* diffLineRuns(
+  lines: readonly (ParsedDiffLine | null)[],
+  key: (line: ParsedDiffLine) => string | undefined,
+): Generator<readonly [start: number, end: number]> {
+  const keyAt = (index: number) => {
+    const line = lines[index];
+    return line ? key(line) : undefined;
+  };
+  for (let start = 0, end = 0; start < lines.length; start = end) {
+    const runKey = keyAt(start);
+    end = start + 1;
+    if (runKey === undefined) continue;
+    while (end < lines.length && keyAt(end) === runKey) end++;
+    yield [start, end];
+  }
 }
 
-export function collectChangedDiffBlock(
-  parsedLines: readonly (ParsedDiffLine | null | undefined)[],
-  start: number,
-) {
-  const block: ParsedDiffLine[] = [];
-  let end = start;
-  while (end < parsedLines.length) {
-    const next = parsedLines[end];
-    if (!next || !isChangedDiffLine(next)) break;
-    block.push(next);
-    end++;
-  }
-  return { block, end };
-}
+/** Maximal runs of added and removed rows; word emphasis pairs lines only within one run. */
+export const changedDiffBlocks = (lines: readonly (ParsedDiffLine | null)[]) =>
+  diffLineRuns(lines, (line) => (line.kind === " " ? undefined : "changed"));

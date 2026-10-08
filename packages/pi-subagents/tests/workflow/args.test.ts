@@ -8,14 +8,8 @@ import {
   WORKFLOW_ARGS_SUMMARY_MAX_CHARS,
   workflowArgsSummary,
 } from "../../src/workflow/args.ts";
-import {
-  finished,
-  resultValue,
-  script,
-  testHost,
-  withWorkflows,
-  workflowFixture,
-} from "./fixtures/workflow-harness.ts";
+import { WORKFLOW_ARGS_MAX_CHARS } from "../../src/workflow/model.ts";
+import { finished, resultValue, startScript, workflowTest } from "./fixtures/workflow-harness.ts";
 
 const TARGET = {
   type: "object",
@@ -175,119 +169,84 @@ describe("workflow args schemas", () => {
 });
 
 describe("workflow args at start", () => {
-  it.live(
-    "starts with matching args and refuses mismatching or omitted ones before running",
-    () => {
-      const fixture = workflowFixture();
-      return withWorkflows(fixture, (workflows) =>
-        Effect.gen(function* () {
-          const source = { kind: "inline" as const, script: targeted("return { got: args };") };
-          const started = yield* workflows.start({ source, args: { target: "src" } }, testHost());
-          expect(resultValue(yield* finished(workflows, started.id))).toEqual({
-            got: { target: "src" },
-          });
+  it.live("starts with matching args and refuses mismatching or omitted ones before running", () =>
+    workflowTest({}, function* ({ workflows }) {
+      const source = { kind: "inline" as const, script: targeted("return { got: args };") };
+      const started = yield* startScript(workflows, source, { args: { target: "src" } });
+      expect(resultValue(yield* finished(workflows, started.id))).toEqual({
+        got: { target: "src" },
+      });
 
-          const mismatch = yield* workflows
-            .start({ source, args: { target: 3 } }, testHost())
-            .pipe(Effect.flip);
-          expect(mismatch).toMatchObject({
-            _tag: "WorkflowRequestError",
-            code: "args_mismatch",
-            argsProblems: [{ path: "args.target" }],
-          });
-          // The refusal names the path and advertises the args the workflow expects.
-          expect(mismatch.message).toContain("args.target");
-          expect(mismatch.message).toContain("target: string");
-
-          const omitted = yield* workflows
-            .start({ source, args: null }, testHost())
-            .pipe(Effect.flip);
-          expect(omitted).toMatchObject({
-            code: "args_mismatch",
-            argsProblems: [{ path: "args" }],
-          });
-
-          const resumed = yield* workflows
-            .start({ source, args: {}, resumeFromRunId: started.id }, testHost())
-            .pipe(Effect.flip);
-          expect(resumed).toMatchObject({
-            code: "args_mismatch",
-            argsProblems: [{ path: "args.target" }],
-          });
-          expect((yield* workflows.list).map((run) => run.id)).toEqual([started.id]);
-        }),
+      const mismatch = yield* startScript(workflows, source, { args: { target: 3 } }).pipe(
+        Effect.flip,
       );
-    },
+      expect(mismatch).toMatchObject({
+        _tag: "WorkflowRequestError",
+        code: "args_mismatch",
+        argsProblems: [{ path: "args.target" }],
+      });
+      // The refusal names the path and advertises the args the workflow expects.
+      expect(mismatch.message).toContain("args.target");
+      expect(mismatch.message).toContain("target: string");
+
+      const omitted = yield* startScript(workflows, source).pipe(Effect.flip);
+      expect(omitted).toMatchObject({
+        code: "args_mismatch",
+        argsProblems: [{ path: "args" }],
+      });
+
+      const resumed = yield* startScript(workflows, source, {
+        args: {},
+        resumeFromRunId: started.id,
+      }).pipe(Effect.flip);
+      expect(resumed).toMatchObject({
+        code: "args_mismatch",
+        argsProblems: [{ path: "args.target" }],
+      });
+      expect((yield* workflows.list).map((run) => run.id)).toEqual([started.id]);
+    }),
   );
 
-  it.live("accepts any args for a script without meta.args", () => {
-    const fixture = workflowFixture();
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        for (const args of [null, "text", [1, 2], { anything: { goes: true } }]) {
-          const started = yield* workflows.start(
-            { source: { kind: "inline", script: script("return { got: args };") }, args },
-            testHost(),
-          );
-          expect(resultValue(yield* finished(workflows, started.id))).toEqual({ got: args });
-        }
-      }),
-    );
-  });
+  it.live("accepts any args within the size limit for a script without meta.args", () =>
+    workflowTest({}, function* ({ workflows }) {
+      const start = (args: Schema.Json) =>
+        startScript(workflows, "return { got: args };", { args });
+      for (const args of [null, "text", [1, 2], { anything: { goes: true } }]) {
+        const started = yield* start(args);
+        expect(resultValue(yield* finished(workflows, started.id))).toEqual({ got: args });
+      }
+      // Its JSON, quotes included, is just over the limit.
+      const large = yield* start("x".repeat(WORKFLOW_ARGS_MAX_CHARS - 1)).pipe(Effect.flip);
+      expect(large).toMatchObject({ code: "args_too_large" });
+      expect((yield* workflows.list).length).toBe(4);
+    }),
+  );
 
-  it.live("fails the run when a nested workflow's args don't match, even inside parallel()", () => {
-    const fixture = workflowFixture({
-      scripts: { child: targeted("return { got: args.target };", "child") },
-    });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const run = (args: string) =>
-          workflows
-            .start(
-              {
-                source: {
-                  kind: "inline",
-                  script: script(
-                    `const [value] = await parallel([() => workflow("child", ${args})]); return value;`,
-                  ),
-                },
-                args: null,
-              },
-              testHost(),
-            )
-            .pipe(Effect.flatMap((started) => finished(workflows, started.id)));
+  it.live("fails the run when a nested workflow's args don't match, even inside parallel()", () =>
+    workflowTest(
+      { scripts: { child: targeted("return { got: args.target };", "child") } },
+      function* ({ workflows }) {
+        const run = (reference: string, args: string) =>
+          startScript(
+            workflows,
+            `const [value] = await parallel([() => workflow("${reference}", ${args})]); return value;`,
+          ).pipe(Effect.flatMap((started) => finished(workflows, started.id)));
 
-        const matching = yield* run('{ target: "src" }');
+        const matching = yield* run("child", '{ target: "src" }');
         expect(matching.state).toBe("completed");
         expect(resultValue(matching)).toEqual({ got: "src" });
         expect(matching.phases.map((phase) => phase.title)).toContain("▸ child · Main");
 
-        const mismatched = yield* run("{ target: 1 }");
+        const mismatched = yield* run("child", "{ target: 1 }");
         expect(mismatched.state).toBe("failed");
         expect(mismatched.failure?.message).toContain("args.target");
         // Nothing of the refused workflow was added to the run.
         expect(mismatched.phases.map((phase) => phase.title)).toEqual(["Main"]);
 
-        const omitted = yield* run("undefined");
-        expect(omitted.state).toBe("failed");
-
+        expect((yield* run("child", "undefined")).state).toBe("failed");
         // A nested workflow that doesn't load is an invalid call too, not a null result.
-        const misspelled = yield* workflows
-          .start(
-            {
-              source: {
-                kind: "inline",
-                script: script(
-                  'const [value] = await parallel([() => workflow("chlid", { target: "src" })]); return value;',
-                ),
-              },
-              args: null,
-            },
-            testHost(),
-          )
-          .pipe(Effect.flatMap((started) => finished(workflows, started.id)));
-        expect(misspelled.state).toBe("failed");
-      }),
-    );
-  });
+        expect((yield* run("chlid", '{ target: "src" }')).state).toBe("failed");
+      },
+    ),
+  );
 });

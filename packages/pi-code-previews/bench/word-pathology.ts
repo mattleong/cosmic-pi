@@ -2,7 +2,7 @@
 import type { DiffWordEmphasis } from "../src/config/schema";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { wordEmphasisTelemetry } from "../tests/support/word-emphasis-telemetry";
-import { changedRanges, changedRangesWithConfidence } from "../src/diff/word/emphasis";
+import { changedRangesWithConfidence } from "../src/diff/word/emphasis";
 import { profileLine, profilePlacement } from "../tests/support/word-fixtures/profile-lines";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import {
@@ -52,7 +52,7 @@ try {
       setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: mode });
       results.push(
         runBench(benchCase.name, "changedRanges", mode, () => {
-          const ranges = changedRanges(benchCase.before, benchCase.after, mode);
+          const ranges = changedRangesWithConfidence(benchCase.before, benchCase.after, mode);
           sink += ranges.removed.length + ranges.added.length;
         }),
       );

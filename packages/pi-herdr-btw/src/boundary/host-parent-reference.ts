@@ -17,45 +17,33 @@ import {
   type SessionHeaderProbe,
 } from "./session-file.ts";
 
-export interface ParentReferenceRegistrationOptions {
-  /** Test seams for deterministic header and filesystem-identity probing. */
-  readonly probe?: ((path: string) => SessionHeaderProbe) | undefined;
-  readonly compareIdentity?: SessionFileIdentityComparator | undefined;
-}
-
-export interface HerdrBtwParentReferenceBridge {
-  readonly capture: (ctx: ExtensionContext) => HerdrBtwParentReference | undefined;
-  readonly activate: (reference: HerdrBtwParentReference | undefined) => void;
-  readonly clear: () => void;
-}
-
 /**
  * Registers the fixed parent-marker flags and before-turn prompt hook. The
- * application's generation-checked slot remains the activation owner.
+ * application's generation-checked slot remains the activation owner; activating
+ * `undefined` clears the reference.
  */
 export const registerHerdrBtwParentReference = (
   pi: ExtensionAPI,
-  options: ParentReferenceRegistrationOptions = {},
-): HerdrBtwParentReferenceBridge => {
-  const probe = options.probe ?? probeSessionHeader;
-  const compareIdentity = options.compareIdentity ?? compareSessionFileIdentity;
+  /** Test seams for deterministic header and filesystem-identity probing. */
+  {
+    probe = probeSessionHeader,
+    compareIdentity = compareSessionFileIdentity,
+  }: {
+    readonly probe?: (path: string) => SessionHeaderProbe;
+    readonly compareIdentity?: SessionFileIdentityComparator;
+  } = {},
+) => {
   let activeReference: HerdrBtwParentReference | undefined;
 
-  pi.registerFlag(HERDR_BTW_PARENT_FLAG, {
-    description:
-      "Internal pi-herdr-btw marker carrying the parent Pi session ID of a Herdr side session.",
-    type: "string",
-  });
-  pi.registerFlag(HERDR_BTW_PARENT_FILE_FLAG, {
-    description:
-      "Internal pi-herdr-btw marker carrying the live parent Pi session file of a Herdr side session.",
-    type: "string",
-  });
-  pi.registerFlag(HERDR_BTW_CHILD_SESSION_FLAG, {
-    description:
-      "Internal pi-herdr-btw marker binding the live parent reference to one Herdr side session.",
-    type: "string",
-  });
+  for (const [name, role] of [
+    [HERDR_BTW_PARENT_FLAG, "carrying the parent Pi session ID of a"],
+    [HERDR_BTW_PARENT_FILE_FLAG, "carrying the live parent Pi session file of a"],
+    [HERDR_BTW_CHILD_SESSION_FLAG, "binding the live parent reference to one"],
+  ] as const)
+    pi.registerFlag(name, {
+      description: `Internal pi-herdr-btw marker ${role} Herdr side session.`,
+      type: "string",
+    });
 
   const capture = (ctx: ExtensionContext): HerdrBtwParentReference | undefined => {
     try {
@@ -99,11 +87,8 @@ export const registerHerdrBtwParentReference = (
 
   return {
     capture,
-    activate: (reference) => {
+    activate: (reference: HerdrBtwParentReference | undefined) => {
       activeReference = reference;
-    },
-    clear: () => {
-      activeReference = undefined;
     },
   };
 };

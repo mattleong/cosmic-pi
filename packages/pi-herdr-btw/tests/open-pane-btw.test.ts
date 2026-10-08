@@ -4,29 +4,20 @@ import { expect } from "vitest";
 import { type HerdrStartSideSessionInput } from "../src/boundary/herdr-client.ts";
 import { makeAgentName, parentBtwDisplayName, selectSplitDirection } from "../src/btw/policy.ts";
 import {
-  makeServiceFixture,
+  CHILD_ALIAS,
+  CHILD_FILE,
+  CHILD_ID,
+  CWD,
+  makeServiceFixture as fixture,
   operationCount,
   operationInputs,
   operationNames,
+  SESSION_FILE,
+  SESSION_ID,
   withShellReadiness,
   type HerdrBtwFixtureOptions,
   aliasIdentity,
 } from "./fixtures/herdr-btw-harness.ts";
-
-const SESSION_FILE = "/sessions/parent.jsonl";
-const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
-const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
-const CHILD_FILE = "/sessions/child.jsonl";
-const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
-const CWD = "/project";
-
-const fixture = (options: HerdrBtwFixtureOptions = {}) =>
-  makeServiceFixture({
-    protocol: 19,
-    createdChildId: CHILD_ID,
-    createdChildFile: CHILD_FILE,
-    ...options,
-  });
 
 describe("herdr-btw policy", () => {
   it("uses a right split only when the current pane is wide", () => {

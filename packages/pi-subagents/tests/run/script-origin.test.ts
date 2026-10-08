@@ -27,21 +27,13 @@ const route = (index: number, intent: "read-only" | "writer"): ProfileRouteConti
 describe("immutable script-origin subtree policy", () => {
   it.effect("inherits through authenticated readers and ignores spoofed parent ancestry", () => {
     const counts = leaseCounts();
-    const f = localServiceFixture(
-      undefined,
-      undefined,
-      undefined,
-      fakeWriterLeaseLayer({ counts }),
-    );
+    const f = localServiceFixture({}, undefined, undefined, fakeWriterLeaseLayer({ counts }));
     return withService(f.layer, function* (service) {
       const scripted = yield* service.startScriptSessionOwned(request());
       const unrelated = yield* service.startSessionOwned(request({ cwd: "/unrelated" }));
       const reader = yield* service.startSessionOwnedFrom(
         scripted.id,
-        request({
-          parentRunId: unrelated.id,
-          cwd: "/unrelated",
-        }),
+        request({ parentRunId: unrelated.id, cwd: "/unrelated" }),
       );
       expect(reader).toMatchObject({ parentRunId: scripted.id, cwd: scripted.cwd, depth: 2 });
       for (const caller of [scripted.id, reader.id]) {
@@ -124,12 +116,7 @@ describe("immutable script-origin subtree policy", () => {
       `${scripted ? "refuses script-origin" : "preserves model-origin"} writer retry successors`,
       () => {
         const counts = leaseCounts();
-        const f = localServiceFixture(
-          undefined,
-          undefined,
-          undefined,
-          fakeWriterLeaseLayer({ counts }),
-        );
+        const f = localServiceFixture({}, undefined, undefined, fakeWriterLeaseLayer({ counts }));
         return withService(f.layer, function* (service) {
           const initial = request({ profile: "reviewer", routeContinuation: route(0, "writer") });
           const failed = yield* scripted
@@ -178,10 +165,7 @@ describe("immutable script-origin subtree policy", () => {
       const f = localServiceFixture();
       return withService(f.layer, function* (service) {
         const failed = yield* service.startScriptSessionOwned(
-          request({
-            profile: "reviewer",
-            routeContinuation: route(0, "read-only"),
-          }),
+          request({ profile: "reviewer", routeContinuation: route(0, "read-only") }),
         );
         f.fake.controls[0]!.exit(1);
         yield* yieldUntil(() => f.fake.controls[0]?.released() === 1);

@@ -1,4 +1,10 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  Theme,
+  ToolDefinition,
+  ToolRenderResultOptions,
+} from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 type RendererContext = Parameters<NonNullable<AnyToolDefinition["renderCall"]>>[2];
@@ -14,3 +20,14 @@ export type RendererState = RendererContext["state"];
 
 /** Pi-owned arguments presented to an extension renderer. */
 export type RendererArguments = RendererContext["args"];
+
+/** A tool's own call and result renderers, before the shared shell composes them. */
+export type PreviewRenderers = {
+  readonly renderCall: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
+  readonly renderResult: (
+    result: AgentToolResult<any>,
+    options: ToolRenderResultOptions,
+    theme: Theme,
+    context: ToolRenderContext<any, any>,
+  ) => Component;
+};

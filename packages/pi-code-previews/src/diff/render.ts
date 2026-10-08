@@ -2,20 +2,20 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../config/state";
 import type { DiffWordEmphasis } from "../config/schema";
 import { expandPreviewTabs } from "../shared/helpers";
-import { escapeControlChars } from "../shared/terminal-text";
+import { escapeControlChars, injectVisibleRanges } from "../shared/terminal-text";
 import { splitLinesLimited } from "../shared/text-lines";
-import { renderWithShiki } from "../syntax/render";
-import { collectChangedDiffBlock } from "./parse";
-import { changedLineEmphasis, emphasizeChangedSpans } from "./word/line-emphasis";
+import { isLightShikiTheme, renderWithShiki } from "../syntax/render";
 import {
   DIFF_ADD_MARKER,
   DIFF_REMOVE_MARKER,
   diffLineNumberWidth,
+  diffLineRuns,
   formatDiffLineNumber,
-  isChangedDiffLine,
   parseDiffLine,
   type ParsedDiffLine,
 } from "./parse";
+import { emphasizedChangedPairs } from "./word/change-block";
+import type { TextRange } from "./word/types";
 
 export function renderSyntaxHighlightedDiff(
   diff: string,
@@ -58,39 +58,26 @@ function renderDiff(diff: string, options: DiffRenderOptions): string {
   const lines = splitLinesLimited(diff, options.limit);
   const parsedLines = lines.map(parseDiffLine);
   const lineNumberWidth = options.lineNumbers ? diffLineNumberWidth(parsedLines) : 0;
-  const out: string[] = [];
-  const highlightedLines = options.lang
+  const highlighted = options.lang
     ? highlightDiffLineRuns(parsedLines, options.lang, options.invalidate)
-    : parsedLines.map(() => undefined);
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    const parsed = parsedLines[i];
-    if (!parsed) {
-      out.push(renderSeparator(line, options.theme));
-      continue;
-    }
-
-    if (options.wordEmphasis !== "off" && isChangedDiffLine(parsed)) {
-      const { block, end } = collectChangedDiffBlock(parsedLines, i);
-      out.push(
-        ...renderChangeBlock(
-          block,
-          highlightedLines,
-          i,
-          options.theme,
-          lineNumberWidth,
-          options.wordEmphasis,
-        ),
-      );
-      i = end - 1;
-      continue;
-    }
-
-    out.push(renderDiffParsedLine(parsed, highlightedLines[i], options.theme, lineNumberWidth));
-  }
-
-  return out.join("\n");
+    : [];
+  const emphasis = new Map<number, TextRange[]>();
+  for (const pair of emphasizedChangedPairs(parsedLines, options.wordEmphasis))
+    emphasis.set(pair.removedIndex, pair.ranges.removed).set(pair.addedIndex, pair.ranges.added);
+  return lines
+    .map((line, index) => {
+      const parsed = parsedLines[index];
+      return parsed
+        ? renderDiffParsedLine(
+            parsed,
+            highlighted[index],
+            options.theme,
+            lineNumberWidth,
+            emphasis.get(index),
+          )
+        : renderSeparator(line, options.theme);
+    })
+    .join("\n");
 }
 
 function renderSeparator(line: string, theme: Theme): string {
@@ -98,9 +85,7 @@ function renderSeparator(line: string, theme: Theme): string {
   const trimmed = safeLine.trim();
   if (trimmed === "...") return theme.fg("muted", "      --- unchanged lines hidden ---");
   if (trimmed.startsWith("@@")) return theme.fg("accent", theme.bold(safeLine));
-  if (trimmed.startsWith("---") || trimmed.startsWith("+++")) return theme.fg("muted", safeLine);
-  if (trimmed.startsWith("diff ") || trimmed.startsWith("index "))
-    return theme.fg("muted", safeLine);
+  if (/^(?:---|\+\+\+|diff |index )/u.test(trimmed)) return theme.fg("muted", safeLine);
   return theme.fg("toolDiffContext", safeLine);
 }
 
@@ -109,9 +94,18 @@ function renderDiffParsedLine(
   highlighted: string | undefined,
   theme: Theme,
   lineNumberWidth: number,
+  emphasis: TextRange[] | undefined,
 ): string {
-  const rendered =
+  const content =
     highlighted ?? theme.fg("toolOutput", escapeControlChars(expandPreviewTabs(parsed.content)));
+  // Emphasis ranges index the visible content, so they are injected before the gutter is added.
+  const rendered = emphasis
+    ? injectVisibleRanges(content, emphasis, {
+        open: wordEmphasisBackground(parsed.kind === "+"),
+        close: "\x1b[49m",
+        reopenAfterSgr: (sequence) => sequence === "\x1b[39m" || sequence === "\x1b[22m",
+      })
+    : content;
   const lineNumber = formatDiffLineNumber(parsed.lineNumber, lineNumberWidth);
   if (parsed.kind === "+")
     return `${DIFF_ADD_MARKER}${theme.fg("toolDiffAdded", `+${lineNumber} │ `)}${rendered}`;
@@ -122,25 +116,10 @@ function renderDiffParsedLine(
   );
 }
 
-function renderChangeBlock(
-  block: ParsedDiffLine[],
-  highlightedLines: Array<string | undefined>,
-  highlightedOffset: number,
-  theme: Theme,
-  lineNumberWidth: number,
-  wordEmphasis: DiffWordEmphasis,
-): string[] {
-  const emphasis = changedLineEmphasis(block, wordEmphasis);
-  return block.map((line, index) => {
-    const rendered = renderDiffParsedLine(
-      line,
-      highlightedLines[highlightedOffset + index],
-      theme,
-      lineNumberWidth,
-    );
-    const match = emphasis.get(index);
-    return match ? emphasizeChangedSpans(rendered, match.ranges, match.kind) : rendered;
-  });
+function wordEmphasisBackground(added: boolean): string {
+  if (isLightShikiTheme(codePreviewSettings.shikiTheme))
+    return added ? "\x1b[48;2;194;209;194m" : "\x1b[48;2;216;182;182m";
+  return added ? "\x1b[48;2;64;132;82m" : "\x1b[48;2;148;62;70m";
 }
 
 function dimAnsi(text: string): string {
@@ -152,16 +131,8 @@ function highlightDiffLineRuns(
   lang: string,
   invalidate?: () => void,
 ): Array<string | undefined> {
-  const highlighted: Array<string | undefined> = lines.map(() => undefined);
-  let start = 0;
-  while (start < lines.length) {
-    const first = lines[start];
-    if (!first) {
-      start++;
-      continue;
-    }
-    let end = start + 1;
-    while (end < lines.length && lines[end]?.kind === first.kind) end++;
+  const highlighted: Array<string | undefined> = [];
+  for (const [start, end] of diffLineRuns(lines, (line) => line.kind)) {
     const source = lines
       .slice(start, end)
       .map((line) => expandPreviewTabs(line?.content ?? ""))
@@ -170,7 +141,6 @@ function highlightDiffLineRuns(
     if (rendered) {
       for (let index = start; index < end; index++) highlighted[index] = rendered[index - start];
     }
-    start = end;
   }
   return highlighted;
 }

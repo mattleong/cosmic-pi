@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   settingsItemsFromDescriptors,
-  settingsRowGenerations,
   withoutGroupRowChanges,
 } from "../src/manager/settings-surface.ts";
 
@@ -37,13 +36,5 @@ describe("shared settings surface helpers", () => {
     handle("value", "off");
     expect(change).toHaveBeenCalledOnce();
     expect(change).toHaveBeenCalledWith("value", "off");
-  });
-
-  it("rejects stale optimistic row settlements", () => {
-    const generations = settingsRowGenerations();
-    const first = generations.begin("row");
-    const second = generations.begin("row");
-    expect(generations.isCurrent("row", first)).toBe(false);
-    expect(generations.isCurrent("row", second)).toBe(true);
   });
 });

@@ -96,14 +96,6 @@ Answer delivery, waiter ownership, retention, retries, and the shared queue are 
 
 In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Run cancellation or session replacement cancels a child's waiting or mounted requests. Activity rows, hide/resume, and the authenticated child relay are described in [ARCHITECTURE.md](../ARCHITECTURE.md#tui-lifecycle-and-pinned-host-workaround).
 
-## Private forms for local extensions
-
-`pi-ask-user/protocol` also exports a versioned `OwnedFormCapability`. This is a local-extension API, not an agent tool or subagent relay; headless sessions and marked relay children do not publish it. The caller supplies an `ExtensionFormOwner` with `extensionId`, `operationId`, `requestId`, and a user-facing `label`. These identities do not authenticate a subagent or grant permission to execute anything. Answers return only to the calling extension, never through automatic steering, model-visible status, or session-history persistence by Ask User. Queueing, cancellation, and presentation are described in [ARCHITECTURE.md](../ARCHITECTURE.md#local-extension-forms).
-
-A form accepts 0 to 16 flat fields: string, finite number, integer, boolean, string enum, or an array of string-enum choices. Supported checks cover required values, defaults, numeric bounds, text lengths, selection counts, and `email`, `uri`, `date`, or `date-time` formats. These are bounded local checks, not a remote JSON Schema engine. Each enum field has at most 64 choices. Messages and string values are limited to 4,096 code units, URLs to 8,192, and each captured request or answer to 64 KiB of serialized UTF-8 JSON. Decoding also bounds depth and node count.
-
-Accept on a URL request means consent to browser navigation, not completed navigation. The calling extension must check its current authority before any later browser action. The custom `pi-mcp` integration is retired; native Pi MCP owns its authentication and interaction flow and does not automatically consume this local-extension protocol. This capability adds no approval-policy engine.
-
 ## TUI controls
 
 While editing a text answer, letters such as `b` and `q` and digits are literal text; `Shift+Enter` inserts a newline. `Esc` returns to the question view, where `Enter` activates Edit answer. Only a valid saved answer counts toward submission, and answers still require explicit submission on Review.

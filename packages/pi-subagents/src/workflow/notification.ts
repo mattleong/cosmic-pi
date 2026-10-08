@@ -177,13 +177,11 @@ export const workflowNotification = (
   };
 };
 
-/** What ended the run: a teardown this process remembers, or anything before Pi restarted. */
-const interruptedCause = (run: WorkflowInterruptedRun): string =>
-  run.restarted ? "before Pi restarted" : "when the session was reloaded, navigated or replaced";
+/** What cut the run short: `teardown`, as this process remembers it, or Pi's restart. */
+const teardownCause = (run: WorkflowInterruptedRun, teardown: string): string =>
+  run.restarted ? "before Pi restarted" : teardown;
 
-/** What came before Pi accepted an ended run's report. */
-const undeliveredCause = (run: WorkflowInterruptedRun): string =>
-  run.restarted ? "before Pi restarted" : "before the session was reloaded, navigated or replaced";
+const SESSION_TEARDOWN = "the session was reloaded, navigated or replaced";
 
 /** How to start the run again with its finished agents reused. */
 const resumeLine = (run: WorkflowInterruptedRun): string => {
@@ -198,17 +196,17 @@ const resumeLine = (run: WorkflowInterruptedRun): string => {
 
 const interruptedOpening = (run: WorkflowInterruptedRun): ReadonlyArray<string> => {
   const subject = workflowRunSubject(run.name, run.runId);
+  const interrupted = teardownCause(run, `when ${SESSION_TEARDOWN}`);
   // Nothing suggests running again a run someone chose to stop.
   if (run.ended !== undefined) {
-    const opening = `${subject} ${run.ended}, but its report didn't arrive ${undeliveredCause(run)}.`;
+    const undelivered = teardownCause(run, `before ${SESSION_TEARDOWN}`);
+    const opening = `${subject} ${run.ended}, but its report didn't arrive ${undelivered}.`;
     return run.stopped ? [opening] : [opening, resumeLine(run)];
   }
   if (run.stopped)
-    return [
-      `${subject} was being stopped ${interruptedCause(run)}, so its final report will not arrive.`,
-    ];
+    return [`${subject} was being stopped ${interrupted}, so its final report will not arrive.`];
   return [
-    `${subject} was interrupted ${interruptedCause(run)}, so its result will not arrive.`,
+    `${subject} was interrupted ${interrupted}, so its result will not arrive.`,
     resumeLine(run),
   ];
 };
@@ -226,7 +224,7 @@ export const interruptedWorkflowNotification = (
     run.workspaces.length === 0
       ? undefined
       : [
-          `Its writers created these worktrees ${run.restarted ? "before Pi restarted" : "before the reload, navigation or replacement"}, so subagent_workspace can't review, integrate or discard them in this session. Recover any changes you need by hand from each worktree's path, which subagent_workspace list shows:`,
+          `Its writers created these worktrees ${teardownCause(run, "before the reload, navigation or replacement")}, so subagent_workspace can't review, integrate or discard them in this session. Recover any changes you need by hand from each worktree's path, which subagent_workspace list shows:`,
           ...workflowWorkspaceLines(
             run.workspaces,
             (workspaceId) => `- ${workspaceId}`,

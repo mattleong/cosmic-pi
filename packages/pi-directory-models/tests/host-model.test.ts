@@ -42,7 +42,17 @@ describe("directory model host capture", () => {
       "high",
     );
     const pi = extensionApiFixture({});
-    const error = Effect.runSync(Effect.flip(applyHostPreference(pi, ctx, preference)));
-    expect(error).toMatchObject({ _tag: "DirectoryModelHostError", operation: "read" });
+    const nestedHostile = extensionContextFixture({
+      model: Object.defineProperty({ provider: "openai-codex" }, "id", {
+        enumerable: true,
+        get() {
+          throw new Error("host getter failed");
+        },
+      }),
+    });
+    for (const context of [ctx, nestedHostile]) {
+      const error = Effect.runSync(Effect.flip(applyHostPreference(pi, context, preference)));
+      expect(error).toMatchObject({ _tag: "DirectoryModelHostError", operation: "read" });
+    }
   });
 });

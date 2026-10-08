@@ -19,15 +19,20 @@ const MEANINGFUL_OPERATOR_TOKEN_PATTERN =
   /^(?:===|!==|=>|==|!=|<=|>=|&&|\|\||[+\-*/%<>=!?:~&|^]+)$/;
 const DOMAIN_SEPARATOR_TOKEN_PATTERN = /^[-/:@#]$/;
 const STRUCTURAL_PUNCTUATION_TOKEN_PATTERN = /^[{}()[\].,;]$/;
+const IDENTIFIER_PART_PATTERN =
+  /[$_]+|(?:\p{Lu}\p{Mark}*)+(?=(?:\p{Lu}\p{Mark}*)(?:\p{Ll}\p{Mark}*)|\p{N}|$)|(?:\p{Lu}\p{Mark}*)?(?:\p{Ll}\p{Mark}*)+|\p{N}+|(?:\p{Lu}\p{Mark}*)+|(?:\p{L}\p{Mark}*)+/gu;
 
 export function wordEmphasisTokens(text: string): WordEmphasisToken[] {
-  const tokens: WordEmphasisToken[] = [];
-  for (const match of text.matchAll(WORD_TOKEN_PATTERN)) {
-    const value = match[0];
-    const start = match.index;
-    tokens.push({ value, start, end: start + value.length });
-  }
-  return tokens;
+  return matchedTokens(text, WORD_TOKEN_PATTERN, 0);
+}
+
+/** `matchAll` iterates a clone, so the shared global patterns keep no `lastIndex` state. */
+function matchedTokens(text: string, pattern: RegExp, offset: number): WordEmphasisToken[] {
+  return Array.from(text.matchAll(pattern), ({ 0: value, index }) => ({
+    value,
+    start: offset + index,
+    end: offset + index + value.length,
+  }));
 }
 
 export function wordTokenValues(text: string): string[] {
@@ -60,29 +65,16 @@ export function wordEmphasisTokenWeight(value: string): number {
 }
 
 export function splitIdentifierToken(value: string, start: number): WordEmphasisToken[] {
-  const parts: WordEmphasisToken[] = [];
-  const partPattern =
-    /[$_]+|(?:\p{Lu}\p{Mark}*)+(?=(?:\p{Lu}\p{Mark}*)(?:\p{Ll}\p{Mark}*)|\p{N}|$)|(?:\p{Lu}\p{Mark}*)?(?:\p{Ll}\p{Mark}*)+|\p{N}+|(?:\p{Lu}\p{Mark}*)+|(?:\p{L}\p{Mark}*)+/gu;
-  for (const match of value.matchAll(partPattern)) {
-    const part = match[0];
-    const offset = match.index;
-    parts.push({ value: part, start: start + offset, end: start + offset + part.length });
-  }
+  const parts = matchedTokens(value, IDENTIFIER_PART_PATTERN, start);
   return parts.length > 0 ? parts : [{ value, start, end: start + value.length }];
 }
 
 export function wordEmphasisSimilarityTokenValues(tokens: WordEmphasisToken[]): string[] {
-  const values: string[] = [];
-  for (const token of tokens) {
-    if (!isIdentifierToken(token.value)) {
-      values.push(token.value);
-      continue;
-    }
-    const parts = identifierSimilarityParts(token.value);
-    if (parts.length === 0) values.push(token.value.toLowerCase());
-    else values.push(...parts);
-  }
-  return values;
+  return tokens.flatMap(({ value }) => {
+    if (!isIdentifierToken(value)) return [value];
+    const parts = identifierSimilarityParts(value);
+    return parts.length > 0 ? parts : [value.toLowerCase()];
+  });
 }
 
 export function identifierSimilarityParts(value: string): string[] {

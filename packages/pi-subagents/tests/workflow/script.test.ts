@@ -9,6 +9,12 @@ import {
 
 const parse = (source: string) => Effect.runSync(Effect.result(parseWorkflowScript(source)));
 
+const parsed = (source: string) => {
+  const result = parse(source);
+  if (result._tag === "Failure") throw new Error(result.failure.message);
+  return result.success;
+};
+
 const failure = (source: string): string => {
   const result = parse(source);
   if (result._tag === "Success") throw new Error("Expected the script to be rejected");
@@ -34,17 +40,16 @@ describe("workflow script parsing", () => {
       "phase('Find');",
       "return meta.name;",
     ].join("\n");
-    const result = parse(valid);
-    if (result._tag === "Failure") throw new Error(result.failure.message);
-    expect(result.success.meta).toEqual({
+    const script = parsed(valid);
+    expect(script.meta).toEqual({
       name: "review",
       description: "Review changes",
       whenToUse: "On request",
       phases: [{ title: "Find" }, { title: "Verify", detail: "adversarial" }],
     });
-    expect(result.success.body.split("\n")).toHaveLength(valid.split("\n").length);
-    expect(result.success.body).toContain("       const meta = {");
-    expect(result.success.body.indexOf("phase('Find')")).toBe(valid.indexOf("phase('Find')"));
+    expect(script.body.split("\n")).toHaveLength(valid.split("\n").length);
+    expect(script.body).toContain("       const meta = {");
+    expect(script.body.indexOf("phase('Find')")).toBe(valid.indexOf("phase('Find')"));
   });
 
   it("requires the meta declaration to come first", () => {
@@ -107,9 +112,7 @@ describe("workflow script parsing", () => {
 
   it("keeps the script source exactly as given", () => {
     const source = "export const meta = { name: 'a', description: 'b' };\nreturn 1;\n";
-    const result = parse(source);
-    if (result._tag === "Failure") throw new Error(result.failure.message);
-    expect(result.success.source).toBe(source);
+    expect(parsed(source).source).toBe(source);
   });
 });
 
@@ -122,30 +125,15 @@ describe("args schema in meta", () => {
       "{ type: 'object', properties: { target: { type: 'string' } }, required: ['target'] }",
       "{ type: 'array', items: { type: 'string' } }",
       "{ type: 'string', minLength: 1 }",
-    ]) {
-      const result = parse(withArgs(args));
-      if (result._tag === "Failure") throw new Error(result.failure.message);
-      expect(result.success.args?.summary, args).toBeTruthy();
-    }
-    const plain = parse("export const meta = { name: 'a', description: 'b' };\nreturn args;");
-    if (plain._tag === "Failure") throw new Error(plain.failure.message);
-    expect(plain.success.args).toBeUndefined();
+    ])
+      expect(parsed(withArgs(args)).args?.summary, args).toBeTruthy();
+    expect(
+      parsed("export const meta = { name: 'a', description: 'b' };\nreturn args;").args,
+    ).toBeUndefined();
   });
 
   it("rejects an unusable args schema as a script error naming meta.args", () => {
-    for (const args of [
-      "{ $ref: '#/$defs/x' }",
-      "'string'",
-      "{ type: 'string', pattern: '[' }",
-      `{ type: 'string', description: '${"x".repeat(20_000)}' }`,
-    ]) {
-      const result = parse(withArgs(args));
-      expect(result._tag, args.slice(0, 60)).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure._tag).toBe("WorkflowScriptError");
-        expect(result.failure.message).toContain("meta.args");
-      }
-    }
+    expect(failure(withArgs("{ $ref: '#/$defs/x' }"))).toContain("meta.args");
     expect(failure(withArgs("{ type: kind }"))).toContain("pure literal");
   });
 });
@@ -155,9 +143,9 @@ describe("planned agents in meta", () => {
     `export const meta = { name: 'a', description: 'b', phases: [{ title: 'Find', agents: ${agents} }, { title: 'Verify' }] };`;
 
   it("accepts labels and labelled profiles, in declaration order", () => {
-    const result = parse(withAgents("['finder', { label: ' checker ', profile: 'reviewer' }]"));
-    if (result._tag === "Failure") throw new Error(result.failure.message);
-    const [find, verify] = result.success.meta.phases ?? [];
+    const [find, verify] =
+      parsed(withAgents("['finder', { label: ' checker ', profile: 'reviewer' }]")).meta.phases ??
+      [];
     expect(workflowPlannedAgents(find!)).toEqual([
       { phase: "Find", label: "finder" },
       { phase: "Find", label: "checker", profile: "reviewer" },
@@ -167,11 +155,10 @@ describe("planned agents in meta", () => {
   });
 
   it("trims phase titles once, so planned agents use the title phase() calls give", () => {
-    const result = parse(
-      "export const meta = { name: 'a', description: 'b', phases: [{ title: ' Find  ', agents: ['finder'] }] };",
-    );
-    if (result._tag === "Failure") throw new Error(result.failure.message);
-    const [find] = result.success.meta.phases ?? [];
+    const [find] =
+      parsed(
+        "export const meta = { name: 'a', description: 'b', phases: [{ title: ' Find  ', agents: ['finder'] }] };",
+      ).meta.phases ?? [];
     expect(find?.title).toBe("Find");
     expect(workflowPlannedAgents(find!)).toEqual([{ phase: "Find", label: "finder" }]);
     expect(

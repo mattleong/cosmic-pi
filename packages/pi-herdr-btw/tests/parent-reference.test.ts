@@ -1,9 +1,5 @@
-import type {
-  BeforeAgentStartEvent,
-  ExtensionContext,
-  ExtensionHandler,
-} from "@earendil-works/pi-coding-agent";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import type { BeforeAgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerHerdrBtwParentReference } from "../src/boundary/host-parent-reference.ts";
 import type {
@@ -11,8 +7,6 @@ import type {
   SessionHeaderProbe,
 } from "../src/boundary/session-file.ts";
 import { resolveParentReferenceCandidate } from "../src/parent-link/policy.ts";
-
-type Handler = ExtensionHandler<any, any>;
 
 const PARENT_FILE = "/sessions/parent.jsonl";
 const PARENT_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
@@ -34,7 +28,6 @@ interface HarnessOptions {
 }
 
 const harness = (options: HarnessOptions = {}) => {
-  const handlers = new Map<string, Handler[]>();
   const registerFlag = vi.fn();
   const probe = vi.fn((_path: string): SessionHeaderProbe => {
     if (options.hostileProbe) throw new Error("host-probe-secret");
@@ -46,21 +39,19 @@ const harness = (options: HarnessOptions = {}) => {
       return options.identityResult ?? (leftPath === rightPath ? "same" : "distinct");
     },
   );
-  const pi = extensionApiFixture({
-    on(name: string, handler: Handler) {
-      const list = handlers.get(name) ?? [];
-      list.push(handler);
-      handlers.set(name, list);
+  const { pi, handlers } = recordingExtensionHost(
+    {},
+    {
+      registerFlag,
+      getFlag: (name: string) => {
+        if (options.hostileFlag) throw new Error("host-flag-secret");
+        if (name === "herdr-btw-parent") return options.flag;
+        if (name === "herdr-btw-parent-file") return options.parentSession;
+        if (name === "herdr-btw-child-session") return options.sessionId ?? "child-id";
+        return undefined;
+      },
     },
-    registerFlag,
-    getFlag: (name: string) => {
-      if (options.hostileFlag) throw new Error("host-flag-secret");
-      if (name === "herdr-btw-parent") return options.flag;
-      if (name === "herdr-btw-parent-file") return options.parentSession;
-      if (name === "herdr-btw-child-session") return options.sessionId ?? "child-id";
-      return undefined;
-    },
-  });
+  );
   const bridge = registerHerdrBtwParentReference(pi, { compareIdentity, probe });
 
   const makeCtx = (override: Partial<HarnessOptions> = {}) => {
@@ -85,7 +76,6 @@ const harness = (options: HarnessOptions = {}) => {
     return result;
   };
   const sessionStart = (ctx = makeCtx()) => bridge.activate(bridge.capture(ctx));
-  const sessionShutdown = () => bridge.clear();
   const sections: BeforeAgentStartEvent["systemPromptOptions"]["sections"] = {
     another_extension: "keep me",
   };
@@ -111,7 +101,6 @@ const harness = (options: HarnessOptions = {}) => {
     makeCtx,
     probe,
     registerFlag,
-    sessionShutdown,
     sessionStart,
   };
 };
@@ -258,13 +247,5 @@ describe("herdr-btw parent reference", () => {
     // A later matching session start reactivates it.
     h.sessionStart();
     expect(h.beforeAgentStart()).toBeDefined();
-  });
-
-  it("clears the reference on session shutdown", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
-    h.sessionStart();
-    expect(h.beforeAgentStart()).toBeDefined();
-    h.sessionShutdown();
-    expect(h.beforeAgentStart()).toBeUndefined();
   });
 });

@@ -7,8 +7,7 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { formatElapsed, synchronousNow } from "pi-cosmic-core";
-import type { HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
+import { formatElapsed, invokeHostCallback, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "../boundary/host-status.ts";
 
 const WAITING_MESSAGE = "Waiting for you";
@@ -25,16 +24,14 @@ const formatWorkingMessage = (
 };
 
 interface WorkingRowOptions {
-  readonly callbacks: HostCallbackBoundaryContract;
   readonly now?: () => number;
   readonly every?: (intervalMs: number, tick: () => void) => () => void;
 }
 
 export const makeWorkingRow = ({
-  callbacks,
   now = synchronousNow,
   every = startHostUiTicker,
-}: WorkingRowOptions) => {
+}: WorkingRowOptions = {}) => {
   let context: MutableRef.MutableRef<ExtensionContext> | undefined;
   let running = false;
   let prompting = false;
@@ -66,16 +63,12 @@ export const makeWorkingRow = ({
   };
 
   const write = (message?: string) =>
-    callbacks.invoke<"written" | "unavailable" | "failed">(
-      "working-message",
-      () => {
-        const ctx = context && MutableRef.get(context);
-        if (ctx?.mode !== "tui") return "unavailable";
-        ctx.ui.setWorkingMessage(message);
-        return "written";
-      },
-      "failed",
-    );
+    invokeHostCallback<"written" | "unavailable" | "failed">(() => {
+      const ctx = context && MutableRef.get(context);
+      if (ctx?.mode !== "tui") return "unavailable";
+      ctx.ui.setWorkingMessage(message);
+      return "written";
+    }, "failed");
 
   /** A failed write keeps a writable row ticking; an unavailable host stops the ticker. */
   const show = (message: string): boolean => {

@@ -16,6 +16,7 @@ import {
   type StartSubagentRequest,
   type SubagentProjection,
 } from "../../src/run/model.ts";
+import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import { createOnlyWorkspaceEngine } from "../fixtures/workspace-engine.ts";
 import {
@@ -37,13 +38,41 @@ const ownedRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
     ...overrides,
   });
 
-const parentContactBackend = () =>
+const parentContactBackend = (options: { readonly resumable?: boolean } = {}) =>
   fakeNativeReportBackendLayer({
     capabilities: ["steer", "interrupt", "resume", "rename-display", "parent-contact"],
+    ...options,
   });
 
+/** A service whose backend holds the first start prompt until `startGate` completes. */
+const promptGatedFixture = () => {
+  const startGate = Deferred.makeUnsafe<void>();
+  const fixture = nativeReportServiceFixture(
+    fakeNativeReportBackendLayer({ initialStartGate: startGate }),
+  );
+  return { ...fixture, startGate };
+};
+
+/** Forks an owned start under a reserved id, returning once its first prompt is in flight. */
+const startAtPrompt = (
+  service: SubagentServiceContract,
+  backend: ReturnType<typeof fakeNativeReportBackendLayer>,
+) =>
+  Effect.gen(function* () {
+    yield* service.openOwner(OWNER);
+    const runId = yield* service.reserveRunId;
+    const starting = yield* service
+      .startOwned(ownedRequest(), { ...owner, runId })
+      .pipe(Effect.forkScoped);
+    yield* yieldUntil(() => backend.controls[0]?.prompts.length === 1);
+    return { runId, starting };
+  });
+
+const latestRun = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
+  projections.at(-1)?.runs.find((run) => run.id === id);
+
 const stateOf = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
-  projections.at(-1)?.runs.find((run) => run.id === id)?.state;
+  latestRun(projections, id)?.state;
 
 const rootOutcomes = (notifications: ReadonlyArray<SubagentNotification>) =>
   notifications.flatMap((notification) =>
@@ -61,23 +90,15 @@ const drainDelivery = TestClock.adjust("5 seconds");
 
 describe("owned subagent runs", () => {
   it.effect("keeps a report that settles during startup away from root delivery", () => {
-    const startGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, notifications, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate: startGate }),
-    );
+    const { backend, projections, notifications, layer, startGate } = promptGatedFixture();
     return withService(layer, function* (service) {
-      yield* service.openOwner(OWNER);
-      const runId = yield* service.reserveRunId;
-      const starting = yield* service
-        .startOwned(ownedRequest(), { ...owner, runId })
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => backend.controls[0]?.prompts.length === 1);
+      const { runId, starting } = yield* startAtPrompt(service, backend);
       backend.controls[0]!.report(runId, 1, "fast", "Found three issues.");
       yield* Deferred.succeed(startGate, undefined);
       const handle = yield* Fiber.join(starting);
       expect(handle.runId).toBe(runId);
       yield* yieldUntil(() => stateOf(projections, runId) === "completed");
-      expect(projections.at(-1)?.runs.find((run) => run.id === runId)?.workflow).toEqual({
+      expect(latestRun(projections, runId)?.workflow).toEqual({
         workflowId: OWNER,
         name: "review",
         phase: "Find",
@@ -117,9 +138,7 @@ describe("owned subagent runs", () => {
           args: { path: "src/a.ts" },
         });
       control.offer({ type: "usage", usage: { ...emptyUsage(), output: 9, totalTokens: 90 } });
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs.find((run) => run.id === handle.runId)?.toolUses === 3,
-      );
+      yield* yieldUntil(() => latestRun(projections, handle.runId)?.toolUses === 3);
       control.report(handle.runId, 1, "done", "Found three issues.");
       expect(yield* service.awaitOwned(handle)).toMatchObject({
         kind: "completed",
@@ -252,10 +271,7 @@ describe("owned subagent runs", () => {
   it.effect("counts a former workflow agent toward the root's limit once resumed", () => {
     const nestingPolicy = { maxDirectChildren: 1, maxDepth: 3 };
     const { backend, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({
-        capabilities: ["steer", "interrupt", "resume", "rename-display", "parent-contact"],
-        resumable: true,
-      }),
+      parentContactBackend({ resumable: true }),
       {},
       profileLayerFor({ version: 6, nesting: nestingPolicy }),
     );
@@ -393,17 +409,9 @@ describe("owned subagent runs", () => {
   });
 
   it.effect("stops an admitted run when its owned start is interrupted", () => {
-    const startGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, notifications, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate: startGate }),
-    );
+    const { backend, projections, notifications, layer, startGate } = promptGatedFixture();
     return withService(layer, function* (service) {
-      yield* service.openOwner(OWNER);
-      const runId = yield* service.reserveRunId;
-      const starting = yield* service
-        .startOwned(ownedRequest(), { ...owner, runId })
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => backend.controls[0]?.prompts.length === 1);
+      const { runId, starting } = yield* startAtPrompt(service, backend);
       // Request interruption while the prompt is in flight, then let the backend accept it.
       starting.interruptUnsafe();
       yield* Deferred.succeed(startGate, undefined);
@@ -416,17 +424,9 @@ describe("owned subagent runs", () => {
   });
 
   it.effect("fails an owned start after admission without leaking its failure to the root", () => {
-    const startGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, notifications, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate: startGate }),
-    );
+    const { backend, projections, notifications, layer, startGate } = promptGatedFixture();
     return withService(layer, function* (service) {
-      yield* service.openOwner(OWNER);
-      const runId = yield* service.reserveRunId;
-      const starting = yield* service
-        .startOwned(ownedRequest(), { ...owner, runId })
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => backend.controls[0]?.prompts.length === 1);
+      const { runId, starting } = yield* startAtPrompt(service, backend);
       backend.controls[0]!.failNextStart();
       yield* Deferred.succeed(startGate, undefined);
       const failure = yield* Fiber.join(starting).pipe(Effect.flip);
@@ -453,9 +453,7 @@ describe("owned subagent runs", () => {
       const waiting = yield* service.waitForAdmissionChange(before).pipe(Effect.forkScoped);
       for (let output = 1; output <= 5; output++)
         backend.controls[0]!.offer({ type: "usage", usage: { ...emptyUsage(), output } });
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs.find((run) => run.id === handle.runId)?.usage.output === 15,
-      );
+      yield* yieldUntil(() => latestRun(projections, handle.runId)?.usage.output === 15);
       backend.controls[0]!.report(handle.runId, 1, "done", "Done.");
       yield* yieldUntil(() => stateOf(projections, handle.runId) === "completed");
       // Progress and settlement leave the writer's hold in place until backend cleanup ends it.
@@ -492,10 +490,7 @@ describe("owned subagent runs", () => {
 
   it.effect("resumes a former workflow agent as an ordinary root child", () => {
     const { backend, projections, notifications, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({
-        capabilities: ["steer", "interrupt", "resume", "rename-display", "parent-contact"],
-        resumable: true,
-      }),
+      parentContactBackend({ resumable: true }),
     );
     return withService(layer, function* (service) {
       const resultContract = yield* compileResultContract({

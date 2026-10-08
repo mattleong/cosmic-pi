@@ -1,27 +1,12 @@
 // Actual Pi agent loop and native QuickJS, with an owned subagent backend boundary only.
-import {
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxToolCall,
-  InMemoryCredentialStore,
-  InMemoryModelsStore,
-  type JsonObject,
-} from "@earendil-works/pi-ai";
-import {
-  createAgentSession,
-  createCodemodeExtension,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, type JsonObject } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { fauxCodemodeSession } from "pi-cosmic-core/testing/sdk";
 import { makeHostNotifier, type SubagentNotifier } from "../../src/boundary/host-notifier.ts";
 import { registerWorkflowTool } from "../../src/tools/workflow.ts";
 import { declaredCandidate } from "../fixtures/profiles.ts";
@@ -47,8 +32,6 @@ const claudeProfiles = profileLayerFor({
 
 /** A real Pi session whose model is scripted and whose subagents run on the native fake. */
 const workflowSession = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagents-dynamic-workflow-" });
   let notifier: SubagentNotifier | undefined;
   let host: ExtensionAPI | undefined;
   const fixture = workflowFixture({ profiles: claudeProfiles, notify: (n) => notifier?.(n) });
@@ -56,86 +39,35 @@ const workflowSession = Effect.gen(function* () {
     Effect.sync(() => ManagedRuntime.make(Layer.merge(fixture.layer, fixture.backend.layer))),
     (managed) => step(() => managed.dispose()),
   );
-  const fake = fauxProvider({ provider: "dynamic-workflow-test", tokensPerSecond: 0 });
-  const models = yield* step(() =>
-    ModelRuntime.create({
-      credentials: new InMemoryCredentialStore(),
-      modelsStore: new InMemoryModelsStore(),
-      modelsPath: null,
-      refreshOnCreate: false,
-      allowModelNetwork: false,
-    }),
-  );
-  models.registerNativeProvider(fake.provider);
-  yield* Effect.addFinalizer(() => Effect.sync(() => models.unregisterProvider(fake.provider.id)));
-  const settings = SettingsManager.inMemory({
-    defaultTools: ["+codemode"],
-    compaction: { enabled: false },
-    retry: { enabled: false },
-  });
-  const loader = new DefaultResourceLoader({
-    cwd: directory,
-    agentDir: directory,
-    settingsManager: settings,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    extensionFactories: [
-      { name: "codemode", builtin: true, factory: createCodemodeExtension() },
-      {
-        name: "subagents-dynamic-workflow-test",
-        factory: (pi) => {
-          host = pi;
-          notifier = makeHostNotifier(pi);
-          registerWorkflowTool(pi, {
-            environment: { cwd: directory, projectTrusted: false },
-            savedWorkflowLocations: memoryLocations,
-            run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
-          });
-        },
+  const { session, fake, ...base } = yield* fauxCodemodeSession({
+    prefix: "subagents-dynamic-workflow-",
+    provider: "dynamic-workflow-test",
+    prompt: "Exercise the workflow",
+    reply: "Continuing with other work.",
+    extension: {
+      name: "subagents-dynamic-workflow-test",
+      factory: (cwd) => (pi) => {
+        host = pi;
+        notifier = makeHostNotifier(pi);
+        registerWorkflowTool(pi, {
+          environment: { cwd, projectTrusted: false },
+          savedWorkflowLocations: memoryLocations,
+          run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
+        });
       },
-    ],
+    },
   });
-  yield* step(() => loader.reload());
-  const { session } = yield* Effect.acquireRelease(
-    step(() =>
-      createAgentSession({
-        cwd: directory,
-        agentDir: directory,
-        model: fake.getModel(),
-        modelRuntime: models,
-        settingsManager: settings,
-        sessionManager: SessionManager.inMemory(directory),
-        resourceLoader: loader,
-      }),
-    ),
-    ({ session }) =>
-      step(() => session.abort()).pipe(
-        Effect.andThen(
-          step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })),
-        ),
-        Effect.ensuring(Effect.sync(() => session.dispose())),
-      ),
-  );
-  yield* step(() => session.bindExtensions({ mode: "print" }));
   // Pi registers the runner inactive; the application activates it while workflows are on.
   const activateRunner = () =>
     host?.setActiveTools([...host.getActiveTools(), "subagent_workflow"]);
   const call = (name: string, args: JsonObject) =>
-    Effect.gen(function* () {
-      fake.setResponses([
-        fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" }),
-        fauxAssistantMessage("Continuing with other work."),
-      ]);
-      yield* step(() => session.prompt("Exercise the workflow"));
-      const message = session.agent.state.messages.findLast(
-        (candidate) => candidate.role === "toolResult" && candidate.toolName === name,
+    base
+      .call(name, args)
+      .pipe(
+        Effect.map(({ message }) =>
+          message.content.map((part) => (part.type === "text" ? part.text : "")).join("\n"),
+        ),
       );
-      if (!message || message.role !== "toolResult")
-        return yield* Effect.die(new Error("The agent loop returned no tool result."));
-      return message.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
-    });
   return { session, fake, fixture, call, activateRunner };
 });
 

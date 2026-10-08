@@ -4,6 +4,7 @@ import {
   type BuiltinCompactProjectionInput,
 } from "../../src/tools/builtin-projection";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
+import { CORE_CODE_PREVIEW_TOOLS } from "../../src/tools/names";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 
 const base: BuiltinCompactProjectionInput = {
@@ -19,8 +20,6 @@ const base: BuiltinCompactProjectionInput = {
   maxWriteDiffBytes: 100000,
   maxWriteDiffChangedLineCells: 10000,
 };
-const tools: BuiltinCompactTool[] = ["read", "bash", "write", "edit", "grep", "find", "ls"];
-
 function failed(tool: BuiltinCompactTool, text: string, overrides: Partial<typeof base> = {}) {
   return projectBuiltinCompactSummary(tool, {
     ...base,
@@ -29,8 +28,6 @@ function failed(tool: BuiltinCompactTool, text: string, overrides: Partial<typeo
     result: { content: [{ type: "text", text }], details: overrides.result?.details ?? {} },
   });
 }
-const codes = (tool: BuiltinCompactTool, input: Partial<BuiltinCompactProjectionInput>) =>
-  projectBuiltinCompactSummary(tool, { ...base, ...input })?.issues?.map(({ code }) => code);
 
 describe("builtin issue style", () => {
   it("writes every failure and argument warning in the shared style", () => {
@@ -133,22 +130,30 @@ describe("builtin failure classification", () => {
       expect.objectContaining({ severity: "info", message: footer }),
     );
     expect(JSON.stringify(value)).not.toContain("ordinaryDiagnostic");
+    // Only Pi's footer position is recovery evidence; the same text earlier is just output.
+    const printed = failed("bash", `[${footer}]\nlater output\n\nCommand exited with code 7`);
+    expect(printed?.issues?.map(({ code }) => code)).toEqual(["shell-exit"]);
   });
 
-  it.each(tools)("%s treats a bare abort as cancellation without an issue", (tool) => {
-    expect(failed(tool, "Operation aborted")).toMatchObject({ outcome: "cancelled", issues: [] });
-    // More text means the host reported something beyond a plain abort.
-    const value = failed(tool, "Operation aborted\nInspect the file before retrying.");
-    expect(value?.outcome).toBe("error");
-    expect(JSON.stringify(value?.issues)).not.toContain("Inspect the file");
-  });
+  it.each(CORE_CODE_PREVIEW_TOOLS)(
+    "%s treats a bare abort as cancellation without an issue",
+    (tool) => {
+      expect(failed(tool, "Operation aborted")).toMatchObject({ outcome: "cancelled", issues: [] });
+      // More text means the host reported something beyond a plain abort.
+      const value = failed(tool, "Operation aborted\nInspect the file before retrying.");
+      expect(value?.outcome).toBe("error");
+      expect(JSON.stringify(value?.issues)).not.toContain("Inspect the file");
+    },
+  );
 
   it.each([
-    ["ENOENT: no such file or directory, access '/secret/path.ts'", "File not found"],
-    ["EACCES: permission denied, open '/secret/path.ts'", "Permission denied"],
-    ["Path not found: /secret/path.ts", "Path not found"],
-  ])("filesystem error %s is described without its path", (text, message) => {
-    const value = failed("read", `${text}\nInspect parent permissions before retrying.`);
+    ["read", "ENOENT: no such file or directory, access '/secret/path.ts'", "File not found"],
+    ["read", "EACCES: permission denied, open '/secret/path.ts'", "Permission denied"],
+    ["read", "Path not found: /secret/path.ts", "Path not found"],
+    ["edit", "Could not edit file: /secret/path.ts. Error code: ENOENT.", "File not found"],
+    ["edit", "Could not edit file: /secret/path.ts. Error code: EACCES.", "Permission denied"],
+  ] as const)("%s filesystem error %s is described without its path", (tool, text, message) => {
+    const value = failed(tool, `${text}\nInspect parent permissions before retrying.`);
     expect(value?.outcome).toBe("error");
     expect(value?.issues).toEqual([{ severity: "error", code: "filesystem", message }]);
     expect(JSON.stringify(value?.issues)).not.toMatch(/secret\/path|Inspect parent/u);
@@ -181,6 +186,13 @@ describe("builtin failure classification", () => {
         "edit-unchanged",
         "",
       ],
+      [
+        "No changes made to secret-file. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.",
+        "edit-unchanged",
+        "",
+      ],
+      ["oldText must not be empty in secret-file.", "edit-empty", "oldText"],
+      ["edits[1].oldText must not be empty in secret-file.", "edit-empty", "edits[1].oldText"],
     ] as const) {
       const value = failed("edit", text);
       expect(value?.outcome).toBe("error");
@@ -201,8 +213,9 @@ describe("builtin failure classification", () => {
     expect(empty?.issues?.[0]?.message).toBeTruthy();
   });
 
-  it("keeps input warnings and output limits beside the failure", () => {
-    const value = failed("bash", "Command exited with code 1", {
+  it("keeps input warnings and output limits beside the failure, naming saved output once", () => {
+    const footer = "[Showing lines 1-2 of 9. Full output: /tmp/bash-full.txt]";
+    const value = failed("bash", `${footer}\n\nCommand exited with code 1`, {
       args: { command: "rm -rf build" },
       result: {
         content: [],
@@ -219,14 +232,13 @@ describe("builtin failure classification", () => {
     expect(value?.issues?.at(-1)?.message).toContain("/tmp/bash-full.txt");
   });
 
-  it("declines attachments and over-budget output rather than summarising part of it", () => {
+  it("declines attachments rather than summarising part of the output", () => {
     const image = projectBuiltinCompactSummary("read", {
       ...base,
       isError: true,
       result: { content: [{ type: "image", mimeType: "image/png", data: "AAAA" }], details: {} },
     });
     expect(image).toBeUndefined();
-    expect(failed("bash", "x".repeat(128 * 1024 + 1))).toBeUndefined();
   });
 });
 
@@ -249,21 +261,7 @@ describe("builtin projection policy", () => {
 });
 
 describe("write and edit history", () => {
-  it("reports intentionally uncaptured history as information only", () => {
-    const value = projectBuiltinCompactSummary("write", {
-      ...base,
-      beforeWrite: { kind: "not-captured" },
-    });
-    expect(value?.outcome).toBe("success");
-    expect(value?.issues).toEqual([
-      expect.objectContaining({ severity: "info", code: "write-diff-not-captured" }),
-    ]);
-  });
-
-  it("reports unknown and failed snapshot history as information, not a problem with the write", () => {
-    expect(codes("write", {})).toEqual(["write-history-unavailable"]);
-    expect(projectBuiltinCompactSummary("write", base)?.outcome).toBe("success");
-    expect(projectBuiltinCompactSummary("write", base)?.issues?.[0]?.severity).toBe("info");
+  it("reports failed snapshot history as information, not a problem with the write", () => {
     const failedSnapshot = projectBuiltinCompactSummary("write", {
       ...base,
       beforeWrite: {
@@ -281,22 +279,18 @@ describe("write and edit history", () => {
     const secret = projectBuiltinCompactSummary("write", {
       ...base,
       args: { path: "file.ts", content: "-----BEGIN PRIVATE KEY-----" },
-      beforeWrite: { kind: "not-captured" },
     });
     expect(secret?.outcome).toBe("warning");
     expect(secret?.issues?.map(({ code }) => code)).toContain("possible-secrets");
     const edit = projectBuiltinCompactSummary("edit", {
       ...base,
       args: { path: "file.ts", oldText: "before", newText: "after" },
-      beforeWrite: { kind: "not-captured" },
     });
     expect(edit?.outcome).toBe("success");
     expect(edit?.issues).toEqual([
       expect.objectContaining({ severity: "info", code: "edit-diff-unavailable" }),
     ]);
-    const writeFailure = failed("write", "Write failed.", {
-      beforeWrite: { kind: "not-captured" },
-    });
+    const writeFailure = failed("write", "Write failed.");
     expect(writeFailure?.outcome).toBe("error");
     expect(writeFailure?.issues?.map(({ code }) => code)).toEqual(["failure"]);
   });

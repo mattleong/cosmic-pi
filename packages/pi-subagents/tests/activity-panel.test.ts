@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { SubagentRunView } from "../src/run/model.ts";
 import {
-  emptyActivityPresentation,
+  EMPTY_ACTIVITY_PRESENTATION,
   hasSubagentActivityPanelContent,
   projectSubagentActivityPanel,
   renderProjectedSubagentActivityPanel,
@@ -13,17 +13,12 @@ import {
 import { projectionOf, view } from "./fixtures/run-view.ts";
 
 const presentation = (
-  overrides: Partial<SubagentActivityPresentationSnapshot> = {},
-): SubagentActivityPresentationSnapshot => ({
-  revision: 1,
-  starts: [],
-  awaits: [],
-  ...overrides,
-});
+  overrides: Partial<SubagentActivityPresentationSnapshot>,
+): SubagentActivityPresentationSnapshot => ({ ...EMPTY_ACTIVITY_PRESENTATION, ...overrides });
 
 const render = (
   runs: ReadonlyArray<SubagentRunView>,
-  live = emptyActivityPresentation(),
+  live = EMPTY_ACTIVITY_PRESENTATION,
   width = 120,
 ) =>
   renderProjectedSubagentActivityPanel(
@@ -53,16 +48,14 @@ describe("persistent subagent activity panel", () => {
     });
     const waiting = view({ id: "waiting", state: "waiting_for_parent", startedAt: 3 });
     const paused = view({ id: "paused", state: "paused", startedAt: 4 });
-    const retained = view({ id: "retained", state: "reported" });
     const unrelated = view({ id: "done", state: "completed" });
 
     const panel = projectSubagentActivityPanel(
-      projectionOf([child, unrelated, retained, parent, waiting, paused]),
+      projectionOf([child, unrelated, parent, waiting, paused]),
     );
 
     expect(panel.trackedRuns.map((run) => run.id)).toEqual(["child", "waiting", "paused"]);
     expect(panel.rows.map((row) => row.run.id)).toEqual(["parent", "child", "waiting", "paused"]);
-    expect(panel.retainedCount).toBe(1);
   });
 
   it("keeps siblings in launch order even when the service projection is newest-first", () => {
@@ -87,7 +80,7 @@ describe("persistent subagent activity panel", () => {
     expect(panel.rows).toHaveLength(runs.length);
   });
 
-  it("projects overlapping await leases without losing their modes or terminal targets", () => {
+  it("projects overlapping await leases without losing their terminal targets", () => {
     const running = view({ id: "running-target" });
     const finished = view({ id: "finished-target", state: "completed", endedAt: 5 });
     const other = view({ id: "other" });
@@ -102,10 +95,6 @@ describe("persistent subagent activity panel", () => {
 
     expect([...panel.awaitedRunIds]).toEqual([running.id, finished.id, other.id]);
     expect(panel.awaitedRuns.map((run) => run.id)).toEqual([running.id, finished.id, other.id]);
-    expect(panel.presentation.awaits.map((entry) => entry.until)).toEqual([
-      "all_finished",
-      "any_finished",
-    ]);
     expect(panel.rows.map((row) => row.run.id)).not.toContain(finished.id);
   });
 
@@ -115,7 +104,7 @@ describe("persistent subagent activity panel", () => {
   });
 
   it("derives ticker cadence only from rows with clock-dependent presentation", () => {
-    const cadence = (runs: ReadonlyArray<SubagentRunView>, live = emptyActivityPresentation()) =>
+    const cadence = (runs: ReadonlyArray<SubagentRunView>, live = EMPTY_ACTIVITY_PRESENTATION) =>
       subagentActivityPanelCadence(projectSubagentActivityPanel(projectionOf(runs), live));
 
     // The base state mapping is covered with subagentUiRefreshCadence; the panel adds paused elapsed.
@@ -138,7 +127,7 @@ describe("persistent subagent activity panel", () => {
         profile: "scout",
         currentTool: "read\rtool\u001b[31msecret",
       });
-      const lines = render([hostile], emptyActivityPresentation(), width);
+      const lines = render([hostile], EMPTY_ACTIVITY_PRESENTATION, width);
 
       expect(
         lines.every(
@@ -150,9 +139,8 @@ describe("persistent subagent activity panel", () => {
     },
   );
 
-  it("renders nothing when only retained and terminal records remain", () => {
+  it("renders nothing when only terminal records remain", () => {
     const runs = [
-      view({ id: "retained", state: "reported" }),
       view({ id: "complete", state: "completed" }),
       view({ id: "failed", state: "failed" }),
     ];

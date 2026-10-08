@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentUsage } from "../src/run/model.ts";
-import {
-  addUsage,
-  clipUtf8Text,
-  safeTextPrefix,
-  sanitizeDiagnosticText,
-} from "../src/run/state.ts";
-import { clipText } from "pi-cosmic-core";
+import { addUsage, clipUtf8Text, sanitizeDiagnosticText } from "../src/run/state.ts";
 
 const usage = (overrides: Partial<SubagentUsage> = {}): SubagentUsage => ({
   input: 1,
@@ -21,8 +15,6 @@ const usage = (overrides: Partial<SubagentUsage> = {}): SubagentUsage => ({
 describe("subagent usage state", () => {
   it("clips text without producing unpaired UTF-16 surrogates", () => {
     const value = `ab😀cd`;
-    expect(safeTextPrefix(value, 3)).toBe("ab");
-    expect(clipText(value, 3)).toBe("ab…");
     const byteClipped = clipUtf8Text(`${"x".repeat(10)}😀tail`, 14);
     expect(Buffer.byteLength(byteClipped, "utf8")).toBeLessThanOrEqual(14);
     expect(byteClipped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);

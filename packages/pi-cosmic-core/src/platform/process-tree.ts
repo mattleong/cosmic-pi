@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { nodeSpawn } from "./node-builtins.ts";
 
 /** `present` means the signal was delivered; only ESRCH proves absence. */
-export type ProcessSignalResult = "present" | "absent" | "permission" | "failed";
+type ProcessSignalResult = "present" | "absent" | "permission" | "failed";
 
 const send = (target: number, signal: NodeJS.Signals | 0): ProcessSignalResult => {
   try {
@@ -59,7 +59,7 @@ export const processGroupSignalError = (result: "permission" | "failed") =>
 
 type TerminatorListener = (result: Error | number | null) => void;
 
-export interface ProcessTreeTerminatorChild {
+interface ProcessTreeTerminatorChild {
   on(event: "exit" | "error", listener: TerminatorListener): void;
   removeListener(event: "exit" | "error", listener: TerminatorListener): void;
   kill(signal: NodeJS.Signals): void;
@@ -83,8 +83,6 @@ export interface WindowsProcessTreeTermination {
   readonly targetExited?: (() => boolean) | undefined;
 }
 
-const defaultSpawnTaskkill: ProcessTreeTerminatorSpawn = nodeSpawn;
-
 /**
  * Windows lacks POSIX process groups, so `taskkill /pid PID /T [/F]` terminates the tree.
  * Interruption and the timeout clean up synchronously and never await taskkill's own exit:
@@ -94,7 +92,7 @@ export const terminateWindowsProcessTree = (
   termination: WindowsProcessTreeTermination,
 ): Effect.Effect<void, ProcessTreeError> => {
   const { pid, mode, targetExited } = termination;
-  const spawnTaskkill = termination.spawnTaskkill ?? defaultSpawnTaskkill;
+  const spawnTaskkill: ProcessTreeTerminatorSpawn = termination.spawnTaskkill ?? nodeSpawn;
   const timeoutMillis = termination.taskkillTimeoutMillis ?? 2_000;
   return Effect.callback<void, ProcessTreeError>((resume) => {
     // Checked when the Effect runs, not when it is built, so a reused Effect never goes stale.
@@ -108,12 +106,11 @@ export const terminateWindowsProcessTree = (
       );
     } catch (cause) {
       const message = "Unable to start the Windows process-tree terminator.";
-      resume(
+      return resume(
         Effect.fail(
           treeError("spawn taskkill", "taskkill_spawn_failed", withErrno(message, cause)),
         ),
       );
-      return;
     }
     // A throwing cleanup method must not suppress the remaining cleanup attempts.
     const attempt = (operation: () => void): boolean => {
@@ -174,8 +171,7 @@ export const terminateWindowsProcessTree = (
       killer.on("error", onError);
     } catch (cause) {
       cleanup();
-      resume(Effect.fail(startFailure(cause)));
-      return;
+      return resume(Effect.fail(startFailure(cause)));
     }
     return Effect.sync(cleanup);
   }).pipe(

@@ -1,12 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
-export { ACTIVITY_LIMITS, type ActivityLimits } from "./limits.ts";
+export { ACTIVITY_LIMITS } from "./limits.ts";
 
-export const ACTIVITY_VERSION = 1 as const;
+const ACTIVITY_VERSION = 1 as const;
 export const ACTIVITY_EVENT = "cosmic-ui:activity:v1";
 export const ACTIVITY_DISCOVER = "cosmic-ui:activity:discover:v1";
 export const ACTIVITY_HOST = "cosmic-ui:activity:host:v1";
@@ -22,7 +22,7 @@ const Count = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
   Schema.isLessThanOrEqualTo(ACTIVITY_LIMITS.count),
 );
-export const ActivityPhaseSchema = Schema.Struct({
+const ActivityPhaseSchema = Schema.Struct({
   title: PhaseTitle,
   detail: Schema.optional(Text),
   /**
@@ -105,7 +105,7 @@ const ActivityFields = {
     ).check(Schema.isMaxLength(ACTIVITY_LIMITS.actions)),
   ),
 };
-export const ActivityItemSchema = Schema.Union([
+const ActivityItemSchema = Schema.Union([
   Schema.Struct({
     ...ActivityFields,
     status: Schema.Literal("needs-input"),
@@ -172,15 +172,13 @@ export const ActivityEnvelopeSchema = Schema.Struct({
   acknowledge: callback<(available: boolean) => void>(),
 });
 export type ActivityEnvelope = typeof ActivityEnvelopeSchema.Type;
-export const ActivityHostSchema = Schema.Struct({
+const ActivityHostSchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Id,
   hostToken: Schema.ObjectKeyword,
   available: Schema.Boolean,
 });
 
-const safeSummary = (text: string, limit: number) =>
-  sanitizeDiagnosticContent(sanitizeTerminalLine(text.slice(0, limit)), { maximumLength: limit });
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] | undefined => {
   if (
     items.length > ACTIVITY_LIMITS.items ||
@@ -192,13 +190,15 @@ const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityIte
   )
     return undefined;
   return items.map((item) =>
-    detachActivityItem(item, safeSummary, (detail) =>
+    detachActivityItem(item, (detail) =>
       sanitizeDiagnosticContent(detail.slice(0, ACTIVITY_LIMITS.detail), {
         maximumLength: ACTIVITY_LIMITS.detail,
       }),
     ),
   );
 };
+
+const unavailable = () => Promise.reject(new Error("Activity provider unavailable."));
 
 /** Plain callback adapter. Its owner must dispose it when the producer session closes. */
 export function registerActivityProvider(
@@ -221,41 +221,34 @@ export function registerActivityProvider(
   const send = (operation: ActivityEnvelope["operation"]) => {
     if (disposed || !hostToken) return;
     const registrationHost = hostToken;
+    const { getDetail } = options;
+    // Capabilities work only while this registration is available to its own host.
+    const usable = (signal: AbortSignal) =>
+      !disposed && available && hostToken === registrationHost && !signal.aborted;
     try {
-      const envelope: ActivityEnvelope = {
+      events.emit(ACTIVITY_EVENT, {
         version: ACTIVITY_VERSION,
         sessionId: options.sessionId,
         providerId: options.providerId,
         token,
         hostToken: registrationHost,
         operation,
-      };
-      if (operation !== "revoke")
-        Object.assign(envelope, {
+        ...(operation !== "revoke" && {
           items: detachedSummaries(options.snapshot()),
           starting: options.starting?.() ?? 0,
-        });
-      if (operation === "register")
-        Object.assign(envelope, {
-          invoke: (itemId: string, actionId: string, revision: string, signal: AbortSignal) => {
-            if (disposed || !available || hostToken !== registrationHost || signal.aborted)
-              return Promise.reject(new Error("Activity provider unavailable."));
-            return options.invoke(itemId, actionId, revision, signal);
-          },
+        }),
+        ...(operation === "register" && {
+          invoke: (itemId: string, actionId: string, revision: string, signal: AbortSignal) =>
+            usable(signal) ? options.invoke(itemId, actionId, revision, signal) : unavailable(),
           acknowledge: (next: boolean) => {
             if (hostToken === registrationHost) acknowledge(next);
           },
-        });
-      const getDetail = options.getDetail;
-      if (operation === "register" && getDetail)
-        Object.assign(envelope, {
-          getDetail: (itemId: string, revision: string, signal: AbortSignal) => {
-            if (disposed || !available || hostToken !== registrationHost || signal.aborted)
-              return Promise.reject(new Error("Activity provider unavailable."));
-            return getDetail(itemId, revision, signal);
-          },
-        });
-      events.emit(ACTIVITY_EVENT, envelope);
+          ...(getDetail && {
+            getDetail: (itemId: string, revision: string, signal: AbortSignal) =>
+              usable(signal) ? getDetail(itemId, revision, signal) : unavailable(),
+          }),
+        }),
+      } satisfies ActivityEnvelope);
     } catch {
       acknowledge(false);
     }
@@ -290,7 +283,7 @@ export function registerActivityProvider(
   };
 }
 
-export interface RevisionedActivityProviderOptions {
+interface RevisionedActivityProviderOptions {
   readonly sessionId: string;
   readonly providerId: string;
   readonly isCurrent: () => boolean;

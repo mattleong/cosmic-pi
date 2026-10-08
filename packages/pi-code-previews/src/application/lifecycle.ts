@@ -5,6 +5,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   captureSessionHost,
+  invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
@@ -39,7 +40,7 @@ import {
   publishPreviewToolStatuses,
 } from "./tool-renderers";
 
-export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
+type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
 
 type SessionInput = {
   readonly cwd: string;
@@ -47,7 +48,7 @@ type SessionInput = {
   readonly settingsAdmission: SettingsAdmission;
   readonly presentation: CodePreviewPresentationOwner;
   capability?: CodePreviewSessionCapability;
-  readonly signal?: AbortSignal;
+  readonly signal: AbortSignal | undefined;
   readonly notifyFailure: () => void;
   readonly warn: (message: string) => void;
 };
@@ -59,19 +60,8 @@ function retirePresentation(input: SessionInput): void {
 
 class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePreviewRendererRegistrationError>()(
   "CodePreviewRendererRegistrationError",
-  { operation: Schema.Literals(["register-renderers"]), message: Schema.String },
+  { message: Schema.String },
 ) {}
-
-function registerRenderersAtHostBoundary(register: () => void) {
-  return Effect.try({
-    try: register,
-    catch: () =>
-      new CodePreviewRendererRegistrationError({
-        operation: "register-renderers",
-        message: "Code preview renderer registration failed.",
-      }),
-  });
-}
 
 export interface CodePreviewExtensionDependencies {
   readonly makeRuntime: (pi: ExtensionAPI) => CodePreviewRuntime;
@@ -127,13 +117,19 @@ export function codePreviewsWithDependencies(
     Effect.gen(function* () {
       yield* dependencies.loadSettings(input.settingsAdmission, input.cwd, input.projectTrusted);
       const scheduler = yield* CodePreviewSchedulerService;
-      yield* registerRenderersAtHostBoundary(() => {
-        publishPreviewToolStatuses(
-          capturePreviewHostTools(pi),
-          getEnabledCodePreviewTools(),
-          ownedTools,
-        );
-        dependencies.registerRenderers(pi, input.cwd, { ownedTools, installedTools });
+      yield* Effect.try({
+        try: () => {
+          publishPreviewToolStatuses(
+            capturePreviewHostTools(pi),
+            getEnabledCodePreviewTools(),
+            ownedTools,
+          );
+          dependencies.registerRenderers(pi, input.cwd, { ownedTools, installedTools });
+        },
+        catch: () =>
+          new CodePreviewRendererRegistrationError({
+            message: "Code preview renderer registration failed.",
+          }),
       });
       return scheduler;
     });
@@ -183,18 +179,14 @@ export function codePreviewsWithDependencies(
       notifyAtHostBoundary(ctx, "Code Previews couldn't start", "warning");
     const capturedHost = captureSessionHost(ctx);
     const projectTrusted = isProjectTrusted(ctx);
-    if (capturedHost["_tag"] === "Unavailable") {
-      presentation.retire();
-      notifyFailure();
-      return slot.shutdown().then(() => undefined);
-    }
     // Admission queries public metadata synchronously, before any settings I/O.
-    try {
-      capturePreviewHostTools(pi);
-    } catch {
+    if (
+      capturedHost["_tag"] === "Unavailable" ||
+      !invokeHostCallback(() => capturePreviewHostTools(pi), undefined)
+    ) {
       presentation.retire();
       notifyFailure();
-      return slot.shutdown().then(() => undefined);
+      return slot.shutdown();
     }
     if (capturedHost.aborted) notifyFailure();
     if (started || !presentation.live) {
@@ -202,17 +194,15 @@ export function codePreviewsWithDependencies(
       presentation = new CodePreviewPresentationOwner();
     }
     started = true;
-    const base: SessionInput = {
+    const input: SessionInput = {
       cwd: capturedHost.cwd,
       projectTrusted,
       settingsAdmission: makeSettingsAdmission(),
       presentation,
+      signal: capturedHost.signal,
       notifyFailure,
       warn: (message) => notifyAtHostBoundary(ctx, message, "warning"),
     };
-    const input: SessionInput = capturedHost.signal
-      ? { ...base, signal: capturedHost.signal }
-      : base;
     return slot.start(input, capturedHost.signal).then(() => undefined);
   });
   pi.on("session_shutdown", () => {

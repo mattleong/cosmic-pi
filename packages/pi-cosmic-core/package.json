@@ -33,6 +33,7 @@
   "exports": {
     ".": "./index.ts",
     "./testing": "./testing.ts",
+    "./testing/sdk": "./src/testing/sdk-session.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -57,6 +58,7 @@
     "fast-sha256": "catalog:"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
@@ -65,7 +67,13 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"

@@ -1,6 +1,6 @@
 import { formatTokens, formatCost } from "pi-cosmic-core";
 
-export interface FormatUsageInput {
+interface FormatUsageInput {
   readonly totalTokens: number;
   readonly cost?: number | undefined;
 }

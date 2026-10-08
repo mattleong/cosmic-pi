@@ -44,7 +44,8 @@ disk. The former standalone `pi-mcp-previews` package is retired and must be rem
   proven prior ownership admission. It preserves activation through `defaultActive`, separates
   attempted ownership from successful installation, and permits retry after mutate-then-refresh
   failures. Discovery failures stop startup; a bounded write registration error keeps rendering
-  and the current runtime available.
+  and the current runtime available. Without an active session the installed hook writes
+  natively, recording no before-write evidence.
 
 ## Siloed third-party presentation
 
@@ -80,32 +81,34 @@ Schema-derived tolerant decoding preserves valid siblings. Built-in defaults, gl
 `codePreview`, trusted-project nested settings, then flat global overrides determine values;
 there are no environment overrides, and performance budgets are fixed. Untrusted projects are
 ignored. Locked latest-document saves touch only edited known overrides, preserve unknown fields
-and skip unchanged documents. An override is dropped only when both the project and global
-baselines already yield its value; reset removes every known override. Loads publish ignored
-files and invalid fields, which session start and health report.
-The settings controller uses Cosmic UI's shared command and owned settings surfaces; pure menus
-live in `settings/ui/`. Panel drafts roll back only the latest failed edit. Syntax initialization
-failure after a successful theme save cannot roll back persistence. Health is an owned overlay,
-so closing cannot pop an unrelated stacked surface.
+and never rewrite an unchanged document, though they still commit. An override is dropped only
+when both the project and global baselines already yield its value; reset removes every known
+override. Loads publish ignored files and invalid fields, which session start and health report.
+The settings controller uses Cosmic UI's shared command and owned settings surfaces and edits only
+settings a session has loaded; pure menus live in `settings/ui/`. Panel drafts roll back only the
+latest failed edit. Syntax initialization failure after a successful theme save cannot roll back
+persistence. Health is an owned overlay, so closing cannot pop an unrelated stacked surface.
 
 ## Presentation and feature state
 
-- `tools/cooperative-tools.ts` and the builtin factories share one renderer adapter. Shell mode
-  and collapsed style are captured at wrapping; timing remains live. The root renderer-only
-  `withCodePreviewRenderers` accepts no execution/schema; `withCodePreviewShell` preserves an
-  extension-owned execution definition. `selfShell: true` retains fixed self framing in every
-  appearance mode, including a native-like combined background in preview/on.
+- `withCodePreviewRenderers` (`tools/cooperative-tools.ts`) is the one renderer composition.
+  Shell mode and collapsed style are captured at wrapping; timing remains live. It accepts no
+  execution/schema; `withCodePreviewShell` delegates to it and preserves an extension-owned
+  execution definition. Builtin factories supply only their call/result bodies;
+  `tools/renderers/registration.ts` adds the shared summary and expanded content.
+  `selfShell: true` retains fixed self framing in every appearance mode, including a
+  native-like combined background in preview/on.
 - `tools/compact-summary.ts` and bounded schemas define semantic summaries; malformed or absent
   evidence gets conservative generic presentation, never inferred success. `compact-issues.ts`
   merges human messages with expanded-only diagnostics. Preview and compact styles share issues.
 - `preview/` owns shell composition, separate original/content-only slot caches, frame/timing,
   children, expanded sections and safe fallback. Expanded content retains complete input/output.
-  Slot failures restore raw output without replaying failed renderers. The public
-  `getCodePreviewAnimationFrame` reads a safe scalar projection, not mutable timing state.
+  Slot failures restore raw output without replaying failed renderers. Native renderers read the
+  animation frame through a safe scalar projection, not mutable timing state.
 - Native codemode evidence inspects only the latest 256 own data-property call slots, validates
   neighbors independently and reports missing coverage. Subjects use observed bounded arguments
-  and unambiguous MCP aliases. `tools/native-mcp-resource-subject.ts` is the shared argument-only
-  resource action/subject seam; it contains no manager or standalone renderer logic.
+  and unambiguous MCP aliases. `tools/native-mcp-identity.ts` also owns the argument-only
+  resource action/subject; it contains no manager or standalone renderer logic.
 - `tools/native-codemode-discovery.ts` projects source-derived discovery intent with Acorn, not
   execution telemetry. Direct unshadowed helper calls supply fixed MCP/tool hints; unused function
   bodies, aliases, dynamic callees and unsupported/budget-exhausted source decline. Whole-program

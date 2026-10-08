@@ -1,10 +1,12 @@
-// Test/benchmark boundary intentionally exercises native Pi APIs behind Effect timers.
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { renderCompactChildren } from "../../src/preview/compact-children";
 import type { CompactChild } from "../../src/tools/compact-summary";
+import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
+import { createBuiltinPreviewRenderers } from "../../src/tools/renderers/registration";
+import { getEnabledCodePreviewTools } from "../../src/tools/selection";
 export { stripAnsi } from "pi-cosmic-core";
 export { plainTheme };
 
@@ -57,7 +59,16 @@ export function compactChildren(
   return renderCompactChildren({ entries, total }, plainTheme, width, {
     layout,
     timingEnabled: timing,
-    ...(options.all !== undefined && { all: options.all }),
-    ...(options.frame !== undefined && { animationFrame: options.frame }),
+    all: options.all ?? false,
+    animationFrame: options.frame,
   });
 }
+
+/** Builtin presentation as the resolver builds it for a /project session, never animated. */
+export const builtinRenderers = (name: BuiltinCompactTool, selfShell = false) =>
+  createBuiltinPreviewRenderers(name, {
+    cwd: "/project",
+    selfShell,
+    scheduleAnimation: () => () => undefined,
+    enabledTools: [...getEnabledCodePreviewTools()],
+  });

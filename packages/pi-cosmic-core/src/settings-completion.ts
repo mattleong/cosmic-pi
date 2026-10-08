@@ -4,13 +4,13 @@ import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
 import type { SubscriptionUsageConfig } from "./usage-controller.ts";
 
-export interface SettingsCompletionDescriptor {
+interface SettingsCompletionDescriptor {
   readonly id: string;
   readonly description: string;
   readonly values?: ReadonlyArray<string> | undefined;
 }
 
-export interface SettingsCompletionChoice {
+interface SettingsCompletionChoice {
   readonly value: string;
   readonly label: string;
   readonly description: string;
@@ -41,7 +41,6 @@ export const completeSettingsArguments = (
       })) ?? null
     );
   }
-  if (scopes.length > 0) extras = [...scopes, ...extras];
   const [head = "", ...rest] = normalized.split(/\s+/);
   if (rest.length === 0 && !/\s$/.test(normalized)) {
     const query = head.toLowerCase();
@@ -51,6 +50,7 @@ export const completeSettingsArguments = (
         label: descriptor.id,
         description: descriptor.description,
       })),
+      ...scopes,
       ...extras,
     ];
     const matches = choices.filter((choice) => choice.value.toLowerCase().startsWith(query));
@@ -60,11 +60,12 @@ export const completeSettingsArguments = (
   const descriptor = descriptors.find((entry) => entry.id.toLowerCase() === headId);
   if (!descriptor) return null;
   const valuePrefix = (rest[0] ?? "").toLowerCase();
+  // The canonical id, not the typed one: dispatch matches ids exactly.
   const matches = (descriptor.values ?? [])
     .filter((value) => value.toLowerCase().startsWith(valuePrefix))
     .map((value) => ({
-      value: `${head} ${value}`,
-      label: `${head} ${value}`,
+      value: `${descriptor.id} ${value}`,
+      label: `${descriptor.id} ${value}`,
       description: descriptor.description,
     }));
   return matches.length > 0 ? matches : null;

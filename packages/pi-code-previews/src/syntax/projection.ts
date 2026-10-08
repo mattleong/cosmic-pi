@@ -1,7 +1,7 @@
 import type { ShikiHighlighter } from "../boundary/shiki";
-import type { ProjectionOwnership } from "../shared/projection-ownership";
+import { ownedProjectionSlot, type ProjectionOwnership } from "../shared/projection-ownership";
 
-export type ShikiProjectionStatus = Readonly<{
+type ShikiProjectionStatus = Readonly<{
   initialized: boolean;
   loadedLanguages: number;
   pendingLanguages: number;
@@ -35,50 +35,32 @@ type SyntaxRequests = Readonly<{
   language: (language: string, invalidate?: () => void) => void;
 }>;
 
-let activeOwner: ProjectionOwnership | undefined;
-let newestGeneration = 0;
-let activeSnapshot: CodePreviewSyntaxSnapshot | undefined;
-let activeRequests: SyntaxRequests | undefined;
-
-const claimOwnership = (owner: ProjectionOwnership): boolean => {
-  if (activeOwner?.key === owner.key) return true;
-  // A newly acquired session takes over immediately. Retired or stale owners cannot rebind.
-  if (owner.generation <= newestGeneration) return false;
-  newestGeneration = owner.generation;
-  activeOwner = owner;
-  activeSnapshot = undefined;
-  activeRequests = undefined;
-  return true;
-};
+const slot = ownedProjectionSlot<{
+  snapshot: CodePreviewSyntaxSnapshot;
+  requests: SyntaxRequests;
+}>();
 
 export function publishSyntaxProjection(
   owner: ProjectionOwnership,
   snapshot: CodePreviewSyntaxSnapshot,
 ): void {
-  if (!claimOwnership(owner)) return;
-  activeSnapshot = snapshot;
+  slot.write(owner, { snapshot });
 }
 
 export function installSyntaxRequests(owner: ProjectionOwnership, requests: SyntaxRequests): void {
-  if (!claimOwnership(owner)) return;
-  activeRequests = requests;
+  slot.write(owner, { requests });
 }
 
-export function clearSyntaxProjection(owner: ProjectionOwnership): void {
-  if (activeOwner?.key !== owner.key) return;
-  activeOwner = undefined;
-  activeSnapshot = undefined;
-  activeRequests = undefined;
-}
+export const clearSyntaxProjection = slot.clear;
 
 export function syntaxProjection(): CodePreviewSyntaxSnapshot | undefined {
-  return activeSnapshot;
+  return slot.read().snapshot;
 }
 
 export function requestSyntaxInitialize(theme: string, invalidate?: () => void): void {
-  activeRequests?.initialize(theme, invalidate);
+  slot.read().requests?.initialize(theme, invalidate);
 }
 
 export function requestSyntaxLanguage(language: string, invalidate?: () => void): void {
-  activeRequests?.language(language, invalidate);
+  slot.read().requests?.language(language, invalidate);
 }

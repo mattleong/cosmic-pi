@@ -101,11 +101,15 @@ describe("/tasks stop confirmation", () => {
 
   it("sanitizes the pending task identity in the confirmation footer", () => {
     const { component } = makeManager([task("\x1b[31mbad\nidentity")]);
+    const before = component.render(120);
     component.handleInput("x");
 
+    // Only the confirmation prompt changes, and it names the task without its raw controls.
     const rendered = component.render(120);
-    expect(rendered.some((line) => line.includes("Confirm stop bad identity"))).toBe(true);
-    expect(rendered.every((line) => !line.includes("\x1b[31m"))).toBe(true);
+    const prompt = rendered.filter((line) => !before.includes(line));
+    expect(prompt.some((line) => line.includes("bad identity"))).toBe(true);
+    // The list row and detail pane show the same identity and must stay sanitized too.
+    expect(rendered.join("\n")).not.toContain("\x1b[31m");
   });
 
   it("cancels a pending stop on Esc without closing the manager", () => {

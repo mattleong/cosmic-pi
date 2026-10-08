@@ -1,10 +1,8 @@
-import * as Predicate from "effect/Predicate";
-
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 
-function formatResetCountdown(seconds: number | null): string | null {
-  if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds)) return null;
+function formatResetCountdown(seconds: number): string {
   const total = Math.max(0, Math.round(seconds));
   const days = Math.floor(total / 86_400);
   const hours = Math.floor((total % 86_400) / 3_600);
@@ -16,26 +14,17 @@ function formatResetCountdown(seconds: number | null): string | null {
   return `${secs}s`;
 }
 
-const LOCAL_DAY = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
-
-function formatResetClock(
-  seconds: number | null,
-  options: { readonly includeDate?: boolean } | undefined,
-  now: number,
-): string | null {
+/** The reset instant `seconds` after `now` with its countdown; undefined unless both are finite. */
+function resetAt(seconds: number | null, now: number) {
   if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
-    return null;
+    return undefined;
   const reset = DateTime.make(now + seconds * 1000);
-  const current = DateTime.make(now);
-  if (Option.isNone(reset) || Option.isNone(current)) return null;
-  const time = DateTime.formatLocal(reset.value, { hour: "numeric", minute: "2-digit" });
-  const resetDay = DateTime.formatLocal(reset.value, LOCAL_DAY);
-  const currentDay = DateTime.formatLocal(current.value, LOCAL_DAY);
-  if (!options?.includeDate && resetDay === currentDay) return time;
-  const weekday = DateTime.formatLocal(reset.value, { weekday: "short" });
-  if (!options?.includeDate) return `${weekday} ${time}`;
-  return `${weekday} ${DateTime.formatLocal(reset.value, { month: "numeric", day: "numeric" })} ${time}`;
+  return Option.isSome(reset)
+    ? { reset: reset.value, countdown: formatResetCountdown(seconds) }
+    : undefined;
 }
+
+const LOCAL_DAY = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
 
 export function formatCompactReset(
   label: string,
@@ -43,27 +32,31 @@ export function formatCompactReset(
   options: { readonly includeDate?: boolean } | undefined,
   now: number,
 ): string | null {
-  const countdown = formatResetCountdown(seconds);
-  const clock = formatResetClock(seconds, options, now);
-  return countdown && clock ? `${label} ↺ ${countdown} - ${clock}` : null;
+  const at = resetAt(seconds, now);
+  const current = DateTime.make(now);
+  if (at === undefined || Option.isNone(current)) return null;
+  const time = DateTime.formatLocal(at.reset, { hour: "numeric", minute: "2-digit" });
+  const weekday = DateTime.formatLocal(at.reset, { weekday: "short" });
+  let clock = `${weekday} ${time}`;
+  if (options?.includeDate)
+    clock = `${weekday} ${DateTime.formatLocal(at.reset, { month: "numeric", day: "numeric" })} ${time}`;
+  else if (
+    DateTime.formatLocal(at.reset, LOCAL_DAY) === DateTime.formatLocal(current.value, LOCAL_DAY)
+  )
+    clock = time;
+  return `${label} ↺ ${at.countdown} - ${clock}`;
 }
 
 /** Formats a reset with a compact local date/time while retaining its countdown. */
-export function formatShortReset(
-  label: string,
-  seconds: number | null,
-  now: number,
-): string | null {
-  if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
-    return null;
-  const reset = DateTime.make(now + seconds * 1000);
-  if (Option.isNone(reset)) return null;
-  const date = DateTime.formatLocal(reset.value, {
+function formatShortReset(label: string, seconds: number | null, now: number): string | null {
+  const at = resetAt(seconds, now);
+  if (at === undefined) return null;
+  const date = DateTime.formatLocal(at.reset, {
     locale: "en-US",
     month: "numeric",
     day: "numeric",
   });
-  const time = DateTime.formatLocal(reset.value, {
+  const time = DateTime.formatLocal(at.reset, {
     locale: "en-US",
     hour: "numeric",
     minute: "2-digit",
@@ -72,8 +65,7 @@ export function formatShortReset(
     .replace(/\s+/gu, "")
     .replace(/AM$/u, "a")
     .replace(/PM$/u, "p");
-  const countdown = formatResetCountdown(seconds);
-  return countdown ? `${label} ↺ ${countdown} - ${date} • ${time}` : `${label} ↺ ${date} • ${time}`;
+  return `${label} ↺ ${at.countdown} - ${date} • ${time}`;
 }
 
 /** Clamp a finite percent into the inclusive 0–100 range. */
@@ -123,7 +115,7 @@ export function remainingResetSeconds(
   return Number.isFinite(remaining) ? remaining : null;
 }
 
-export type UsageWindowLine = {
+type UsageWindowLine = {
   readonly label: string;
   readonly leftPercent: number | null;
   readonly resetInSeconds: number | null;

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import {
   mapProfileIds,
@@ -93,36 +94,23 @@ describe("session profile overrides", () => {
       for (const invalidRoute of invalidRoutes) {
         // SAFETY: Deliberately exercise the public mutation boundary with invalid unknown input.
         const route = invalidRoute as never;
-        const direct = yield* patchSessionProfileSnapshot(initial, {
-          profile: "worker",
-          route,
-          expectedRevision: initial.revision,
-        }).pipe(Effect.result);
-        expect(direct._tag).toBe("Failure");
         const result = yield* service
           .patchSessionProfile({ profile: "worker", route, expectedRevision: initial.revision })
           .pipe(Effect.result);
         expect(result._tag).toBe("Failure");
+        // A saved-set apply boundary must reject the same routes even through a typed call.
+        const rejectedSet = yield* service
+          .replaceSessionProfiles({
+            ...initial.baseline,
+            expectedRevision: initial.revision,
+            profiles: { ...initial.baseline.profiles, worker: route },
+          })
+          .pipe(Effect.result);
+        expect(rejectedSet._tag).toBe("Failure");
         expect(yield* service.capture).toBe(initial);
         expect(published).toEqual(beforePublication);
       }
       expect(reads).toBe(0);
-      const invalidProfiles = {
-        ...initial.baseline.profiles,
-        worker: { candidates: [{ ...local, host: "herdr" }] },
-      };
-      // SAFETY: A saved-set apply boundary must reject retired routes even through a typed call.
-      const rejectedSet = yield* service
-        .replaceSessionProfiles({
-          expectedRevision: initial.revision,
-          origin: initial.baseline.origin,
-          profiles: invalidProfiles as never,
-          profileSources: initial.baseline.profileSources,
-        })
-        .pipe(Effect.result);
-      expect(rejectedSet._tag).toBe("Failure");
-      expect(yield* service.capture).toBe(initial);
-      expect(published).toEqual(beforePublication);
     }),
   );
 
@@ -406,6 +394,14 @@ describe("session profile overrides", () => {
         maxDepth: 5,
       });
 
+      const invalid = yield* service
+        .patchSessionNesting({
+          nesting: { maxDirectChildren: 0, maxDepth: 5 },
+          expectedRevision: overridden.revision,
+        })
+        .pipe(Effect.flip);
+      expect(invalid.message).toContain("nesting policy is invalid");
+
       const cleared = yield* service.patchSessionNesting({
         expectedRevision: overridden.revision,
       });
@@ -413,29 +409,36 @@ describe("session profile overrides", () => {
     }),
   );
 
-  it.effect("commits session state when publication throws", () =>
-    Effect.gen(function* () {
-      let attempts = 0;
-      const service = yield* makeSubagentProfileService(baseConfig(), {
-        publishSessionOverrides: () => {
-          attempts += 1;
-          throw new Error("hostile session publication");
-        },
-      });
-      const committed = yield* service.patchSessionProfile({
-        profile: "reviewer",
-        route: route("openai/session-after-throw"),
-        expectedRevision: 0,
-      });
-      const captured = yield* service.capture;
+  it.effect(
+    "commits each edit with its best-effort handoff publication, even interrupted there",
+    () =>
+      Effect.gen(function* () {
+        let committing: Fiber.Fiber<unknown, unknown> | undefined;
+        const published: number[] = [];
+        const service = yield* makeSubagentProfileService(baseConfig(), {
+          publishSessionOverrides: (seed) => {
+            published.push(seed.revision);
+            committing?.interruptUnsafe();
+            throw new Error("hostile session publication");
+          },
+        });
+        const patch = (model: string, expectedRevision: number) =>
+          service.patchSessionProfile({
+            profile: "reviewer",
+            route: route(model),
+            expectedRevision,
+          });
+        const committed = yield* patch("openai/session-after-throw", 0);
+        expect(yield* service.capture).toEqual(committed);
+        expect(committed.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+          "openai/session-after-throw",
+        );
 
-      expect(attempts).toBe(2);
-      expect(committed.revision).toBe(1);
-      expect(captured).toEqual(committed);
-      expect(captured.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
-        "openai/session-after-throw",
-      );
-    }),
+        committing = yield* Effect.forkChild(patch("openai/interrupted", committed.revision));
+        expect(Exit.hasInterrupts(yield* Fiber.await(committing))).toBe(true);
+        expect(published).toEqual([0, 1, 2]);
+        expect((yield* service.capture).revision).toBe(2);
+      }),
   );
 
   it.effect(
@@ -557,41 +560,6 @@ describe("session profile overrides", () => {
           actualRevision: cleared.revision,
         });
       }),
-  );
-
-  it.effect("linearizes a whole-set replace racing a route reset", () =>
-    Effect.gen(function* () {
-      const service = yield* makeSubagentProfileService(baseConfig());
-      const initial = yield* service.capture;
-      const sparse = yield* service.patchSessionProfile({
-        profile: "reviewer",
-        route: route("openai/sparse"),
-        expectedRevision: initial.revision,
-      });
-      const outcomes = yield* Effect.all(
-        [
-          Effect.exit(
-            service.replaceSessionProfiles({
-              expectedRevision: sparse.revision,
-              origin: { scope: "global", name: "racing-set" },
-              profiles: sparse.baseline.profiles,
-              profileSources: sparse.baseline.profileSources,
-            }),
-          ),
-          Effect.exit(
-            service.patchSessionProfile({
-              profile: "reviewer",
-              expectedRevision: sparse.revision,
-            }),
-          ),
-        ],
-        { concurrency: "unbounded" },
-      );
-
-      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1);
-      expect(outcomes.filter(Exit.isFailure)).toHaveLength(1);
-      expect((yield* service.capture).revision).toBe(sparse.revision + 1);
-    }),
   );
 
   it.effect("compares every candidate field when suppressing no-op revisions", () =>

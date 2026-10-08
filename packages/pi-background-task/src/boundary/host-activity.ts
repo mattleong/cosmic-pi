@@ -9,9 +9,20 @@ import {
   isActiveTaskState,
   sortTasksByActivity,
   type BackgroundTaskProjection,
+  type BackgroundTaskState,
 } from "../task/model.ts";
 import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
 import { taskStateLabel } from "../ui/task-state.ts";
+
+const ACTIVITY_STATUS = {
+  starting: "pending",
+  running: "running",
+  stopping: "stopping",
+  exited: "done",
+  failed: "failed",
+  stopped: "cancelled",
+  timed_out: "failed",
+} as const satisfies Record<BackgroundTaskState, ActivityItem["status"]>;
 
 /**
  * One snapshot holds at most `ACTIVITY_LIMITS.items`, or the host rejects all of it. Retained
@@ -28,20 +39,9 @@ export function backgroundTaskActivityItems(
       });
       const item: ActivityItem = {
         id: task.id,
-        kind: "command" as const,
+        kind: "command",
         title,
-        status:
-          task.state === "starting"
-            ? ("pending" as const)
-            : task.state === "stopping"
-              ? ("stopping" as const)
-              : isActiveTaskState(task.state)
-                ? ("running" as const)
-                : task.state === "failed" || task.state === "timed_out"
-                  ? ("failed" as const)
-                  : task.state === "stopped"
-                    ? ("cancelled" as const)
-                    : ("done" as const),
+        status: ACTIVITY_STATUS[task.state],
         revision: `${task.startedAt}:${task.state}:${task.logCursor}`,
         summary: taskStateLabel(task.state),
         awaited: task.awaited === true,
@@ -67,8 +67,8 @@ export function backgroundTaskActivityItems(
                 }),
               ],
         ),
+        ...(task.endedAt !== undefined && { endedAt: task.endedAt }),
       };
-      if (task.endedAt !== undefined) Object.assign(item, { endedAt: task.endedAt });
       return Object.freeze(item);
     }),
   );
@@ -113,7 +113,7 @@ export function registerBackgroundTaskActivity(options: {
   readonly bridge: BackgroundTaskProjectionBridge;
   readonly isCurrent: () => boolean;
   readonly stop: (id: string, signal: AbortSignal) => Promise<void>;
-  readonly clear?: (signal: AbortSignal) => Promise<void>;
+  readonly clear: (signal: AbortSignal) => Promise<void>;
 }): () => void {
   return registerRevisionedActivityProvider(options.events, {
     sessionId: options.sessionId,
@@ -122,7 +122,7 @@ export function registerBackgroundTaskActivity(options: {
     items: () => backgroundTaskActivityItems(options.bridge.get()),
     detail: (item) => backgroundTaskActivityDetail(options.bridge.get(), item.id) ?? "",
     act: (item, action, signal) => {
-      if (action === "clear" && options.clear) return options.clear(signal);
+      if (action === "clear") return options.clear(signal);
       if (action === "stop") return options.stop(item.id, signal);
       throw new Error("Background task action is unavailable.");
     },

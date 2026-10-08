@@ -236,32 +236,24 @@ export function renderImageBody(
   return container;
 }
 
+const imageResultRenderer =
+  (nested: boolean) =>
+  <Details>(
+    result: AgentToolResult<Details>,
+    options: ToolRenderResultOptions,
+    theme: Theme,
+    context: ImageResultContext,
+  ): Component => {
+    if (options.isPartial) return nested ? new Container() : new Text(toolRunningLine(theme), 0, 0);
+    return renderImageBody(
+      imageViewOf(result, context.cwd),
+      { expanded: nested || options.expanded, isError: context.isError, nested },
+      theme,
+    );
+  };
+
 /** Preview result body: the running line while it runs, then the image facts. */
-export function renderImageResult<Details>(
-  result: AgentToolResult<Details>,
-  options: ToolRenderResultOptions,
-  theme: Theme,
-  context: ImageResultContext,
-): Component {
-  if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
-  return renderImageBody(
-    imageViewOf(result, context.cwd),
-    { expanded: options.expanded, isError: context.isError, nested: false },
-    theme,
-  );
-}
+export const renderImageResult = imageResultRenderer(false);
 
 /** Compact expansion's unique result content; the compact row already shows progress. */
-export function renderImageContent<Details>(
-  result: AgentToolResult<Details>,
-  options: ToolRenderResultOptions,
-  theme: Theme,
-  context: ImageResultContext,
-): Component {
-  if (options.isPartial) return new Container();
-  return renderImageBody(
-    imageViewOf(result, context.cwd),
-    { expanded: true, isError: context.isError, nested: true },
-    theme,
-  );
-}
+export const renderImageContent = imageResultRenderer(true);

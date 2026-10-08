@@ -4,14 +4,14 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { emptyUsage } from "../../src/run/model.ts";
-import { SubagentWriterConflictError } from "../../src/run/errors.ts";
+import { InvalidSubagentRequestError, SubagentWriterConflictError } from "../../src/run/errors.ts";
 import type { OwnedRunHandle, OwnedRunOutcome, OwnedRunStart } from "../../src/run/owned-runs.ts";
 import {
   makeWorkflowAgentCall,
   type WorkflowAgentRun,
   type WorkflowAgentServices,
 } from "../../src/workflow/agent.ts";
-import { makeWorkflowSlots, makeWorkflowWaitOrder } from "../../src/workflow/admission-queue.ts";
+import { makeWorkflowSlots } from "../../src/workflow/admission-queue.ts";
 import { makeWorkflowBudget } from "../../src/workflow/budget.ts";
 import { makeWorkflowReplay, type WorkflowJournalEntry } from "../../src/workflow/journal.ts";
 import type { WorkflowAgentSpend, WorkflowAgentView } from "../../src/workflow/model.ts";
@@ -46,12 +46,11 @@ const harness = (
   const recorded: Recorded = { journal: [], counted: [], updates: [], logs: [], results: [] };
   const services: WorkflowAgentServices = {
     subagents: {
-      reserveRunId: Effect.succeed("agent-r1-1"),
       projection: Effect.succeed({ revision: 0, runs: [] }),
       admissionRevision: Effect.succeed(0),
       waitForAdmissionChange: () => unexpected,
       waitForRevision: () => Effect.never,
-      queuedWriterConflict: () => Effect.succeed(undefined),
+      queuedWriterConflict: () => Effect.undefined,
       workspaceBindingStatus: () => Effect.succeed("pending"),
       workspaceDiscardUnchanged: () => Effect.succeed(false),
       startOwned: (_request, owner) => Effect.succeed(admitted(owner)),
@@ -71,7 +70,6 @@ const harness = (
       host: testHost(),
       replay: undefined,
       slots: makeWorkflowSlots(1),
-      order: makeWorkflowWaitOrder(),
       budget: makeWorkflowBudget(undefined, {
         subagents: services.subagents,
         warn: (message) => Effect.sync(() => void recorded.logs.push(message)),
@@ -95,6 +93,30 @@ const harness = (
   return { call, recorded };
 };
 
+/** A writer conflict that clears once the root writer is released. */
+const rootWriterConflict = new SubagentWriterConflictError({
+  activeId: "agent-r1-0",
+  activeName: "root writer",
+  message: "Writer root writer (agent-r1-0) owns the shared cwd exclusively.",
+  transient: true,
+});
+
+/** The resume journal entry of an earlier `prompt` call, which spent 7 output tokens. */
+const entry = (
+  prompt: string,
+  options: WorkflowAgentOptions,
+  result: string,
+  workspaceId?: string,
+): WorkflowJournalEntry => ({
+  key: workflowAgentJournalKey(prompt, options, undefined),
+  result,
+  outputTokens: 7,
+  chars: result.length,
+  ...(workspaceId !== undefined && { workspaceId }),
+});
+
+const worktreeWriter = { profile: "worker", isolation: "worktree" } as const;
+
 const completed = (text: string): OwnedRunOutcome => ({
   kind: "completed",
   text,
@@ -107,7 +129,7 @@ describe("workflow agent call", () => {
     Effect.gen(function* () {
       const failures: string[] = [];
       const { call } = harness({
-        nextCall: Effect.sync(() => undefined),
+        nextCall: Effect.undefined,
         failRun: (message) => Effect.sync(() => void failures.push(message)),
       });
       const error = yield* call(["task", {}]).pipe(Effect.flip);
@@ -118,9 +140,9 @@ describe("workflow agent call", () => {
 
   it.effect("replays an identical earlier result without starting an agent", () =>
     Effect.gen(function* () {
-      const key = workflowAgentJournalKey("task", {}, undefined);
+      const cached = entry("task", {}, "cached");
       const { call, recorded } = harness({
-        replay: makeWorkflowReplay([{ key, result: "cached", outputTokens: 7, chars: 6 }]),
+        replay: makeWorkflowReplay([cached]),
         nextCall: unexpected,
       });
       // A reused result costs nothing in this run.
@@ -128,20 +150,36 @@ describe("workflow agent call", () => {
         result: "cached",
         outputTokens: 0,
       });
-      expect(recorded.journal).toEqual([expect.objectContaining({ key, result: "cached" })]);
+      expect(recorded.journal).toEqual([cached]);
       expect(recorded.counted).toEqual([[7, true]]);
     }),
   );
 
-  it.effect("returns the final text and journals it with its output tokens", () =>
-    Effect.gen(function* () {
-      const { call, recorded } = harness({}, completed("All good."));
-      expect(yield* call(["task", {}])).toEqual({ result: "All good.", outputTokens: 11 });
-      expect(recorded.journal).toEqual([
-        expect.objectContaining({ result: "All good.", outputTokens: 11 }),
-      ]);
-      expect(recorded.updates.at(-1)).toMatchObject({ state: "completed" });
-    }),
+  it.effect(
+    "returns the final text and journals it with its output tokens, label and worktree",
+    () =>
+      Effect.gen(function* () {
+        const { call, recorded } = harness({}, completed("All good."), {
+          projection: Effect.succeed({
+            revision: 1,
+            runs: [view({ id: "agent-r1-1", workspaceId: "workspace-9" })],
+          }),
+        });
+        expect(yield* call(["task", { ...worktreeWriter, label: "fixer" }])).toEqual({
+          result: "All good.",
+          outputTokens: 11,
+        });
+        // A resume names a reused worktree, and its results line, by the journaled label.
+        expect(recorded.journal).toEqual([
+          expect.objectContaining({
+            result: "All good.",
+            outputTokens: 11,
+            label: "fixer",
+            workspaceId: "workspace-9",
+          }),
+        ]);
+        expect(recorded.updates.at(-1)).toMatchObject({ state: "completed" });
+      }),
   );
 
   it.effect("resolves null with a warning when a structured result isn't JSON", () =>
@@ -155,33 +193,6 @@ describe("workflow agent call", () => {
     }),
   );
 
-  it.effect("waits for an admission change behind a writer conflict that clears by itself", () =>
-    Effect.gen(function* () {
-      const released = yield* Deferred.make<void>();
-      let attempts = 0;
-      const { call } = harness({}, completed("Migrated."), {
-        startOwned: (_request, owner) =>
-          ++attempts === 1
-            ? Effect.fail(
-                new SubagentWriterConflictError({
-                  activeId: "agent-r1-0",
-                  activeName: "previous writer",
-                  message: "Writer previous writer is still cleaning up; retry shortly.",
-                  transient: true,
-                }),
-              )
-            : Effect.succeed(admitted(owner)),
-        waitForAdmissionChange: () => Deferred.await(released),
-      });
-      const fiber = yield* call(["migrate", { profile: "worker" }]).pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      expect(attempts).toBe(1);
-      yield* Deferred.succeed(released, undefined);
-      expect(yield* Fiber.join(fiber)).toEqual({ result: "Migrated.", outputTokens: 11 });
-      expect(attempts).toBe(2);
-    }),
-  );
-
   it.effect("gives its permit back while queued, so other agents keep starting", () =>
     Effect.gen(function* () {
       const released = yield* Deferred.make<void>();
@@ -190,16 +201,7 @@ describe("workflow agent call", () => {
         startOwned: (request, owner) =>
           request.task === "migrate" && !started.includes("migrate-refused")
             ? Effect.sync(() => void started.push("migrate-refused")).pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    new SubagentWriterConflictError({
-                      activeId: "agent-r1-0",
-                      activeName: "root writer",
-                      message: "Writer root writer (agent-r1-0) owns the shared cwd exclusively.",
-                      transient: true,
-                    }),
-                  ),
-                ),
+                Effect.andThen(Effect.fail(rootWriterConflict)),
               )
             : Effect.sync(() => void started.push(request.task)).pipe(Effect.as(admitted(owner))),
         waitForAdmissionChange: () => Deferred.await(released),
@@ -216,6 +218,31 @@ describe("workflow agent call", () => {
       yield* Deferred.succeed(released, undefined);
       expect(yield* Fiber.join(writer)).toEqual({ result: "Done.", outputTokens: 11 });
       expect(started).toEqual(["migrate-refused", "review", "migrate"]);
+    }),
+  );
+
+  it.effect("settles a call whose launch can't resolve and gives its slot back", () =>
+    Effect.gen(function* () {
+      const host = testHost();
+      const { call, recorded } = harness(
+        {
+          host: {
+            ...host,
+            resolveAgent: (spec) =>
+              spec.task === "unroutable"
+                ? Effect.fail(new InvalidSubagentRequestError({ message: "no route" }))
+                : host.resolveAgent(spec),
+          },
+        },
+        completed("Done."),
+      );
+      expect(yield* call(["unroutable", {}])).toEqual({ result: null, outputTokens: 0 });
+      expect(recorded.updates.at(-1)).toMatchObject({
+        state: "failed",
+        reason: "couldn't start: no route",
+      });
+      // The run has one slot, so the next call runs only if the failed launch released it.
+      expect(yield* call(["routable", {}])).toEqual({ result: "Done.", outputTokens: 11 });
     }),
   );
 
@@ -240,100 +267,35 @@ describe("workflow agent call", () => {
     }),
   );
 
-  it.effect("journals a writer's worktree and reports it again when the result is reused", () =>
-    Effect.gen(function* () {
-      const { call, recorded } = harness({}, completed("Fixed."), {
-        projection: Effect.succeed({
-          revision: 1,
-          runs: [view({ id: "agent-r1-1", workspaceId: "workspace-9" })],
-        }),
-      });
-      yield* call(["fix", { profile: "worker", isolation: "worktree", label: "fixer" }]);
-      expect(recorded.journal).toEqual([
-        expect.objectContaining({ workspaceId: "workspace-9", label: "fixer" }),
-      ]);
-      const reused: Array<string | undefined> = [];
-      const resumed = harness({
-        replay: makeWorkflowReplay(recorded.journal),
-        nextCall: unexpected,
-        reuse: (entry) => Effect.sync(() => void reused.push(entry.workspaceId)),
-      });
-      yield* resumed.call(["fix", { profile: "worker", isolation: "worktree" }]);
-      expect(reused).toEqual(["workspace-9"]);
-    }),
-  );
-
-  it.effect("counts a reused result in the call's display phase", () =>
-    Effect.gen(function* () {
-      const key = workflowAgentJournalKey("task", {}, undefined);
-      const phases: Array<string | undefined> = [];
-      const { call } = harness({
-        replay: makeWorkflowReplay([{ key, result: "cached", outputTokens: 7, chars: 6 }]),
-        nextCall: unexpected,
-        reuse: (_entry, claim) => Effect.sync(() => void phases.push(claim.phase)),
-      });
-      yield* call(["task", { phase: "Find" }]);
-      expect(phases).toEqual(["Find"]);
-    }),
-  );
-
-  for (const status of ["unbound", "closed"] as const)
-    it.effect(`runs a worktree writer again when its worktree is ${status}`, () =>
-      Effect.gen(function* () {
-        const options = { profile: "worker", isolation: "worktree" as const };
-        const key = workflowAgentJournalKey("fix", options, undefined);
-        const { call, recorded } = harness(
-          {
-            replay: makeWorkflowReplay([
-              { key, result: "Fixed.", outputTokens: 7, chars: 6, workspaceId: "workspace-9" },
-            ]),
-          },
-          completed("Fixed again."),
-          { workspaceBindingStatus: () => Effect.succeed(status) },
-        );
-        expect(yield* call(["fix", options])).toEqual({ result: "Fixed again.", outputTokens: 11 });
-        expect(recorded.counted).toEqual([[11, false]]);
-        expect(recorded.logs.some((line) => line.includes("workspace-9"))).toBe(true);
-      }),
-    );
-
   it.effect("reuses an integrated writer's result without listing its worktree", () =>
     Effect.gen(function* () {
-      const options = { profile: "worker", isolation: "worktree" as const };
-      const key = workflowAgentJournalKey("fix", options, undefined);
-      const entry = {
-        key,
-        result: "Fixed.",
-        outputTokens: 7,
-        chars: 6,
-        workspaceId: "workspace-9",
-      };
+      const integrated = entry("fix", worktreeWriter, "Fixed.", "workspace-9");
       const reused: Array<string | undefined> = [];
       const { call, recorded } = harness(
         {
-          replay: makeWorkflowReplay([entry]),
+          replay: makeWorkflowReplay([integrated]),
           nextCall: unexpected,
           reuse: (counted) => Effect.sync(() => void reused.push(counted.workspaceId)),
         },
         undefined,
         { workspaceBindingStatus: () => Effect.succeed("integrated") },
       );
-      expect(yield* call(["fix", options])).toEqual({ result: "Fixed.", outputTokens: 0 });
+      expect(yield* call(["fix", worktreeWriter])).toEqual({ result: "Fixed.", outputTokens: 0 });
       expect(reused).toEqual([undefined]);
-      // The journal keeps the worktree, so resuming this run checks it again.
-      expect(recorded.journal).toEqual([entry]);
+      // Like the results file, the journal leaves the integrated worktree out, so neither a
+      // later resume nor a teardown notice treats it as an unreviewed proposal.
+      const { workspaceId: _integrated, ...journaled } = integrated;
+      expect(recorded.journal).toEqual([journaled]);
     }),
   );
 
   it.effect("journals a result taken from the replay even when the run stops meanwhile", () =>
     Effect.gen(function* () {
-      const options = { profile: "worker", isolation: "worktree" as const };
-      const key = workflowAgentJournalKey("fix", options, undefined);
-      const entry = { key, result: "Fixed.", outputTokens: 7, chars: 6, workspaceId: "w-9" };
+      const taken = entry("fix", worktreeWriter, "Fixed.", "w-9");
       const reading = yield* Deferred.make<void>();
       const read = yield* Deferred.make<void>();
       const { call, recorded } = harness(
-        { replay: makeWorkflowReplay([entry]), nextCall: unexpected },
+        { replay: makeWorkflowReplay([taken]), nextCall: unexpected },
         undefined,
         {
           // The worktree's binding is read under the workspace lock, which can be held.
@@ -344,25 +306,19 @@ describe("workflow agent call", () => {
             ),
         },
       );
-      const fiber = yield* call(["fix", options]).pipe(Effect.forkChild);
+      const fiber = yield* call(["fix", worktreeWriter]).pipe(Effect.forkChild);
       yield* Deferred.await(reading);
       const stop = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild);
       yield* Effect.yieldNow;
       yield* Deferred.succeed(read, undefined);
       yield* Fiber.join(stop);
-      expect(recorded.journal).toEqual([entry]);
+      expect(recorded.journal).toEqual([taken]);
       expect(recorded.counted).toEqual([[7, true]]);
     }),
   );
 
   describe("writer-aware resume", () => {
     const writer = { profile: "worker" };
-    const entry = (prompt: string, options: WorkflowAgentOptions, result: string) => ({
-      key: workflowAgentJournalKey(prompt, options, undefined),
-      result,
-      outputTokens: 7,
-      chars: result.length,
-    });
     const earlier = [
       entry("implement the fix", writer, "Implemented."),
       entry("run the tests", {}, "Tests failed."),
@@ -445,10 +401,9 @@ describe("workflow agent call", () => {
 
     it.effect("keeps reusing results after a worktree writer runs again", () =>
       Effect.gen(function* () {
-        const isolated = { profile: "worker", isolation: "worktree" as const };
         const replay = () =>
           makeWorkflowReplay([
-            { ...entry("fix it", isolated, "Fixed."), workspaceId: "workspace-9" },
+            entry("fix it", worktreeWriter, "Fixed.", "workspace-9"),
             entry("run the tests", {}, "Tests passed."),
           ]);
         // A worktree that was discarded, and a changed worktree writer, each rerun the writer.
@@ -456,7 +411,7 @@ describe("workflow agent call", () => {
           const { call } = harness({ replay: replay() }, completed("Fixed again."), {
             workspaceBindingStatus: () => Effect.succeed("closed"),
           });
-          expect(yield* call([prompt, isolated])).toEqual({
+          expect(yield* call([prompt, worktreeWriter])).toEqual({
             result: "Fixed again.",
             outputTokens: 11,
           });
@@ -475,7 +430,7 @@ describe("workflow agent call", () => {
           // The writer got its worktree from the session's writer mode, which may now be
           // shared-checkout, so its rerun can edit the checkout the later reader reads.
           const replay = makeWorkflowReplay([
-            { ...entry("implement the fix", writer, "Implemented."), workspaceId: "workspace-9" },
+            entry("implement the fix", writer, "Implemented.", "workspace-9"),
             entry("run the tests", {}, "Tests failed."),
           ]);
           const { call, recorded } = harness({ replay }, completed("Fresh."), {
@@ -506,10 +461,10 @@ describe("workflow agent call", () => {
             host: {
               ...host,
               // The writer's validation takes a while, as a large schema's would.
-              checkAgent: (spec) =>
-                spec.profile === "worker"
-                  ? Deferred.await(checked).pipe(Effect.andThen(host.checkAgent(spec)))
-                  : host.checkAgent(spec),
+              checkAgent: (options) =>
+                options.profile === "worker"
+                  ? Deferred.await(checked).pipe(Effect.andThen(host.checkAgent(options)))
+                  : host.checkAgent(options),
             },
           },
           completed("Fresh."),
@@ -571,16 +526,10 @@ describe("workflow agent call", () => {
       const released = yield* Deferred.make<void>();
       const paused = yield* Deferred.make<void>();
       let blocked = true;
-      const conflict = new SubagentWriterConflictError({
-        activeId: "agent-r1-0",
-        activeName: "root writer",
-        message: "Writer root writer (agent-r1-0) owns the shared cwd exclusively.",
-        transient: true,
-      });
       let projection = { revision: 0, runs: [view({ id: "agent-r1-0", state: "running" })] };
       const { call, recorded } = harness({}, completed("Done."), {
         projection: Effect.sync(() => projection),
-        queuedWriterConflict: () => Effect.sync(() => (blocked ? conflict : undefined)),
+        queuedWriterConflict: () => Effect.sync(() => (blocked ? rootWriterConflict : undefined)),
         waitForAdmissionChange: () => Deferred.await(released),
         // Only the pause publishes a newer projection.
         waitForRevision: (after) =>
@@ -629,28 +578,6 @@ describe("workflow agent call", () => {
       expect(yield* call(["task", {}])).toEqual({ result: null, outputTokens: 3 });
       expect(recorded.counted).toEqual([[3, false]]);
       expect(recorded.logs.join("\n")).toContain("Model refused.");
-    }),
-  );
-
-  it.effect("counts a live agent's full usage and tool uses and journals them", () =>
-    Effect.gen(function* () {
-      const usage = { input: 900, output: 40, cacheRead: 60, cacheWrite: 0, totalTokens: 1_000 };
-      const spends: Array<WorkflowAgentSpend> = [];
-      const { call, recorded } = harness(
-        { count: (spend) => Effect.sync(() => void spends.push(spend)) },
-        { kind: "completed", text: "Done.", usage: { ...usage, cost: 0.25 }, toolUses: 7 },
-      );
-      expect(yield* call(["task", {}])).toEqual({ result: "Done.", outputTokens: 40 });
-      expect(spends).toEqual([{ usage: { ...usage, cost: 0.25 }, toolUses: 7 }]);
-      expect(recorded.results).toEqual([
-        expect.objectContaining({
-          state: "completed",
-          outputTokens: 40,
-          usage: { ...usage, cost: 0.25 },
-          toolUses: 7,
-          durationMs: expect.any(Number),
-        }),
-      ]);
     }),
   );
 

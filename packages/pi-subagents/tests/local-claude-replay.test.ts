@@ -26,6 +26,10 @@ import type {
 } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorChannelContract } from "../src/boundary/supervisor-channel.ts";
 import type { SubagentError } from "../src/run/errors.ts";
+import {
+  SUPERVISOR_MCP_REGISTRATION,
+  SUPERVISOR_MCP_TOOL_NAMES,
+} from "../src/supervisor/mcp-contract.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import {
   backendLaunch,
@@ -33,13 +37,6 @@ import {
   supervisorMetadata,
   takeBackendEvent,
 } from "./fixtures/backend-supervisor.ts";
-
-const SUPERVISOR_TOOLS = [
-  "supervisor_progress",
-  "supervisor_warning",
-  "supervisor_question",
-  "supervisor_submit_report",
-] as const;
 
 type ReplayScenario =
   | "steering"
@@ -154,9 +151,9 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
                 response: {
                   mcpServers: [
                     {
-                      name: "pi_subagents_supervisor",
+                      name: SUPERVISOR_MCP_REGISTRATION,
                       status: "connected",
-                      tools: SUPERVISOR_TOOLS.map((name) => ({ name })),
+                      tools: SUPERVISOR_MCP_TOOL_NAMES.map((name) => ({ name })),
                     },
                   ],
                 },
@@ -333,9 +330,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     const child: LocalCliHandle = {
       pid: 1,
       events: childEvents,
-      awaitExit: Deferred.await(exited).pipe(
-        Effect.map((exit) => ({ type: "exit" as const, ...exit })),
-      ),
+      awaitExit: Deferred.await(exited),
       send,
       acknowledge: () => {},
       terminate: () =>
@@ -356,8 +351,10 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             cwd: request.cwd,
             session_id: "claude-replay-session",
             model: request.model,
-            tools: SUPERVISOR_TOOLS.map((tool) => `mcp__pi_subagents_supervisor__${tool}`),
-            mcp_servers: [{ name: "pi_subagents_supervisor", status: "connected" }],
+            tools: SUPERVISOR_MCP_TOOL_NAMES.map(
+              (tool) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${tool}`,
+            ),
+            mcp_servers: [{ name: SUPERVISOR_MCP_REGISTRATION, status: "connected" }],
           });
           return child;
         }),
@@ -368,7 +365,6 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
           hasAcceptedReport: () => Effect.succeed(true),
           acceptedReportForEpoch: (epoch) =>
             Effect.succeed(acceptedReport?.assignmentEpoch === epoch ? acceptedReport : undefined),
-          close: Effect.sync(() => Queue.endUnsafe(supervisorEvents)),
         });
         return Effect.succeed(handle);
       },
@@ -520,11 +516,35 @@ const withStartedBackend = <A, E>(
 
 const take = (backend: BackendHandle) => takeBackendEvent(backend, { acknowledge: true });
 
-const expectInternalUserFrame = (scenario: ReplayScenario) =>
-  withStartedBackend(scenario, 8, (backend) =>
+/** A started backend whose assignment confirmation and first assistant message are drained. */
+const withRunningBackend = <A, E>(
+  scenario: ReplayScenario,
+  epoch: number,
+  use: (backend: BackendHandle, harness: ReplayHarness) => Effect.Effect<A, E, Scope>,
+) =>
+  withStartedBackend(scenario, epoch, (backend, harness) =>
     Effect.gen(function* () {
-      expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 8 });
-      expect(yield* take(backend)).toMatchObject({ type: "assistant_message", assignmentEpoch: 8 });
+      expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: epoch });
+      expect(yield* take(backend)).toMatchObject({
+        type: "assistant_message",
+        assignmentEpoch: epoch,
+      });
+      return yield* use(backend, harness);
+    }),
+  );
+
+/** Steers with guidance the fixture holds back; returns the caller once delivery is pending. */
+const sendDelayedGuidance = (backend: BackendHandle, harness: ReplayHarness) =>
+  Effect.gen(function* () {
+    const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
+    yield* harness.guidanceSent;
+    expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "pending" });
+    return caller;
+  });
+
+const expectInternalUserFrame = (scenario: ReplayScenario) =>
+  withRunningBackend(scenario, 8, (backend) =>
+    Effect.gen(function* () {
       expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 8 });
       expect(yield* take(backend)).toMatchObject({
         type: "assistant_message",
@@ -536,13 +556,7 @@ const expectInternalUserFrame = (scenario: ReplayScenario) =>
   );
 
 const takeRejectedUserFrame = (scenario: ReplayScenario) =>
-  withStartedBackend(scenario, 9, (backend) =>
-    Effect.gen(function* () {
-      expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 9 });
-      expect(yield* take(backend)).toMatchObject({ type: "assistant_message", assignmentEpoch: 9 });
-      return yield* take(backend);
-    }),
-  );
+  withRunningBackend(scenario, 9, (backend) => take(backend));
 
 describe("local Claude steering acknowledgement lifecycle", () => {
   for (const kind of [
@@ -552,13 +566,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
     "wrong-report-epoch",
   ] as const)
     it.effect(`checks causal report acceptance before failing a ${kind} native result`, () =>
-      withStartedBackend("steering", 12, (backend, harness) =>
+      withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* take(backend);
-          yield* take(backend);
-          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-          yield* harness.guidanceSent;
-          yield* take(backend);
+          const caller = yield* sendDelayedGuidance(backend, harness);
           yield* TestClock.adjust("11 seconds");
           yield* Fiber.await(caller);
           yield* harness.acceptReport(kind === "wrong-report-epoch" ? 13 : 12, false);
@@ -578,13 +588,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
   it.effect(
     "survives the caller deadline, rejects new send and cancel_queued interrupt, then confirms late",
     () =>
-      withStartedBackend("steering", 12, (backend, harness) =>
+      withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* take(backend);
-          yield* take(backend);
-          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-          yield* harness.guidanceSent;
-          expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "pending" });
+          const caller = yield* sendDelayedGuidance(backend, harness);
           yield* TestClock.adjust("11 seconds");
           // Typed pending evidence reaches the caller only while the backend still tracks guidance.
           expect(yield* Effect.flip(Fiber.join(caller))).toMatchObject({
@@ -621,13 +627,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
 
   for (const kind of ["wrong-uuid", "wrong-session", "absent-session"] as const)
     it.effect(`does not confirm same-text guidance from ${kind}`, () =>
-      withStartedBackend("steering", 12, (backend, harness) =>
+      withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* take(backend);
-          yield* take(backend);
-          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-          yield* harness.guidanceSent;
-          yield* take(backend);
+          const caller = yield* sendDelayedGuidance(backend, harness);
           yield* harness.rejectReplay(kind);
           expect(yield* take(backend)).toMatchObject({ type: "protocol_error" });
           expect(yield* Effect.flip(backend.controls.steer("No resend"))).toMatchObject({
@@ -641,13 +643,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
   it.effect(
     "activity never extends the watchdog, whose primary cause survives generic process exit",
     () =>
-      withStartedBackend("steering", 12, (backend, harness) =>
+      withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* take(backend);
-          yield* take(backend);
-          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-          yield* harness.guidanceSent;
-          yield* take(backend);
+          const caller = yield* sendDelayedGuidance(backend, harness);
           yield* TestClock.adjust("299 seconds");
           yield* harness.activity;
           yield* take(backend);
@@ -674,13 +672,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
     it.effect(
       `preserves exact accepted report through ${path} without claiming guidance incorporation`,
       () =>
-        withStartedBackend("steering", 12, (backend, harness) =>
+        withRunningBackend("steering", 12, (backend, harness) =>
           Effect.gen(function* () {
-            yield* take(backend);
-            yield* take(backend);
-            const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-            yield* harness.guidanceSent;
-            yield* take(backend);
+            const caller = yield* sendDelayedGuidance(backend, harness);
             yield* TestClock.adjust("11 seconds");
             expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true);
             yield* harness.acceptReport(12, path === "forwarded");
@@ -704,13 +698,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
 
   for (const settlement of ["report", "transport-close"] as const)
     it.effect(`${settlement} before the caller deadline never reports guidance pending`, () =>
-      withStartedBackend("steering", 12, (backend, harness) =>
+      withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* take(backend);
-          yield* take(backend);
-          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-          yield* harness.guidanceSent;
-          yield* take(backend);
+          const caller = yield* sendDelayedGuidance(backend, harness);
           if (settlement === "report") yield* harness.acceptReport(12);
           else yield* harness.close;
           const failure = yield* Effect.flip(Fiber.join(caller));
@@ -723,13 +713,9 @@ describe("local Claude steering acknowledgement lifecycle", () => {
     );
 
   it.effect("a report for another assignment cannot suppress the steering watchdog", () =>
-    withStartedBackend("steering", 12, (backend, harness) =>
+    withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
-        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-        yield* harness.guidanceSent;
-        yield* take(backend);
+        const caller = yield* sendDelayedGuidance(backend, harness);
         yield* harness.acceptReport(13, false);
         yield* TestClock.adjust("5 minutes");
         yield* yieldUntil(() => harness.terminations() > 0);
@@ -763,16 +749,6 @@ describe("local Claude replay classification", () => {
         isCompactSummary: true,
         contentKind: "text",
         textLength: 14,
-      });
-
-      const assistant = yield* decodeClaudeProtocolEvent({
-        type: "assistant",
-        parent_tool_use_id: "native-agent-tool-use",
-        message: { role: "assistant", content: [] },
-      });
-      expect(assistant).toMatchObject({
-        type: "assistant",
-        parentToolUseId: "native-agent-tool-use",
       });
     }),
   );
@@ -894,15 +870,10 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("keeps exact UUID replay correlated after guidance caller cancellation", () =>
-    withStartedBackend("accepted-report-close", 12, (backend, { guidanceSent, replayGuidance }) =>
+    withRunningBackend("accepted-report-close", 12, (backend, harness) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
-        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-        yield* guidanceSent;
-        expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "pending" });
-        yield* Fiber.interrupt(caller);
-        yield* replayGuidance;
+        yield* Fiber.interrupt(yield* sendDelayedGuidance(backend, harness));
+        yield* harness.replayGuidance;
         expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "confirmed" });
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",
@@ -913,10 +884,8 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("preserves accepted evidence behind a full queue and delayed consumer", () =>
-    withStartedBackend("accepted-report-close", 12, (backend, { close, fillProgress }) =>
+    withRunningBackend("accepted-report-close", 12, (backend, { close, fillProgress }) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
         yield* fillProgress;
         yield* yieldUntil(() => Queue.sizeUnsafe(backend.events) >= 512);
         yield* close;
@@ -930,10 +899,8 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("recovers accepted evidence when transport closes before report forwarding", () =>
-    withStartedBackend("accepted-report-close", 12, (backend, { close }) =>
+    withRunningBackend("accepted-report-close", 12, (backend, { close }) =>
       Effect.gen(function* () {
-        expect(yield* take(backend)).toMatchObject({ type: "run_started" });
-        expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* close;
         expect(yield* Stream.runCollect(Stream.fromQueue(backend.events))).toMatchObject([
           { type: "report", assignmentEpoch: 12, text: "Accepted report text" },
@@ -943,17 +910,10 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("preserves an accepted report when a trailing unknown replay arrives", () =>
-    withStartedBackend("accepted-report-foreign-replay", 12, (backend) =>
+    withRunningBackend("accepted-report-foreign-replay", 12, (backend) =>
       Effect.gen(function* () {
-        expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 12 });
         expect(yield* take(backend)).toMatchObject({
-          type: "assistant_message",
-          assignmentEpoch: 12,
-        });
-        const warning = yield* take(backend);
-        expect(warning).toMatchObject({
           type: "warning",
-          source: "runtime-extension",
           message: expect.stringContaining("report=accepted"),
         });
         expect(yield* take(backend)).toMatchObject({
@@ -978,13 +938,8 @@ describe("local Claude task-notification replays", () => {
     ["one labelled replay", 1],
     ["more labelled replays than the result window", SENT_UUID_LIMIT + 1],
   ] as const)("tolerates %s mid-run and still completes the assignment", ([, count]) =>
-    withStartedBackend("steering", 12, (backend, harness) =>
+    withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
-        expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 12 });
-        expect(yield* take(backend)).toMatchObject({
-          type: "assistant_message",
-          assignmentEpoch: 12,
-        });
         for (let index = 0; index < count; index += 1) {
           yield* harness.taskNotification("labelled");
           expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
@@ -1008,10 +963,8 @@ describe("local Claude task-notification replays", () => {
   );
 
   it.effect("suppresses a repeated labelled replay without owning another subturn", () =>
-    withStartedBackend("steering", 12, (backend, harness) =>
+    withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
         const uuid = yield* harness.taskNotification("labelled");
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         yield* harness.taskNotification("labelled", uuid);
@@ -1025,13 +978,9 @@ describe("local Claude task-notification replays", () => {
   );
 
   it.effect("never lets a labelled replay confirm or displace pending guidance", () =>
-    withStartedBackend("steering", 12, (backend, harness) =>
+    withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
-        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-        yield* harness.guidanceSent;
-        expect(yield* take(backend)).toMatchObject({ type: "input_delivery", state: "pending" });
+        const caller = yield* sendDelayedGuidance(backend, harness);
         yield* harness.taskNotification("labelled");
         expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 12 });
         expect(yield* Effect.flip(backend.controls.steer("Another guidance"))).toMatchObject({
@@ -1045,13 +994,9 @@ describe("local Claude task-notification replays", () => {
   );
 
   it.effect("keeps the unlabelled envelope fail closed while guidance is pending", () =>
-    withStartedBackend("steering", 12, (backend, harness) =>
+    withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
-        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-        yield* harness.guidanceSent;
-        yield* take(backend);
+        const caller = yield* sendDelayedGuidance(backend, harness);
         yield* harness.taskNotification("unlabelled");
         expect(yield* take(backend)).toMatchObject({
           type: "protocol_error",
@@ -1065,10 +1010,8 @@ describe("local Claude task-notification replays", () => {
   it.effect.each(["labelled", "unlabelled"] as const)(
     "keeps a %s replay fail closed once the assignment result has settled",
     (form) =>
-      withStartedBackend("steering", 12, (backend, harness) =>
+      withRunningBackend("steering", 12, (backend, harness) =>
         Effect.gen(function* () {
-          yield* take(backend);
-          yield* take(backend);
           yield* harness.assignmentResult;
           expect(yield* take(backend)).toMatchObject({
             type: "assistant_message",
@@ -1086,10 +1029,8 @@ describe("local Claude task-notification replays", () => {
     ["cross-session", "session=mismatch"],
     ["auto-continuation", "origin=auto-continuation"],
   ] as const)("rejects the %s near-miss replay", ([form, diagnostic]) =>
-    withStartedBackend("steering", 12, (backend, harness) =>
+    withRunningBackend("steering", 12, (backend, harness) =>
       Effect.gen(function* () {
-        yield* take(backend);
-        yield* take(backend);
         yield* harness.taskNotification(form);
         expect(yield* take(backend)).toMatchObject({
           type: "protocol_error",

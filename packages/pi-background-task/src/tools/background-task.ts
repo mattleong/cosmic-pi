@@ -26,6 +26,7 @@ import {
   backgroundTaskCompactSummary,
   backgroundTaskResultSubject,
   decodeBackgroundTaskDetails,
+  resultSnapshot,
 } from "../ui/compact-summary.ts";
 import {
   executeBackgroundTaskCommand,
@@ -33,7 +34,7 @@ import {
   type BackgroundTaskToolDetails,
 } from "./command.ts";
 import { BackgroundTaskContractSchema, encodeBackgroundTaskContract } from "./contract-schema.ts";
-import { resultSnapshot, renderBackgroundTaskPreview, taskProcessLine } from "./preview.ts";
+import { renderBackgroundTaskPreview, taskProcessLine } from "./preview.ts";
 import { BackgroundTaskParameters, type BackgroundTaskToolInput } from "./schema.ts";
 
 export interface BackgroundTaskToolRunner {

@@ -15,12 +15,12 @@ type SyntaxRequest =
   | { readonly tag: "Initialize"; readonly theme: string }
   | { readonly tag: "Language"; readonly language: string };
 
-export interface SyntaxIngressHandlers {
+interface SyntaxIngressHandlers {
   readonly initialize: (theme: string) => Effect.Effect<void>;
   readonly language: (language: string) => Effect.Effect<void>;
 }
 
-export interface SyntaxIngress {
+interface SyntaxIngress {
   readonly shutdown: Effect.Effect<void>;
 }
 
@@ -51,7 +51,7 @@ export const makeSyntaxIngress = (
       for (const key of pendingRequests.keys()) invalidateRequest(key);
     });
 
-    const ingress = yield* makeSynchronousIngress<SyntaxRequest, never, never>({
+    const ingress = yield* makeSynchronousIngress<SyntaxRequest, never>({
       capacity: INGRESS_CAPACITY,
       overflow: "drop",
       handle: (request) => {
@@ -64,10 +64,20 @@ export const makeSyntaxIngress = (
       },
     });
 
+    let overflowing = false;
+    // Pi's invalidate redraws the row synchronously, and that render requests again while the
+    // ingress is still saturated; the row it just redrew is not invalidated a second time.
+    const invalidateOverflow = (invalidate: (() => void) | undefined): void => {
+      if (overflowing) return;
+      overflowing = true;
+      invokeHostInvalidation(invalidate);
+      overflowing = false;
+    };
+
     const retainCallback = (callbacks: (() => void)[], invalidate?: () => void): void => {
       if (!invalidate) return;
       if (retainedCallbacks >= CALLBACK_CAPACITY) {
-        invokeHostInvalidation(invalidate);
+        invalidateOverflow(invalidate);
         return;
       }
       callbacks.push(invalidate);
@@ -83,7 +93,7 @@ export const makeSyntaxIngress = (
         return;
       }
       if (pendingRequests.size >= INGRESS_CAPACITY) {
-        invokeHostInvalidation(invalidate);
+        invalidateOverflow(invalidate);
         return;
       }
       const admitted: (() => void)[] = [];

@@ -27,7 +27,6 @@ export function progressBar(
   const empty = cells - filled;
   return [
     filled > 0 ? theme.fg(tone, "━".repeat(filled)) : "",
-    empty > 0 && filled < cells ? theme.fg(tone, "╸") : "",
-    empty > 0 ? theme.fg("dim", "─".repeat(Math.max(0, empty - (filled < cells ? 1 : 0)))) : "",
+    empty > 0 ? `${theme.fg(tone, "╸")}${theme.fg("dim", "─".repeat(empty - 1))}` : "",
   ].join("");
 }

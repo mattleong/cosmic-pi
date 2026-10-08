@@ -7,7 +7,10 @@ import * as Data from "effect/Data";
 import * as Schema from "effect/Schema";
 import { decodeRpcEnvelope, type RpcResponse } from "../src/backend/local-pi-protocol.ts";
 import { describe, expect, it } from "@effect/vitest";
-import { nodeFsPromises as fs, nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
+import { temporaryDirectory } from "pi-cosmic-core/testing";
+import { nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 class RpcFixtureError extends Data.TaggedError("RpcFixtureError")<{ readonly message: string }> {}
 
@@ -16,12 +19,8 @@ describe("installed Pi RPC input hooks", () => {
     "transforms and handles steer/follow_up through source rpc without credentials or inference",
     () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.String("TMPDIR").pipe(Config.withDefault("/tmp"));
         const executablePath = yield* Config.String("PATH").pipe(Config.withDefault(""));
-        const directory = yield* Effect.acquireRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-rpc-input-"))),
-          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-        );
+        const directory = yield* temporaryDirectory("pi-rpc-input-");
         const exited = yield* Deferred.make<void>();
         const child = yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -117,16 +116,12 @@ describe("installed Pi RPC input hooks", () => {
             const reject = (error: RpcFixtureError) => resume(Effect.fail(error));
             const id = String(++nextId);
             pending.set(id, { resolve, reject });
-            child.stdin.write(
-              Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ id, type, message }) +
-                "\n",
-              (error) => {
-                if (error) {
-                  pending.delete(id);
-                  reject(new RpcFixtureError({ message: error.message }));
-                }
-              },
-            );
+            child.stdin.write(`${encodeJson({ id, type, message })}\n`, (error) => {
+              if (error) {
+                pending.delete(id);
+                reject(new RpcFixtureError({ message: error.message }));
+              }
+            });
             return Effect.sync(() => {
               pending.delete(id);
             });

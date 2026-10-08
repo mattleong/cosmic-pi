@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { afterEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import { formatDuration } from "pi-cosmic-core";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
-import { animationSchedulerProbe, createToolPresentationHarness } from "../../testing";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
-import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
+import { failingTheme, plainTheme } from "pi-cosmic-core/testing";
+import {
+  animationSchedulerProbe,
+  applyPresentationSettings,
+  createToolPresentationHarness,
+} from "../../testing";
+import { codemodeRenderers, nativeCall, scriptResult } from "../support/native-codemode";
 import { stripAnsi } from "../support/render";
 
 const settings = (
@@ -13,48 +15,27 @@ const settings = (
   timing = false,
   background: "off" | "on" | "border" = "off",
 ) =>
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    syntaxHighlighting: false,
+  applyPresentationSettings({
     toolCallCollapsedStyle: style,
     toolCallTiming: timing,
     toolCallBackground: background,
   });
-const running = {
-  content: [],
-  details: {
-    calls: [{ id: "private/1", name: "read", args: '{"path":"/project/a.ts"}', status: "running" }],
-  },
-};
-const completed = {
-  content: [
-    { type: "text" as const, text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
-    { type: "text" as const, text: "OUTPUT_RETAINED" },
-  ],
-  details: { calls: [] },
-};
-afterEach(() => {
-  setCodePreviewSettings(defaultCodePreviewSettings);
-  vi.restoreAllMocks();
-});
+const running = { content: [], details: { calls: [nativeCall({ status: "running" })] } };
+const completed = scriptResult(
+  "completed",
+  { calls: [] },
+  { type: "text", text: "OUTPUT_RETAINED" },
+);
+beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false }));
+afterEach(() => vi.restoreAllMocks());
 
 for (const width of [16, 60, 100])
   test(`native collapsed source is screen-row bounded at ${width} columns, with complete expansion`, () => {
     settings("preview");
     const source = "// SOURCE_HEAD " + "x".repeat(2400) + " SOURCE_TAIL";
     for (const hostile of [false, true]) {
-      const theme = hostile
-        ? opaqueFixture({
-            ...plainTheme,
-            fg() {
-              throw new Error("theme unavailable");
-            },
-          })
-        : plainTheme;
-      const h = createToolPresentationHarness(
-        createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
-        { theme },
-      );
+      const theme = hostile ? failingTheme() : plainTheme;
+      const h = createToolPresentationHarness(codemodeRenderers(), { theme });
       h.call({ code: source });
       assert.ok(h.render(width).length <= 12);
       h.call({ code: source }, { expanded: true });
@@ -73,9 +54,7 @@ for (const style of ["compact", "preview"] as const)
           test(`native progress animates and releases its owner in ${style}/${background}/${progress}, expanded=${expanded}, timing=${timing}`, () => {
             settings(style, timing, background);
             const probe = animationSchedulerProbe();
-            const h = createToolPresentationHarness(
-              createNativeCodemodeRenderers("/project", { scheduleAnimation: probe.schedule }),
-            );
+            const h = createToolPresentationHarness(codemodeRenderers(probe.schedule));
             h.call({ code: "// SOURCE_RETAINED" }, { expanded });
             assert.equal(probe.scheduled, 0);
             const partial =
@@ -113,9 +92,7 @@ for (const style of ["compact", "preview"] as const)
             settings(style, enabled, background);
             let now = 1000;
             vi.spyOn(Date, "now").mockImplementation(() => now);
-            const h = createToolPresentationHarness(
-              createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
-            );
+            const h = createToolPresentationHarness(codemodeRenderers());
             const args = { code: "await Promise.allSettled(checks);" };
             h.call(args, { executionStarted: true, isPartial: true, expanded });
             h.result(running, { isPartial: true, expanded });
@@ -125,21 +102,20 @@ for (const style of ["compact", "preview"] as const)
               details: {
                 calls: [
                   { ...running.details.calls[0], status: "ok", durationMs: 137 },
-                  {
+                  nativeCall({
                     id: "private/2",
                     name: "mcp__atlassian__tool_call",
                     args: "{}",
-                    status: "ok",
                     durationMs: 253,
-                  },
-                  {
+                  }),
+                  nativeCall({
                     id: "private/3",
                     name: "bash",
                     args: '{"command":"run-check"}',
                     status: "error",
                     error: "CHECK_FAILURE_RETAINED",
                     durationMs: 211,
-                  },
+                  }),
                 ],
               },
             };
@@ -172,9 +148,7 @@ for (const style of ["compact", "preview"] as const)
     test(`native ${style}/${background} pending and replayed calls never acquire synthetic timing`, () => {
       settings(style, true, background);
       for (const durationMs of [undefined, -1, NaN, Infinity, "250", 0]) {
-        const h = createToolPresentationHarness(
-          createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
-        );
+        const h = createToolPresentationHarness(codemodeRenderers());
         const args = { code: "// SOURCE_RETAINED" };
         h.call(args, { executionStarted: false, isPartial: true });
         assert.equal(h.render(160).join("\n").includes(formatDuration(0)), false);
@@ -201,12 +175,9 @@ for (const style of ["compact", "preview"] as const)
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} expansion preserves bounded calls with oversized or unknown history`, () => {
     settings(style);
-    const records = Array.from({ length: 257 }, (_, index) => ({
-      id: `private/${index}`,
-      name: "read",
-      args: JSON.stringify({ path: `/project/record-${index}.ts` }),
-      status: "ok",
-    }));
+    const records = Array.from({ length: 257 }, (_, index) =>
+      nativeCall({ id: `private/${index}`, args: `{"path":"/project/record-${index}.ts"}` }),
+    );
     const retained = [
       ...records.slice(0, -1),
       { ...records[256]!, status: "error", error: "LAST_FAILURE" },
@@ -217,9 +188,7 @@ for (const style of ["compact", "preview"] as const)
     };
     const before = structuredClone(result);
     for (const unknownHeader of [false, true]) {
-      const h = createToolPresentationHarness(
-        createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
-      );
+      const h = createToolPresentationHarness(codemodeRenderers());
       const rendered = unknownHeader
         ? {
             ...result,

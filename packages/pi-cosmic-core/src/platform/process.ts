@@ -62,34 +62,26 @@ export interface BoundedProcessResult {
   readonly cleanupUnconfirmed: boolean;
 }
 
-interface OutputCollector {
-  readonly chunks: Array<Uint8Array>;
-  size: number;
-}
-
-interface TotalOutputCounter {
-  readonly maximumBytes: number;
-  size: number;
-}
-
+/** Retains one stream within its own and the shared total budget; any excess is an overflow. */
 const boundedOutput = (
+  source: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
   streamName: "stdout" | "stderr",
-  handle: ChildProcessSpawner.ChildProcessHandle,
   maximumBytes: number,
-  collector: OutputCollector,
-  total: TotalOutputCounter,
-) =>
-  handle[streamName].pipe(
+  total: { readonly maximumBytes: number; size: number },
+) => {
+  const chunks: Array<Uint8Array> = [];
+  let size = 0;
+  const drain = source.pipe(
     Stream.runForEach((chunk) =>
       Effect.suspend(() => {
         const remaining = Math.max(
           0,
-          Math.min(maximumBytes - collector.size, total.maximumBytes - total.size),
+          Math.min(maximumBytes - size, total.maximumBytes - total.size),
         );
         if (remaining > 0) {
           const retained = chunk.byteLength <= remaining ? chunk : chunk.slice(0, remaining);
-          collector.chunks.push(retained);
-          collector.size += retained.byteLength;
+          chunks.push(retained);
+          size += retained.byteLength;
           total.size += retained.byteLength;
         }
         return chunk.byteLength > remaining
@@ -98,8 +90,10 @@ const boundedOutput = (
       }),
     ),
   );
+  return { drain, text: () => new TextDecoder().decode(Buffer.concat(chunks)) };
+};
 
-export interface EffectProcessExit {
+interface EffectProcessExit {
   readonly code: number | null;
   readonly signal: string | null;
 }
@@ -115,12 +109,9 @@ export const effectProcessExit = (
       ? failure.reason.cause
       : failure;
   const message = source instanceof Error ? source.message : String(source);
-  // Pinned rc.112 exposes the signal only through this stable nested cause text.
+  // Pinned Effect 4.0.0 exposes the signal only through this stable nested cause text.
   return { code: null, signal: /receipt of signal: '([^']+)'/u.exec(message)?.[1] ?? null };
 };
-
-const decodeOutput = (collector: OutputCollector): string =>
-  new TextDecoder().decode(Buffer.concat(collector.chunks));
 
 const sweepExitedProcessTree = (
   handle: ChildProcessSpawner.ChildProcessHandle,
@@ -168,15 +159,6 @@ export const confirmEffectProcessClose = (
 const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   request: BoundedProcessRequest,
 ) {
-  const stdout: OutputCollector = { chunks: [], size: 0 };
-  const stderr: OutputCollector = { chunks: [], size: 0 };
-  const totalOutput: TotalOutputCounter = {
-    maximumBytes: Math.max(
-      0,
-      request.totalOutputLimitBytes ?? request.stdoutLimitBytes + request.stderrLimitBytes,
-    ),
-    size: 0,
-  };
   const cleanupTimeoutMillis = Math.max(1, request.cleanupTimeoutMillis ?? 2_000);
   const command = ChildProcess.make(request.executable, [...request.args], {
     cwd: request.cwd,
@@ -190,7 +172,7 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     killSignal: "SIGTERM",
     forceKillAfter: Math.max(1, cleanupTimeoutMillis / 2),
   });
-  const handle = yield* Effect.uninterruptibleMask(() =>
+  const handle = yield* Effect.uninterruptible(
     Effect.gen(function* () {
       // Register before dispatch. The spawner can acquire a native child and
       // fail before publishing its handle; its own finalizer swallows kill errors.
@@ -221,29 +203,30 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
       return acquired;
     }),
   );
-  const observed = Effect.all(
-    [
-      boundedOutput("stdout", handle, request.stdoutLimitBytes, stdout, totalOutput),
-      boundedOutput("stderr", handle, request.stderrLimitBytes, stderr, totalOutput),
-      Effect.exit(handle.exitCode),
-    ] as const,
-    { concurrency: 3 },
-  ).pipe(
+  const total = {
+    maximumBytes: Math.max(
+      0,
+      request.totalOutputLimitBytes ?? request.stdoutLimitBytes + request.stderrLimitBytes,
+    ),
+    size: 0,
+  };
+  const stdout = boundedOutput(handle.stdout, "stdout", request.stdoutLimitBytes, total);
+  const stderr = boundedOutput(handle.stderr, "stderr", request.stderrLimitBytes, total);
+  const observed = Effect.all([stdout.drain, stderr.drain, Effect.exit(handle.exitCode)] as const, {
+    concurrency: 3,
+  }).pipe(
     Effect.map(([, , exit]) => ({ _tag: "Completed" as const, exit })),
-    Effect.catch((error) =>
-      error instanceof BoundedProcessOverflow
-        ? Effect.succeed({ _tag: "Overflow" as const })
-        : Effect.fail(
-            new BoundedProcessError({
-              operation: "stream",
-              message: "Unable to read process output.",
-            }),
-          ),
+    Effect.catchTag("BoundedProcessOverflow", () => Effect.succeed({ _tag: "Overflow" as const })),
+    Effect.mapError(
+      () =>
+        new BoundedProcessError({ operation: "stream", message: "Unable to read process output." }),
     ),
   );
-  const outcome = yield* Effect.raceFirst(
-    observed,
-    Effect.sleep(Math.max(1, request.timeoutMillis)).pipe(Effect.as({ _tag: "Timeout" as const })),
+  const outcome = yield* observed.pipe(
+    Effect.timeoutOrElse({
+      duration: Math.max(1, request.timeoutMillis),
+      orElse: () => Effect.succeed({ _tag: "Timeout" as const }),
+    }),
   );
   const cleanupConfirmed =
     outcome._tag === "Completed"
@@ -251,13 +234,12 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
         ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
         : true
       : yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis);
-  const processExit =
-    outcome._tag === "Completed" ? effectProcessExit(outcome.exit) : { code: null, signal: null };
   return {
-    code: processExit.code,
-    signal: processExit.signal,
-    stdout: decodeOutput(stdout),
-    stderr: decodeOutput(stderr),
+    ...(outcome._tag === "Completed"
+      ? effectProcessExit(outcome.exit)
+      : { code: null, signal: null }),
+    stdout: stdout.text(),
+    stderr: stderr.text(),
     overflowed: outcome._tag === "Overflow",
     timedOut: outcome._tag === "Timeout",
     cleanupUnconfirmed: !cleanupConfirmed,

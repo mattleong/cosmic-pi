@@ -1,6 +1,26 @@
 import { sha256Text } from "pi-cosmic-core";
-import type { PreviewToolInfo } from "../application/renderer-contract";
-import { nativeMcpResourceAction, type NativeMcpResourceTool } from "./native-mcp-resource-subject";
+import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+
+/** Readable actions of Pi's native MCP resource tools. */
+const NATIVE_MCP_RESOURCE_ACTIONS = {
+  read_mcp_resource: "read resource",
+  list_mcp_resources: "list resources",
+  list_mcp_resource_templates: "list templates",
+} as const;
+type NativeMcpResourceTool = keyof typeof NATIVE_MCP_RESOURCE_ACTIONS;
+
+const isNativeMcpResourceTool = (name: string): name is NativeMcpResourceTool =>
+  Object.hasOwn(NATIVE_MCP_RESOURCE_ACTIONS, name);
+
+/** Readable action of one of Pi's native MCP resource tools; undefined for any other name. */
+export function nativeMcpResourceAction(name: string): string | undefined {
+  return isNativeMcpResourceTool(name) ? NATIVE_MCP_RESOURCE_ACTIONS[name] : undefined;
+}
+
+/** Observed server and URI text only. Listings have no URI and omit an absent server. */
+export function nativeMcpResourceSubject(name: string, server: string, uri: string): string {
+  return [server, name === "read_mcp_resource" ? uri : ""].filter(Boolean).join(" / ");
+}
 
 /** Public aliases identify rows, not exact remote names: sanitization is not reversible. */
 export type NativeMcpIdentity =
@@ -13,18 +33,16 @@ export type NativeMcpIdentity =
     };
 
 export function isNativeMcpName(name: string): boolean {
-  return nativeMcpResourceAction(name) !== undefined || /^mcp__[A-Za-z0-9_]+$/.test(name);
+  return isNativeMcpResourceTool(name) || /^mcp__[A-Za-z0-9_]+$/.test(name);
 }
 
 /** Capture only public metadata. No labels, execution definitions or reverse alias parsing. */
 export function nativeMcpIdentity(
   name: string,
-  tool?: Pick<PreviewToolInfo, "namespace">,
+  tool?: Pick<ToolInfo, "namespace">,
 ): NativeMcpIdentity {
-  const action = nativeMcpResourceAction(name);
-  if (action !== undefined)
-    // SAFETY: The shared action lookup recognizes exactly the three native resource tool names.
-    return { kind: "resource", name: name as NativeMcpResourceTool, action };
+  if (isNativeMcpResourceTool(name))
+    return { kind: "resource", name, action: NATIVE_MCP_RESOURCE_ACTIONS[name] };
   const identity: NativeMcpIdentity = { kind: "tool", name, registered: tool !== undefined };
   return tool?.namespace ? { ...identity, namespace: tool.namespace.name } : identity;
 }

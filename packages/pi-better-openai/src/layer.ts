@@ -1,6 +1,6 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
-import type { CodePreviewSchedulerService } from "pi-code-previews";
+import { CodePreviewSchedulerService } from "pi-code-previews";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, SafeFile, nodePlatformLayer } from "pi-cosmic-core";
 import { OpenAICompactionClient } from "./boundary/openai-compaction.ts";
@@ -58,9 +58,11 @@ export const makeOpenAIApplicationLayer = (
     nodePlatformLayer,
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
-  return Layer.mergeAll(fast, image, compaction).pipe(Layer.provide(platform));
+  return Layer.mergeAll(fast, image, compaction, CodePreviewSchedulerService.layer).pipe(
+    Layer.provide(platform),
+  );
 };
 
 export type OpenAIApplicationLayer = ReturnType<typeof makeOpenAIApplicationLayer>;
-export type OpenAIApplication = Layer.Success<OpenAIApplicationLayer> | CodePreviewSchedulerService;
+export type OpenAIApplication = Layer.Success<OpenAIApplicationLayer>;
 export type OpenAIRuntimeError = Layer.Error<OpenAIApplicationLayer>;

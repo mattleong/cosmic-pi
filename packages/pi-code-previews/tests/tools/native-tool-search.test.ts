@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { failingTheme } from "pi-cosmic-core/testing";
 import { stripAnsi } from "pi-cosmic-core";
-import { afterEach, test } from "vitest";
+import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
   applyPresentationSettings,
@@ -18,8 +18,7 @@ import {
   nativeToolSearchSummary,
 } from "../../src/tools/native-tool-search-summary";
 
-let restore = () => {};
-afterEach(() => restore());
+beforeEach(() => applyPresentationSettings({ toolCallTiming: false }));
 const result = <Details>(details: Details): AgentToolResult<unknown> => ({
   content: [
     { type: "text", text: "RAW_OUTPUT\nRead the returned tool instructions before calling it" },
@@ -103,6 +102,9 @@ test("receipt and query inspection reject inherited data, accessors, and throwin
   const subject = nativeToolSearchSubject({ query: "query\u001b[2J\n" + "padding ".repeat(1000) });
   assert.ok(subject.length <= 160);
   for (const control of ["\u001b", "\n", "\r"]) assert.equal(subject.includes(control), false);
+  // A query with nothing visible, as while arguments stream, leaves the heading empty.
+  for (const query of ["", " \t", "\u0007", "\u001b[2J"])
+    assert.equal(nativeToolSearchSubject({ query }), "");
 });
 
 test("errors use human issues and preserve all recovery text without invented spill evidence", () => {
@@ -131,11 +133,7 @@ for (const style of ["preview", "compact"] as const)
   for (const mode of ["on", "off", "border"] as const)
     for (const evidence of ["valid", "malformed", "error"] as const)
       test(`${style}/${mode}/${evidence} preserves exact expansion, result identity, and native images`, () => {
-        restore = applyPresentationSettings({
-          toolCallCollapsedStyle: style,
-          toolCallBackground: mode,
-          toolCallTiming: false,
-        });
+        applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: mode });
         const renderers = createNativeToolSearchRenderers({
           scheduleAnimation: () => undefined,
           selfShell: true,
@@ -189,16 +187,11 @@ for (const style of ["preview", "compact"] as const)
       });
 
 test("theme failures preserve complete input, output, and human issues", () => {
-  restore = applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false });
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
   const h = createToolPresentationHarness(
     createNativeToolSearchRenderers({ scheduleAnimation: () => undefined }),
     {
-      theme: opaqueFixture({
-        ...plainTheme,
-        fg() {
-          throw new Error("theme unavailable");
-        },
-      }),
+      theme: failingTheme(),
     },
   );
   h.call({ query: "EXACT_QUERY", limit: 3, extra: "EXACT_EXTRA" }, { expanded: true });
@@ -215,7 +208,7 @@ test("theme failures preserve complete input, output, and human issues", () => {
 });
 
 test("pending and running rows use injected animation, settled rows stop it", () => {
-  restore = applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false });
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
   const probe = animationSchedulerProbe();
   const h = createToolPresentationHarness(
     createNativeToolSearchRenderers({ scheduleAnimation: probe.schedule }),

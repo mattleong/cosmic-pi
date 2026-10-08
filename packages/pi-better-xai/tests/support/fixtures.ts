@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { opaqueFixture } from "pi-cosmic-core/testing";
 import { ModelRegistryAuth } from "../../src/boundary/model-registry-auth.ts";
 import type { UsageSnapshot } from "../../src/usage/format.ts";
 
@@ -6,24 +6,20 @@ import type { UsageSnapshot } from "../../src/usage/format.ts";
 // runtime values (tagged errors, redacted credentials) for secret fragments.
 export const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
-type Registry = ExtensionContext["modelRegistry"];
-
-/** Pi registry double: each `getProviderAuth` call resolves `lookup()` as xAI auth; an Error rejects. */
-export const registryDouble = (lookup: () => string | Error | undefined) => {
-  const registry = {
-    getProviderAuth: (): ReturnType<Registry["getProviderAuth"]> => {
-      const token = lookup();
-      if (token instanceof Error) return Promise.reject(token);
-      return Promise.resolve(token === undefined ? undefined : { auth: { apiKey: token } });
-    },
-  };
-  // SAFETY: The registry boundary and usage paths call only getProviderAuth on this double.
-  return registry as typeof registry & Registry;
-};
-
-/** The real registry boundary over a Pi double that answers every lookup through `lookup`. */
+/**
+ * The real registry boundary over a Pi double: each `getProviderAuth` call resolves `lookup()` as
+ * xAI auth, and an Error rejects.
+ */
 export const registryLookupLayer = (lookup: () => string | Error | undefined) =>
-  ModelRegistryAuth.layer(() => registryDouble(lookup));
+  ModelRegistryAuth.layer(() =>
+    opaqueFixture({
+      getProviderAuth: () => {
+        const token = lookup();
+        if (token instanceof Error) return Promise.reject(token);
+        return Promise.resolve(token === undefined ? undefined : { auth: { apiKey: token } });
+      },
+    }),
+  );
 
 export const registryLayer = (token?: string | Error) => registryLookupLayer(() => token);
 

@@ -1,12 +1,15 @@
 import type { ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, it, vi } from "vitest";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
-import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterInstallation } from "../src/footer/installation.ts";
 import { makeProjection } from "../src/protocol/service.ts";
-import { footerDataProviderFixture } from "./support/host.ts";
 
 type FooterFactory = (
   tui: { requestRender(): void },
@@ -32,7 +35,6 @@ function installation() {
     });
   const footer = createFooterInstallation({
     pi: extensionApiFixture({}),
-    callbacks: makeHostCallbackBoundary(),
     registry: { snapshot: () => ({ contributions: [] }) },
     projection,
     config: makeDefaultResolvedCosmicUiConfig,
@@ -44,8 +46,8 @@ function installation() {
     if (!factory) throw new Error("Expected an installed footer factory.");
     return factory(
       { requestRender },
-      { fg: (_color, text) => text },
-      footerDataProviderFixture({ onBranchChange: () => () => undefined }),
+      plainTheme,
+      opaqueFixture({ onBranchChange: () => () => undefined }),
     );
   };
   return { footer, context, instance, factories };

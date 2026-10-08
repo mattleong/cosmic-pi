@@ -2,7 +2,7 @@ import { deferredPromise } from "pi-cosmic-core/testing";
 import { effectTest, step } from "./support/effect-test.ts";
 import { describe, expect, it, vi } from "vitest";
 import type { ProfileWorkspaceSaveResult } from "../src/settings/profile-workspace.ts";
-import { settleTurn, workspaceHarness } from "./fixtures/profile-workspace.ts";
+import { chooseFromPage, settleTurn, workspaceHarness } from "./fixtures/profile-workspace.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 
 const first = profileCandidate("test/first");
@@ -100,10 +100,7 @@ describe("fixed-target profile workspace", () => {
       initialField: "context",
       initialCandidateIndex: 1,
     });
-    h.component.handleInput("a");
-    h.component.handleInput("/");
-    for (const key of "move-up") h.component.handleInput(key);
-    h.component.handleInput("\r");
+    chooseFromPage(h.component, "a", "move-up");
     yield* step(settleTurn);
     expect(h.candidates()).toEqual([second, first]);
     expect(h.component.getPosition()).toMatchObject({
@@ -167,23 +164,11 @@ describe("fixed-target profile workspace", () => {
     expect(h.loadModelPicker).not.toHaveBeenCalled();
   });
 
-  it("remembers each profile and candidate's field and Advanced state", () => {
+  it("remembers each profile's candidate, field, and Advanced state", () => {
     const h = workspaceHarness({
       initialFocus: "fields",
       initialField: "context",
       initialCandidateIndex: 1,
-    });
-    h.component.handleInput("[");
-    expect(h.component.getPosition()).toMatchObject({
-      initialCandidateIndex: 0,
-      initialField: "model",
-      initialAdvancedExpanded: false,
-    });
-    h.component.handleInput("]");
-    expect(h.component.getPosition()).toMatchObject({
-      initialCandidateIndex: 1,
-      initialField: "context",
-      initialAdvancedExpanded: true,
     });
     h.component.handleInput("\u001b");
     h.component.handleInput("\u001b[A");
@@ -219,6 +204,7 @@ describe("fixed-target profile workspace", () => {
     expect(h.component.getPosition()).toMatchObject({
       initialCandidateIndex: 0,
       initialField: "model",
+      initialAdvancedExpanded: false,
     });
     h.component.handleInput("]");
     expect(h.component.getPosition()).toMatchObject({
@@ -286,10 +272,7 @@ describe("fixed-target profile workspace", () => {
 
   effectTest("adds from profile controls without exposing Add in candidate menus", function* () {
     const h = workspaceHarness();
-    h.component.handleInput("a");
-    h.component.handleInput("/");
-    for (const key of "add") h.component.handleInput(key);
-    h.component.handleInput("\r");
+    chooseFromPage(h.component, "a", "add");
     expect(h.loadModelPicker).not.toHaveBeenCalled();
     expect(h.saveDraft).not.toHaveBeenCalled();
     h.component.handleInput("\u001b");

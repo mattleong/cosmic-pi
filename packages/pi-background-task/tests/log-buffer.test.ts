@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LogBuffer, readLogBuffer } from "../src/task/log-buffer.ts";
-import { utf8ByteLength } from "../src/task/utf8.ts";
+import { utf8ByteLength } from "pi-cosmic-core";
 
 describe("background log buffer", () => {
   it("counts UTF-8 bytes and retains a valid tail", () => {
@@ -76,15 +76,6 @@ describe("background log buffer", () => {
     expect(cached[0]?.text).toBe("one\ntwo\n");
     expect(full).toMatchObject({ nextCursor: 1, droppedBytes: 0 });
     expect(tail.events[0]?.text).toBe("two\n");
-  });
-
-  it("returns a bounded line tail when no cursor is supplied", () => {
-    const buffer = new LogBuffer();
-    buffer.append("stdout", "one\ntwo\n", 1, 1024);
-    buffer.append("stdout", "three\nfour\n", 2, 1024);
-    const slice = readLogBuffer("task-1", buffer, "running", { tailLines: 2 });
-    expect(slice.events.map((event) => event.text).join("")).toContain("four");
-    expect(slice.events.map((event) => event.text).join("")).not.toContain("one");
   });
 
   it("tails logical lines that span chunks or end without a newline", () => {

@@ -1,5 +1,10 @@
 import { isJsonObject, type JsonObject } from "pi-cosmic-core";
-import { decodeSubagentConfig, isLegacyConfigVersion } from "../config/schema.ts";
+import {
+  MIGRATED_PROFILE_SET_NAME,
+  SUBAGENT_CONFIG_VERSION,
+  decodeSubagentConfig,
+  isLegacyConfigVersion,
+} from "../config/schema.ts";
 import {
   captureRestoreDeclaration,
   migrateLegacyRouteJson,
@@ -11,6 +16,7 @@ import {
   declaredRouteForDraft,
   hasOwnProfileRouteDeclaration,
   loadProfileRouteDraft,
+  profileTargetKey as key,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
   type ProfileWorkspaceTarget,
@@ -40,25 +46,21 @@ const rawRestore = (
   inspection: ProfileSettingsInspection,
 ): ProfileEditRestore | undefined => {
   if (target.kind === "session") return undefined;
-  const document =
-    target.set.scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+  const document = inspection[`${target.set.scope}Document` as const];
   const sets = document?.profileSets;
   const set = isJsonObject(sets) ? sets[target.set.name] : undefined;
-  const legacy = document?.version === 4 || document?.version === 5;
   const profiles =
-    legacy && target.set.name === "default"
-      ? document.profiles
+    isLegacyConfigVersion(document?.version) && target.set.name === MIGRATED_PROFILE_SET_NAME
+      ? document?.profiles
       : isJsonObject(set)
         ? set.profiles
         : undefined;
   const declaration = isJsonObject(profiles) ? profiles[profile] : undefined;
   return {
-    sourceVersion: inspection[target.set.scope]?.file.version ?? 6,
+    sourceVersion: inspection[target.set.scope]?.file.version ?? SUBAGENT_CONFIG_VERSION,
     declaration: structuredClone(declaration),
   };
 };
-const key = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session" ? "session" : `${target.set.scope}/${target.set.name}`;
 
 // Fixed tuples compare domain values, not object insertion order or document formatting.
 const candidatesKey = (draft: ProfileRouteDraft): string =>

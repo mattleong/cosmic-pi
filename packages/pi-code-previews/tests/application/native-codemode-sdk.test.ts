@@ -1,12 +1,7 @@
 // Public SDK/Promise host boundary with the actual native QuickJS engine; no provider/network calls.
 import assert from "node:assert/strict";
 import {
-  createAgentSession,
   createCodemodeExtension,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
   type AgentSession,
   type ExtensionAPI,
   type ToolDefinition,
@@ -17,13 +12,11 @@ import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { makePiManagedRuntime, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
-import { codePreviewApplicationLayer } from "../../src/layer";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
+import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
+import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 
@@ -41,76 +34,43 @@ it.live(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-native-sdk-" });
-      const models = yield* step(() =>
-        ModelRuntime.create({
-          authPath: `${directory}/auth.json`,
-          modelsPath: null,
-          modelsStorePath: `${directory}/models-cache.json`,
-          refreshOnCreate: false,
-          allowModelNetwork: false,
-        }),
-      );
-      const settings = SettingsManager.inMemory({
-        defaultTools: ["+codemode"],
-        compaction: { enabled: false },
-        retry: { enabled: false },
-      });
+      const models = yield* offlineModels(directory);
+      const settings = quietSettings({ defaultTools: ["+codemode"] });
       let ownerApi: ExtensionAPI | undefined;
       let boundSession: AgentSession | undefined;
       const nativeDefinitions: ToolDefinition<any, any, any>[] = [];
       const rendererRegistrations: ToolRendererResolver[] = [];
       const hooks: string[] = [];
-      const loader = new DefaultResourceLoader({
+      const presentation = codePreviewsUnderTest(
+        directory,
+        {
+          tools: ["codemode"],
+          syntaxHighlighting: false,
+          toolCallCollapsedStyle: "compact",
+          toolCallBackground: "off",
+        },
+        {
+          api: (pi) => ({
+            registerTool() {
+              throw new Error("presentation must not replace native execution");
+            },
+            registerToolRenderer(resolver) {
+              rendererRegistrations.push(resolver);
+              pi.registerToolRenderer(resolver);
+            },
+          }),
+        },
+      );
+      const loader = yield* quietLoader({
         cwd: directory,
         agentDir: directory,
         settingsManager: settings,
-        noSkills: true,
-        noPromptTemplates: true,
-        noThemes: true,
-        noContextFiles: true,
         extensionFactories: [
           {
             name: "code-previews-test",
             factory: (pi) => {
               ownerApi = pi;
-              return codePreviewsWithDependencies(
-                {
-                  ...pi,
-                  registerTool() {
-                    throw new Error("presentation must not replace native execution");
-                  },
-                  registerToolRenderer(resolver) {
-                    rendererRegistrations.push(resolver);
-                    pi.registerToolRenderer(resolver);
-                  },
-                },
-                {
-                  makeRuntime: (api) =>
-                    makePiManagedRuntime(api, codePreviewApplicationLayer, {
-                      agentDirectory: () => directory,
-                      packageName: "pi-code-previews",
-                    }),
-                  registerCommands: (api) =>
-                    api.registerCommand("code-previews", {
-                      description: "Owned Code Previews fixture",
-                      handler: () => Promise.resolve(),
-                    }),
-                  loadSettings: () =>
-                    Effect.sync(() => {
-                      const preview = {
-                        ...defaultCodePreviewSettings,
-                        tools: ["codemode" as const],
-                        syntaxHighlighting: false,
-                        toolCallCollapsedStyle: "compact" as const,
-                        toolCallBackground: "off" as const,
-                      };
-                      setCodePreviewSettings(preview);
-                      return preview;
-                    }),
-                  initializeSyntax: () => Effect.void,
-                  registerRenderers: () => undefined,
-                },
-              );
+              return presentation(pi);
             },
           },
           {
@@ -276,7 +236,6 @@ it.live(
           },
         ],
       });
-      yield* step(() => loader.reload());
       const native = nativeDefinitions[0]!;
       assert.ok(native);
       const original = {
@@ -286,27 +245,8 @@ it.live(
         exposure: native.exposure,
         defaultActive: native.defaultActive,
       };
-      const { session } = yield* step(() =>
-        createAgentSession({
-          cwd: directory,
-          agentDir: directory,
-          modelRuntime: models,
-          settingsManager: settings,
-          sessionManager: SessionManager.inMemory(directory),
-          resourceLoader: loader,
-        }),
-      );
+      const session = yield* scopedSession({ cwd: directory, models, settings, loader });
       boundSession = session;
-      yield* Effect.addFinalizer(() =>
-        step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              session.dispose();
-              setCodePreviewSettings(defaultCodePreviewSettings);
-            }),
-          ),
-        ),
-      );
       const initialActive = session.getActiveToolNames();
       yield* step(() => session.bindExtensions({ mode: "print" }));
       assert.deepEqual(session.getActiveToolNames(), initialActive);

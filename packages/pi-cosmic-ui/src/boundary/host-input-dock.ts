@@ -98,10 +98,7 @@ export const createInputDock = (ui: ExtensionUIContext) => {
         },
         isHidden: () => handle.isHidden(),
         focus: () => handle.focus(),
-        unfocus: (options) => {
-          if (options) handle.unfocus(options);
-          else handle.unfocus();
-        },
+        unfocus: (options) => handle.unfocus(options),
         isFocused: () => handle.isFocused(),
         getBounds: () => handle.getBounds(),
       };

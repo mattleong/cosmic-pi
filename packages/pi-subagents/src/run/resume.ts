@@ -15,15 +15,16 @@ import { validateParentMessage } from "./tool-policy.ts";
 import {
   invalidRequest,
   type InvalidSubagentRequestError,
+  processError,
   type SubagentError,
-  SubagentNotFoundError,
   SubagentProcessError,
   UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
 import {
-  clearRunNativeActivity,
+  clearRunActivity,
   commitRunInitialization,
   completeRunInitialization,
+  type PendingInitializationSettlement,
   requireCapability,
   type RunContext,
   type RunRecord,
@@ -41,7 +42,7 @@ import type { RunWorkspaceControl } from "./workspace-control.ts";
 import { addWriterPoolMemberLocked } from "./writer-pool.ts";
 
 const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | undefined => {
-  const { id, state, reportGeneration } = record.view;
+  const { id, state } = record.view;
   if (record.evictionClaim)
     return invalidRequest(
       "resume_state_invalid",
@@ -53,12 +54,7 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
       `Subagent ${id} cannot resume because its private continuation state was already reclaimed.`,
     );
   if (state !== "paused" && state !== "completed")
-    return invalidRequest(
-      "resume_state_invalid",
-      state === "reported"
-        ? `Subagent ${id} is retained after report generation ${reportGeneration}; use subagent_send to begin its next assignment on the same backend resource.`
-        : `Subagent ${id} cannot resume while ${state}.`,
-    );
+    return invalidRequest("resume_state_invalid", `Subagent ${id} cannot resume while ${state}.`);
   if (record.stoppedByParent)
     return invalidRequest("resume_cancelled", `Subagent ${id} was stopped and cannot resume.`);
   // A paused owned run continues its owned generation; resuming a completed one would
@@ -84,13 +80,10 @@ export interface RunResumeDependencies extends RunContext {
   readonly currentChildLimit: Effect.Effect<number>;
   readonly delivery: RunNotificationDelivery;
   readonly initializeProcess: RunProcessInitializer;
-  readonly submitPrompt: RunAssignment["submitPrompt"];
-  readonly settle: RunSettlement["settle"];
-  readonly failRun: RunSettlement["failRun"];
+  readonly assignment: RunAssignment;
+  readonly settlement: Pick<RunSettlement, "settle" | "failRun">;
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
-  readonly retainUncertainAssignment: RunAssignment["retainUncertainAssignment"];
-  readonly invalidateWorkspace: RunWorkspaceControl["invalidateForResume"];
-  readonly heldLaunchSlots: RunWorkspaceControl["heldLaunchSlots"];
+  readonly workspaces: Pick<RunWorkspaceControl, "invalidateForResume" | "heldLaunchSlots">;
 }
 
 /**
@@ -111,17 +104,15 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
     requireRecord,
     allocateAssignmentAttemptToken,
     initializeProcess,
-    submitPrompt,
-    settle,
-    failRun,
+    assignment,
+    settlement,
     closeRecordScope,
-    retainUncertainAssignment,
+    workspaces,
     sendPeerNotices,
   } = dependencies;
 
-  const waitForRunCleanup = (
-    id: string,
-  ): Effect.Effect<void, SubagentNotFoundError | SubagentProcessError> =>
+  /** Waits at most 10 seconds for the run's pending cleanup to be confirmed. */
+  const waitForRunCleanup = (id: string) =>
     withLock(
       Effect.gen(function* () {
         const record = yield* requireRecord(id);
@@ -136,33 +127,36 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 outcome === "confirmed"
                   ? Effect.void
                   : Effect.fail(
-                      new SubagentProcessError({
-                        operation: "resume",
-                        code: "cleanup_unconfirmed",
-                        message: `Subagent ${id} cleanup could not be confirmed; resume remains blocked for this session.`,
-                      }),
+                      processError(
+                        "resume",
+                        "cleanup_unconfirmed",
+                        `Subagent ${id} cleanup could not be confirmed; resume remains blocked for this session.`,
+                      ),
                     ),
               ),
             ),
       ),
-    );
-
-  const waitForRunCleanupBounded = (
-    id: string,
-  ): Effect.Effect<void, SubagentNotFoundError | SubagentProcessError> =>
-    waitForRunCleanup(id).pipe(
       Effect.timeoutOrElse({
         duration: "10 seconds",
         orElse: () =>
           Effect.fail(
-            new SubagentProcessError({
-              operation: "resume",
-              code: "cleanup_timeout",
-              message: `Subagent ${id} cleanup did not finish within 10 seconds; inspect with subagent_status before retrying resume.`,
-            }),
+            processError(
+              "resume",
+              "cleanup_timeout",
+              `Subagent ${id} cleanup did not finish within 10 seconds; inspect with subagent_status before retrying resume.`,
+            ),
           ),
       }),
     );
+
+  /** Settles what the run reported while its resume initialization still owned it. */
+  const settlePendingInitialization = (
+    record: RunRecord,
+    pending: PendingInitializationSettlement,
+  ) =>
+    pending.state === "failed"
+      ? settlement.failRun(record, pending.error ?? "Subagent failed while resuming.")
+      : settlement.settle(record, pending.state, pending.error);
 
   /** Session-owned commit of a claimed resume: respawns when needed, then issues the prompt. */
   const commitResume = (
@@ -189,7 +183,6 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   writerPools,
                   record.canonicalWriterCwd,
                   record.view.id,
-                  record.view.writeClaims,
                 )
               : undefined;
             record.scope = nextScope;
@@ -222,16 +215,19 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
             return pendingSettlement;
           }),
         );
-        if (committed) {
-          if (committed.state === "failed")
-            return yield* failRun(
-              record,
-              committed.error ?? "Subagent failed while resuming.",
-            ).pipe(Effect.tap(() => closeRecordScope(record)));
-          return yield* settle(record, committed.state, committed.error);
-        }
+        if (committed)
+          return yield* settlePendingInitialization(record, committed).pipe(
+            Effect.tap(() =>
+              committed.state === "failed" ? closeRecordScope(record) : Effect.void,
+            ),
+          );
       }
-      const issued = yield* submitPrompt(claimed.record, prompt, "resume", claimed.attemptToken);
+      const issued = yield* assignment.submitPrompt(
+        claimed.record,
+        prompt,
+        "resume",
+        claimed.attemptToken,
+      );
       const view = yield* withLock(
         Effect.gen(function* () {
           const record = claimed.record;
@@ -258,29 +254,27 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
       return view;
     }).pipe(
       Effect.tapError((error) =>
-        error._tag === "SubagentProcessError" && error.code === "resume_outcome_uncertain"
-          ? withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
-              Effect.flatMap((pending) =>
-                pending
-                  ? pending.state === "failed"
-                    ? failRun(
-                        claimed.record,
-                        pending.error ?? "Subagent failed while resuming.",
-                      ).pipe(Effect.asVoid)
-                    : settle(claimed.record, pending.state, pending.error).pipe(Effect.asVoid)
-                  : retainUncertainAssignment(claimed.record, claimed.attemptToken, error.message),
-              ),
-            )
-          : withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
-              Effect.andThen(failRun(claimed.record, error.message)),
-              Effect.andThen(closeRecordScope(claimed.record)),
-              Effect.asVoid,
-            ),
+        withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
+          Effect.flatMap((pending) => {
+            if (error._tag !== "SubagentProcessError" || error.code !== "resume_outcome_uncertain")
+              return settlement
+                .failRun(claimed.record, error.message)
+                .pipe(Effect.andThen(closeRecordScope(claimed.record)));
+            return pending
+              ? settlePendingInitialization(claimed.record, pending)
+              : assignment.retainUncertainAssignment(
+                  claimed.record,
+                  claimed.attemptToken,
+                  error.message,
+                );
+          }),
+          Effect.asVoid,
+        ),
       ),
     );
 
   const resume = (id: string, message?: string): Effect.Effect<SubagentRunView, SubagentError> =>
-    waitForRunCleanupBounded(id).pipe(
+    waitForRunCleanup(id).pipe(
       Effect.andThen(
         withLock(
           Effect.gen(function* () {
@@ -360,7 +354,7 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                 parentRunId,
                 yield* dependencies.currentChildLimit,
                 selected,
-                dependencies.heldLaunchSlots(parentRunId),
+                workspaces.heldLaunchSlots(parentRunId),
               );
               if (capacityFailure) return yield* capacityFailure;
             });
@@ -394,12 +388,11 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               const claimed = yield* withLock(
                 Effect.gen(function* () {
                   const { selected, needsRespawn } = yield* admitLocked;
-                  const invalidateWorkspace = yield* dependencies.invalidateWorkspace(selected);
+                  const invalidateWorkspace = yield* workspaces.invalidateForResume(selected);
                   const attemptToken = allocateAssignmentAttemptToken();
                   selected.pauseRequested = false;
                   selected.pauseOutcome = undefined;
-                  selected.activeTools.clear();
-                  clearRunNativeActivity(selected);
+                  clearRunActivity(selected);
                   selected.notificationGeneration += 1;
                   delivery.discardQuestionLocked(selected.view.id);
                   selected.replyPendingRequestId = undefined;

@@ -13,30 +13,25 @@ import {
   sessionEntryToContextMessages,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import {
   decodeOpenAICompactionDetails,
+  JsonObjectSchema,
   type OpenAICompactionCheckpoint,
   type OpenAICompactionJsonObject,
 } from "./protocol.ts";
-
-import { hasExactPrefix } from "./context.ts";
+import { encodeJson, hasExactPrefix, latestOwnedCheckpoint } from "./context.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
-const JsonObjectArraySchema = Schema.Array(Schema.Record(Schema.String, Schema.Json));
-const NativeJsonSchema = Schema.fromJsonString(Schema.Unknown);
-const InputJsonSchema = Schema.fromJsonString(JsonObjectArraySchema);
+const InputJsonSchema = Schema.fromJsonString(Schema.Array(JsonObjectSchema));
 
 function leadingInstructionCount(input: readonly unknown[]): number {
-  let count = 0;
-  while (count < input.length) {
-    const item = input[count];
-    if (!Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer")) break;
-    count++;
-  }
-  return count;
+  const end = input.findIndex(
+    (item) => !Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer"),
+  );
+  return end < 0 ? input.length : end;
 }
 
 export function isEligibleOpenAICompactionModel(
@@ -50,11 +45,7 @@ export function findActiveOpenAICompactionCheckpoint(
   branch: readonly SessionEntry[],
   model: Model<Api>,
 ): OpenAICompactionCheckpoint | undefined {
-  const latest = branch.findLast((entry) => entry?.type === "compaction");
-  const checkpoint =
-    latest?.type === "compaction"
-      ? decodeOpenAICompactionDetails(latest.details)?.checkpoint
-      : undefined;
+  const checkpoint = latestOwnedCheckpoint(branch)?.checkpoint;
   return checkpoint &&
     checkpoint.provider === model.provider &&
     checkpoint.api === model.api &&
@@ -95,8 +86,7 @@ export function projectOpenAIResponseInput(
     },
   });
   // The native SDK serializes optional undefined fields away before sending.
-  const json = Schema.encodeSync(NativeJsonSchema)(converted);
-  const input = Option.getOrUndefined(Schema.decodeOption(InputJsonSchema)(json));
+  const input = decodeUnknownOrUndefined(InputJsonSchema, encodeJson(converted));
   return input?.slice(leadingInstructionCount(input));
 }
 

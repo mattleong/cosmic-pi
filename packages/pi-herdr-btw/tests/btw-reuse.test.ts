@@ -11,22 +11,22 @@ import {
   type HerdrBtwLink,
 } from "../src/btw/link.ts";
 import {
+  CHILD_ALIAS,
+  CHILD_FILE,
+  CHILD_ID,
   makeServiceFixture,
   operationCount,
   operationInputs,
   operationNames,
+  SESSION_FILE,
+  SESSION_ID,
   withShellReadiness as withReadiness,
   type HerdrBtwFixtureOptions,
   aliasIdentity,
 } from "./fixtures/herdr-btw-harness.ts";
 
-const SESSION_FILE = "/sessions/parent.jsonl";
-const SESSION_ID = "019fd4cd-4c88-7564-8b67-3b917b42df51";
-const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
-const CHILD_FILE = "/sessions/child.jsonl";
 const NEW_CHILD_ID = "0198bbbb-7564-4c88-8b67-child0btw002";
 const NEW_CHILD_FILE = "/sessions/child-new.jsonl";
-const CHILD_ALIAS = "/sessions/aliases/../child.jsonl";
 
 const OWNER = { sessionId: SESSION_ID, sessionPath: SESSION_FILE } as const;
 
@@ -53,7 +53,6 @@ const liveChildAgent = (overrides: Partial<HerdrPane> = {}) => ({
 
 const fixture = (options: HerdrBtwFixtureOptions = {}) =>
   makeServiceFixture({
-    protocol: 20,
     createdChildId: NEW_CHILD_ID,
     createdChildFile: NEW_CHILD_FILE,
     ...options,
@@ -132,11 +131,25 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("focuses without prompting when no prompt is supplied", () =>
+  it.effect("reuse focus follows prompt settlement, skipping an absent prompt", () =>
     Effect.gen(function* () {
-      const test = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
-      yield* test.open();
-      expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
+      const quiet = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
+      yield* quiet.open();
+      expect(operationNames(quiet.calls)).not.toContain("prompt side-session Pi");
+
+      const failing = fixture({
+        initialLinks: [LINK],
+        liveAgents: [liveChildAgent()],
+        failOperation: "prompt side-session Pi",
+      });
+      expect(yield* Effect.flip(failing.open("question"))).toMatchObject({
+        outcome: "uncertain",
+        paneId: "w1:p2",
+      });
+      expect(operationNames(failing.calls).slice(-2)).toEqual([
+        "prompt side-session Pi",
+        "focus side-session Pi",
+      ]);
     }),
   );
 
@@ -331,19 +344,6 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("accepts path-based startup evidence for the same child filesystem identity", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        startedSession: CHILD_ALIAS,
-        compareSessionFileIdentity: aliasIdentity([CHILD_FILE, CHILD_ALIAS]),
-      });
-
-      expect(yield* withReadiness(test.open())).toMatchObject({ mode: "resumed" });
-      expect(test.recordedLinks.at(-1)?.childSessionPath).toBe(CHILD_FILE);
-    }),
-  );
-
   it.effect("openNew creates a fresh child and supersedes only after startup validation", () =>
     Effect.gen(function* () {
       const test = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
@@ -388,21 +388,6 @@ describe("herdr-btw reuse workflow", () => {
           childSessionPath: NEW_CHILD_FILE,
         });
       }
-    }),
-  );
-
-  it.effect("focus follows prompt settlement even when prompt outcome is uncertain", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgents: [liveChildAgent()],
-        failOperation: "prompt side-session Pi",
-      });
-      yield* Effect.flip(test.open("question"));
-      expect(operationNames(test.calls).slice(-2)).toEqual([
-        "prompt side-session Pi",
-        "focus side-session Pi",
-      ]);
     }),
   );
 

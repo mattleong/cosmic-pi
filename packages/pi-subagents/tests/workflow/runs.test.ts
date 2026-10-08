@@ -10,14 +10,7 @@ import {
   type WorkflowActivitySink,
 } from "../../src/workflow/runs.ts";
 import { workflowRunView } from "../fixtures/run-view.ts";
-import {
-  eventually,
-  finished,
-  script,
-  testHost,
-  withWorkflows,
-  workflowFixture,
-} from "./fixtures/workflow-harness.ts";
+import { eventually, finished, startScript, workflowTest } from "./fixtures/workflow-harness.ts";
 
 const run = (id = "wf-a-1"): WorkflowRunView => workflowRunView({ id });
 
@@ -32,8 +25,7 @@ describe("workflow run views in Activity", () => {
   it.effect("coalesces a burst of log lines and publishes starts and finishes at once", () =>
     Effect.gen(function* () {
       const host = recordingSink();
-      const scope = yield* Scope.make();
-      const runs = yield* makeWorkflowRuns(host.sink).pipe(Scope.provide(scope));
+      const runs = yield* makeWorkflowRuns(host.sink);
       yield* runs.mutate((views) => [...views, run()]);
       // A start publishes before any time passes.
       expect(host.published).toHaveLength(1);
@@ -57,7 +49,6 @@ describe("workflow run views in Activity", () => {
       });
       yield* runs.update("wf-a-1", (view) => ({ ...view, state: "stopped", endedAt: 9 }));
       expect(host.published).toHaveLength(4);
-      yield* Scope.close(scope, Exit.void);
     }),
   );
 
@@ -77,36 +68,37 @@ describe("workflow run views in Activity", () => {
       expect((yield* runs.list).map((view) => view.id)).toEqual(["wf-a-1", "wf-a-2"]);
     }),
   );
+
+  it.effect("publishes nothing for a change that leaves a run as it was", () =>
+    Effect.gen(function* () {
+      const host = recordingSink();
+      const runs = yield* makeWorkflowRuns(host.sink);
+      yield* runs.mutate((views) => [...views, run()]);
+      expect(yield* runs.modify("wf-a-1", (view) => [true, view] as const)).toBe(true);
+      yield* TestClock.adjust(WORKFLOW_ACTIVITY_PUBLISH_MS * 2);
+      expect(host.published).toHaveLength(1);
+    }),
+  );
+
   it.live("publishes a script's log burst far fewer times than it logs", () => {
     const host = recordingSink();
-    const fixture = workflowFixture({ activity: host.sink });
     const lines = 2_000;
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: {
-              kind: "inline",
-              script: script(
-                `for (let line = 0; line < ${lines}; line++) log("line " + line); return 1;`,
-              ),
-            },
-            args: null,
-          },
-          testHost(),
-        );
-        // The start is in Activity before the script logs anything.
-        expect(host.published[0]?.map((view) => view.id)).toEqual([started.id]);
-        yield* finished(workflows, started.id);
-        yield* eventually(
-          () =>
-            host.published.at(-1)?.find((view) => view.id === started.id)?.state === "completed"
-              ? true
-              : undefined,
-          "the finished run in Activity",
-        );
-        expect(host.published.length).toBeLessThan(lines / 10);
-      }),
-    );
+    return workflowTest({ activity: host.sink }, function* ({ workflows }) {
+      const started = yield* startScript(
+        workflows,
+        `for (let line = 0; line < ${lines}; line++) log("line " + line); return 1;`,
+      );
+      // The start is in Activity before the script logs anything.
+      expect(host.published[0]?.map((view) => view.id)).toEqual([started.id]);
+      yield* finished(workflows, started.id);
+      yield* eventually(
+        () =>
+          host.published.at(-1)?.find((view) => view.id === started.id)?.state === "completed"
+            ? true
+            : undefined,
+        "the finished run in Activity",
+      );
+      expect(host.published.length).toBeLessThan(lines / 10);
+    });
   });
 });

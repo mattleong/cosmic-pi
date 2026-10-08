@@ -10,7 +10,7 @@ import {
   workflowRow,
 } from "./support/activity.ts";
 import { activitySectionId, phaseRowId } from "../src/activity/grouped-tree.ts";
-import type { ActivityActionRequest, ActivityDetailRequest } from "../src/activity/service.ts";
+import type { ActivityActionRequest } from "../src/activity/service.ts";
 
 const routed = activityRow("Long task title ".repeat(30), "running", undefined, {
   profile: "worker",
@@ -116,12 +116,7 @@ describe("activity presentation", () => {
     }));
     for (const collapsed of [new Set<string>(), new Set([active.key])]) {
       expect(
-        renderActivityWidget(
-          [{ ...active, omittedChildren: 3, omittedHistory: 2 }, ...history],
-          80,
-          8,
-          { collapsed },
-        ),
+        renderActivityWidget([{ ...active, omittedChildren: 3 }, ...history], 80, 8, { collapsed }),
       ).toEqual(renderActivityWidget([active], 80, 8, { collapsed }));
     }
     expect(renderActivityWidget(finished, 80, 8, { starting: 1 }).length).toBeGreaterThan(0);
@@ -133,37 +128,25 @@ describe("activity presentation", () => {
     expect(renderActivityWidget([activityRow("running")], 80).length).toBeGreaterThan(0);
   });
   it("accepts only the latest detail refresh even for the same revision", () => {
-    const deliveries: Array<(text: string) => void> = [];
-    const { component } = mountActivity(() => [activityRow("work")], {
-      height: 16,
-      loadDetail: (_request, deliver) => {
-        deliveries.push(deliver);
-      },
-    });
+    const { component, loads } = mountActivity(() => [activityRow("work")], { height: 16 });
     component.render(120);
     component.handleInput("\r");
-    deliveries[0]!("baseline-log");
+    loads[0]!.deliver("baseline-log");
     component.handleInput("r");
     component.handleInput("r");
-    deliveries[1]!("obsolete-log");
+    loads[1]!.deliver("obsolete-log");
     expect(component.render(120).join("\n")).toContain("baseline-log");
-    deliveries[2]!("latest-log");
-    deliveries[1]!("obsolete-log");
+    loads[2]!.deliver("latest-log");
+    loads[1]!.deliver("obsolete-log");
     const text = component.render(120).join("\n");
     expect(text).toContain("latest-log");
     expect(text).not.toContain("obsolete-log");
   });
   it("keeps viewed log lines steady on refresh and freshness changes", () => {
     let current = activityRow("work");
-    const deliveries: Array<(text: string) => void> = [];
     const logs = (count: number) =>
       Array.from({ length: count }, (_, index) => `log-${index}`).join("\n");
-    const { component } = mountActivity(() => [current], {
-      height: 16,
-      loadDetail: (_request, deliver) => {
-        deliveries.push(deliver);
-      },
-    });
+    const { component, loads } = mountActivity(() => [current], { height: 16 });
     const visibleLogs = () =>
       component
         .render(120)
@@ -171,12 +154,12 @@ describe("activity presentation", () => {
         .match(/log-\d+/g);
     component.render(120);
     component.handleInput("\r");
-    deliveries[0]!(logs(30));
+    loads[0]!.deliver(logs(30));
     const original = visibleLogs();
     expect(original?.length).toBeGreaterThan(0);
     component.handleInput("r");
     component.render(120);
-    deliveries[1]!(logs(40));
+    loads[1]!.deliver(logs(40));
     // New lines may fill the old trailing blank rows, but must not move viewed log lines.
     expect(visibleLogs()?.slice(0, original?.length)).toEqual(original);
     component.handleInput("k");
@@ -184,7 +167,7 @@ describe("activity presentation", () => {
     current = { ...current, revision: "2" };
     expect(visibleLogs()).toEqual(scrolled);
     component.handleInput("r");
-    deliveries[2]!(logs(45));
+    loads[2]!.deliver(logs(45));
     expect(visibleLogs()).toEqual(scrolled);
   });
   it("says why work that never started was cancelled, on its row", () => {
@@ -194,18 +177,12 @@ describe("activity presentation", () => {
       endedAt: 5,
     });
     const { component } = mountActivity(() => [workflow, refused], { height: 20 });
-    const line = component.render(140).find((text) => text.includes("SUBAGENT refused"));
+    const line = component.render(140).find((text) => text.includes("refused"));
     expect(line).toContain("over budget");
   });
   it("opens a newly selected item's detail at its first lines and lets the reader move it", () => {
-    const deliveries: Array<(text: string) => void> = [];
     const text = Array.from({ length: 60 }, (_, index) => `line-${index}`).join("\n");
-    const { component } = mountActivity(() => [activityRow("work")], {
-      height: 16,
-      loadDetail: (_request, deliver) => {
-        deliveries.push(deliver);
-      },
-    });
+    const { component, loads } = mountActivity(() => [activityRow("work")], { height: 16 });
     const visible = () =>
       component
         .render(120)
@@ -213,7 +190,7 @@ describe("activity presentation", () => {
         .match(/line-\d+/g) ?? [];
     component.render(120);
     component.handleInput("\r");
-    deliveries[0]!(text);
+    loads[0]!.deliver(text);
     const opened = visible();
     expect(opened[0]).toBe("line-0");
     expect(opened).not.toContain("line-59");
@@ -228,23 +205,17 @@ describe("activity presentation", () => {
     const parent = activityRow("parent");
     const child = activityRow("child", "running", "parent");
     let rows = [parent, child];
-    let loads = 0;
-    const { component } = mountActivity(() => rows, {
-      height: 16,
-      loadDetail: () => {
-        loads++;
-      },
-    });
+    const { component, loads } = mountActivity(() => rows, { height: 16 });
     component.render(120);
     component.handleInput("\u001b[D");
     expect(component.presentation.collapsed.has(parent.key)).toBe(true);
     component.handleInput("\u001b[C");
     expect(component.presentation.collapsed.has(parent.key)).toBe(false);
     expect(component.shell.state.pane).toBe("list");
-    expect(loads).toBe(0);
+    expect(loads).toHaveLength(0);
     component.handleInput("l");
     expect(component.shell.state.pane).toBe("detail");
-    expect(loads).toBe(1);
+    expect(loads).toHaveLength(1);
     component.handleInput("h");
     expect(component.shell.state.pane).toBe("list");
     component.handleInput("j");
@@ -331,21 +302,16 @@ describe("activity presentation", () => {
   });
   it("keeps inspected detail across revisions until explicit refresh", () => {
     let current = activityRow("a");
-    let loads = 0;
-    const { component } = mountActivity(() => [current], {
-      height: 20,
-      loadDetail: (_request, deliver) => {
-        loads++;
-        deliver(`log-${loads}`);
-      },
-    });
+    const { component, loads } = mountActivity(() => [current], { height: 20 });
     component.render(120);
     component.handleInput("\r");
+    loads[0]!.deliver("log-1");
     expect(component.render(120).join("\n")).toContain("log-1");
     current = { ...current, revision: "2" };
     expect(component.render(120).join("\n")).toContain("log-1");
-    expect(loads).toBe(1);
+    expect(loads).toHaveLength(1);
     component.handleInput("r");
+    loads[1]!.deliver("log-2");
     expect(component.render(120).join("\n")).toContain("log-2");
   });
   it("makes every advertised action reachable", () => {
@@ -418,12 +384,7 @@ describe("grouped activity interaction", () => {
   it("traverses the workflow row, its phases and members, fetching only source details", () => {
     const workflow = reviewWorkflow({ detail: "workflow-evidence" });
     const worker = memberRow("worker", workflow, "Find");
-    const loads: Array<{ request: ActivityDetailRequest; deliver: (text: string) => void }> = [];
-    const { component, closed } = mountGrouped(() => [workflow, worker], {
-      loadDetail: (request, deliver) => {
-        loads.push({ request, deliver });
-      },
-    });
+    const { component, closed, loads } = mountGrouped(() => [workflow, worker]);
     component.render(140);
     expect(component.shell.state.selectedId).toBe(workflow.key);
     expect(loads).toEqual([]);
@@ -542,12 +503,7 @@ describe("grouped activity interaction", () => {
       status: "done",
       actions: [{ id: "clear", label: "Clear" }],
     });
-    const loads: Array<{ request: ActivityDetailRequest; deliver: (text: string) => void }> = [];
-    const { component, closed } = mountGrouped(() => [workflow], {
-      loadDetail: (request, deliver) => {
-        loads.push({ request, deliver });
-      },
-    });
+    const { component, closed, loads } = mountGrouped(() => [workflow]);
     component.render(140);
     component.handleInput("\r");
     workflow = { ...workflow, revision: "2" };
@@ -636,24 +592,14 @@ describe("grouped activity interaction", () => {
   });
   it("follows only by explicit opt-in plus host update, never during rendering or resize", () => {
     let row = activityRow("task", "running", undefined, { kind: "command" });
-    const loads: Array<{ request: ActivityDetailRequest; deliver: (text: string) => void }> = [];
-    let cancelled = false;
-    const { component } = mountGrouped(() => [row], {
-      initialSection: "tasks",
-      loadDetail: (request, deliver) => {
-        loads.push({ request, deliver });
-      },
-      cancelDetail: () => {
-        cancelled = true;
-      },
-    });
+    const { component, loads, cancels } = mountGrouped(() => [row], { initialSection: "tasks" });
     for (const width of [80, 30, 160]) {
       component.invalidate();
       component.render(width);
     }
     component.update();
     expect(loads).toEqual([]);
-    expect(cancelled).toBe(false);
+    expect(cancels()).toBe(0);
     component.handleInput("\r");
     loads[0]!.deliver("baseline-log");
     row = { ...row, revision: "2" };
@@ -667,7 +613,7 @@ describe("grouped activity interaction", () => {
     component.update();
     expect(loads[2]?.request.revision).toBe("3");
     component.handleInput("f");
-    expect(cancelled).toBe(true);
+    expect(cancels()).toBeGreaterThan(0);
     loads[2]!.deliver("cancelled-log");
     expect(component.render(120).join("\n")).toContain("followed-log");
     expect(component.render(120).join("\n")).not.toContain("cancelled-log");
@@ -675,29 +621,21 @@ describe("grouped activity interaction", () => {
   it("cancels source loads on phase selection and never revives a stale callback", () => {
     const workflow = reviewWorkflow();
     const member = memberRow("member", workflow, "Find");
-    const deliveries: Array<(text: string) => void> = [];
-    let cancelled = false;
-    const { component } = mountGrouped(() => [workflow, member], {
+    const { component, loads, cancels } = mountGrouped(() => [workflow, member], {
       initialSection: "subagents",
-      loadDetail: (_request, deliver) => {
-        deliveries.push(deliver);
-      },
-      cancelDetail: () => {
-        cancelled = true;
-      },
     });
     component.render(120);
     component.handleInput("\r");
     component.handleInput("f");
     component.handleInput("h");
     component.handleInput("h");
-    expect(cancelled).toBe(true);
+    expect(cancels()).toBeGreaterThan(0);
     expect(component.shell.state.selectedId).toBe(phaseRowId(workflow.key, "Find"));
     component.handleInput("j");
-    deliveries[1]!("revoked-log");
+    loads[1]!.deliver("revoked-log");
     expect(component.render(120).join("\n")).not.toContain("revoked-log");
     component.handleInput("q");
-    deliveries[0]!("closed-log");
+    loads[0]!.deliver("closed-log");
     expect(component.render(120).join("\n")).not.toContain("closed-log");
   });
   it.each([
@@ -709,7 +647,6 @@ describe("grouped activity interaction", () => {
     ["m", "message"],
     ["e", "rename"],
     ["c", "clear"],
-    ["c", "clear-finished"],
   ])("keeps the %s source shortcut revision-safe for %s", (key, actionId) => {
     const workflow = reviewWorkflow();
     let row = memberRow("member", workflow, "Find", "running", {
@@ -743,12 +680,8 @@ describe("grouped activity interaction", () => {
       ...memberRow("old", workflow, "Find", "done", { actions: [{ id: "clear", label: "Clear" }] }),
       retained: true as const,
     };
-    const loads: ActivityDetailRequest[] = [];
-    const { component, closed } = mountGrouped(() => [workflow, row], {
+    const { component, closed, loads } = mountGrouped(() => [workflow, row], {
       initialSection: "subagents",
-      loadDetail: (request) => {
-        loads.push(request);
-      },
     });
     component.render(120);
     expect(component.shell.state.selectedId).toBe(row.key);

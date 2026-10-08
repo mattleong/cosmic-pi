@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { issueMessageStyleProblems, renderContextFixture } from "../../testing";
-import type { CompactSummary } from "../../src/tools/compact-summary";
-import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
+import { compactStatus, type CompactSummary } from "../../src/tools/compact-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
+import { scriptResult, settledSummary } from "../support/native-codemode";
 
 const header =
   "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
@@ -15,21 +14,10 @@ const unsaved = "\n\n[Could not save the full output: ENOSPC: disk full]";
 const recovery = (fullOutputPath: string | undefined) =>
   fullOutputPath === undefined ? {} : { fullOutputPath };
 
-function codemode(text: string, fullOutputPath?: string) {
-  const result: AgentToolResult<unknown> = {
-    content: [
-      { type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
-      { type: "text", text },
-    ],
-    details: { calls: [], ...recovery(fullOutputPath) },
-  };
-  return nativeCodemodeSummary("/project")({
-    phase: "settled",
-    args: { code: "" },
-    result,
-    context: renderContextFixture({ isPartial: false, executionStarted: true }),
-  });
-}
+const codemode = (text: string, fullOutputPath?: string) =>
+  settledSummary(
+    scriptResult("completed", { calls: [], ...recovery(fullOutputPath) }, { type: "text", text }),
+  );
 
 function mcp(text: string, fullOutputPath?: string) {
   const identity = nativeMcpIdentity("mcp__docs__lookup", { namespace: { name: "mcp__docs" } });
@@ -72,13 +60,20 @@ test("codemode and MCP read Pi's truncation envelope the same way", () => {
       path: "/tmp/full.txt",
       expected: [["output-truncated", "info"]],
     },
+    { text: `${header}HEAD${saved}\nTAIL${unsaved}`, path: undefined, expected: lost },
     // A saved-output path cannot hide Pi saying the save failed.
     { text: `${header}HEAD…TAIL${unsaved}`, path: "/tmp/stale.txt", expected: lost },
     { text: `${header}HEAD…TAIL${unsaved}`, path: undefined, expected: lost },
     { text: `${header}HEAD…TAIL`, path: undefined, expected: [["output-truncated", "warning"]] },
   ]) {
-    const issues = [clipping(codemode(text, path)), clipping(mcp(text, path))];
-    for (const projected of issues) {
+    const lostOutput = expected.some(([, severity]) => severity === "warning");
+    for (const [summary, delivered] of [
+      [codemode(text, path), "success"],
+      [mcp(text, path), "returned"],
+    ] as const) {
+      // Recoverable clipping is informational; lost output raises the row to a warning.
+      assert.equal(compactStatus("settled", summary!), lostOutput ? "warning" : delivered);
+      const projected = clipping(summary);
       assert.deepEqual(
         projected.map(({ kind, severity }) => [kind, severity]),
         expected,

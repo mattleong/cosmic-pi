@@ -1,3 +1,4 @@
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 import type { SubagentUsage } from "../run/model.ts";
 
@@ -23,23 +24,14 @@ const Stats = Schema.Struct({
 export const makeLocalPiUsage = () => {
   let previous: SubagentUsage | undefined;
   const account = <ValueInput>(value: ValueInput): SubagentUsage | undefined => {
-    const decoded = Schema.decodeUnknownOption(Stats)(value);
-    if (decoded._tag === "None") return undefined;
-    const { tokens, cost } = decoded.value;
+    const decoded = decodeUnknownOrUndefined(Stats, value);
+    if (!decoded) return undefined;
+    const { tokens, cost } = decoded;
     const next = { ...tokens, totalTokens: tokens.total, cost };
     if (!previous) {
       previous = next;
       return undefined;
     }
-    if (
-      next.input < previous.input ||
-      next.output < previous.output ||
-      next.cacheRead < previous.cacheRead ||
-      next.cacheWrite < previous.cacheWrite ||
-      next.totalTokens < previous.totalTokens ||
-      cost < (previous.cost ?? 0)
-    )
-      return undefined;
     const delta = {
       input: next.input - previous.input,
       output: next.output - previous.output,
@@ -48,8 +40,11 @@ export const makeLocalPiUsage = () => {
       totalTokens: next.totalTokens - previous.totalTokens,
       cost: cost - (previous.cost ?? 0),
     };
+    const components = Object.values(delta);
+    // Any regressing component leaves the high-water mark unchanged.
+    if (components.some((component) => component < 0)) return undefined;
     previous = next;
-    return Object.values(delta).some((value) => value > 0) ? delta : undefined;
+    return components.some((component) => component > 0) ? delta : undefined;
   };
   return { account, hasBaseline: () => previous !== undefined };
 };

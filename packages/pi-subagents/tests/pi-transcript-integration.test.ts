@@ -1,50 +1,30 @@
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
   getCurrentSystemPrompt,
   getCurrentTools,
-  InMemoryCredentialStore,
-  InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Config from "effect/Config";
 import { Type } from "typebox";
 import { describe, expect, it } from "@effect/vitest";
+import { temporaryDirectory } from "pi-cosmic-core/testing";
+import {
+  fauxModels,
+  quietLoader,
+  quietSettings,
+  scopedPrintSession,
+} from "pi-cosmic-core/testing/sdk";
 import { childToolPolicy, createForkedSession } from "../src/boundary/child-process.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
+import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 
 describe("installed Pi transcript reconstruction", () => {
   it.live(
     "uses child prompt/tools and restores executable membership when navigating branches",
     () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.String("TMPDIR").pipe(Config.withDefault("/tmp"));
-        const directory = yield* Effect.acquireRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-transcript-"))),
-          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-        );
-        const fake = fauxProvider({ provider: "subagent-transcript-test", tokensPerSecond: 0 });
-        const models = yield* Effect.promise(() =>
-          ModelRuntime.create({
-            credentials: new InMemoryCredentialStore(),
-            modelsStore: new InMemoryModelsStore(),
-            modelsPath: null,
-            refreshOnCreate: false,
-            allowModelNetwork: false,
-          }),
-        );
-        models.registerNativeProvider(fake.provider);
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => models.unregisterProvider(fake.provider.id)),
-        );
+        const directory = yield* temporaryDirectory("pi-transcript-");
+        const { fake, models } = yield* fauxModels("subagent-transcript-test");
         const parent = SessionManager.create(directory, directory);
         parent.appendMessage({
           role: "system",
@@ -55,38 +35,22 @@ describe("installed Pi transcript reconstruction", () => {
         parent.appendMessage({ role: "user", content: "parent conversation", timestamp: 2 });
         parent.appendMessage(fauxAssistantMessage("parent answer"));
         const forkFile = yield* createForkedSession(
-          {
-            runId: "transcript",
-            name: "transcript",
+          backendLaunch({
             cwd: directory,
             context: "fork",
-            writeIntent: "read-only",
-            openaiFastMode: false,
-            model: "faux/faux",
-            effort: "off",
-            activeTools: ["child_alpha"],
-            projectTrusted: false,
             parentSessionId: parent.getSessionId(),
             parentSessionFile: parent.getSessionFile()!,
             parentLeafId: parent.getLeafId()!,
-            systemPrompt: "child-only instruction",
-          },
+          }),
           directory,
         );
-        const settings = SettingsManager.inMemory({
-          compaction: { enabled: false },
-          retry: { enabled: false },
-        });
+        const settings = quietSettings();
         const executed: string[] = [];
-        const loader = new DefaultResourceLoader({
+        const loader = yield* quietLoader({
           cwd: directory,
           agentDir: directory,
           settingsManager: settings,
           noExtensions: true,
-          noSkills: true,
-          noPromptTemplates: true,
-          noThemes: true,
-          noContextFiles: true,
           systemPromptOverride: () => "child-only instruction",
           extensionFactories: [
             (pi) => {
@@ -113,30 +77,17 @@ describe("installed Pi transcript reconstruction", () => {
             },
           ],
         });
-        yield* Effect.promise(() => loader.reload());
-        const { session } = yield* Effect.acquireRelease(
-          Effect.promise(() =>
-            createAgentSession({
-              cwd: directory,
-              agentDir: directory,
-              model: fake.getModel(),
-              modelRuntime: models,
-              settingsManager: settings,
-              sessionManager: SessionManager.open(forkFile),
-              resourceLoader: loader,
-              tools: [...childToolPolicy(["child_alpha", "child_beta"]).enabled],
-              excludeTools: childToolPolicy([]).excluded.split(","),
-            }),
-          ),
-          ({ session }) =>
-            Effect.gen(function* () {
-              yield* Effect.promise(() => session.abort());
-              yield* Effect.promise(() =>
-                session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-              );
-            }).pipe(Effect.ensuring(Effect.sync(() => session.dispose()))),
-        );
-        yield* Effect.promise(() => session.bindExtensions({ mode: "print" }));
+        const session = yield* scopedPrintSession({
+          cwd: directory,
+          agentDir: directory,
+          model: fake.getModel(),
+          modelRuntime: models,
+          settingsManager: settings,
+          sessionManager: SessionManager.open(forkFile),
+          resourceLoader: loader,
+          tools: [...childToolPolicy(["child_alpha", "child_beta"]).enabled],
+          excludeTools: childToolPolicy([]).excluded.split(","),
+        });
         // Provider callbacks inspect normalized transcripts produced by Pi, never cast brands.
         fake.setResponses([
           (context) => {

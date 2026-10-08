@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import {
   processError,
   SubagentProtocolError,
-  UnsupportedSubagentCapabilityError,
   type SubagentError,
   type SubagentProcessError,
 } from "../run/errors.ts";
@@ -22,18 +21,7 @@ export const supervisorError =
   ({ code, message }: { readonly code: string; readonly message: string }): SubagentProcessError =>
     processError(operation, code, message);
 
-/**
- * Shared unsupported-capability failure factory. Each driver binds its own backend tag
- * and message template verbatim at its call sites.
- */
-export const unsupported = (
-  backend: string,
-  capability: string,
-  message: string,
-): UnsupportedSubagentCapabilityError =>
-  new UnsupportedSubagentCapabilityError({ backend, capability, message });
-
-export interface CorrelatedRequestOptions<Frame, Response> {
+interface CorrelatedRequestOptions<Frame, Response> {
   /** Correlated-response wait bound; timeouts fail with `timeoutError` and never retry. */
   readonly timeout: Duration.Input;
   /**

@@ -6,8 +6,7 @@ import {
   clipToWidth,
   type ManagerFooterGroup,
 } from "../manager/chrome.ts";
-import { filterReservedKeyLabel } from "../manager/key-labels.ts";
-import type { FullScreenSelectionKeybindingId } from "../manager/keymap.ts";
+import { configuredKeyLabels } from "../manager/key-labels.ts";
 import {
   detailWindowPositionLabel,
   padListDetailRow,
@@ -24,44 +23,16 @@ import {
   listDetailHeading,
   type ListDetailShell,
 } from "../manager/list-detail-shell.ts";
-import { activityActionHints, type ActivityActionHints } from "./action-keys.ts";
-import { activityAttentionLabels, activityAttentionTotals } from "./attention.ts";
-import { needsYou } from "./tree.ts";
+import { activityActionHints, activityShortcuts, type ActivityActionHints } from "./action-keys.ts";
+import { activityAttentionLabels, needsYou } from "./attention.ts";
 import { activityStartupGlyph, activityOwnerLabel } from "./widget.ts";
 import { groupedMemberLine } from "./row-line.ts";
 import { workflowRowLine } from "./workflow-row.ts";
-import {
-  groupedActivitySource,
-  groupSummaryLabels,
-  type GroupedActivityRow,
-} from "./grouped-tree.ts";
+import { groupedActivitySource, type GroupedActivityRow } from "./grouped-tree.ts";
+import { groupSummaryLabels, summarizeGroup } from "./group-summary.ts";
 import { groupedDetail } from "./grouped-detail.ts";
 import type { ActivityComponentOptions } from "./component.ts";
 import type { ActivityDetailRequest } from "./service.ts";
-
-export const activityShortcuts = new Set([
-  "a",
-  "r",
-  "w",
-  "z",
-  "f",
-  "t",
-  "x",
-  "i",
-  "u",
-  "m",
-  "e",
-  "c",
-  "1",
-  "2",
-  "3",
-  "4",
-  "5",
-  "6",
-  "7",
-  "8",
-  "9",
-]);
 
 function rowLine(
   entry: GroupedActivityRow,
@@ -71,21 +42,16 @@ function rowLine(
 ): string {
   const theme = options.theme;
   const focusedStyle = focused ? (text: string) => focusedField(theme, text) : undefined;
+  const paint = { now: options.now?.(), theme };
   if (entry.type === "member")
-    return groupedMemberLine(
-      entry,
-      width,
-      { now: options.now?.(), theme },
-      "manager",
-      focusedStyle,
-    );
-  if (entry.type === "workflow" || entry.type === "phase")
-    return workflowRowLine(entry, width, { now: options.now?.(), theme }, "manager", focusedStyle);
-  const prefix = `${"  ".repeat(Math.min(entry.depth, 10))}${entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  "}`;
-  const label = entry.title;
+    return groupedMemberLine(entry, width, paint, "manager", focusedStyle);
+  if (entry.type !== "section")
+    return workflowRowLine(entry, width, paint, "manager", focusedStyle);
+  // Sections are the tree's top level, so they carry no guide.
+  const fold = entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
   const summary = groupSummaryLabels(entry.summary).join(" · ");
   return clipToWidth(
-    `${theme.fg("dim", prefix)}${focused ? focusedField(theme, label) : theme.fg(entry.type === "section" ? "accent" : "text", label)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
+    `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
     width,
     "…",
   );
@@ -170,14 +136,9 @@ export function renderGroupedActivity(
   const inner = Math.max(0, width - 2);
   const frame = listDetailFrame(options.theme, shell.state.pane);
   const urgent = needsYou(rows);
-  const attention = activityAttentionLabels(activityAttentionTotals(rows)).join(" · ");
+  const attention = activityAttentionLabels(summarizeGroup(rows).attention).join(" · ");
   const startup = activityStartupGlyph(rows, options.starting?.() ?? 0, options.now?.());
-  const hint = (id: FullScreenSelectionKeybindingId, fallback: string) =>
-    filterReservedKeyLabel(
-      options.keybindingLabel?.(id, fallback) ?? fallback,
-      activityShortcuts,
-      fallback,
-    );
+  const { key: hint } = configuredKeyLabels(options.keybindingLabel, activityShortcuts);
   const confirm = hint("tui.select.confirm", "Enter");
   const cancel = hint("tui.select.cancel", "Esc");
   const movement = `${hint("tui.select.up", "↑")}/${hint("tui.select.down", "↓")}`;
@@ -279,7 +240,6 @@ export function renderGroupedActivity(
         : "Summary · no execution actions";
       const detailText = groupedDetail({
         selected,
-        rows,
         theme: options.theme,
         focused: !listFocused,
         now: options.now?.(),

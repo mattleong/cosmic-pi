@@ -1,17 +1,19 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { processError, type SubagentProcessError } from "../run/errors.ts";
+import { SUPERVISOR_MCP_REGISTRATION } from "../supervisor/mcp-contract.ts";
+import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
 import type {
   ClaudeInputTerminationReason,
   PendingUserReplay,
 } from "./local-claude-input-delivery.ts";
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 
-export interface ClaudeInputFailureSnapshot {
+interface ClaudeInputFailureSnapshot {
   readonly operation: PendingUserReplay["operation"];
   /** Elapsed delivery ownership; not proof of when the native write completed. */
   readonly waitElapsedMillis: number;
-  readonly lastInbound: ClaudeProtocolEvent["type"] | "protocol-error" | "exit" | "none";
+  readonly lastInbound: ClaudeProtocolEvent["type"] | "protocol-error" | "none";
   readonly lastInboundAgeMillis: number | null;
   readonly activeToolCategory:
     | "none"
@@ -30,9 +32,8 @@ const boundedMillis = (value: number) => Math.max(0, Math.min(86_400_000, Math.f
 const toolCategory = (name: string): ClaudeInputFailureSnapshot["activeToolCategory"] => {
   if (name === "Bash") return "shell";
   if (["Edit", "Write", "Read", "NotebookEdit", "Glob", "Grep"].includes(name)) return "file";
-  if (["Agent", "Task", "TaskOutput", "TaskStop", "SendMessage"].includes(name))
-    return "native-agent";
-  if (name.startsWith("mcp__pi_subagents_supervisor__")) return "supervisor";
+  if (CLAUDE_NATIVE_AGENT_TOOLS.includes(name)) return "native-agent";
+  if (name.startsWith(`mcp__${SUPERVISOR_MCP_REGISTRATION}__`)) return "supervisor";
   return "other";
 };
 

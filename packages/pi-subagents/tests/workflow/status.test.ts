@@ -140,7 +140,7 @@ describe("workflow status", () => {
 
   it("finds what the subagents of running agents need, by subagent_status's precedence", () => {
     const current = run([...[1, 2, 3, 5, 6, 7, 8].map((index) => running(index, 0)), agent(4)]);
-    const question = { requestId: "q-1", message: "Which module?", createdAt: 1 };
+    const question = { requestId: "q-1", message: "Which module?" };
     expect(
       workflowAttention(current, [
         view({ id: "agent-1", state: "waiting_for_parent", question }),

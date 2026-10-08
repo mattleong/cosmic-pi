@@ -1,22 +1,21 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
-import { afterEach, test } from "vitest";
-import { animationSchedulerProbe, createToolPresentationHarness } from "pi-code-previews/testing";
-import { applyPresentationSettings } from "pi-code-previews/testing";
-let restoreSettings = () => {};
-const setPresentation = (settings: Parameters<typeof applyPresentationSettings>[0]) => {
-  restoreSettings();
-  restoreSettings = applyPresentationSettings(settings);
-};
+import { failingTheme, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { beforeEach, test } from "vitest";
+import {
+  animationSchedulerProbe,
+  applyPresentationSettings,
+  createToolPresentationHarness,
+} from "pi-code-previews/testing";
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
+import type { NativeMcpEvidence } from "../../src/tools/native-mcp-summary";
+import { stripAnsi } from "pi-cosmic-core";
+
 const styleNativeMcp = (definition: ToolDefinition<any, any, any>) =>
   createNativeMcpRenderers(definition.name, definition, undefined, {
     scheduleAnimation: animationSchedulerProbe().schedule,
   });
-import type { NativeMcpEvidence } from "../../src/tools/native-mcp-summary";
-import { stripAnsi } from "pi-cosmic-core";
 
 const header =
   "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
@@ -36,37 +35,21 @@ const definition = (): ToolDefinition<any, any, any> => ({
   execute: () => Promise.resolve(value()),
 });
 const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
-  setPresentation({
-    syntaxHighlighting: false,
-    toolCallTiming: false,
-    toolCallCollapsedStyle: style,
-    toolCallBackground: background,
-  });
-
-afterEach(() => restoreSettings());
+  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
+beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
 for (const style of ["compact", "preview"] as const)
   for (const background of ["off", "on", "border"] as const)
     test(`recoverable MCP clipping stays quiet through ${style}/${background} expansion and fallback`, () => {
       settings(style, background);
-      const outputFailureTheme: Theme = opaqueFixture({
-        ...plainTheme,
-        fg(color: Parameters<Theme["fg"]>[0], text: string) {
-          if (color === "toolOutput") throw new Error("Output style unavailable");
-          return plainTheme.fg(color, text);
-        },
+      const outputFailureTheme = failingTheme({
+        message: "Output style unavailable",
+        when: (token) => token === "toolOutput",
       });
       const themes = [plainTheme, outputFailureTheme];
       // A producer's total theme fallback is exercised without theme-dependent shell chrome.
       if (style === "preview" && background !== "border")
-        themes.push(
-          opaqueFixture({
-            ...plainTheme,
-            fg() {
-              throw new Error("Theme unavailable");
-            },
-          }),
-        );
+        themes.push(failingTheme({ message: "Theme unavailable" }));
       for (const theme of themes) {
         const original = definition();
         const tool = styleNativeMcp(original);
@@ -191,12 +174,7 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
 
 test("metadata-only saved output remains accessible under theme fallback", () => {
   settings("preview");
-  const theme: Theme = opaqueFixture({
-    ...plainTheme,
-    fg() {
-      throw new Error("Theme unavailable");
-    },
-  });
+  const theme = failingTheme({ message: "Theme unavailable" });
   const h = createToolPresentationHarness(styleNativeMcp(definition()), { theme });
   h.call({ query: "ARGUMENT_RETAINED" }, { expanded: true });
   h.result(

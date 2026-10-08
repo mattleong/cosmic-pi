@@ -1,9 +1,9 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { invokeHostCallback, synchronousNow } from "pi-cosmic-core";
+import { invokeHostCallback, notifyListeners, synchronousNow } from "pi-cosmic-core";
 import type { SubagentProjection } from "../run/model.ts";
 import {
-  emptyActivityPresentation,
+  EMPTY_ACTIVITY_PRESENTATION,
   hasSubagentActivityPanelContent,
   projectSubagentActivityPanel,
   renderProjectedSubagentActivityPanel,
@@ -46,21 +46,15 @@ export interface SubagentActivityPresentationController {
 }
 
 export const makeSubagentActivityPresentation = (): SubagentActivityPresentationController => {
-  let revision = 0;
   let generation = 0;
   let panelAvailable = false;
   let nextLeaseId = 0;
-  let snapshot = emptyActivityPresentation();
+  let snapshot = EMPTY_ACTIVITY_PRESENTATION;
   const leases = new Map<number, PresentationLease>();
   const listeners = new Set<() => void>();
 
-  const notify = () => {
-    for (const listener of listeners) invokeHostCallback(listener, undefined);
-  };
   const publish = () => {
-    revision += 1;
     snapshot = Object.freeze({
-      revision,
       starts: Object.freeze(
         [...leases.values()].flatMap((lease) =>
           lease.action === "start" ? [Object.freeze({ requestedCount: lease.requestedCount })] : [],
@@ -74,7 +68,7 @@ export const makeSubagentActivityPresentation = (): SubagentActivityPresentation
         ),
       ),
     });
-    notify();
+    notifyListeners(listeners);
   };
   const acquire = (lease: PresentationLease): (() => void) => {
     const id = ++nextLeaseId;
@@ -118,7 +112,7 @@ export const makeSubagentActivityPresentation = (): SubagentActivityPresentation
     setPanelAvailable: (available) => {
       if (panelAvailable === available) return;
       panelAvailable = available;
-      notify();
+      notifyListeners(listeners);
     },
     clear: () => {
       generation += 1;
@@ -266,14 +260,7 @@ export const makeSubagentActivityWidgetHost = (
     setContext: (next) => {
       if (context === next && options.presentation.isPanelAvailable()) return;
       clearCurrent();
-      if (!next) return;
-      let usable = false;
-      try {
-        usable = next.hasUI && next.mode === "tui";
-      } catch {
-        usable = false;
-      }
-      if (!usable) return;
+      if (!next || !invokeHostCallback(() => next.hasUI && next.mode === "tui", false)) return;
       context = next;
       const ownerGeneration = generation;
       let factoryFailed = false;

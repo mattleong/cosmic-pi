@@ -4,14 +4,14 @@ import { invokeBestEffort } from "./host-session.ts";
 import { decodeUnknownOrUndefined } from "./schema/decode.ts";
 
 /** One versioned session-capability event protocol. */
-export interface SessionCapabilityProtocolOptions<Version extends number> {
+interface SessionCapabilityProtocolOptions<Version extends number> {
   readonly version: Version;
   /** Inclusive session-id bound. Omitted means unbounded; an empty id is always rejected. */
   readonly maxSessionIdChars?: number;
 }
 
 /** A decoded capability query. `respond` swallows throws and contains a returned thenable. */
-export interface SessionCapabilityQuery<Version extends number> {
+interface SessionCapabilityQuery<Version extends number> {
   readonly version: Version;
   readonly sessionId: string;
   readonly respond: <Candidate>(candidate: Candidate) => void;
@@ -19,21 +19,20 @@ export interface SessionCapabilityQuery<Version extends number> {
 
 /**
  * Provider side of a synchronous `{ version, sessionId, respond }` event-bus query. Every hostile
- * payload is decoded once; only checked fields are retained. The owning package keeps its gates,
- * its capability's exact `execute` contract, and its public protocol names.
+ * payload is decoded once; only checked fields are retained. The owning package keeps its gates
+ * and its public protocol names.
  */
 export const makeSessionCapabilityProtocol = <const Version extends number>(
   options: SessionCapabilityProtocolOptions<Version>,
 ) => {
-  const envelope = {
+  const Query = Schema.Struct({
     version: Schema.Literal(options.version),
     sessionId: Schema.String.check(
       Schema.isMinLength(1),
       Schema.isMaxLength(options.maxSessionIdChars ?? Number.MAX_SAFE_INTEGER),
     ),
-  };
-  const Query = Schema.Struct({ ...envelope, respond: Schema.declare(Predicate.isFunction) });
-  const Capability = Schema.Struct({ ...envelope, execute: Schema.declare(Predicate.isFunction) });
+    respond: Schema.declare(Predicate.isFunction),
+  });
 
   const normalizeQuery = <Value>(value: Value): SessionCapabilityQuery<Version> | undefined => {
     const decoded = decodeUnknownOrUndefined(Query, value);
@@ -46,10 +45,7 @@ export const makeSessionCapabilityProtocol = <const Version extends number>(
     });
   };
 
-  /** Decodes a provider's response; the caller re-wraps `execute` with its exact contract. */
-  const decodeCapability = <Value>(value: Value) => decodeUnknownOrUndefined(Capability, value);
-
-  return { normalizeQuery, decodeCapability };
+  return { normalizeQuery };
 };
 
 /** Any synchronous event bus; Pi's `ExtensionAPI["events"]` fits structurally. */

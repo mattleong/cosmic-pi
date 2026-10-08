@@ -1,28 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { plainTheme } from "pi-cosmic-core/testing";
-import { groupedDetail } from "../src/activity/grouped-detail.ts";
 import { workflowMemberSpan } from "../src/activity/group-summary.ts";
-import { groupedActivityTree, type GroupedActivityRow } from "../src/activity/grouped-tree.ts";
-import type { ActivityRow } from "../src/activity/model.ts";
-import { activityRow, memberRow, workflowRow } from "./support/activity.ts";
+import {
+  activityRow,
+  groupedDetailOf as detail,
+  memberRow,
+  workflowRow,
+} from "./support/activity.ts";
 
 const first = activityRow("first", "done", undefined, { startedAt: 100, endedAt: 300 });
 const second = activityRow("second", "running", undefined, { startedAt: 200 });
-const detail = (
-  rows: readonly ActivityRow[],
-  pick: (entry: GroupedActivityRow) => boolean,
-  loaded?: string,
-) =>
-  groupedDetail({
-    selected: groupedActivityTree(rows).find(pick),
-    rows,
-    theme: plainTheme,
-    focused: true,
-    now: 1000,
-    loaded,
-    actionPage: 0,
-    technical: true,
-  });
 
 describe("grouped activity detail", () => {
   it("shows the workflow row's own detail, actions and phase progress", () => {

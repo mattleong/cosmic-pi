@@ -8,7 +8,7 @@ import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config
 import type { SubagentApplication } from "../layer.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionFeaturePatch, SessionProfileSnapshot } from "../profiles/session-overrides.ts";
-import { SubagentService } from "../run/service.ts";
+import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import {
   registerSubagentManagerCommand,
   type FleetManagerActions,
@@ -58,6 +58,13 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
       : Promise.reject(new Error("Subagents are not active; run /reload and try again."));
   };
 
+  const runCurrent = <A, E>(effect: Effect.Effect<A, E, SubagentApplication>): Promise<A> =>
+    withCurrentActivation(() => run(effect));
+  /** Runs a run-registry action whose result the caller doesn't read. */
+  const runAction = <E>(
+    act: (service: SubagentServiceContract) => Effect.Effect<unknown, E>,
+  ): Promise<void> => run(SubagentService.use(act).pipe(Effect.asVoid));
+
   const withConfigStore =
     <Patch, A, E>(
       select: (
@@ -77,13 +84,11 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
   const applySessionFeature = (
     patchFor: (snapshot: SessionProfileSnapshot) => SessionFeaturePatch,
   ): Promise<void> =>
-    withCurrentActivation(() =>
-      run(
-        Effect.gen(function* () {
-          const profiles = yield* SubagentProfileService;
-          return yield* profiles.patchSessionFeature(patchFor(yield* profiles.capture));
-        }),
-      ),
+    runCurrent(
+      Effect.gen(function* () {
+        const profiles = yield* SubagentProfileService;
+        return yield* profiles.patchSessionFeature(patchFor(yield* profiles.capture));
+      }),
     ).then((snapshot) => ultracode.setEnabled(snapshot.effectiveConfig.ultracode));
 
   const managerActions: FleetManagerActions = {
@@ -114,11 +119,9 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
             : Promise.reject(new Error("Subagents session was replaced.")),
       };
     },
-    stop: (id) => run(SubagentService.use((service) => service.stop(id))).then(() => undefined),
-    interrupt: (id) =>
-      run(SubagentService.use((service) => service.interrupt(id))).then(() => undefined),
-    resume: (id, message) =>
-      run(SubagentService.use((service) => service.resume(id, message))).then(() => undefined),
+    stop: (id) => runAction((service) => service.stop(id)),
+    interrupt: (id) => runAction((service) => service.interrupt(id)),
+    resume: (id, message) => runAction((service) => service.resume(id, message)),
     send: (id, message) =>
       run(
         SubagentService.use((service) =>
@@ -132,10 +135,8 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
           ),
         ),
       ),
-    reply: (id, message) =>
-      run(SubagentService.use((service) => service.reply(id, message))).then(() => undefined),
-    rename: (id, name) =>
-      run(SubagentService.use((service) => service.rename(id, name))).then(() => undefined),
+    reply: (id, message) => runAction((service) => service.reply(id, message)),
+    rename: (id, name) => runAction((service) => service.rename(id, name)),
     inspectProfiles: (projectTrusted) =>
       withCurrentActivation((activation) =>
         run(
@@ -208,13 +209,9 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
     patchFeatureToggle: withConfigStore((store) => store.patchFeatureToggle),
     patchSessionFeatureToggle: (patch) => applySessionFeature(() => patch),
     patchSessionProfile: (patch) =>
-      withCurrentActivation(() =>
-        run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
-      ),
+      runCurrent(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
     replaceSessionProfiles: (patch) =>
-      withCurrentActivation(() =>
-        run(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))),
-      ),
+      runCurrent(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))),
     patchSessionNesting: (patch) =>
       run(SubagentProfileService.use((profiles) => profiles.patchSessionNesting(patch))).then(
         () => undefined,
@@ -222,7 +219,7 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
     listNativeModels: (runtime, signal) =>
       withCurrentActivation((activation) =>
         run(
-          Effect.flatMap(NativeModelCatalog, (catalog) => catalog.list(runtime, activation.cwd)),
+          NativeModelCatalog.use((catalog) => catalog.list(runtime, activation.cwd)),
           signal,
         ),
       ),
@@ -231,20 +228,18 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
   registerUltracodeCommand(pi, {
     isAvailable: () => current() !== undefined,
     status: () =>
-      withCurrentActivation(() =>
-        run(
-          Effect.gen(function* () {
-            const session = yield* SubagentProfileService.use((profiles) => profiles.capture);
-            const saved = yield* WorkflowStore.use((store) => store.list);
-            const window = ultracode.window();
-            return {
-              enabled: session.effectiveConfig.ultracode,
-              source: session.effectiveConfig.featureSources.ultracode,
-              window: { open: isUltracodeWindowOpen(window), runs: window.runs.length },
-              saved,
-            };
-          }),
-        ),
+      runCurrent(
+        Effect.gen(function* () {
+          const session = yield* SubagentProfileService.use((profiles) => profiles.capture);
+          const saved = yield* WorkflowStore.use((store) => store.list);
+          const window = ultracode.window();
+          return {
+            enabled: session.effectiveConfig.ultracode,
+            source: session.effectiveConfig.featureSources.ultracode,
+            window: { open: isUltracodeWindowOpen(window), runs: window.runs.length },
+            saved,
+          };
+        }),
       ),
     setSession: (enabled) =>
       applySessionFeature((snapshot) => ({

@@ -20,11 +20,16 @@ const fileLayer = Layer.merge(
 );
 
 describe("OpenAI image protocol", () => {
-  it.effect("ignores unknown events and accepts wrapped completion", () =>
+  it.effect("ignores unknown events and non-image items before a wrapped completion", () =>
     Effect.gen(function* () {
       const result = yield* parseImageSse(
         body(
           dataEvent({ type: "response.in_progress", sequence_number: 1 }) +
+            // Reasoning models complete a reasoning item before the image call.
+            dataEvent({
+              type: "response.output_item.done",
+              item: { type: "reasoning", id: "rs_1", summary: [] },
+            }) +
             dataEvent({
               type: "response.output_item.done",
               item: {

@@ -1,9 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { needsYou } from "./attention.ts";
 import type { ActivityRow } from "./model.ts";
-import { needsYou, type ActivityTreeOptions } from "./tree.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "./grouped-tree.ts";
 
-export interface WidgetOptions extends ActivityTreeOptions {
+/** The widget shares the manager's collapse state; zoom and history stay manager-only. */
+export interface WidgetOptions {
+  readonly collapsed?: ReadonlySet<string>;
   readonly starting?: number;
   readonly now?: number;
   readonly theme?: Pick<Theme, "fg">;
@@ -31,13 +33,13 @@ export interface ActivityWidgetSection {
 }
 
 /** Failed members each live workflow keeps in the widget, most recent first. */
-export const LIVE_FAILURE_ROWS = 2;
+const LIVE_FAILURE_ROWS = 2;
 
 /** Declared work that has not started. */
 export const isPlannedEntry = (entry: GroupedActivityRow): boolean =>
   entry.type === "member" && entry.row.planned === true;
 /** A failed member; the widget keeps these only while their workflow is live. */
-export const isFailedEntry = (entry: GroupedActivityRow): boolean =>
+const isFailedEntry = (entry: GroupedActivityRow): boolean =>
   entry.type === "member" && entry.row.status === "failed";
 
 /**
@@ -83,7 +85,6 @@ const checklist = (rows: readonly ActivityRow[]): readonly GroupedActivityRow[] 
   if (cached) return cached;
   const tree = groupedActivityTree(rows, {
     hideHistory: true,
-    retainPhaseHistory: true,
     liveFailures: LIVE_FAILURE_ROWS,
   });
   checklists.set(rows, tree);

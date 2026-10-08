@@ -5,7 +5,8 @@ Vendored from [`dmmulroy/anti-slop`](https://github.com/dmmulroy/anti-slop) at c
 
 The vendored production files retain upstream behavior. Local type-only adjustments let the plugin
 pass its own rules. Identical scope lookup, parameter annotation unwrapping, function node types,
-and alias-name lookup mechanics are extracted into `shared/ast.ts`; rule policy stays local.
+and alias-name lookup mechanics are extracted into `shared/ast.ts`; rule policy stays local. The
+unused upstream helper `isPopulatedObjectExpression` was dropped from `shared/dictionary-types.ts`.
 
 The 12 upstream rule tests are retained, with local baseline coverage added for the three upstream
 rules that had no tests, so Oxlint and `@oxlint/plugins` upgrades can be verified against the

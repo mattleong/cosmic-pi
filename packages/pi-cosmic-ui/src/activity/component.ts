@@ -11,10 +11,11 @@ import {
   ACTIVITY_ACTION_PAGE_SIZE,
   activityActionForKey,
   activityActionPages,
+  activityShortcuts,
 } from "./action-keys.ts";
+import { needsYou } from "./attention.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
-import { needsYou, type ActivityTreeOptions } from "./tree.ts";
 import {
   activitySectionId,
   groupedActivityPath,
@@ -22,7 +23,7 @@ import {
   groupedActivityTree,
   type GroupedActivityRow,
 } from "./grouped-tree.ts";
-import { activityShortcuts, renderGroupedActivity } from "./grouped-render.ts";
+import { renderGroupedActivity } from "./grouped-render.ts";
 import type { ActivitySection } from "./view-protocol.ts";
 
 export interface ActivityPresentation {
@@ -124,7 +125,6 @@ export class ActivityComponent {
     const rows = this.options.snapshot();
     if (this.fullTree?.rows === rows) return this.fullTree.entries;
     const entries = groupedActivityTree(rows, {
-      retainPhaseHistory: true,
       expandedHistory: new Set(rows.map((row) => row.key)),
     });
     this.fullTree = { rows, entries };
@@ -144,12 +144,11 @@ export class ActivityComponent {
       sameSet(cached.expandedHistory, prefs.expandedHistory)
     )
       return cached.entries;
-    const options: ActivityTreeOptions = {
+    const entries = groupedActivityTree(rows, {
       collapsed: prefs.collapsed,
       expandedHistory: prefs.expandedHistory,
-    };
-    if (prefs.focus) Object.assign(options, { focus: prefs.focus });
-    const entries = groupedActivityTree(rows, { ...options, retainPhaseHistory: true });
+      ...(prefs.focus && { focus: prefs.focus }),
+    });
     this.visibleTree = {
       rows,
       entries,

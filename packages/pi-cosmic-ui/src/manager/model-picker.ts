@@ -31,7 +31,7 @@ export interface ModelPickerModel {
   readonly searchText?: string | undefined;
 }
 
-export type ModelPickerScope = "scoped" | "all";
+type ModelPickerScope = "scoped" | "all";
 
 export const modelSelector = (
   model: Pick<ModelPickerModel, "provider" | "id" | "selector">,
@@ -80,18 +80,16 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
   current?: string,
 ): Array<SearchableSelectPageChoice<M>> =>
   models.map((model) => {
-    const selector = sanitizeTerminalLine(modelSelector(model));
+    const item = modelItem(model, current);
     return {
-      value: selector,
-      item: modelItem(model, current),
-      searchText: sanitizeTerminalLine(model.searchText ?? `${selector} ${model.name ?? ""}`),
+      value: item.value,
+      item,
+      searchText: sanitizeTerminalLine(model.searchText ?? `${item.value} ${model.name ?? ""}`),
       payload: model,
       tone: managerTone.value,
       enabled: model.available !== false,
-      disabledReason:
-        model.available === false
-          ? sanitizeTerminalLine(model.unavailableReason ?? "Model is unavailable")
-          : undefined,
+      // An unavailable row is described by its sanitized reason, which a label may omit if blank.
+      disabledReason: model.available === false ? (item.description ?? "") : undefined,
     };
   });
 
@@ -151,8 +149,8 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
   }
 
   private scopeSubtitle(): string {
+    if (!this.canScope) return this.options.subtitle ?? "";
     const base = this.options.subtitle ? `${this.options.subtitle} · ` : "";
-    if (!this.canScope) return base.slice(0, -3);
     return `${base}${this.scope === "scoped" ? "Scoped models" : "All authenticated models"} · Tab switch`;
   }
 
@@ -202,7 +200,3 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
     this.page.invalidate();
   }
 }
-
-export const makeModelPickerPage = <M extends ModelPickerModel>(
-  options: ModelPickerPageOptions<M>,
-): ModelPickerPage<M> => new ModelPickerPage(options);

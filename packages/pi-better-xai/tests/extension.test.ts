@@ -1,12 +1,16 @@
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { expect, layer } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  failingTheme,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import {
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_HOST_QUERY,
@@ -15,11 +19,7 @@ import {
   type CosmicUiHostQuery,
 } from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
-import {
-  registerBetterXaiApplication,
-  type BetterXaiExtensionDependencies,
-} from "../src/application.ts";
-import betterXai from "../src/extension.ts";
+import { registerBetterXaiApplication } from "../src/application.ts";
 import * as usageRequests from "../src/usage/request.ts";
 import * as configStore from "../src/config/store.ts";
 import { usageSnapshot } from "./support/fixtures.ts";
@@ -29,29 +29,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type Handler = ExtensionHandler<any, any>;
-type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
-type TestSurface = {
-  readonly render?: (width: number) => string[];
-  readonly invalidate?: () => void;
-  readonly handleInput?: (data: string) => void;
-};
-type TestSurfaceFactory = (
-  tui: { readonly terminal?: { readonly rows: number }; readonly requestRender: () => void },
-  theme: {
-    readonly bold: (text: string) => string;
-    readonly fg: (color: string, text: string) => string;
-  },
-  keybindings: {
-    readonly matches: (data: string, id: string) => boolean;
-    readonly getKeys?: (id: string) => readonly string[];
-  },
-  done: (result: undefined) => void,
-) => TestSurface;
+/** Pi's custom-surface factory, called here with partial hostile tui/theme/keybindings/done. */
+type TestSurfaceFactory = (...host: unknown[]) => Component;
 
 const harness = (
   options: {
-    readonly startupEffect?: BetterXaiExtensionDependencies["startupEffect"];
+    readonly startupEffect?: Parameters<typeof registerBetterXaiApplication>[1];
     /** Installs a Cosmic UI host-query responder reporting this footer ownership. */
     readonly cosmicUi?: { readonly active: () => boolean; readonly hidden?: string[] };
   } = {},
@@ -66,20 +49,11 @@ const harness = (
     yield* fs.writeFileString(path.join(configDirectory, "pi-better-xai.json"), "{}\n");
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDir));
 
-    const handlers = new Map<string, Handler>();
-    const commands = new Map<string, Command>();
     const notify = vi.fn();
     const setStatus = vi.fn();
     const setFooter = vi.fn();
-    const pi = extensionApiFixture({
-      on(name: string, handler: Handler) {
-        handlers.set(name, handler);
-      },
-      registerCommand(name: string, options: { handler: Command }) {
-        commands.set(name, options.handler);
-      },
-      events: { emit: vi.fn(), on: vi.fn() },
-    });
+    const host = recordingExtensionHost({}, { events: { emit: vi.fn(), on: vi.fn() } });
+    const { pi } = host;
     const { cosmicUi } = options;
     if (cosmicUi)
       vi.mocked(pi.events.emit).mockImplementation((name, data) => {
@@ -104,13 +78,12 @@ const harness = (
       isProjectTrusted: vi.fn(() => true),
     });
 
-    if (options.startupEffect)
-      registerBetterXaiApplication(pi, { startupEffect: options.startupEffect });
-    else betterXai(pi);
+    registerBetterXaiApplication(pi, options.startupEffect);
     yield* Effect.addFinalizer(() =>
-      invoke(handlers.get("session_shutdown")?.({ reason: "quit" }, ctx)),
+      invoke(host.emit("session_shutdown", ctx, { reason: "quit" })),
     );
-    return { handlers, commands, ctx, cwd, notify, setStatus, setFooter, pi };
+    const command = (args: string) => host.commands.get("xai")?.handler(args, ctx);
+    return { emit: host.emit, command, ctx, cwd, notify, setStatus, setFooter, pi };
   });
 
 function stalledStartup() {
@@ -166,21 +139,21 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
               };
             });
           vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
-          yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-          const pending = h.commands.get("xai")?.("settings usage.showResetTimes false", h.ctx);
+          yield* invoke(h.emit("session_start", h.ctx, {}));
+          const pending = h.command("settings usage.showResetTimes false");
           yield* Deferred.await(committed);
           h.notify.mockClear();
           const removal =
             ending === "shutdown"
-              ? h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx)
-              : h.handlers.get("session_start")?.({}, { ...h.ctx });
+              ? h.emit("session_shutdown", h.ctx, { reason: "quit" })
+              : h.emit("session_start", { ...h.ctx }, {});
           yield* Deferred.succeed(release, undefined);
           yield* invoke(pending);
           yield* invoke(removal);
           if (ending === "shutdown") expect(h.notify).not.toHaveBeenCalled();
           else expect(h.notify).toHaveBeenCalledOnce(); // Only the current startup failure.
           h.setStatus.mockClear();
-          h.handlers.get("turn_end")?.({}, h.ctx);
+          h.emit("turn_end", h.ctx, {});
           yield* Effect.yieldNow;
           expect(h.setStatus).not.toHaveBeenCalled();
         }),
@@ -194,11 +167,11 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
       );
       const h = yield* harness();
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      const pending = h.commands.get("xai")?.("usage", h.ctx);
+      yield* invoke(h.emit("session_start", h.ctx, {}));
+      const pending = h.command("usage");
       yield* Deferred.await(started);
       h.notify.mockClear();
-      const shutdown = h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx);
+      const shutdown = h.emit("session_shutdown", h.ctx, { reason: "quit" });
       yield* invoke(pending);
       yield* invoke(shutdown);
       expect(h.notify).not.toHaveBeenCalled();
@@ -210,14 +183,14 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       const h = yield* harness();
       throwOnRead(h.ctx, "mode", "hasUI");
 
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
 
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
+      yield* invoke(h.command("usage"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
+      yield* invoke(h.command("settings"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
     }),
   );
@@ -229,8 +202,8 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       );
       let active = false;
       const h = yield* harness({ cosmicUi: { active: () => active } });
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
+      yield* invoke(h.command("usage"));
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", expect.any(String));
       const fallback = h.setStatus.mock.lastCall?.[1];
       expect(fallback).not.toBe("");
@@ -255,7 +228,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     Effect.gen(function* () {
       const h = yield* harness({ cosmicUi: { active: () => true, hidden: ["xai.usage"] } });
 
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
 
       expect(h.pi.events.emit).toHaveBeenCalledWith(
         COSMIC_UI_FOOTER_REMOVE,
@@ -291,7 +264,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         },
       });
 
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
 
       expect(cwdReads).toBe(1);
       expect(signalReads).toBe(1);
@@ -304,48 +277,49 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       const h = yield* harness();
       throwOnRead(h.ctx, "cwd");
 
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
+      yield* invoke(h.command("usage"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
-  it.effect("contains hostile signal getters at command and event boundaries", () =>
+  it.effect("contains hostile signal and model getters at command and event boundaries", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      throwOnRead(h.ctx, "signal");
+      yield* invoke(h.emit("session_start", h.ctx, {}));
+      throwOnRead(h.ctx, "signal", "model");
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
+      yield* invoke(h.command("usage"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("settings usage.showResetTimes false", h.ctx));
+      yield* invoke(h.command("settings usage.showResetTimes false"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
-      expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
-      expect(() => h.handlers.get("model_select")?.({}, h.ctx)).not.toThrow();
-    }),
-  );
-
-  it.effect("fails closed when interactive settings capability getters throw", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      throwOnRead(h.ctx.ui, "custom");
-
+      // The status report reads the model through the host guard, so it still reports.
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
-
+      yield* invoke(h.command("settings status"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
+
+      expect(() => h.emit("turn_end", h.ctx, {})).not.toThrow();
+      expect(() => h.emit("model_select", h.ctx, {})).not.toThrow();
+
+      // A readable model whose own fields throw is contained the same way.
+      const model = { provider: "xai", id: "grok" };
+      throwOnRead(model, "provider", "id");
+      Object.defineProperty(h.ctx, "model", { configurable: true, value: model });
+      h.notify.mockClear();
+      yield* invoke(h.command("settings status"));
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
+      expect(() => h.emit("model_select", h.ctx, {})).not.toThrow();
     }),
   );
 
-  it.effect("contains synchronous and rejected custom-surface opens", () =>
+  it.effect("reports synchronous, rejected, and factory-failed custom-surface opens", () =>
     Effect.gen(function* () {
       for (const open of [
         () => {
@@ -365,16 +339,28 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
                   : undefined,
             },
           ),
+        // Pinned Pi rejects its custom Promise when the factory throws.
+        (factory: TestSurfaceFactory) => {
+          factory(
+            { terminal: { rows: 24 }, requestRender: () => undefined },
+            failingTheme({ message: "host-factory-secret" }),
+            { matches: () => false, getKeys: () => [] },
+            () => {
+              throw new Error("host-done-secret");
+            },
+          );
+          return Promise.resolve(undefined);
+        },
       ]) {
         const h = yield* harness();
-        yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+        yield* invoke(h.emit("session_start", h.ctx, {}));
         Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: open });
 
         h.notify.mockClear();
-        yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
+        yield* invoke(h.command("settings"));
 
         expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-        yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+        yield* invoke(h.emit("session_shutdown", h.ctx, { reason: "quit" }));
       }
     }),
   );
@@ -383,7 +369,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     Effect.gen(function* () {
       initTheme(undefined, false);
       const h = yield* harness();
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
       let renderResult: string[] | undefined;
       const custom = (factory: TestSurfaceFactory) => {
         const surface = factory(
@@ -393,13 +379,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
               throw new Error("host-render-secret");
             },
           },
-          {
-            bold: (text) => text,
-            fg(color, text) {
-              if (color === "dim") throw new Error("host-theme-secret");
-              return text;
-            },
-          },
+          failingTheme({ message: "host-theme-secret", when: (token) => token === "dim" }),
           {
             matches() {
               throw new Error("host-keybinding-secret");
@@ -411,9 +391,9 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
           },
         );
         expect(() => {
-          renderResult = surface.render?.(80);
+          renderResult = surface.render(80);
         }).not.toThrow();
-        expect(() => surface.invalidate?.()).not.toThrow();
+        expect(() => surface.invalidate()).not.toThrow();
         expect(() => surface.handleInput?.("j")).not.toThrow();
         expect(() => surface.handleInput?.(String.fromCharCode(27))).not.toThrow();
         return Promise.resolve(undefined);
@@ -421,106 +401,36 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
 
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
+      yield* invoke(h.command("settings"));
 
       expect(renderResult).toEqual(expect.any(Array));
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
-  it.effect("reports a throwing settings factory as a failed open", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      // Pinned Pi rejects its custom Promise when the factory throws.
-      const custom = (factory: TestSurfaceFactory) => {
-        factory(
-          { terminal: { rows: 24 }, requestRender: () => undefined },
-          {
-            bold: (text) => text,
-            fg() {
-              throw new Error("host-factory-secret");
-            },
-          },
-          { matches: () => false, getKeys: () => [] },
-          () => {
-            throw new Error("host-done-secret");
-          },
-        );
-        return Promise.resolve(undefined);
-      };
-      Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });
-
-      h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("settings", h.ctx));
-
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-    }),
-  );
-
-  it.effect("clears provider status before replacement startup settles", () =>
+  it.effect("clears provider status on replacement and silently supersedes a stalled start", () =>
     Effect.gen(function* () {
       const stalled = stalledStartup();
       let starts = 0;
       const h = yield* harness({
-        startupEffect: () => (++starts === 1 ? Effect.void : stalled.effect),
+        startupEffect: () => (++starts === 2 ? stalled.effect : Effect.void),
       });
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
       h.setStatus.mockClear();
+      h.notify.mockClear();
 
-      const replacement = h.handlers.get("session_start")?.({}, h.ctx);
+      const replacement = h.emit("session_start", h.ctx, {});
       yield* Deferred.await(stalled.started);
 
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", undefined);
       expect(h.setFooter).not.toHaveBeenCalled();
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
-      yield* invoke(replacement);
-    }),
-  );
 
-  it.effect("replacement immediately interrupts a stalled session startup", () =>
-    Effect.gen(function* () {
-      const stalled = stalledStartup();
-      let starts = 0;
-      const h = yield* harness({
-        startupEffect: () => (++starts === 1 ? stalled.effect : Effect.void),
-      });
-      const first = h.handlers.get("session_start")?.({}, h.ctx);
-      yield* Deferred.await(stalled.started);
-
-      const second = h.handlers.get("session_start")?.({}, h.ctx);
-      yield* invoke(Promise.all([first, second]));
-
+      yield* invoke(Promise.all([replacement, h.emit("session_start", h.ctx, {})]));
       expect(stalled.interruptions()).toBe(1);
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
-      h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
+      yield* invoke(h.command("usage"));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
-  );
-
-  it.effect(
-    "host abort immediately interrupts a stalled session startup and removes its listener",
-    () =>
-      Effect.gen(function* () {
-        const stalled = stalledStartup();
-        const controller = new AbortController();
-        const addEventListener = vi.spyOn(controller.signal, "addEventListener");
-        const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
-        const h = yield* harness({ startupEffect: () => stalled.effect });
-        h.ctx.signal = controller.signal;
-        const startup = h.handlers.get("session_start")?.({}, h.ctx);
-        yield* Deferred.await(stalled.started);
-        const hostAbortListener = addEventListener.mock.calls[0]?.[1];
-
-        controller.abort();
-        yield* invoke(startup);
-
-        expect(stalled.interruptions()).toBe(1);
-        expect(hostAbortListener).toBeTypeOf("function");
-        expect(removeEventListener).toHaveBeenCalledWith("abort", hostAbortListener);
-        expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
-      }),
   );
 
   it.effect("disposes and clears a runtime when startup is already aborted", () =>
@@ -531,28 +441,13 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       const h = yield* harness();
       h.ctx.signal = controller.signal;
 
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.emit("session_start", h.ctx, {}));
 
       expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
-      yield* invoke(h.commands.get("xai")?.("usage", h.ctx));
+      yield* invoke(h.command("usage"));
       expect(h.notify).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("shutdown immediately interrupts a stalled session startup", () =>
-    Effect.gen(function* () {
-      const stalled = stalledStartup();
-      const h = yield* harness({ startupEffect: () => stalled.effect });
-      const startup = h.handlers.get("session_start")?.({}, h.ctx);
-      yield* Deferred.await(stalled.started);
-
-      const shutdown = h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx);
-      yield* invoke(Promise.all([startup, shutdown]));
-
-      expect(stalled.interruptions()).toBe(1);
-      expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 });

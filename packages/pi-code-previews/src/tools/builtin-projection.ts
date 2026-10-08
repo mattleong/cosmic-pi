@@ -7,8 +7,9 @@ import {
 import { getObjectValue } from "../shared/helpers";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { CompactSummary, CompactPhase } from "./compact-summary";
-import { builtinFailure } from "./builtin-failure";
-import { compactIssueSeverity, mergeCompactIssues } from "./compact-issues";
+import { fileFailure } from "./builtin-failure-file";
+import { shellFailure } from "./builtin-failure-shell";
+import { compactIssueSeverity, mergeCompactIssues, type CompactIssue } from "./compact-issues";
 import {
   bashCommandIssues,
   outputLimitProjection,
@@ -18,7 +19,11 @@ import {
 } from "./builtin-issues";
 import { getPathArg } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
-import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
+import {
+  describeBuiltinCompactSubject,
+  stringArg,
+  type BuiltinCompactTool,
+} from "./builtin-subject";
 
 export interface BuiltinCompactPolicy {
   secretWarnings: boolean;
@@ -30,7 +35,6 @@ export interface BuiltinCompactPolicy {
 
 export type BuiltinBeforeWrite =
   | { kind: "unknown" }
-  | { kind: "not-captured" }
   | { kind: "new" }
   | { kind: "snapshot"; value: unknown; counts?: { detail: string | undefined } };
 
@@ -55,15 +59,13 @@ export function projectBuiltinCompactSummary(
     secretIssues(sources, input.secretWarnings, input.secretScanChars);
   const output = getBoundedTextContent(result?.content);
   if (output === undefined) return undefined;
-  const command = stringArg(args, "command");
   const inputSources = secretInputSources(tool, args, input.secretWarnings);
   if (!inputSources) return undefined;
   const issues = scan([...inputSources, output]);
   const metadata: string[] = [];
   const counters: string[] = [];
-  if (tool === "bash") {
-    issues.push(...bashCommandIssues(command, input.bashWarnings));
-  }
+  if (tool === "bash")
+    issues.push(...bashCommandIssues(stringArg(args, "command"), input.bashWarnings));
   const subject = describeBuiltinCompactSubject(tool, args, cwd);
   if (result) {
     if (tool === "read" && !isError) {
@@ -83,7 +85,7 @@ export function projectBuiltinCompactSummary(
   if (isError) {
     // Text ownership must not replace attachment-aware failure renderers.
     if (result?.content.some((part) => part.type !== "text")) return undefined;
-    const failure = builtinFailure(tool, output);
+    const failure = builtinFailure(tool, output, issues);
     return {
       subject,
       outcome: failure.outcome,
@@ -98,15 +100,8 @@ export function projectBuiltinCompactSummary(
     const before = beforeWrite.kind === "snapshot" ? beforeWrite.value : undefined;
     const beforeContent = getObjectValue(before, "content");
     if (Predicate.isString(beforeContent)) issues.push(...scan([beforeContent]));
-    const knownNewFile = beforeWrite.kind === "new";
-    if (knownNewFile) counters.push("new file");
-    if (beforeWrite.kind === "not-captured")
-      issues.push({
-        severity: "info",
-        code: "write-diff-not-captured",
-        message: "Diff unavailable: previous contents not captured",
-      });
-    else if (!knownNewFile) {
+    if (beforeWrite.kind === "new") counters.push("new file");
+    else {
       const projection = writeDiffProjection(before, content, input);
       issues.push(...projection.issues);
       metadata.push(...projection.metadata);
@@ -144,9 +139,15 @@ export function projectBuiltinCompactSummary(
   };
 }
 
-function stringArg<Args>(args: Args, name: string): string {
-  const value = getObjectValue(args, name);
-  return Predicate.isString(value) ? value : "";
+/** Recognized builtin error envelopes get a human message; anything else shows its first line. */
+function builtinFailure(tool: BuiltinCompactTool, output: string, issues: readonly CompactIssue[]) {
+  const details = output || `${tool} failed`;
+  if (details.trim() === "Operation aborted") return { outcome: "cancelled" as const, issues: [] };
+  const lines = details.trimEnd().split(/\r?\n/u);
+  if (tool !== "bash") return fileFailure(tool, details, lines);
+  // Structured details may already name where the full output was saved.
+  const retained = issues.some(({ code }) => code === "retained-output");
+  return shellFailure(details, lines, retained);
 }
 
 function secretInputSources<Args>(

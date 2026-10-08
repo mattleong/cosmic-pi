@@ -2,25 +2,28 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
   managerLayoutTier,
+  managerNoticeColor,
   renderResponsiveManagerFooter,
   clipToWidth,
 } from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
-import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
+import { configuredKeyLabels } from "pi-cosmic-ui/manager/key-labels";
 import { listWindowStart, wideListDetailGeometry } from "pi-cosmic-ui/manager/list-detail";
 import {
   framedFill,
   framedScreen,
   framedStackedRows,
   framedWideRows,
+  listDetailFrame,
   listDetailHeading,
 } from "pi-cosmic-ui/manager/list-detail-shell";
+import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
+import { profileRouteOptionLabel, SCOPE_LABELS } from "../profile-route-editor.ts";
 import {
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
 } from "./profile-set-picker-model.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
-import { focusedProfileField, profileFrame, profileTone } from "./profile-style.ts";
 
 export interface ProfileSetPickerRenderState {
   readonly entries: ReadonlyArray<ProfileSetPickerEntry>;
@@ -30,20 +33,17 @@ export interface ProfileSetPickerRenderState {
   readonly message?: { readonly kind: "info" | "warning" | "error"; readonly text: string };
 }
 
-const RESERVED_KEYS = new Set(["/", "a", "u"]);
+/** Library shortcuts: search, More, and Use. */
+export const PROFILE_SET_SHORTCUTS: ReadonlySet<string> = new Set(["/", "a", "u"]);
 
 const footer = (
   state: ProfileSetPickerRenderState,
   width: number,
   keybindingLabel: SearchableSelectHostOptions["keybindingLabel"],
 ): string => {
-  const label = keybindingLabel ?? ((_id, fallback) => fallback);
-  const confirm = filterReservedKeyLabel(
-    label("tui.select.confirm", "Enter"),
-    RESERVED_KEYS,
-    "Enter",
-  );
-  const cancel = filterReservedKeyLabel(label("tui.select.cancel", "Esc"), RESERVED_KEYS, "Esc");
+  const { key } = configuredKeyLabels(keybindingLabel, PROFILE_SET_SHORTCUTS);
+  const confirm = key("tui.select.confirm", "Enter");
+  const cancel = key("tui.select.cancel", "Esc");
   if (state.searching)
     return renderResponsiveManagerFooter(width, [
       [`Type to filter · ${confirm} Edit · ${cancel} Clear`],
@@ -55,9 +55,7 @@ const footer = (
 };
 
 const messageRows = (state: ProfileSetPickerRenderState, theme: Theme): string[] =>
-  state.message
-    ? [theme.fg(state.message.kind === "info" ? "muted" : state.message.kind, state.message.text)]
-    : [];
+  state.message ? [theme.fg(managerNoticeColor(state.message.kind), state.message.text)] : [];
 
 const libraryRows = (
   state: ProfileSetPickerRenderState,
@@ -65,7 +63,7 @@ const libraryRows = (
   height: number,
 ): ReadonlyArray<string> => {
   const header = [
-    listDetailHeading(theme, "Saved profile sets", true, profileTone.saved),
+    listDetailHeading(theme, "Saved profile sets", true, managerTone.saved),
     ...(state.searching ? [theme.fg("muted", `Search /${state.query}`)] : []),
     ...messageRows(state, theme),
     theme.fg("muted", 'Saved sets stay separate until you choose "Use in Current Session".'),
@@ -78,7 +76,7 @@ const libraryRows = (
     if (!entry) continue;
     if (entry.scope !== scope) {
       scope = entry.scope;
-      logical.push({ text: theme.fg("muted", entry.scope === "project" ? "Project" : "Global") });
+      logical.push({ text: theme.fg("muted", SCOPE_LABELS[entry.scope]) });
     }
     const selected = index === state.selectedIndex;
     const invalid =
@@ -93,7 +91,7 @@ const libraryRows = (
         : "";
     logical.push({
       entryIndex: index,
-      text: `${selected ? ">" : " "} ${selected && !state.searching ? focusedProfileField(theme, entry.label) : theme.fg(profileTone.saved, entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
+      text: `${selected ? ">" : " "} ${selected && !state.searching ? focusedField(theme, entry.label) : theme.fg(managerTone.saved, entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
     });
   }
   const listHeight = Math.max(1, height - header.length);
@@ -119,17 +117,17 @@ const previewRows = (
       width,
     );
   const rows = [
-    listDetailHeading(theme, qualifiedProfileSetLabel(entry.ref), false, profileTone.saved),
+    listDetailHeading(theme, qualifiedProfileSetLabel(entry.ref), false, managerTone.saved),
   ];
   const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
   const profiles = entry.preview.map((profile) => ({
     ...profile,
-    label: `${theme.fg(profileTone.profile, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${profile.source.replace("-invalid", "")}`) : ""}`,
+    label: `${theme.fg(managerTone.identity, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${profile.source.replace("-invalid", "")}`) : ""}`,
     cells:
       profile.status === "configured"
         ? profile.candidates.map((candidate, index) => [
-            theme.fg("muted", index === 0 ? "Primary" : `Fallback ${index}`),
-            `${theme.fg(profileTone.model, candidate.model)}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
+            theme.fg("muted", profileRouteOptionLabel(index)),
+            `${theme.fg(managerTone.value, candidate.model)}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
             theme.fg(
               "muted",
               candidate.effort === "default" ? "profile default" : candidate.effort,
@@ -195,14 +193,14 @@ export const renderProfileSetPicker = (
   if (width === 0 || height === 0) return [];
   if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const theme = options.theme;
-  const frame = profileFrame(theme, true);
+  const frame = listDetailFrame(theme, "list");
   const inner = width - 2;
   const title = clipToWidth(" /subagents profiles › Profile sets ", inner, "");
   const bottom = clipToWidth(footer(state, inner, options.keybindingLabel), inner, "");
   return framedScreen(frame, {
     width,
     height,
-    top: theme.fg(profileTone.saved, title),
+    top: theme.fg(managerTone.saved, title),
     bottom,
     body: (bodyHeight) => {
       if (bodyHeight <= 4) {
@@ -211,7 +209,7 @@ export const renderProfileSetPicker = (
           ? theme.fg(
               entry.kind === "invalid-default" || (entry.kind === "set" && entry.invalid)
                 ? "error"
-                : profileTone.saved,
+                : managerTone.saved,
               theme.bold(
                 `> ${entry.kind === "set" ? qualifiedProfileSetLabel(entry.ref) : entry.label}`,
               ),

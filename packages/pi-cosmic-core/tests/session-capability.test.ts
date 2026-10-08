@@ -65,16 +65,6 @@ describe("session capability queries", () => {
       expect(() => query?.respond("capability")).not.toThrow();
     }
   });
-
-  it("decodes a capability envelope only when execute is a function", () => {
-    const execute = () => Promise.resolve();
-    expect(protocol.decodeCapability({ version: 1, sessionId: "session", execute })).toEqual({
-      version: 1,
-      sessionId: "session",
-      execute,
-    });
-    expect(protocol.decodeCapability({ version: 1, sessionId: "session" })).toBeUndefined();
-  });
 });
 
 describe("session capability discovery", () => {

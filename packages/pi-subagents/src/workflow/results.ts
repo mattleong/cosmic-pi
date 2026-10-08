@@ -135,22 +135,11 @@ export interface WorkflowReplayLine {
   readonly resultFile?: string | undefined;
 }
 
-/** What a run's results journal tells a later Pi process. */
-export interface WorkflowJournalReading {
-  /** Calls that completed with a result, live or reused. */
-  readonly finished: number;
-  /** Worktrees the lines name, in journal order, other than those discarded as unchanged. */
-  readonly workspaces: ReadonlyArray<string>;
-  readonly replayable: ReadonlyArray<WorkflowReplayLine>;
-}
-
-type ReadLine = typeof ReadLineSchema.Type;
-
 /**
  * A completed line's replay, or undefined when it has no key or lacks its full value. A writer
  * whose worktree held no changes replays like a reader: nothing of its awaits review.
  */
-const replayLine = (line: ReadLine): WorkflowReplayLine | undefined => {
+const replayLine = (line: typeof ReadLineSchema.Type): WorkflowReplayLine | undefined => {
   if (line.key === undefined || line.replayable === false) return undefined;
   if (line.resultTruncated === true && line.resultFile === undefined) return undefined;
   return {
@@ -165,22 +154,19 @@ const replayLine = (line: ReadLine): WorkflowReplayLine | undefined => {
   };
 };
 
-/** Reads a results journal's lines; malformed ones are skipped. */
-export const readWorkflowResultLines = (lines: ReadonlyArray<string>): WorkflowJournalReading => {
+/**
+ * What a run's results journal tells a later Pi process: how many calls completed with a result,
+ * live or reused; the worktrees its lines name, in journal order, other than those discarded as
+ * unchanged; and the completed calls a resume replays. Malformed lines are skipped.
+ */
+export const readWorkflowResultLines = (lines: ReadonlyArray<string>) => {
   const read = lines.flatMap((text) => Option.toArray(decodeReadLine(text)));
   const completed = read.filter((line) => line.state === "completed");
   return {
     finished: completed.length,
     workspaces: [
-      ...new Set(
-        read.flatMap((line) =>
-          line.workspaceId === undefined || line.unchanged === true ? [] : [line.workspaceId],
-        ),
-      ),
+      ...new Set(read.flatMap((line) => (line.unchanged === true ? [] : (line.workspaceId ?? [])))),
     ],
-    replayable: completed.flatMap((line) => {
-      const replay = replayLine(line);
-      return replay === undefined ? [] : [replay];
-    }),
+    replayable: completed.flatMap((line) => replayLine(line) ?? []),
   };
 };

@@ -1,9 +1,6 @@
 import { signalProcess } from "pi-cosmic-core";
 import { nodeUptime } from "./node-builtins.ts";
 
-/** This Pi process's id, which a workflow run record names as the process that runs it. */
-export const currentProcessId = (): number => process.pid;
-
 /**
  * When this machine booted, in epoch milliseconds, from the wall-clock time `now` and the
  * system's uptime, which keeps counting while the machine sleeps. A record naming another boot

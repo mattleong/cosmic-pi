@@ -4,7 +4,6 @@ import { isActiveRunState } from "./model.ts";
 
 export const emptyProjection = (): SubagentProjection => ({
   revision: 0,
-  root: { id: "root", depth: 0, directChildCount: 0, descendantCount: 0 },
   runs: [],
 });
 
@@ -23,13 +22,11 @@ export const fleetStatus = (projection: SubagentProjection): string | undefined 
   ).length;
   const waiting = projection.runs.filter((run) => run.state === "waiting_for_parent").length;
   const paused = projection.runs.filter((run) => run.state === "paused").length;
-  const retained = projection.runs.filter((run) => run.state === "reported").length;
   if (owned === 0) return undefined;
   return [
     working ? `${countLabel(working, "subagent")} running` : undefined,
     waiting ? `${waiting} waiting for reply` : undefined,
     paused ? `${paused} paused` : undefined,
-    retained ? `${retained} reported` : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");

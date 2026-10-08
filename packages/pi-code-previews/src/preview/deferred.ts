@@ -14,14 +14,13 @@ export function shouldRenderDeferred(text: string): boolean {
  */
 export class DeferredPreview implements Component {
   private component: Component;
-  private generation = 0;
+  private cancelled = false;
   private cancellation: (() => void) | undefined;
 
   constructor(message: string, theme: Theme, compute: () => Component, invalidate: () => void) {
     this.component = new Text(theme.fg("muted", message), 0, 0);
-    const generation = ++this.generation;
     this.cancellation = deferCodePreview(() => {
-      if (generation !== this.generation) return;
+      if (this.cancelled) return;
       let next: Component;
       try {
         next = compute();
@@ -35,7 +34,7 @@ export class DeferredPreview implements Component {
           0,
         );
       }
-      if (generation !== this.generation) return;
+      if (this.cancelled) return;
       this.component = next;
       this.cancellation = undefined;
       invalidate();
@@ -43,7 +42,7 @@ export class DeferredPreview implements Component {
   }
 
   cancel(): void {
-    this.generation++;
+    this.cancelled = true;
     this.cancellation?.();
     this.cancellation = undefined;
   }

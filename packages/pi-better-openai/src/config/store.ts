@@ -3,9 +3,7 @@ import * as Number from "effect/Number";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
-  makeConfigDocumentErrorFactory,
   makeScopedConfigStore,
-  type JsonObject,
   type ScopedConfigMetadata,
 } from "pi-cosmic-core";
 import {
@@ -24,8 +22,6 @@ export class OpenAIConfigError extends Schema.TaggedError<OpenAIConfigError>()(
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const mapError = makeConfigDocumentErrorFactory(OpenAIConfigError, "Better OpenAI");
-
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
@@ -35,6 +31,7 @@ function decodeConfig<ValueInput>(value: ValueInput) {
     value,
     {
       persistState: Schema.Boolean,
+      // Legacy fast-mode state retained for tolerant reads and compatibility writes.
       active: Schema.Boolean,
       desiredActive: Schema.Boolean,
       usage: UnknownRecordSchema,
@@ -85,18 +82,15 @@ function resolveConfigFiles(
 ): ResolvedConfig {
   const usage = { ...DEFAULT_USAGE_CONFIG, ...global?.usage, ...project?.usage };
   const image = { ...DEFAULT_IMAGE_CONFIG, ...global?.image, ...project?.image };
-  const desiredActive =
-    project?.desiredActive ??
-    project?.active ??
-    global?.desiredActive ??
-    global?.active ??
-    DEFAULT_CONFIG.desiredActive ??
-    false;
   return {
     ...metadata,
-    persistState:
-      project?.persistState ?? global?.persistState ?? DEFAULT_CONFIG.persistState ?? true,
-    desiredActive,
+    persistState: project?.persistState ?? global?.persistState ?? DEFAULT_CONFIG.persistState,
+    desiredActive:
+      project?.desiredActive ??
+      project?.active ??
+      global?.desiredActive ??
+      global?.active ??
+      DEFAULT_CONFIG.desiredActive,
     usage: {
       ...usage,
       refreshIntervalMs: Number.clamp(usage.refreshIntervalMs, {
@@ -112,15 +106,14 @@ function resolveConfigFiles(
   };
 }
 
-// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
 const store = makeScopedConfigStore({
-  errorFactory: mapError,
+  error: OpenAIConfigError,
   label: "Better OpenAI",
   spanPrefix: "OpenAIConfig",
   projectConfigDirectory: CONFIG_DIR_NAME,
   basename: CONFIG_BASENAME,
   decode: decodeConfig,
-  defaultDocument: () => DEFAULT_CONFIG as JsonObject,
+  defaultDocument: () => DEFAULT_CONFIG,
   resolve: resolveConfigFiles,
 });
 

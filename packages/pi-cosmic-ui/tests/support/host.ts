@@ -1,20 +1,32 @@
-import type { ExtensionAPI, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { deferredPromise } from "pi-cosmic-core/testing";
+import { vi } from "vitest";
 import { COSMIC_UI_HOST_QUERY, type CosmicUiHostQuery } from "../../src/protocol/protocol.ts";
 
-export const footerDataProviderFixture = <Fixture extends object>(
-  fixture: Fixture,
-): Fixture & ReadonlyFooterDataProvider => {
-  // SAFETY: Each test invokes only the footer-data members explicitly implemented here.
-  return fixture as Fixture & ReadonlyFooterDataProvider;
-};
-
-export const abortSignalFixture = <Fixture extends object>(
-  fixture: Fixture,
-): Fixture & AbortSignal => {
-  // SAFETY: Each test invokes only the AbortSignal members explicitly implemented here.
-  return fixture as Fixture & AbortSignal;
-};
+/** A real AbortSignal whose `aborted` reads and listener registrations are observable. */
+export function capturedSignal(
+  source = new AbortController().signal,
+  onAbortedRead = () => {},
+  throwAfterAdd = false,
+) {
+  const addEventListener = vi.fn((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    source.addEventListener(...args);
+    if (throwAfterAdd) throw new Error("registered before throwing");
+  });
+  const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+  const signal = new Proxy(source, {
+    get(target, property) {
+      if (property === "aborted") onAbortedRead();
+      if (property === "addEventListener") return addEventListener;
+      if (property === "removeEventListener") return removeEventListener;
+      // SAFETY: The in check proves this property belongs to the AbortSignal contract.
+      const value = property in target ? target[property as keyof AbortSignal] : undefined;
+      return Predicate.isFunction(value) ? value.bind(target) : value;
+    },
+  });
+  return { signal, addEventListener, removeEventListener };
+}
 
 export type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
 export const execResult = (stdout = "", code = 0): ExecResult => ({

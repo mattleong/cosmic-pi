@@ -6,12 +6,13 @@ import { processCapacityError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
+import { runSessionOwned } from "./session-owned.ts";
 import {
   type LaunchSlot,
   mapWorkspaceError,
+  type RevisionHold,
   type WorkspaceBinding,
   type WorkspaceControlContext,
-  type WorkspaceRevision,
   workspaceBusyError,
   workspaceFinishedError,
 } from "./workspace-binding.ts";
@@ -26,15 +27,10 @@ interface LaunchSelection {
   readonly slotWait?: Deferred.Deferred<void>;
 }
 
-/** A launch as a revision successor reusing a workspace. */
-interface LaunchOptions {
-  readonly reuse?: WorkspaceHandle | undefined;
-}
-
 /** A revision successor's launch: the binding it reuses, and the revision whose hold it took. */
 interface Succession {
   readonly binding: WorkspaceBinding;
-  readonly revision: WorkspaceRevision;
+  readonly revision: RevisionHold;
 }
 
 /** A binding's request: what a revision successor launches with, without owner-only fields. */
@@ -67,6 +63,7 @@ const successorRequest = (binding: WorkspaceBinding, message: string): StartSuba
  */
 export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
+  const { operations, ownerScope } = context;
   /** Under the run lock: ends a slot hold, if any, and wakes launches waiting for a slot. */
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
     if (!slot || !state.launchSlots.delete(slot)) return;
@@ -152,17 +149,6 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
       const slotWait = yield* worktreeCapacityLocked(request, caller);
       return slotWait ? { mode, slotWait } : { mode };
     });
-  /** Selects the writer mode and reserves admission, and a worktree slot, before acquisition. */
-  const selectLaunchModeLocked = (request: StartSubagentRequest, slot: LaunchSlot | undefined) =>
-    checkLaunchLocked(request).pipe(
-      Effect.tap((selection) =>
-        Effect.sync(() => {
-          if (selection.slotWait) return;
-          state.reservations += 1;
-          if (selection.mode === "worktree" && slot) state.launchSlots.add(slot);
-        }),
-      ),
-    );
   /** Discards a workspace acquired for a launch that never admitted its writer. */
   const discardUnadmitted = (binding: WorkspaceBinding) => {
     const { workspaceId, ownerId } = binding.handle;
@@ -203,31 +189,36 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
       const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       // A workflow agent's launch holds no direct-child slot.
       const slot: LaunchSlot | undefined = request.workflow ? undefined : { caller };
+      // Selects the mode and reserves admission, and a worktree slot, before any acquisition.
       // Only the wait for another launch's slot is interruptible; nothing is reserved during it.
       const select: Effect.Effect<WriterWorkspaceMode, SubagentError> = withLock(
-        selectLaunchModeLocked(request, slot),
+        checkLaunchLocked(request).pipe(
+          Effect.tap(({ mode, slotWait }) =>
+            Effect.sync(() => {
+              if (slotWait) return;
+              state.reservations += 1;
+              if (mode === "worktree" && slot) state.launchSlots.add(slot);
+            }),
+          ),
+        ),
       ).pipe(
         Effect.flatMap(({ mode, slotWait }) =>
           slotWait
-            ? restore(Deferred.await(slotWait)).pipe(Effect.andThen(Effect.suspend(() => select)))
+            ? restore(Deferred.await(slotWait)).pipe(Effect.andThen(() => select))
             : Effect.succeed(mode),
         ),
       );
       return Effect.gen(function* () {
         const selectedMode = yield* select;
+        /** The workspace this launch acquired, which it discards unless its writer is admitted. */
         let binding: WorkspaceBinding | undefined;
-        let acquired = false;
-        const track = (handle: WorkspaceHandle) => {
-          if (binding?.handle === handle) return;
-          binding = { handle, request: bindingRequest(request, handle), preparing: true, slot };
-          state.bindings.set(handle.workspaceId, binding);
-        };
         // The engine reports acquisition before returning, so an interrupted launch still owns
         // its workspace. That synchronous insert cannot take the run lock, which callers may
         // hold while waiting on the engine; no locked operation observes a fresh preparing binding.
         const onAcquired = (handle: WorkspaceHandle) => {
-          acquired = true;
-          track(handle);
+          if (binding?.handle === handle) return;
+          binding = { handle, request: bindingRequest(request, handle), preparing: true, slot };
+          state.bindings.set(handle.workspaceId, binding);
         };
         /** The workspace this launch admits its writer into, acquired unless it is reused. */
         const acquireHandle = Effect.gen(function* () {
@@ -258,8 +249,7 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
               })
             : service.create({ sourceCwd: request.cwd, ownerId: ownerFor(caller), onAcquired });
           const handle = yield* restore(acquiring.pipe(Effect.mapError(mapWorkspaceError)));
-          acquired = true;
-          yield* withLock(Effect.sync(() => track(handle)));
+          yield* withLock(Effect.sync(() => onAcquired(handle)));
           return handle;
         });
         return yield* Effect.gen(function* () {
@@ -277,7 +267,7 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
             }),
           );
         }).pipe(
-          Effect.onError(() => (acquired && binding ? discardUnadmitted(binding) : Effect.void)),
+          Effect.onError(() => (binding ? discardUnadmitted(binding) : Effect.void)),
           Effect.ensuring(
             withLock(
               Effect.sync(() => {
@@ -292,22 +282,6 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
         );
       });
     });
-  /**
-   * Hands a revision's hold to the launch of the successor it reserved. This runs as that
-   * launch's first step, outside the run lock, so the hold changes hands before an abandoned
-   * revise call can release it; no locked section reads `launched` across a suspension.
-   */
-  const claimRevision = (
-    request: StartSubagentRequest,
-    reuse: WorkspaceHandle,
-  ): Succession | undefined => {
-    const binding = state.bindings.get(reuse.workspaceId);
-    const revision = binding?.handle === reuse ? binding.revision : undefined;
-    if (!binding || !revision || revision.successor !== request || revision.launched)
-      return undefined;
-    revision.launched = true;
-    return { binding, revision };
-  };
   /** Under the run lock: ends a revision's hold on its binding. */
   const releaseRevisionLocked = ({ binding, revision }: Succession) => {
     if (binding.revision !== revision) return;
@@ -315,41 +289,36 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
     binding.preparing = false;
   };
   /**
-   * A revision successor's launch, which holds its revision from its first step until it
-   * settles. Its admission commits the revision; a refusal leaves the binding, its request and
-   * its reviewed revision untouched.
+   * A revision successor's launch, which takes over the revision's hold as its first step and
+   * keeps it until it settles. That step runs when the launch effect runs (the mask callback is
+   * lazy), outside the run lock, so the hold changes hands before an abandoned revise call can
+   * release it; no locked section reads `launched` across a suspension. Its admission commits
+   * the revision; a refusal leaves the binding, its request and its reviewed revision untouched.
    */
   const launchSuccessor = (
-    request: StartSubagentRequest,
+    held: Succession,
     start: WorkspaceStart,
-    reuse: WorkspaceHandle,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.suspend(() => {
-        const succession = claimRevision(request, reuse);
-        if (!succession)
-          return Effect.fail(
-            invalid(
-              "workspace_owner_unavailable",
-              "The revision that requested this successor no longer holds its workspace.",
-            ),
-          );
-        return restore(launchWriter(request, start, succession)).pipe(
-          Effect.ensuring(withLock(Effect.sync(() => releaseRevisionLocked(succession)))),
+    Effect.uninterruptibleMask((restore) => {
+      if (held.binding.revision !== held.revision || held.revision.launched)
+        return Effect.fail(
+          invalid(
+            "workspace_owner_unavailable",
+            "The revision that requested this successor no longer holds its workspace.",
+          ),
         );
-      }),
-    );
+      held.revision.launched = true;
+      return restore(launchWriter(held.revision.successor, start, held)).pipe(
+        Effect.ensuring(withLock(Effect.sync(() => releaseRevisionLocked(held)))),
+      );
+    });
   const withLaunch = (
     request: StartSubagentRequest,
     start: WorkspaceStart,
-    options: LaunchOptions = {},
-  ): Effect.Effect<SubagentRunView, SubagentError> => {
-    if (request.writeIntent !== "writer")
-      return start({ ...request, workspace: undefined, writerWorkspaceMode: undefined });
-    return options.reuse
-      ? launchSuccessor(request, start, options.reuse)
-      : launchWriter(request, start);
-  };
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
+    request.writeIntent === "writer"
+      ? launchWriter(request, start)
+      : start({ ...request, workspace: undefined, writerWorkspaceMode: undefined });
   /**
    * Called under the run lock with every other resume check, at the claim. Refuses a writer that
    * no longer owns its workspace, and returns the commit that marks the reviewed revision stale
@@ -376,9 +345,7 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
       };
     });
   const revise =
-    (
-      start: (request: StartSubagentRequest, reuse: WorkspaceHandle) => ReturnType<WorkspaceStart>,
-    ) =>
+    (start: WorkspaceStart) =>
     (
       workspaceId: string,
       message: string,
@@ -390,12 +357,12 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
           if (!message.trim())
             return yield* invalid("message_required", "A revision request is required.");
           const reserved = yield* restore(
-            context.operations.withPermits(1)(
+            operations.withPermits(1)(
               withLock(
                 Effect.gen(function* () {
                   const binding = yield* requireBinding(workspaceId, caller);
                   if (binding.finished) return yield* workspaceFinishedError();
-                  const revision: WorkspaceRevision = {
+                  const revision: RevisionHold = {
                     successor: successorRequest(binding, message),
                     launched: false,
                   };
@@ -410,7 +377,10 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
               ),
             ),
           );
-          return yield* restore(start(reserved.revision.successor, reserved.binding.handle));
+          // The session owns the successor's launch, so abandoning this call cannot stop it.
+          return yield* restore(
+            runSessionOwned(ownerScope, Effect.void, () => launchSuccessor(reserved, start)),
+          );
         }).pipe(
           // Once the successor's launch has started, it holds the revision until it settles.
           Effect.ensuring(
@@ -422,11 +392,5 @@ export function makeWorkspaceLaunch(context: WorkspaceControlContext) {
           ),
         );
       });
-  return {
-    bind,
-    heldLaunchSlots,
-    withLaunch,
-    invalidateForResume,
-    revise,
-  };
+  return { bind, heldLaunchSlots, withLaunch, invalidateForResume, revise };
 }

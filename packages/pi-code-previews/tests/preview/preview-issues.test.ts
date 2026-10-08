@@ -1,6 +1,6 @@
-import { createReadToolDefinition, type Theme } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth } from "@earendil-works/pi-tui";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { failingTheme } from "pi-cosmic-core/testing";
 import { beforeEach, expect, test } from "vitest";
 import { previewIssuesSlot } from "../../index";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
@@ -79,21 +79,9 @@ test("argument warnings show before any result exists", () => {
   expect(order(harness.render(80))).toEqual(["HEADING", "RISKY", "CALL-CONTENT"]);
 });
 
-const hostile: Theme = opaqueFixture({
-  ...plainTheme,
-  fg: () => {
-    throw new Error("theme unavailable");
-  },
-});
+const hostile = failingTheme();
 
-test("a failing host theme still shows what went wrong", () => {
-  const harness = createToolPresentationHarness(tool(), { theme: hostile });
-  harness.call({ path: "a.ts" }, { executionStarted: true });
-  harness.result(textResult("failed"), { isError: true });
-  expect(order(harness.render(80))).toContain("PROBLEM");
-});
-
-test("a failing host theme keeps every issue line within the row width", () => {
+test("a failing host theme still shows every issue line within the row width", () => {
   const message = "The remote service rejected the request after retries";
   const narrow: CompactSummaryProvider = () => ({
     subject: "subject",
@@ -118,6 +106,9 @@ test("a failing host theme keeps every issue line within the row width", () => {
   }
   const text = harness.render(20).join(" ").replace(/\s+/gu, " ");
   for (const fact of [message, "first detail line", "detail line"]) expect(text).toContain(fact);
+  harness.call({ path: "a.ts" }, { executionStarted: true });
+  harness.result(textResult("failed"), { isError: true });
+  expect(harness.render(80).join(" ")).toContain(message);
 });
 
 test("animation ticks reuse the issues while the result's evidence is unchanged", () => {

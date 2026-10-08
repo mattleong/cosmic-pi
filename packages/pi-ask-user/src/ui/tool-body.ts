@@ -112,7 +112,7 @@ export function answersBody(
 }
 
 /** Agent-facing text under its label. Request IDs and agent procedures stay in here. */
-export const rawResultSection = (theme: Theme, text: string, isError: boolean): Component =>
+const rawResultSection = (theme: Theme, text: string, isError: boolean): Component =>
   expandedSection(
     theme,
     isError ? "Error" : "Raw result",

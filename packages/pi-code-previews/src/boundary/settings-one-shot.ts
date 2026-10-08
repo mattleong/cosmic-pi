@@ -5,11 +5,11 @@ import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
 import { CodePreviewSettingsService } from "../config/service";
 
+// A fresh Layer per run: each one-shot call owns its private settings Ref and scope.
 const oneShotSettingsLayer = () =>
   Layer.merge(
     CodePreviewSettingsService.layer.pipe(
-      Layer.provideMerge(AgentDirectory.layerFromHost(getAgentDir)),
-      Layer.provide(nodeFilePlatformLayer),
+      Layer.provide(Layer.merge(AgentDirectory.layerFromHost(getAgentDir), nodeFilePlatformLayer)),
     ),
     piHostLoggerLayer,
   );
@@ -19,10 +19,5 @@ export function runOneShotSettingsEffect<A, E>(
   effect: Effect.Effect<A, E, CodePreviewSettingsService>,
   signal?: AbortSignal,
 ): Promise<A> {
-  const program = Effect.scoped(
-    Effect.flatMap(Layer.build(oneShotSettingsLayer()), (services) =>
-      Effect.provide(effect, services),
-    ),
-  );
-  return Effect.runPromise(program, signal ? { signal } : undefined);
+  return Effect.runPromise(Effect.provide(effect, oneShotSettingsLayer()), { signal });
 }

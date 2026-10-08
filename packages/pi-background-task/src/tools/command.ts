@@ -4,11 +4,10 @@ import {
   truncateHead,
   truncateLine,
   truncateTail,
-  type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { sanitizeTerminalLine, countLabel } from "pi-cosmic-core";
+import { sanitizeTerminalLine, countLabel, utf8ByteLength } from "pi-cosmic-core";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import {
   discardedOutputText,
@@ -21,7 +20,6 @@ import {
 } from "../task/model.ts";
 import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import { BackgroundTaskService } from "../task/service.ts";
-import { utf8ByteLength } from "../task/utf8.ts";
 import {
   clearContract,
   combinedLogOutput,
@@ -35,17 +33,14 @@ import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
 
-/** The legacy text and persisted-details pair that Code Mode v1 and presentation consume. */
-export interface BackgroundTaskCommandResult {
+/**
+ * The model-facing text, persisted details, and version-1 machine-readable contract. All three
+ * projections come from the same original domain facts; the contract never reads the text or
+ * details.
+ */
+export interface BackgroundTaskContractResult {
   readonly text: string;
   readonly details: BackgroundTaskToolDetails;
-}
-
-/**
- * A command result plus its version-1 machine-readable contract. All three projections come from
- * the same original domain facts; the contract never reads the text or details.
- */
-export interface BackgroundTaskContractResult extends BackgroundTaskCommandResult {
   readonly contract: BackgroundTaskContract;
 }
 
@@ -65,7 +60,7 @@ const ERROR_PREFIX = "\n  error: ";
  * The agent's line for one task: identity, state, exit code and signal, then the command, with
  * any reported error on its own line beneath.
  */
-export const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
+const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
   const exit = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
   const signal = task.signal ? ` signal=${task.signal}` : "";
   const line = truncateLine(
@@ -96,7 +91,7 @@ interface TaskText {
 
 const CAUSE_PREFIX = "\n  cause: ";
 
-/** The persisted v1 snapshot. The in-memory cause travels only in the result text. */
+/** The persisted snapshot. The in-memory cause travels only in the result text. */
 const detailsSnapshot = ({
   failureCause: _cause,
   ...snapshot
@@ -121,6 +116,8 @@ const causeSpans = (text: string, causes: ReadonlyArray<CauseText>) => {
   return kept.length > 0 ? { causes: kept } : {};
 };
 
+const omittedMarker = (count: number) => `[${countLabel(count, "background task")} omitted]`;
+
 const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskStatus>, maxBytes: number): TaskText => {
   if (tasks.length === 0)
     return { text: boundedText("No background tasks.", maxBytes), causes: [] };
@@ -130,27 +127,19 @@ const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskStatus>, maxBytes: nu
   let length = 0;
   for (const [index, task] of tasks.entries()) {
     const separatorBytes = lines.length === 0 ? 0 : 1;
-    const block = withCause(formatBackgroundTask(task), task);
-    const line = block.text;
+    const { text: line, causes: lineCauses } = withCause(formatBackgroundTask(task), task);
     const lineBytes = utf8ByteLength(line);
     const omittedAfter = tasks.length - index - 1;
-    const markerAfter = `[${countLabel(omittedAfter, "background task")} omitted]`;
-    const reservedMarkerBytes = omittedAfter > 0 ? 1 + utf8ByteLength(markerAfter) : 0;
+    const reservedMarkerBytes =
+      omittedAfter > 0 ? 1 + utf8ByteLength(omittedMarker(omittedAfter)) : 0;
     if (used + separatorBytes + lineBytes + reservedMarkerBytes > maxBytes) {
-      const omitted = tasks.length - index;
-      const marker = `[${countLabel(omitted, "background task")} omitted]`;
-      const markerBytes = utf8ByteLength(marker);
-      if (used + separatorBytes + markerBytes <= maxBytes) lines.push(marker);
+      const marker = omittedMarker(tasks.length - index);
+      if (used + separatorBytes + utf8ByteLength(marker) <= maxBytes) lines.push(marker);
       break;
     }
     const offset = length + separatorBytes;
-    causes.push(
-      ...block.causes.map((span) => ({
-        ...span,
-        start: span.start + offset,
-        end: span.end + offset,
-      })),
-    );
+    for (const span of lineCauses)
+      causes.push({ ...span, start: span.start + offset, end: span.end + offset });
     lines.push(line);
     used += separatorBytes + lineBytes;
     length = offset + line.length;
@@ -167,41 +156,12 @@ const formatWait = (result: BackgroundTaskStatusWait): string => {
 
 const NO_NEW_OUTPUT = "(no new output)";
 
-/** The output a `logs` text keeps and how much of it that is. */
-type LogTail = Pick<TruncationResult, "content" | "outputBytes" | "outputLines">;
-const NO_TAIL: LogTail = { content: "", outputBytes: 0, outputLines: 0 };
-
-/**
- * The longest tail of `whole` that `fits` accepts. A longer tail never encodes smaller, so a
- * binary search over the byte bound finds it with a few cuts of the already bounded output.
- */
-const fittingTail = (whole: TruncationResult, fits: (tail: string) => boolean): LogTail => {
-  if (fits(whole.content)) return whole;
-  let best = NO_TAIL;
-  let low = 0;
-  let high = whole.outputBytes - 1;
-  while (low <= high) {
-    const maxBytes = Math.floor((low + high) / 2);
-    const candidate = truncateTail(whole.content, { maxLines: DEFAULT_MAX_LINES, maxBytes });
-    if (fits(candidate.content)) {
-      best = candidate;
-      low = maxBytes + 1;
-    } else high = maxBytes - 1;
-  }
-  return best;
-};
-
 /**
  * `content` is the slice's sanitized combined output, shared with its contract. The output is cut
- * once, from its oldest end, within what the metadata lines and `fits` leave of the text's bounds,
- * so the newest lines survive and the truncation fields describe exactly what the text holds.
+ * once, from its oldest end, within what the metadata lines leave of the text's bounds, so the
+ * newest lines survive and the truncation fields describe exactly what the text holds.
  */
-const formatLogs = (
-  slice: BackgroundLogSlice,
-  content: string,
-  maxBytes: number,
-  fits: (text: string) => boolean,
-) => {
+const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number) => {
   // `backgroundLogLines` reads this layout back: one metadata line, then the gap line, if any.
   const metadata = `[${slice.id} state=${slice.state} cursor=${slice.nextCursor} earliest=${slice.earliestAvailableCursor}]\n`;
   const gap = slice.droppedBytes > 0 ? `[${discardedOutputText(slice.droppedBytes)}]\n` : "";
@@ -212,22 +172,19 @@ const formatLogs = (
     maxLines: DEFAULT_MAX_LINES - (gap ? 2 : 1),
     maxBytes: Math.max(0, maxBytes - headerBytes),
   });
-  const tail =
-    headerBytes > maxBytes ? NO_TAIL : fittingTail(whole, (output) => fits(`${header}${output}`));
   return {
-    text: headerBytes > maxBytes ? boundedText(header, maxBytes) : `${header}${tail.content}`,
+    text: headerBytes > maxBytes ? boundedText(header, maxBytes) : `${header}${whole.content}`,
     // Five explicit fields: persisted details never store the truncated log text a second time.
-    truncation:
-      whole.truncated || tail !== whole
-        ? {
-            truncated: true,
-            outputBytes: tail.outputBytes,
-            totalBytes: whole.totalBytes,
-            // A tail cut to nothing holds no line, not one empty partial line.
-            outputLines: tail.content ? tail.outputLines : 0,
-            totalLines: whole.totalLines,
-          }
-        : undefined,
+    truncation: whole.truncated
+      ? {
+          truncated: true,
+          outputBytes: whole.outputBytes,
+          totalBytes: whole.totalBytes,
+          // A tail cut to nothing holds no line, not one empty partial line.
+          outputLines: whole.content ? whole.outputLines : 0,
+          totalLines: whole.totalLines,
+        }
+      : undefined,
   };
 };
 
@@ -252,17 +209,6 @@ const reply = (
   contract: BackgroundTaskContract,
 ): BackgroundTaskContractResult => ({ text, details, contract });
 
-/** The exact successful-start formatter used by execution and Code Mode admission. */
-export const backgroundTaskStartCommandResult = (
-  snapshot: BackgroundTaskStatus,
-  maxTextBytes: number,
-): BackgroundTaskContractResult =>
-  reply(
-    boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes),
-    { action: "start", snapshot: detailsSnapshot(snapshot) },
-    taskActionContract("start", snapshot),
-  );
-
 /** One task's result: its line (with any cause) bounded, and the details pointing at the cause. */
 const taskReply = (
   line: string,
@@ -280,30 +226,16 @@ const taskReply = (
   );
 };
 
-export interface BackgroundTaskCommandOptions {
-  readonly maxTextBytes?: number;
-  /** Optional nested-call barrier, evaluated after exact start normalization and before service.start. */
-  readonly startOutputFits?: (request: StartBackgroundTask, maxTextBytes: number) => boolean;
-  /**
-   * Optional nested-call bound on a `logs` result beyond `maxTextBytes`, such as its encoded
-   * envelope. The text keeps the newest output this accepts.
-   */
-  readonly logsTextFits?: (text: string, logs: BackgroundLogMetadata) => boolean;
-}
-
-const acceptAnyText = (): boolean => true;
-
-/** Shared action executor used by the top-level Pi tool and the explicit Code Mode adapter. */
+/**
+ * The `background_task` action executor. Text is bounded by Pi's default output size; tests pass
+ * a smaller `maxTextBytes` to exercise the same cuts.
+ */
 export const executeBackgroundTaskCommand = (
   input: BackgroundTaskToolInput,
   sessionCwd: string,
-  options: BackgroundTaskCommandOptions = {},
+  maxTextBytes = DEFAULT_MAX_BYTES,
 ) =>
   Effect.gen(function* () {
-    const maxTextBytes = Math.max(
-      0,
-      Math.min(DEFAULT_MAX_BYTES, options.maxTextBytes ?? DEFAULT_MAX_BYTES),
-    );
     const service = yield* BackgroundTaskService;
     const path = yield* Path.Path;
     switch (input.action) {
@@ -317,15 +249,12 @@ export const executeBackgroundTaskCommand = (
             timeoutSeconds: input.timeoutSeconds,
           }),
         };
-        if (options.startOutputFits && !options.startOutputFits(request, maxTextBytes)) {
-          return yield* new InvalidBackgroundCommandError({
-            message:
-              "Background task result exceeds the current Code Mode child-output allowance. " +
-              "Use a shorter command, name, or cwd and retry.",
-          });
-        }
         const snapshot = yield* service.start(request);
-        return backgroundTaskStartCommandResult(snapshot, maxTextBytes);
+        return reply(
+          boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes),
+          { action: "start", snapshot: detailsSnapshot(snapshot) },
+          taskActionContract("start", snapshot),
+        );
       }
       case "list": {
         const tasks = yield* service.list(input.state ?? "all");
@@ -359,13 +288,7 @@ export const executeBackgroundTaskCommand = (
         });
         const output = combinedLogOutput(slice.events);
         const { events: _events, ...logs } = slice;
-        const fits = options.logsTextFits;
-        const { text, truncation } = formatLogs(
-          slice,
-          output,
-          maxTextBytes,
-          fits ? (candidate) => fits(candidate, logs) : acceptAnyText,
-        );
+        const { text, truncation } = formatLogs(slice, output, maxTextBytes);
         return reply(
           text,
           { action: input.action, logs, ...(truncation && { truncation }) },

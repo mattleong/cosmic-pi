@@ -33,7 +33,7 @@ const DETAIL_RESULT_MAX_CHARS = 6_000;
 const PLACEHOLDER_DETAIL_MAX_CHARS = 4_096;
 
 /** What one agent's subagent has used so far, by its run id; undefined before it starts. */
-export type WorkflowAgentUsage = (runId: string) => SubagentUsage | undefined;
+type WorkflowAgentUsage = (runId: string) => SubagentUsage | undefined;
 
 const clipLog = (text: string): string => clipText(text, WORKFLOW_LOG_LINE_MAX_CHARS);
 

@@ -1,5 +1,5 @@
 import { managerActivityLabel } from "../manager/chrome.ts";
-import { isFinished } from "./model.ts";
+import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
 
 /** Roles and reasons come from producers, never from provider identity or display text. */
@@ -7,6 +7,9 @@ export function activityAttention(item: ActivityItem): "user" | "parent" | "bloc
   if (item.status === "needs-input") return item.inputTarget;
   return item.status === "blocked" ? "blocked" : undefined;
 }
+
+export const needsYou = (rows: readonly ActivityRow[]): readonly ActivityRow[] =>
+  rows.filter((row) => activityAttention(row) === "user");
 
 const blockedLabels = {
   "parent-review": "parent needs to review",
@@ -33,12 +36,10 @@ export const activityQueued = (item: ActivityItem): boolean =>
 export function activityStatus(item: ActivityItem): string {
   // A planned item that ended never ran; its producer no longer intends to start it.
   if (activityPlanned(item)) return isFinished(item) ? "not run" : "planned";
-  const attention = activityAttention(item);
-  if (attention === "user") return "waiting for you";
-  if (attention === "parent") return "waiting for parent";
+  if (item.status === "needs-input")
+    return item.inputTarget === "user" ? "waiting for you" : "waiting for parent";
   if (item.status === "blocked")
     return item.blockedReason ? blockedLabels[item.blockedReason] : "blocked";
-  if (item.status === "needs-input") return managerActivityLabel("waiting");
   if (item.status === "cancelled")
     return item.kind === "question"
       ? "cancelled"
@@ -69,17 +70,17 @@ export function activityAttentionCounts(item: ActivityItem): ActivityAttentionCo
   };
 }
 
-export function activityAttentionTotals(items: readonly ActivityItem[]): ActivityAttentionCounts {
-  const total = { user: 0, parent: 0, blocked: 0, failed: 0 };
-  for (const item of items) {
-    const counts = activityAttentionCounts(item);
-    total.user += counts.user;
-    total.parent += counts.parent;
-    total.blocked += counts.blocked;
-    total.failed += counts.failed;
-  }
-  return total;
-}
+/** Adds `right` to `left`, or subtracts it with a `sign` of -1. */
+export const addAttention = (
+  left: ActivityAttentionCounts,
+  right: ActivityAttentionCounts,
+  sign = 1,
+): ActivityAttentionCounts => ({
+  user: left.user + sign * right.user,
+  parent: left.parent + sign * right.parent,
+  blocked: left.blocked + sign * right.blocked,
+  failed: left.failed + sign * right.failed,
+});
 
 export const activityAttentionLabels = (counts: ActivityAttentionCounts): string[] =>
   [

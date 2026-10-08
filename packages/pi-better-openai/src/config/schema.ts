@@ -25,31 +25,20 @@ export interface ResolvedConfig extends ScopedConfigMetadata {
   };
 }
 
-type OptionalFields<T> = { readonly [K in keyof T]?: T[K] | undefined };
-export type UsageConfig = OptionalFields<ResolvedConfig["usage"]>;
-export type ImageConfig = OptionalFields<ResolvedConfig["image"]>;
-export type ConfigFile = OptionalFields<Pick<ResolvedConfig, "persistState" | "desiredActive">> & {
-  /** Legacy fast-mode state retained for tolerant reads and compatibility writes. */
-  readonly active?: boolean | undefined;
-  readonly usage?: UsageConfig | undefined;
-  readonly compaction?: OptionalFields<ResolvedConfig["compaction"]> | undefined;
-  readonly image?: ImageConfig | undefined;
-};
-
-export const DEFAULT_USAGE_CONFIG: ResolvedConfig["usage"] = {
+export const DEFAULT_USAGE_CONFIG = {
   refreshIntervalMs: 60_000,
   showOnlyOnSubscriptionModels: true,
   showResetTimes: true,
-};
-export const DEFAULT_COMPACTION_CONFIG: ResolvedConfig["compaction"] = { enabled: false };
-export const DEFAULT_IMAGE_CONFIG: ResolvedConfig["image"] = {
+} satisfies ResolvedConfig["usage"];
+export const DEFAULT_COMPACTION_CONFIG = { enabled: false } satisfies ResolvedConfig["compaction"];
+export const DEFAULT_IMAGE_CONFIG = {
   enabled: true,
   defaultModel: "gpt-5.5",
   defaultSave: "project",
   outputFormat: "png",
   timeoutMs: 180_000,
-};
-export const DEFAULT_CONFIG: ConfigFile = {
+} satisfies ResolvedConfig["image"];
+export const DEFAULT_CONFIG = {
   persistState: true,
   active: false,
   desiredActive: false,

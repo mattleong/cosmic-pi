@@ -22,8 +22,6 @@ interface FastModeServiceOptions {
   readonly canPublish?: () => boolean;
 }
 
-type FastInitializationConfig = Pick<ResolvedConfig, "persistState" | "desiredActive">;
-
 export class FastModeService extends Context.Service<FastModeService>()(
   "pi-better-openai/fast/service/FastModeService",
   {
@@ -65,32 +63,32 @@ export class FastModeService extends Context.Service<FastModeService>()(
               lastInjectedTier: event.tier,
             })),
         }).pipe(Effect.orDie);
-        const transition = (ctx: ExtensionContext, desiredActive: boolean) =>
-          persistTransition((current) => ({
+        const desire =
+          (ctx: ExtensionContext, desiredActive: boolean) => (current: FastSnapshot) => ({
             ...current,
             desiredActive,
             active: desiredActive && supportsFast(ctx),
-          }));
+          });
 
         return {
           recordInjection: (event: FastInjectionEvent): void => {
             ingress.offer(event);
           },
+          // Startup writes only when --fast changes the persisted intent it was resolved from.
           initialize: (
             ctx: ExtensionContext,
-            config: FastInitializationConfig,
+            config: Pick<ResolvedConfig, "persistState" | "desiredActive">,
             flagActive: boolean,
           ) => {
-            const desiredActive =
-              flagActive || (config.persistState ? config.desiredActive : false);
-            return transition(ctx, desiredActive);
+            const persisted = config.persistState && config.desiredActive;
+            const update = desire(ctx, flagActive || persisted);
+            return flagActive && !persisted ? persistTransition(update) : commitInMemory(update);
           },
-          setDesired: transition,
+          setDesired: (ctx: ExtensionContext, desiredActive: boolean) =>
+            persistTransition(desire(ctx, desiredActive)),
+          // A model switch changes only derived state; the persisted intent is unchanged.
           modelChanged: (ctx: ExtensionContext) =>
-            persistTransition((current) => ({
-              ...current,
-              active: current.desiredActive && supportsFast(ctx),
-            })),
+            commitInMemory((current) => desire(ctx, current.desiredActive)(current)),
         };
       }),
   },

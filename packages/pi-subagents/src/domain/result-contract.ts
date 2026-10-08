@@ -46,9 +46,7 @@ export interface ResultContract {
 }
 
 const isObjectRooted = (schema: JsonRecord): boolean =>
-  schema.type === "object" &&
-  schema.properties !== undefined &&
-  Option.isSome(decodeJsonRecord(schema.properties));
+  schema.type === "object" && Option.isSome(decodeJsonRecord(schema.properties));
 
 /** The schema a result value itself must match, before any wrapping for the tool parameters. */
 export const resultValueSchema = (contract: ResultContract): Schema.Json =>

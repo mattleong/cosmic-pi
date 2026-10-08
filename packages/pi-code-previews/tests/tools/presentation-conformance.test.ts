@@ -6,7 +6,10 @@ import {
   createToolPresentationHarness,
   withPresentationSettings,
 } from "../../testing";
-import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
+import {
+  withCodePreviewShell,
+  type CodePreviewShellOptions,
+} from "../../src/tools/cooperative-tools";
 import type { CompactIssue } from "../../src/tools/compact-issues";
 import type { CompactSummary } from "../../src/tools/compact-summary";
 import { failingRenderer, stripAnsi, textResult } from "../support/render";
@@ -28,6 +31,17 @@ const inOrder = (text: string, phrases: readonly string[]) => {
 };
 /** The collapsed heading row of the first rendered state. */
 const heading = (texts: string[]) => texts[0]!.split("\n")[0];
+const textRenderer = (label: string) => () => new Text(label, 0, 0);
+/** The builtin read definition with these original renderers, inside the cooperative shell. */
+const readShell = (
+  renderCall: () => Component,
+  renderResult: () => Component,
+  options: CodePreviewShellOptions,
+) =>
+  withCodePreviewShell(
+    { ...createReadToolDefinition("/project"), renderCall, renderResult },
+    options,
+  );
 
 test.each(modes)(
   "content callbacks follow the heading and issues, with every issue once, in %s mode",
@@ -96,14 +110,10 @@ test.each(modes)(
 
 test.each(modes)("Pi errors reconcile with the provider's classification in %s mode", (mode) => {
   const row = (summary: CompactSummary, isError: boolean) => {
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("ORIGINAL CALL", 0, 0),
-        renderResult: () => new Text("ORIGINAL RESULT", 0, 0),
-      },
-      { mode, compactSummary: () => summary },
-    );
+    const tool = readShell(textRenderer("ORIGINAL CALL"), textRenderer("ORIGINAL RESULT"), {
+      mode,
+      compactSummary: () => summary,
+    });
     const h = createToolPresentationHarness(tool, { width: 120 });
     const failure = textResult("FIRST ERROR LINE\nsecond error line");
     return h
@@ -138,21 +148,14 @@ test("issue text wraps without clipping at narrow widths in every frame", () => 
   const message = "日本語 cleanup-is-unconfirmed for the remote operation";
   const detail = "Inspect 文字 state before retrying the operation";
   for (const mode of modes) {
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("call", 0, 0),
-        renderResult: () => new Text("result", 0, 0),
-      },
-      {
-        mode,
-        compactSummary: () => ({
-          subject: "src/" + "nested/".repeat(10) + "file.ts",
-          outcome: "warning",
-          issues: [{ severity: "warning", code: "cleanup", message, detail }],
-        }),
-      },
-    );
+    const tool = readShell(textRenderer("call"), textRenderer("result"), {
+      mode,
+      compactSummary: () => ({
+        subject: "src/" + "nested/".repeat(10) + "file.ts",
+        outcome: "warning",
+        issues: [{ severity: "warning", code: "cleanup", message, detail }],
+      }),
+    });
     const h = createToolPresentationHarness(tool);
     for (const expanded of [false, true]) {
       h.call({ path: "file" }, { expanded });
@@ -186,23 +189,16 @@ test.each(modes)("parent timing has one owner across expansion and fallback in %
       showTiming: true,
       ...(failure && { issues: [issue] }),
     };
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("arguments", 0, 0),
-        renderResult: () => new Text("output", 0, 0),
-      },
-      {
-        mode,
-        compactSummary: () => summary,
-        ...(!path.startsWith("original") && {
-          expandedContent: {
-            renderCall: () => new Text("complete arguments", 0, 0),
-            renderResult: failingRenderer(path, ["complete output"]),
-          },
-        }),
-      },
-    );
+    const tool = readShell(textRenderer("arguments"), textRenderer("output"), {
+      mode,
+      compactSummary: () => summary,
+      ...(!path.startsWith("original") && {
+        expandedContent: {
+          renderCall: textRenderer("complete arguments"),
+          renderResult: failingRenderer(path, ["complete output"]),
+        },
+      }),
+    });
     for (const timing of [true, false]) {
       withPresentationSettings({ toolCallTiming: timing }, () => {
         const h = createToolPresentationHarness(tool, {
@@ -255,12 +251,9 @@ test("partial content hooks retain the other slot and malformed-to-valid switche
     const content = new Text("NEW CONTENT", 0, 0);
     const oldCall = new Text("ORIGINAL CALL", 0, 0);
     const oldResult = new Text("ORIGINAL RESULT", 0, 0);
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => oldCall,
-        renderResult: () => oldResult,
-      },
+    const tool = readShell(
+      () => oldCall,
+      () => oldResult,
       {
         mode: "off",
         compactSummary: () => (valid ? { subject: "target", outcome: "success" } : undefined),
@@ -294,25 +287,18 @@ test("partial content hooks retain the other slot and malformed-to-valid switche
 
 test("content construction or drawing failure falls back in that slot and keeps issues once", () => {
   for (const failure of ["none", "factory", "draw"] as const) {
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("ORIGINAL CALL", 0, 0),
-        renderResult: () => new Text("ORIGINAL RESULT", 0, 0),
+    const tool = readShell(textRenderer("ORIGINAL CALL"), textRenderer("ORIGINAL RESULT"), {
+      mode: "off",
+      compactSummary: () => ({
+        subject: "read result",
+        outcome: "error",
+        issues: [issue, { severity: "info", code: "page", message: "Continue with next page" }],
+      }),
+      expandedContent: {
+        renderCall: textRenderer("unique call"),
+        renderResult: failingRenderer(failure, ["content output"]),
       },
-      {
-        mode: "off",
-        compactSummary: () => ({
-          subject: "read result",
-          outcome: "error",
-          issues: [issue, { severity: "info", code: "page", message: "Continue with next page" }],
-        }),
-        expandedContent: {
-          renderCall: () => new Text("unique call", 0, 0),
-          renderResult: failingRenderer(failure, ["content output"]),
-        },
-      },
-    );
+    });
     const h = createToolPresentationHarness(tool);
     h.call({ path: "file" }, { expanded: true });
     h.result(result, { expanded: true });
@@ -345,12 +331,9 @@ test.each(modes)("drawing failures fall back only in the failed slot in %s mode"
         invalidate() {},
       };
     };
-    const tool = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: slot("call", "unique original call"),
-        renderResult: slot("result", "unique original result"),
-      },
+    const tool = readShell(
+      slot("call", "unique original call"),
+      slot("result", "unique original result"),
       {
         mode,
         compactSummary: () => ({ subject: "file", outcome: "error", issues: [issue] }),
@@ -401,18 +384,11 @@ test.each(["factory", "draw"] as const)(
             invalidate() {},
           };
         };
-        const tool = withCodePreviewShell(
-          {
-            ...createReadToolDefinition("/project"),
-            renderCall: () => new Text("Unique arguments", 0, 0),
-            renderResult,
-          },
-          {
-            mode: "off",
-            compactSummary: () => ({ subject: "file", outcome: "error", issues: [issue] }),
-            ...(contentOnly && { expandedContent: { renderResult } }),
-          },
-        );
+        const tool = readShell(textRenderer("Unique arguments"), renderResult, {
+          mode: "off",
+          compactSummary: () => ({ subject: "file", outcome: "error", issues: [issue] }),
+          ...(contentOnly && { expandedContent: { renderResult } }),
+        });
         const h = createToolPresentationHarness(tool);
         const args = { path: "file" };
         h.call(args, { expanded: true });

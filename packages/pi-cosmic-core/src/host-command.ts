@@ -7,7 +7,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { notifyAtHostBoundary } from "./host-session.ts";
 
 /** One autocomplete choice; `value` replaces the whole argument text. */
-export interface CommandCompletion {
+interface CommandCompletion {
   readonly value: string;
   readonly label: string;
   readonly description?: string;
@@ -23,13 +23,13 @@ export interface ExtensionSubcommand {
   readonly handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
 }
 
-export interface ExtensionCommandBare {
+interface ExtensionCommandBare {
   readonly handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
   /** Also receives arguments that name no subcommand, such as a prompt. */
   readonly text?: boolean | undefined;
 }
 
-export interface ExtensionCommandOptions {
+interface ExtensionCommandOptions {
   /** The command name without its slash, such as `openai`. */
   readonly name: string;
   readonly description: string;
@@ -46,7 +46,7 @@ export interface ExtensionCommand {
   readonly add: (subcommand: ExtensionSubcommand) => void;
 }
 
-export type ExtensionCommandRoute =
+type ExtensionCommandRoute =
   | { readonly _tag: "Bare"; readonly args: string }
   | { readonly _tag: "Subcommand"; readonly subcommand: ExtensionSubcommand; readonly args: string }
   | { readonly _tag: "Overview" }
@@ -91,7 +91,7 @@ export const completeExtensionCommand = (
 };
 
 /** The bare-command overview: each subcommand with its arguments and description. */
-export const extensionCommandOverview = (
+const extensionCommandOverview = (
   name: string,
   description: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
@@ -105,7 +105,7 @@ export const extensionCommandOverview = (
   ].join("\n");
 
 /** The usage line for arguments that name no subcommand; brackets mark an optional one. */
-export const extensionCommandUsage = (
+const extensionCommandUsage = (
   name: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
   bare?: ExtensionCommandBare,
@@ -131,29 +131,22 @@ export function registerExtensionCommand(
   const subcommands = new Map<string, ExtensionSubcommand>();
   for (const subcommand of options.subcommands ?? []) subcommands.set(subcommand.name, subcommand);
   const list = () => [...subcommands.values()];
-  pi.registerCommand(options.name, {
-    description: options.description,
+  const { name, description, bare } = options;
+  pi.registerCommand(name, {
+    description,
     getArgumentCompletions: (prefix) => completeExtensionCommand(prefix, list()),
     handler: (args, ctx) => {
-      const route = routeExtensionCommand(args, list(), options.bare);
+      const route = routeExtensionCommand(args, list(), bare);
       switch (route._tag) {
         case "Bare":
-          return settle(() => options.bare?.handler(route.args, ctx));
+          return settle(() => bare?.handler(route.args, ctx));
         case "Subcommand":
           return settle(() => route.subcommand.handler(route.args, ctx));
         case "Overview":
-          notifyAtHostBoundary(
-            ctx,
-            extensionCommandOverview(options.name, options.description, list()),
-            "info",
-          );
+          notifyAtHostBoundary(ctx, extensionCommandOverview(name, description, list()), "info");
           return Promise.resolve();
         case "Unknown":
-          notifyAtHostBoundary(
-            ctx,
-            extensionCommandUsage(options.name, list(), options.bare),
-            "warning",
-          );
+          notifyAtHostBoundary(ctx, extensionCommandUsage(name, list(), bare), "warning");
           return Promise.resolve();
       }
     },

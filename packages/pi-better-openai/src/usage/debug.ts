@@ -11,18 +11,12 @@ export function formatDebug(
 ): string {
   const state = MutableRef.get(projection);
   const cfg = state.config;
-  return formatUsageDebugReport({
+  return formatUsageDebugReport(state, {
     currentModel: currentModelKey(ctx),
-    eligible: state.eligible,
     requiresSubscriptionModel: cfg?.usage.showOnlyOnSubscriptionModels ?? true,
-    auth: state.authFound ? "found" : "missing",
     identityLabel: "Account ID",
     identityValue: state.accountId,
-    lastFetchAt: state.lastFetchAt,
-    updatedAt: state.updatedAt,
-    error: state.error,
     refreshIntervalMs: cfg?.usage.refreshIntervalMs ?? 60_000,
     endpoint: USAGE_URL,
-    authPath: state.authPath,
   });
 }

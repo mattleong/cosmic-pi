@@ -37,12 +37,16 @@ import {
   type ChildProcessHandle,
   type ChildWireEvent,
 } from "../../../src/boundary/child-process.ts";
+import type { ProcessExit } from "../../../src/boundary/process-transport.ts";
 import { SubagentProcessError } from "../../../src/run/errors.ts";
 import type {
   StartSubagentRequest,
+  SteeringDeliveryState,
   SubagentProjection,
   SubagentRunView,
 } from "../../../src/run/model.ts";
+import type { ProfileRouteContinuation } from "../../../src/profiles/model.ts";
+import { profileCandidate } from "../../fixtures/profiles.ts";
 import type { SubagentNotification } from "../../../src/boundary/host-notifier.ts";
 import {
   SubagentService,
@@ -67,12 +71,12 @@ export const withService = <Eff extends Effect.Effect<any, any, any>, A, ROut, L
 
 /**
  * Awaits runs the way the await tool does: through the public observation API, consuming the
- * completion reports it observed. Resolves to the observed runs.
+ * completion reports it observed. Resolves to the observations.
  */
-export const awaitRuns = (
+export const awaitObservations = (
   service: SubagentServiceContract,
   ids: ReadonlyArray<string>,
-  until: SubagentAwaitUntil,
+  until: SubagentAwaitUntil = "all_finished",
   onUpdate?: (
     runs: ReadonlyArray<SubagentRunView>,
     projection?: ReadonlyArray<SubagentRunView>,
@@ -85,7 +89,13 @@ export const awaitRuns = (
           observation.completionReceipt ? [observation.completionReceipt] : [],
         ),
       )
-      .pipe(Effect.as(observations.map((observation) => observation.run))),
+      .pipe(Effect.as(observations)),
+  );
+
+/** `awaitObservations`, resolving to the observed runs. */
+export const awaitRuns = (...args: Parameters<typeof awaitObservations>) =>
+  awaitObservations(...args).pipe(
+    Effect.map((observations) => observations.map((observation) => observation.run)),
   );
 
 export const waitForCompleted = (service: SubagentServiceContract, id: string) =>
@@ -282,10 +292,7 @@ export function fakeChildLayer(
           const spawnIndex = nextSpawnIndex++;
           yield* beforeSpawn;
           const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
-          const exited = yield* Deferred.make<
-            Extract<ChildWireEvent, { readonly type: "exit" }>,
-            SubagentProcessError
-          >();
+          const exited = yield* Deferred.make<ProcessExit, SubagentProcessError>();
           const commands: RpcCommand[] = [];
           const ipc: LocalPiParentControl[] = [];
           const terminations: Array<"graceful" | "force"> = [];
@@ -387,10 +394,7 @@ export function fakeChildLayer(
             Queue.offerUnsafe(events, { type: "protocol_error", message });
           const exit: FakeChildControl["exit"] = (exitCode = 0, diagnostic = {}) => {
             Queue.endUnsafe(events);
-            Deferred.doneUnsafe(
-              exited,
-              Effect.succeed({ type: "exit", exitCode, stderr: "", ...diagnostic }),
-            );
+            Deferred.doneUnsafe(exited, Effect.succeed({ exitCode, stderr: "", ...diagnostic }));
           };
           const failExit = (message: string) => {
             Queue.endUnsafe(events);
@@ -402,6 +406,7 @@ export function fakeChildLayer(
           const handle: ChildProcessHandle = {
             pid: 10_000 + controls.length,
             events,
+            acknowledge: () => {},
             awaitExit: Deferred.await(exited),
             send: (command) =>
               Effect.gen(function* () {
@@ -532,23 +537,11 @@ export const profileLayerFor = <Global>(global: Global) =>
   );
 
 /** Calls the writer-lease fake received, counted before any injected failure. */
-export interface WriterLeaseCounts {
-  canonicalize: number;
-  acquire: number;
-  mark: number;
-  release: number;
-}
-
-export const leaseCounts = (): WriterLeaseCounts => ({
-  canonicalize: 0,
-  acquire: 0,
-  mark: 0,
-  release: 0,
-});
+export const leaseCounts = () => ({ canonicalize: 0, acquire: 0, mark: 0, release: 0 });
 
 export function fakeWriterLeaseLayer(
   options: {
-    readonly counts?: WriterLeaseCounts | undefined;
+    readonly counts?: ReturnType<typeof leaseCounts> | undefined;
     readonly platform?: NodeJS.Platform | undefined;
     readonly canonicalize?: ((cwd: string) => string) | undefined;
     readonly filesystemIdentity?: ((cwd: string, canonicalPath: string) => string) | undefined;
@@ -640,7 +633,7 @@ export function fakeWriterLeaseLayer(
   });
 }
 
-export const localPiBackendRegistryLayer = Layer.effect(
+const localPiBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
   ChildProcess.use((childProcesses) =>
     Effect.succeed(makeSubagentBackendRegistry([makeLocalPiBackendDriver(childProcesses)])),
@@ -690,8 +683,6 @@ export function fakeNativeReportBackendLayer(
     readonly interruptGate?: Deferred.Deferred<void, never> | undefined;
     readonly onInterruptStarted?: (() => void) | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
-    /** Models a backend without an OS process id, whose cleanup changes no published field. */
-    readonly omitPid?: boolean | undefined;
     /** Holds every backend release until opened. */
     readonly releaseGate?: Deferred.Deferred<void, never> | undefined;
     /** Hands back continuation state, so a closed run can resume in a new process. */
@@ -745,7 +736,7 @@ export function fakeNativeReportBackendLayer(
           launches.push(launch);
           return {
             handle: {
-              ...(!options.omitPid && { pid: 22_001 }),
+              pid: 22_001,
               events,
               awaitExit: Effect.never,
               controls: {
@@ -870,11 +861,29 @@ export const assistantMessageEndFrame = (text: string) =>
     },
   }) as const;
 
+export const inputDeliveryFrame = (
+  assignmentEpoch: number,
+  sequence: number,
+  state: SteeringDeliveryState,
+): BackendEvent => ({ type: "input_delivery", assignmentEpoch, sequence, state });
+
 export const contactParentFrame = (
   requestId: string,
   kind: "progress" | "warning" | "question",
   message: string,
 ): IpcWireValue => ({ channel: "pi-subagents", type: "contact_parent", requestId, kind, message });
+
+/** Offers a blocking child question, then waits until the newest run waits for its parent. */
+export const askParent = (
+  control: FakeChildControl,
+  projections: ReadonlyArray<SubagentProjection>,
+  requestId: string,
+  message = "Which answer?",
+) =>
+  Effect.gen(function* () {
+    control.offerIpc(contactParentFrame(requestId, "question", message));
+    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+  });
 
 export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({
   host: "local",
@@ -897,11 +906,16 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
 });
 
 export const nativeReportRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
-  request({
-    host: "local",
-    runtime: "claude",
-    closeOnReport: true,
-    model: "claude-native",
-    effortWasExplicit: false,
-    ...overrides,
-  });
+  request({ runtime: "claude", model: "claude-native", effortWasExplicit: false, ...overrides });
+
+/** A reviewer route over two local Pi candidates, selected at `selectedCandidateIndex`. */
+export const reviewerContinuation = (
+  selectedCandidateIndex: number,
+  skippedCandidates: ProfileRouteContinuation["skippedCandidates"] = [],
+): ProfileRouteContinuation => ({
+  profile: "reviewer",
+  routeSource: "global",
+  candidates: [profileCandidate("openai-codex/gpt-5.6-sol"), profileCandidate("parent")],
+  selectedCandidateIndex,
+  skippedCandidates,
+});

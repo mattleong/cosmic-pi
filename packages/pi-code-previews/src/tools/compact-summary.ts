@@ -1,6 +1,5 @@
-import type { CompactIssue } from "./compact-issues";
-import { compactIssueSeverity } from "./compact-issues";
-import { isSafeCompactSummary } from "./compact-summary-schema";
+import { compactIssueSeverity, type CompactIssue } from "./compact-issues";
+import { isSafeCompactSummary, type CompactOutcomeSchema } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
 import { failureMessage } from "pi-cosmic-core";
@@ -16,13 +15,7 @@ export type CompactPhase = "pending" | "running" | "settled";
  * `returned` is a neutral delivery outcome: the call settled without an error, but its
  * producer does not assert that the operation succeeded. Issues still raise its status.
  */
-export type CompactOutcome =
-  | "success"
-  | "returned"
-  | "warning"
-  | "error"
-  | "cancelled"
-  | "uncertain";
+export type CompactOutcome = typeof CompactOutcomeSchema.Type;
 export type CompactStatus = Exclude<CompactPhase, "settled"> | CompactOutcome;
 
 /** One nested dispatch. `returned` confirms delivery, not semantic operation success. */
@@ -108,14 +101,16 @@ export function resolveCompactSummary(
   return {
     ...summary,
     outcome: "error",
-    issues: [
-      {
-        severity: "error",
-        code: "tool-error",
-        message: failureMessage(errorText, "The tool reported an error"),
-      },
-      ...(summary.issues ?? []),
-    ],
+    issues: [toolErrorIssue(errorText), ...(summary.issues ?? [])],
+  };
+}
+
+/** An unclassified Pi error, explained by the first line of its text. */
+export function toolErrorIssue(errorText: string): CompactIssue {
+  return {
+    severity: "error",
+    code: "tool-error",
+    message: failureMessage(errorText, "The tool reported an error"),
   };
 }
 

@@ -49,7 +49,7 @@ describe("background task activity provider", () => {
       )!;
       expect(finished.actions?.find((action) => action.id === "clear")?.confirmation).toBeTruthy();
       const invoke = transport.capability()!.invoke!;
-      const signal = new AbortController().signal;
+      const signal = yield* Effect.abortSignal;
       yield* Effect.promise(() => invoke("finished", "clear", finished.revision, signal));
       expect(bridge.get().tasks).toEqual([task]);
       yield* Effect.promise(() =>
@@ -105,6 +105,7 @@ describe("background task activity provider", () => {
       bridge,
       isCurrent: () => true,
       stop: () => Promise.resolve(),
+      clear: () => Promise.resolve(),
     });
     // The host rejects an oversized snapshot outright, which would hide every row.
     const published = Schema.decodeUnknownSync(ActivitySnapshotSchema)(transport.get()?.items);
@@ -180,6 +181,7 @@ describe("background task activity provider", () => {
           bridge,
           isCurrent: () => current,
           stop,
+          clear: () => Promise.resolve(),
         });
         transport.events.emit(ACTIVITY_HOST, {
           version: 1,

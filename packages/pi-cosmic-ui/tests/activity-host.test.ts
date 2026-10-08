@@ -20,15 +20,13 @@ import {
   type ActivityItem,
   type ActivityProviderOptions,
 } from "../src/activity/protocol.ts";
-import {
-  ActivityService,
-  type ActivityError,
-  type ActivityServiceContract,
-} from "../src/activity/service.ts";
+import type { ActivityRow } from "../src/activity/model.ts";
+import type { ActivityError, ActivityServiceContract } from "../src/activity/service.ts";
 import { makeActivityHost } from "../src/boundary/host-activity.ts";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { screenViewport } from "../src/manager/viewport.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
+import { connectedActivityService } from "./support/activity.ts";
 import { eventBus } from "./support/host.ts";
 import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
 
@@ -80,23 +78,32 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
       notify() {},
     },
   });
+  // The latest publication of any service; a replaced service publishes nothing more.
+  // Services keep the hooks they published through; tests drive the display clock by hand.
+  let rows: readonly ActivityRow[] = [];
+  const ticks = new Map<ActivityServiceContract, (now: number) => void>();
   const service = () =>
     Effect.gen(function* () {
-      let connected: ActivityServiceContract | undefined;
-      const value = yield* ActivityService.make({
-        publish: (rows, starting) => {
-          if (connected) host.publish(connected, rows, starting);
-        },
-        connect: (current) => {
-          connected = current;
-          return host.bind(current);
-        },
+      const hooks = host.serviceOptions();
+      const value = yield* connectedActivityService(hooks, (next) => {
+        rows = next;
       });
+      ticks.set(value, hooks.tick);
       return value;
     });
   const drain = () =>
     Effect.gen(function* () {
       while (work.length) yield* work.shift()!.pipe(Effect.ignore);
+    });
+  /** Opens the manager on its surface and returns the opening fiber with the mounted manager. */
+  const openManager = () =>
+    Effect.gen(function* () {
+      const open = yield* host.open(ctx).pipe(Effect.forkScoped({ startImmediately: true }));
+      surface.mount();
+      const component = surface.overlays[0];
+      if (!(component instanceof ActivityComponent))
+        throw new Error("Activity manager not mounted");
+      return { open, component };
     });
   return {
     bus,
@@ -113,7 +120,10 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     surface,
     envelopes: () => emitted.filter(({ name }) => name === ACTIVITY_EVENT).map(({ data }) => data),
     service,
+    rows: () => rows,
+    tick: (service: ActivityServiceContract, now: number) => ticks.get(service)?.(now),
     drain,
+    openManager,
     mountWidget,
     renderWidget: () => mountedWidget?.render(80) ?? [],
     resizeWidget: (rows: number) => {
@@ -139,7 +149,7 @@ describe("activity host lifecycle", () => {
       });
       yield* fixture.drain();
       const redraws = fixture.redraws();
-      fixture.host.tick(service, SPINNER_FRAME_MS);
+      fixture.tick(service, SPINNER_FRAME_MS);
       expect(fixture.redraws()).toBeGreaterThan(redraws);
       fixture.resizeWidget(60);
       for (const phase of phases)
@@ -177,13 +187,7 @@ describe("activity host lifecycle", () => {
         },
       });
       yield* fixture.drain();
-      const open = yield* fixture.host
-        .open(fixture.ctx)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      fixture.surface.mount();
-      const component = fixture.surface.overlays[0];
-      if (!(component instanceof ActivityComponent))
-        throw new Error("Activity manager not mounted");
+      const { open, component } = yield* fixture.openManager();
       component.render(120);
       expect(component.shell.state.selectedId).toBe(activityKey("agents", "flow"));
       component.handleInput("x");
@@ -228,11 +232,7 @@ describe("activity host lifecycle", () => {
         },
       });
       yield* fixture.drain();
-      yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped({ startImmediately: true }));
-      fixture.surface.mount();
-      const component = fixture.surface.overlays[0];
-      if (!(component instanceof ActivityComponent))
-        throw new Error("Activity manager not mounted");
+      const { component } = yield* fixture.openManager();
       component.render(120);
       component.handleInput("x");
       revision = "2";
@@ -276,19 +276,19 @@ describe("activity host lifecycle", () => {
       const provider = fixture.register({ snapshot: () => [], starting: () => starting });
       fixture.host.activate(fixture.ctx, service);
       yield* fixture.drain();
-      fixture.host.tick(service, 0);
+      fixture.tick(service, 0);
       const first = fixture.renderWidget();
       expect(first).toHaveLength(1);
-      expect(yield* service.snapshot).toEqual([]);
+      expect(fixture.rows()).toEqual([]);
       starting = 3;
       provider.publish();
       yield* fixture.drain();
       expect(fixture.renderWidget()).toEqual(first);
       const beforeTick = fixture.redraws();
-      fixture.host.tick(service, SPINNER_FRAME_MS);
+      fixture.tick(service, SPINNER_FRAME_MS);
       expect(fixture.redraws()).toBeGreaterThan(beforeTick);
       expect(fixture.renderWidget()).not.toEqual(first);
-      fixture.host.tick(service, 0);
+      fixture.tick(service, 0);
       starting = -1;
       provider.publish();
       yield* fixture.drain();
@@ -302,11 +302,11 @@ describe("activity host lifecycle", () => {
       yield* fixture.drain();
       expect(fixture.renderWidget()).toEqual([]);
       const afterRevoke = fixture.redraws();
-      fixture.host.tick(service, SPINNER_FRAME_MS);
+      fixture.tick(service, SPINNER_FRAME_MS);
       expect(fixture.redraws()).toBe(afterRevoke);
       fixture.host.deactivate();
       const afterDeactivate = fixture.redraws();
-      fixture.host.tick(service, 200);
+      fixture.tick(service, 200);
       expect(fixture.redraws()).toBe(afterDeactivate);
     }),
   );
@@ -359,11 +359,11 @@ describe("activity host lifecycle", () => {
       fixture.host.activate(fixture.ctx, replacement);
       fixture.bus.emit(ACTIVITY_EVENT, captured);
       yield* fixture.drain();
-      expect(yield* replacement.snapshot).toEqual([]);
+      expect(fixture.rows()).toEqual([]);
       const fresh = fixture.register({ snapshot: () => [item("fresh")] });
       yield* fixture.drain();
       expect(fresh.isAvailable()).toBe(true);
-      expect((yield* replacement.snapshot)[0]?.id).toBe("fresh");
+      expect(fixture.rows()[0]?.id).toBe("fresh");
       fresh.dispose();
     }),
   );
@@ -423,11 +423,7 @@ describe("activity host lifecycle", () => {
     Effect.gen(function* () {
       const fixture = harness();
       fixture.host.activate(fixture.ctx, yield* fixture.service());
-      const open = yield* fixture.host
-        .open(fixture.ctx)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      fixture.surface.mount();
-      const [component] = fixture.surface.overlays;
+      const { open, component } = yield* fixture.openManager();
       const options = fixture.surface.overlayOptions;
       for (const [columns, rows] of [
         [160, 50],
@@ -437,7 +433,7 @@ describe("activity host lifecycle", () => {
       ] as const) {
         Object.assign(fixture.surface.terminal, { columns, rows });
         const { width, height } = screenViewport({ columns, rows });
-        const rendered = component?.render(width).length;
+        const rendered = component.render(width).length;
         expect([options?.width, options?.maxHeight, rendered]).toEqual([width, height, height]);
       }
       yield* Fiber.interrupt(open);
@@ -452,13 +448,7 @@ describe("activity host lifecycle", () => {
         fixture.host.activate(fixture.ctx, yield* fixture.service());
         const provider = fixture.register({ snapshot: () => [item("alpha"), item("beta")] });
         yield* fixture.drain();
-        const first = yield* fixture.host
-          .open(fixture.ctx)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        fixture.surface.mount();
-        const component = fixture.surface.overlays[0];
-        if (!(component instanceof ActivityComponent))
-          throw new Error("Activity manager not mounted");
+        const { open: first, component } = yield* fixture.openManager();
         component.render(120);
         expect(component.shell.state.selectedId).toBe(activityKey("agents", "alpha"));
         component.handleInput("j");
@@ -467,12 +457,7 @@ describe("activity host lifecycle", () => {
         expect(component.presentation.focus).toBe(selected);
         component.handleInput("q");
         yield* Fiber.join(first);
-        const reopened = yield* fixture.host
-          .open(fixture.ctx)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        fixture.surface.mount();
-        const next = fixture.surface.overlays[0];
-        if (!(next instanceof ActivityComponent)) throw new Error("Activity manager not mounted");
+        const { open: reopened, component: next } = yield* fixture.openManager();
         next.render(120);
         expect(next.presentation.focus).toBe(selected);
         expect(next.shell.state.selectedId).toBe(selected);

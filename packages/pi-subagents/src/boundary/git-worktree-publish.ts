@@ -29,16 +29,21 @@ const failure = () =>
     message:
       "Workspace publication failed or is uncertain; preserve the journal and all artifacts for recovery.",
   });
-const launch = <A>(
+const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodePublicationResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(publicationResultSchema),
+);
+const decodeDirectoryResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(directoryResultSchema),
+);
+const launch = <A, E>(
   directory: string,
   request: PublicationWireRequest | DirectoryWireRequest,
-  schema: Schema.Codec<A, unknown>,
+  decode: (stdout: string) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
     if (process.platform === "win32") return yield* failure();
-    const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(request).pipe(
-      Effect.mapError(failure),
-    );
+    const encoded = yield* encodeRequest(request).pipe(Effect.mapError(failure));
     const stdin = Buffer.from(encoded);
     if (stdin.length > publicationInputLimit) return yield* failure();
     const result = yield* runBoundedProcessNode({
@@ -56,9 +61,7 @@ const launch = <A>(
     }).pipe(Effect.mapError(failure));
     if (result.code !== 0 || result.timedOut || result.overflowed || result.cleanupUnconfirmed)
       return yield* failure();
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(result.stdout).pipe(
-      Effect.mapError(failure),
-    );
+    return yield* decode(result.stdout).pipe(Effect.mapError(failure));
   });
 
 const base64 = (image?: { readonly bytes: Uint8Array; readonly mode: number }) =>
@@ -70,10 +73,10 @@ export const publishWorkspaceFile = (request: WorkspacePublicationRequest) => {
   return launch(
     directory,
     { ...fields, before: base64(before), after: base64(after) },
-    publicationResultSchema,
+    decodePublicationResult,
   );
 };
 
 /** Caller journals the planned directory first; existing destinations always fail closed. */
 export const createWorkspaceDirectory = ({ directory, ...fields }: WorkspaceDirectoryRequest) =>
-  launch(directory, { ...fields, operation: "mkdir" }, directoryResultSchema);
+  launch(directory, { ...fields, operation: "mkdir" }, decodeDirectoryResult);

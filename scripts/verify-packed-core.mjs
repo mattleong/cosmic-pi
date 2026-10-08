@@ -400,9 +400,7 @@ try {
     "pi-code-previews/tests",
     "pi-code-previews/tsconfig.json",
     "pi-cosmic-core/dist",
-    "pi-cosmic-core/tsdown.config.ts",
     "pi-code-previews/dist",
-    "pi-code-previews/tsdown.config.ts",
   ]) {
     const excludedPath = join(temporaryDirectory, "node_modules", excluded);
     const present = await stat(excludedPath).then(

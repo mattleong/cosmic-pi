@@ -11,7 +11,7 @@ export class ProjectionError extends Schema.TaggedError<ProjectionError>()("Proj
   message: Schema.String,
 }) {}
 
-export interface FrozenProjection<State, Snapshot> {
+interface FrozenProjection<State, Snapshot> {
   /** Synchronous renderer boundary. The returned value is deeply frozen plain data. */
   readonly getSnapshot: () => Snapshot;
   /** Effect-owned authoritative state read; no Ref is exposed. */
@@ -56,34 +56,30 @@ const cloneAndFreeze = <Value>(
     if (!Number.isFinite(value)) return unsupported(path, "non-finite number");
     return value;
   }
-  const kind = runtimeTypeName(value);
-  if (kind === "function" || kind === "symbol" || kind === "bigint") return unsupported(path, kind);
-  if (!Predicate.isObjectOrArray(value)) return unsupported(path, kind);
+  // Functions, symbols, and bigints are the only kinds left.
+  if (!Predicate.isObjectOrArray(value)) return unsupported(path, runtimeTypeName(value));
 
-  const object = value;
-  const activePath = activePaths.get(object);
+  const activePath = activePaths.get(value);
   if (activePath !== undefined) return unsupported(path, `cyclic reference to ${activePath}`);
-  const prior = seen.get(object);
+  const prior = seen.get(value);
   if (prior !== undefined) return prior;
-  activePaths.set(object, path);
+  activePaths.set(value, path);
 
   if (Array.isArray(value)) {
-    const ownKeys = Reflect.ownKeys(value);
-    const expectedKeyCount = value.length + 1;
-    if (ownKeys.length !== expectedKeyCount)
+    if (Reflect.ownKeys(value).length !== value.length + 1)
       return unsupported(path, "array with extra or symbol-keyed properties");
 
     const clone: ProjectionData[] = [];
-    seen.set(object, clone);
+    seen.set(value, clone);
     for (let index = 0; index < value.length; index++) {
-      const key = String(index);
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor) return unsupported(childPath(path, index), "sparse array entry");
+      const at = childPath(path, index);
+      const descriptor = Object.getOwnPropertyDescriptor(value, index);
+      if (!descriptor) return unsupported(at, "sparse array entry");
       if (!("value" in descriptor) || !descriptor.enumerable)
-        return unsupported(childPath(path, index), "non-data array entry");
-      clone.push(cloneAndFreeze(descriptor.value, seen, activePaths, childPath(path, index)));
+        return unsupported(at, "non-data array entry");
+      clone.push(cloneAndFreeze(descriptor.value, seen, activePaths, at));
     }
-    activePaths.delete(object);
+    activePaths.delete(value);
     return Object.freeze(clone);
   }
 
@@ -91,25 +87,26 @@ const cloneAndFreeze = <Value>(
   if (prototype !== Object.prototype && prototype !== null)
     return unsupported(path, prototype?.constructor?.name ?? "non-plain object");
 
-  const ownKeys = Reflect.ownKeys(object);
-  if (ownKeys.some((key) => Predicate.isSymbol(key))) unsupported(path, "symbol-keyed property");
+  const ownKeys = Reflect.ownKeys(value);
+  if (!ownKeys.every((key) => Predicate.isString(key)))
+    return unsupported(path, "symbol-keyed property");
 
   const clone: ProjectionRecord = {};
-  seen.set(object, clone);
+  seen.set(value, clone);
   for (const key of ownKeys) {
-    if (!Predicate.isString(key)) return unsupported(path, "symbol-keyed property");
-    const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    if (!descriptor) return unsupported(childPath(path, key), "missing property descriptor");
-    if (!("value" in descriptor)) return unsupported(childPath(path, key), "accessor");
-    if (!descriptor.enumerable) return unsupported(childPath(path, key), "non-enumerable property");
+    const at = childPath(path, key);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor) return unsupported(at, "missing property descriptor");
+    if (!("value" in descriptor)) return unsupported(at, "accessor");
+    if (!descriptor.enumerable) return unsupported(at, "non-enumerable property");
     Object.defineProperty(clone, key, {
-      value: cloneAndFreeze(descriptor.value, seen, activePaths, childPath(path, key)),
+      value: cloneAndFreeze(descriptor.value, seen, activePaths, at),
       configurable: true,
       enumerable: true,
       writable: true,
     });
   }
-  activePaths.delete(object);
+  activePaths.delete(value);
   return Object.freeze(clone);
 };
 
@@ -137,19 +134,17 @@ const projectSnapshot = <State, Snapshot>(
 export const makeFrozenProjection = <State, Snapshot>(
   initialState: State,
   project: (state: State) => Snapshot,
-  publish?: (snapshot: Snapshot) => void,
+  publish: (snapshot: Snapshot) => void,
 ): Effect.Effect<FrozenProjection<State, Snapshot>, ProjectionError> =>
   Effect.gen(function* () {
     const initialSnapshot = yield* projectSnapshot(initialState, project);
     const state = yield* Ref.make(initialState);
     const lock = yield* Semaphore.make(1);
     const snapshot = MutableRef.make(initialSnapshot);
-    if (publish) {
-      yield* Effect.try({
-        try: () => publish(initialSnapshot),
-        catch: () => projectionError("$", "Unable to publish the initial snapshot."),
-      });
-    }
+    yield* Effect.try({
+      try: () => publish(initialSnapshot),
+      catch: () => projectionError("$", "Unable to publish the initial snapshot."),
+    });
 
     const transition: FrozenProjection<State, Snapshot>["transition"] = (update) =>
       lock.withPermit(
@@ -162,7 +157,7 @@ export const makeFrozenProjection = <State, Snapshot>(
           yield* Effect.uninterruptible(
             Effect.try({
               try: () => {
-                publish?.(published);
+                publish(published);
                 MutableRef.set(snapshot, published);
               },
               catch: () => projectionError("$", "Unable to publish the snapshot."),

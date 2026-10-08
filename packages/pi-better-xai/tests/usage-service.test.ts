@@ -7,40 +7,26 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
-import { jsonHttpTestLayer, makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  jsonHttpTestLayer,
+  makeInMemoryDocuments,
+} from "pi-cosmic-core/testing";
 import { XaiUsageService } from "../src/usage/controller.ts";
 import { makeProjection } from "../src/usage/projection.ts";
 import { usageSnapshot } from "./support/fixtures.ts";
 
-type HostModel = NonNullable<ExtensionContext["model"]>;
-
-const model = (provider: HostModel["provider"]): HostModel => ({
-  id: provider === "xai" ? "grok-4" : "other-model",
-  name: "test model",
-  api: "openai-completions",
-  provider,
-  baseUrl: "https://example.invalid",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-});
-
-const context = (provider: HostModel["provider"]): ExtensionContext => {
-  const fixture = {
+const context = (provider: string): ExtensionContext =>
+  extensionContextFixture({
     cwd: "/project",
-    hasUI: true as const,
-    model: model(provider),
+    hasUI: true,
+    model: { provider, id: "grok-4" },
     modelRegistry: {
       getProviderAuth: () => Promise.resolve(undefined),
       isUsingOAuth: () => true,
     },
     ui: { notify() {} },
-  };
-  // SAFETY: This service test exercises only the context members implemented by the fixture.
-  return fixture as typeof fixture & ExtensionContext;
-};
+  });
 
 describe("XaiUsageService", () => {
   it.effect(
@@ -76,7 +62,6 @@ describe("XaiUsageService", () => {
             changes++;
           },
           startPolling: false,
-          agentDir: "/agent",
           projectTrusted: false,
           requestUsage,
         }).pipe(

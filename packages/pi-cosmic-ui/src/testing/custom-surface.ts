@@ -13,7 +13,7 @@ import {
 } from "pi-cosmic-core/testing";
 
 /** One-shot faults: the owned handle's hide, guard creation, `done`, and the guard's hide. */
-export type CustomSurfaceFault = "ownedHide" | "guardShow" | "done" | "guardHide";
+type CustomSurfaceFault = "ownedHide" | "guardShow" | "done" | "guardHide";
 
 type Disposable = Component & { dispose?(): void };
 type CustomOptions = Parameters<ExtensionUIContext["custom"]>[1];

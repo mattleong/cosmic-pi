@@ -10,10 +10,10 @@ import {
   opaqueFixture,
   plainTheme,
 } from "pi-cosmic-core/testing";
-import { ActivityService, type ActivityServiceContract } from "../src/activity/service.ts";
 import { discoverActivityView } from "../src/activity/view-protocol.ts";
 import { makeActivityHost } from "../src/boundary/host-activity.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
+import { connectedActivityService } from "./support/activity.ts";
 import { eventBus } from "./support/host.ts";
 
 const fixture = (mode: "tui" | "rpc" = "tui") =>
@@ -56,17 +56,7 @@ const fixture = (mode: "tui" | "rpc" = "tui") =>
         },
       },
     });
-    let connected: ActivityServiceContract | undefined;
-    const service = yield* ActivityService.make({
-      publish: (rows, starting) => {
-        if (connected) host.publish(connected, rows, starting);
-      },
-      connect: (value) => {
-        connected = value;
-        return host.bind(value);
-      },
-    });
-    host.activate(ctx, service);
+    host.activate(ctx, yield* connectedActivityService(host.serviceOptions()));
     return { events, surface, host, opened };
   });
 

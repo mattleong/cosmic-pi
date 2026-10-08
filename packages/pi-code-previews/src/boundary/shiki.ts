@@ -1,9 +1,6 @@
-import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { createHighlighter } from "shiki";
@@ -61,7 +58,7 @@ function attemptHighlighterDisposal(
 
 function beginHighlighterLoad(highlighter: ShikiHighlighter): boolean {
   const state = highlighterUseState(highlighter);
-  if (state.disposalRequested || state.disposalAttempted) return false;
+  if (state.disposalRequested) return false;
   state.activeLoads++;
   return true;
 }
@@ -78,20 +75,13 @@ export function disposeShikiHighlighter(
 ): Effect.Effect<void> {
   if (!highlighter) return Effect.void;
   return Effect.gen(function* () {
-    const loggers = yield* Logger.CurrentLoggers;
-    const fiber = yield* Effect.fiber;
-    const disposalRequestedAt = yield* DateTime.nowAsDate;
+    // Disposal may be deferred to a Shiki Promise continuation, outside this fiber.
+    const services = yield* Effect.context<never>();
     const state = highlighterUseState(highlighter);
-    state.reportDisposalFailure = () => {
-      const options = {
-        cause: Cause.empty,
-        date: disposalRequestedAt,
-        fiber,
-        logLevel: "Warn" as const,
-        message: "Shiki failed to dispose cleanly; continuing lifecycle cleanup.",
-      };
-      for (const logger of loggers) invokeHostCallback(() => logger.log(options), undefined);
-    };
+    state.reportDisposalFailure = () =>
+      Effect.runSyncWith(services)(
+        Effect.logWarning("Shiki failed to dispose cleanly; continuing lifecycle cleanup."),
+      );
     attemptHighlighterDisposal(highlighter, state);
   });
 }

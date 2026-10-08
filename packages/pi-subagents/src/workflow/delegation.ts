@@ -42,22 +42,11 @@ const descendantsOf = (
  * theirs, at every depth. The projection drops an ended subagent's record once enough runs have
  * ended, so each one's latest spend is kept until its agent settles.
  */
-export interface WorkflowDelegation {
-  /** Notes what the subagents of each agent in `agentIds` have used so far. */
-  readonly observe: (projection: SubagentProjection, agentIds: Iterable<string>) => void;
-  /** Output tokens the agent's subagents had used when last observed. */
-  readonly output: (agentId: string) => number;
-  /** What each of the agent's subagents used, observed once more, and forgets them. */
-  readonly settle: (
-    projection: SubagentProjection,
-    agentId: string,
-  ) => ReadonlyArray<WorkflowAgentSpend>;
-}
-
-export const makeWorkflowDelegation = (): WorkflowDelegation => {
+export const makeWorkflowDelegation = () => {
   const seen = new Map<string, Map<string, WorkflowAgentSpend>>();
 
-  const observe: WorkflowDelegation["observe"] = (projection, agentIds) => {
+  /** Notes what the subagents of each agent in `agentIds` have used so far. */
+  const observe = (projection: SubagentProjection, agentIds: Iterable<string>): void => {
     let children: ReadonlyMap<string, ReadonlyArray<SubagentRunView>> | undefined;
     for (const agentId of agentIds) {
       children ??= childrenByParent(projection);
@@ -71,13 +60,18 @@ export const makeWorkflowDelegation = (): WorkflowDelegation => {
     }
   };
 
-  const output: WorkflowDelegation["output"] = (agentId) => {
+  /** Output tokens the agent's subagents had used when last observed. */
+  const output = (agentId: string): number => {
     let total = 0;
     for (const spend of seen.get(agentId)?.values() ?? []) total += spend.usage.output;
     return total;
   };
 
-  const settle: WorkflowDelegation["settle"] = (projection, agentId) => {
+  /** What each of the agent's subagents used, observed once more, and forgets them. */
+  const settle = (
+    projection: SubagentProjection,
+    agentId: string,
+  ): ReadonlyArray<WorkflowAgentSpend> => {
     observe(projection, [agentId]);
     const spends = [...(seen.get(agentId)?.values() ?? [])];
     seen.delete(agentId);

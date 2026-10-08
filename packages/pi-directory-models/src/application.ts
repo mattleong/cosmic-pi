@@ -15,6 +15,7 @@ import { captureDirectorySession } from "./boundary/host-session.ts";
 import { makeDirectoryModelsLayer } from "./layer.ts";
 import {
   DirectoryModelPreferenceService,
+  WRITE_WARNING,
   type DirectoryModelSessionInput,
 } from "./preference/service.ts";
 
@@ -60,18 +61,16 @@ export function registerDirectoryModelsApplication(
   const persist = (ctx: ExtensionContext) =>
     slot
       .run(DirectoryModelPreferenceService.use((service) => service.remember))
-      .catch(() => warn(ctx, "Couldn't save the model for this directory"));
+      .catch(() => warn(ctx, WRITE_WARNING));
 
   pi.on("model_select", (event, ctx) => {
-    if (!slot.isActive()) return;
-    if (event.source === "restore") return;
-    if (!captureSelectedModel(event.model)) return;
+    if (!slot.isActive() || event.source === "restore" || !captureSelectedModel(event.model))
+      return;
     return persist(ctx);
   });
 
   pi.on("thinking_level_select", (event, ctx) => {
-    if (!slot.isActive()) return;
-    if (!captureThinkingLevel(event.level)) return;
+    if (!slot.isActive() || !captureThinkingLevel(event.level)) return;
     return persist(ctx);
   });
 

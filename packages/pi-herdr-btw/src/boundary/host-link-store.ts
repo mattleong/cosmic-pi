@@ -23,11 +23,6 @@ export interface HerdrBtwLinkStore {
   readonly record: (link: HerdrBtwLinkRecord) => HerdrBtwLinkRecordResult;
 }
 
-export interface HostHerdrBtwLinkStoreOptions {
-  /** Test seam for deterministic bounded parent-header probing. */
-  readonly probeSessionHeader?: ((path: string) => SessionHeaderProbe) | undefined;
-}
-
 /**
  * Uses the owner captured by application startup, then revalidates the live
  * session ID, path, and bounded no-follow header before every read or append.
@@ -39,9 +34,9 @@ export const makeHostHerdrBtwLinkStore = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   capturedOwner: HerdrBtwLinkOwner,
-  options: HostHerdrBtwLinkStoreOptions = {},
+  /** Test seam for deterministic bounded parent-header probing. */
+  probe: (path: string) => SessionHeaderProbe = probeSessionHeader,
 ): HerdrBtwLinkStore => {
-  const probe = options.probeSessionHeader ?? probeSessionHeader;
   // Fail-closed owner revalidation shared by restore and record: the captured owner must still
   // match the live extension context and carry the owner header before either operation proceeds.
   const revalidateOwner = (): boolean => {

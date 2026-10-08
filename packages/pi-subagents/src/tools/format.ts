@@ -6,7 +6,6 @@ import {
   countLabel,
 } from "pi-cosmic-core";
 import { normalizeWriteClaim, writeClaimContains } from "../domain/write-claims.ts";
-import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import {
   isParentActionRequiredRun,
   isTerminalRunState,
@@ -29,16 +28,6 @@ import {
   type ActionFailureDisposition,
 } from "./outcome.ts";
 
-export const selectionSourceLabel = (
-  run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
-): string => {
-  const candidate =
-    run.selection.candidateIndex === undefined
-      ? ""
-      : ` candidate ${run.selection.candidateIndex + 1}`;
-  return `${run.selection.source}${candidate}`;
-};
-
 export const boundToolOutput = (text: string): string =>
   clipWithMarker(
     text,
@@ -48,6 +37,10 @@ export const boundToolOutput = (text: string): string =>
 
 export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
   boundToolOutput(parts.filter(Boolean).join("\n\n"));
+
+/** One terminal-safe line, clipped to `maximum` characters with a visible marker. */
+export const boundedLine = (value: string, maximum: number): string =>
+  clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
 
 const runTarget = (run: AttentionRun): string =>
   `${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)})`;
@@ -158,23 +151,17 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
           return pausedAdmissionPeerRecovery(run);
         case "paused":
           return ordinaryPauseRecovery(run);
-        case "question": {
-          const question = sanitizeTerminalLine(state.message);
-          const bounded = clipWithMarker(question, 512, "… [truncated]");
+        case "question":
           return [
-            `Question from ${sanitizeTerminalLine(run.name)}: ${bounded}`,
+            `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
             `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
           ];
-        }
         default:
           return [];
       }
     }),
   ].join("\n");
 };
-
-const boundedLine = (value: string, maximum: number): string =>
-  clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
 
 const statusField = (label: string, value: string): string =>
   `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
@@ -209,34 +196,28 @@ const formatRunHeader = (run: SubagentRunView, route: string): string => {
 const identityStatusFields = (
   run: SubagentRunView,
   route: string,
-): ReadonlyArray<string | undefined> => {
-  const retained = run.state === "reported" && run.closeOnReport === false;
-  return [
-    "Subagent status",
-    statusField("Name", run.name),
-    statusField("ID", run.id),
-    statusField("State", runStateLabel(run.state)),
-    optionalStatusField("Parent", run.parentRunId),
-    run.workflow
-      ? statusField(
-          "Workflow",
-          `${workflowOwnerText(run)}${run.workflow.phase ? ` · phase ${run.workflow.phase}` : ""}`,
-        )
-      : undefined,
-    run.depth === undefined
-      ? undefined
-      : statusField(
-          "Tree",
-          `depth ${run.depth} · ${run.directChildCount ?? 0} direct · ${run.descendantCount ?? 0} descendants`,
-        ),
-    optionalStatusField("Profile", run.profile),
-    statusField("Route", route),
-    statusField(
-      "Retention",
-      `${run.closeOnReport === false ? "retain backend after report" : "close after report"} · assignment ${run.reportGeneration || 1}${retained ? " · retained now" : ""}`,
-    ),
-  ];
-};
+): ReadonlyArray<string | undefined> => [
+  "Subagent status",
+  statusField("Name", run.name),
+  statusField("ID", run.id),
+  statusField("State", runStateLabel(run.state)),
+  optionalStatusField("Parent", run.parentRunId),
+  run.workflow
+    ? statusField(
+        "Workflow",
+        `${workflowOwnerText(run)}${run.workflow.phase ? ` · phase ${run.workflow.phase}` : ""}`,
+      )
+    : undefined,
+  run.depth === undefined
+    ? undefined
+    : statusField(
+        "Tree",
+        `depth ${run.depth} · ${run.directChildCount ?? 0} direct · ${run.descendantCount ?? 0} descendants`,
+      ),
+  optionalStatusField("Profile", run.profile),
+  statusField("Route", route),
+  statusField("Retention", `close after report · assignment ${run.reportGeneration || 1}`),
+];
 
 const routeRetryStatus = (run: SubagentRunView): string | undefined => {
   if (hasUnresolvedSteeringDelivery(run))
@@ -260,7 +241,10 @@ const routeRetryStatus = (run: SubagentRunView): string | undefined => {
 };
 
 const selectionStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => [
-  statusField("Selection", selectionSourceLabel(run)),
+  statusField(
+    "Selection",
+    `${run.selection.source}${run.selection.candidateIndex === undefined ? "" : ` candidate ${run.selection.candidateIndex + 1}`}`,
+  ),
   optionalStatusField("Route source", run.selection.routeSource),
   statusField("Reason", run.selection.reason),
   optionalStatusField("Predecessor", run.predecessorRunId),
@@ -349,7 +333,7 @@ const finalReportStatus = (run: SubagentRunView): string | undefined => {
     return "\nFinal report\nClaimed by another operation; report text is withheld here.";
   if (run.reportStatus === "delivered")
     return "\nFinal report\nAlready delivered; report text is withheld here.";
-  if (run.state !== "completed" && run.state !== "reported") return undefined;
+  if (run.state !== "completed") return undefined;
   return "\nFinal report\nAvailability unknown in this observation; report text is not included.";
 };
 
@@ -427,7 +411,7 @@ export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string
   }
 };
 
-export const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): string =>
+const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): string =>
   failures.length === 0
     ? ""
     : [
@@ -463,7 +447,8 @@ const actionFailureLine = (failure: SubagentActionFailure): string => {
   return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
 };
 
-const ACTION_FAILURE_SECTIONS = [
+/** Each disposition's section title, and the guidance the agent text closes it with. */
+export const ACTION_FAILURE_SECTIONS = [
   ["pending", "Guidance awaiting confirmation", pendingDeliveryEvidence.detail],
   ["unconfirmed", "Unconfirmed targets", unconfirmedActionRecovery],
   ["failed", "Failed targets", undefined],
@@ -496,30 +481,8 @@ export const managementAcknowledgement = (
   if (runs.length === 0) return "";
   const ids = runs.map((run) => run.id).join(", ");
   switch (action) {
-    case "send": {
-      const guided = runs.filter((run) => run.closeOnReport !== false);
-      const retained = runs.filter((run) => run.closeOnReport === false);
-      const summary = (
-        label: string,
-        targets: ReadonlyArray<SubagentRunView>,
-        suffix = "",
-        qualifier = "",
-      ) =>
-        `${label} ${targets.length} ${qualifier}subagent${targets.length === 1 ? "" : "s"}: ${targets.map((run) => run.id).join(", ")}${suffix}`;
-      return [
-        ...(guided.length > 0 ? [summary("Guidance delivered to", guided, ".")] : []),
-        ...(retained.length > 0
-          ? [
-              summary(
-                "Started the next assignment on",
-                retained,
-                "; subagent_await now targets the new report generation.",
-                "retained ",
-              ),
-            ]
-          : []),
-      ].join("\n");
-    }
+    case "send":
+      return `Guidance delivered to ${countLabel(runs.length, "subagent")}: ${ids}.`;
     case "reply":
       return `Reply delivered to ${ids}.`;
     case "retry":

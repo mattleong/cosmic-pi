@@ -3,7 +3,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as JsonSchema from "effect/JsonSchema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
-import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -13,11 +12,10 @@ import {
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
-import { projectBackgroundTaskCodeModeOutput } from "../src/code-mode/output.ts";
 import { backgroundTaskNotFound } from "../src/task/errors.ts";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
-import { BackgroundTaskService, type BackgroundTaskServiceContract } from "../src/task/service.ts";
-import { utf8ByteLength } from "../src/task/utf8.ts";
+import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
+import { utf8ByteLength } from "pi-cosmic-core";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import {
@@ -27,21 +25,16 @@ import {
   type BackgroundTaskContract,
 } from "../src/tools/contract-schema.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
+import {
+  provideTaskService,
+  taskServiceDouble,
+  taskServiceRunner,
+  taskWait,
+} from "./support/task-service-double.ts";
 
 const restoreSettings = applyPresentationSettings({});
 afterEach(restoreSettings);
 
-const unexpected = () => Effect.die("unexpected background task service call");
-const baseService: BackgroundTaskServiceContract = {
-  start: unexpected,
-  list: unexpected,
-  status: unexpected,
-  logs: unexpected,
-  wait: unexpected,
-  stop: unexpected,
-  stopAll: unexpected,
-  clear: unexpected(),
-};
 type ServiceOverrides = Partial<BackgroundTaskServiceContract>;
 
 // Command, cwd, and pid carry markers that must never reach a contract.
@@ -65,8 +58,7 @@ const event = (
 
 const execute = (input: BackgroundTaskToolInput, overrides: ServiceOverrides) =>
   executeBackgroundTaskCommand(input, "/project").pipe(
-    Effect.provideService(BackgroundTaskService, { ...baseService, ...overrides }),
-    Effect.provide(Path.layer),
+    provideTaskService(taskServiceDouble(overrides)),
   );
 
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -82,20 +74,10 @@ const encoded = (contract: BackgroundTaskContract) => {
   return json;
 };
 
-const registeredTool = (overrides: ServiceOverrides) => {
-  const service = { ...baseService, ...overrides };
-  return captureRegistrations((pi) =>
-    registerBackgroundTaskTool(pi, {
-      run: <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>) =>
-        Effect.runPromise(
-          effect.pipe(
-            Effect.provideService(BackgroundTaskService, service),
-            Effect.provide(Path.layer),
-          ),
-        ),
-    }),
+const registeredTool = (overrides: ServiceOverrides) =>
+  captureRegistrations((pi) =>
+    registerBackgroundTaskTool(pi, { run: taskServiceRunner(taskServiceDouble(overrides)) }),
   ).tools[0]!;
-};
 const ctx = extensionContextFixture({ cwd: "/project" });
 
 describe("background_task contract", () => {
@@ -118,16 +100,13 @@ describe("background_task contract", () => {
             events: [event(2, "ready\n")],
           }),
         wait: () =>
-          Effect.succeed({
-            id: "task-1",
-            outcome: "matched",
-            snapshot: task(),
-            nextCursor: 4,
-            earliestAvailableCursor: 2,
-            droppedBytes: 0,
-            matchCursor: 2,
-            appliedWaitSeconds: 30,
-          }),
+          Effect.succeed(
+            taskWait(task(), "matched", {
+              nextCursor: 4,
+              earliestAvailableCursor: 2,
+              matchCursor: 2,
+            }),
+          ),
         clear: Effect.succeed(2),
       };
       const inputs: ReadonlyArray<BackgroundTaskToolInput> = [
@@ -237,13 +216,12 @@ describe("background_task contract", () => {
     }),
   );
 
-  it.effect("encodes strictly into detached frozen data and leaves Code Mode v1 unchanged", () =>
+  it.effect("encodes strictly into detached frozen data", () =>
     Effect.gen(function* () {
-      const result = yield* execute(
+      const { contract } = yield* execute(
         { action: "status", id: "task-1" },
         { status: () => Effect.succeed(task({ failureCause: "error: boom" })) },
       );
-      const { contract } = result;
       if (contract.action !== "status") throw new Error("status returned the wrong contract");
       const json = encoded(contract);
       const nested = Predicate.hasProperty(json, "task") ? json.task : undefined;
@@ -262,11 +240,6 @@ describe("background_task contract", () => {
         { ...contract, task: { ...contract.task, exitCode: 1.5 } },
       ];
       for (const value of invalid) expect(encodeBackgroundTaskContract(value)).toBeUndefined();
-
-      const v1 = projectBackgroundTaskCodeModeOutput(result, 1_000_000);
-      if (v1._tag !== "Accepted") throw new Error("Code Mode v1 refused a small result");
-      expect(Object.keys(v1.output).sort()).toEqual(["action", "snapshot", "text"]);
-      expect(v1.output).toMatchObject({ snapshot: { command: "command-marker pnpm dev" } });
     }),
   );
 
@@ -327,18 +300,7 @@ describe("background_task contract", () => {
     Effect.gen(function* () {
       const { contract } = yield* execute(
         { action: "wait", id: "task-1", until: "exit", waitSeconds: 1 },
-        {
-          wait: () =>
-            Effect.succeed({
-              id: "task-1",
-              outcome: "timeout",
-              snapshot: task(),
-              nextCursor: 3,
-              earliestAvailableCursor: 1,
-              droppedBytes: 0,
-              appliedWaitSeconds: 1,
-            }),
-        },
+        { wait: () => Effect.succeed(taskWait(task(), "timeout", { appliedWaitSeconds: 1 })) },
       );
       encoded(contract);
       expect(contract).toMatchObject({

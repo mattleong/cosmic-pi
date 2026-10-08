@@ -4,6 +4,7 @@ import {
   safeTextSuffix,
   sanitizeDiagnosticError,
   stripTerminalControls,
+  utf8ByteLength,
   utf8Prefix,
   clipText,
 } from "pi-cosmic-core";
@@ -14,17 +15,15 @@ export const MAX_TASK_CHARS = 128 * 1024;
 export const MAX_FINAL_TEXT_CHARS = 32 * 1024;
 export const MAX_ERROR_CHARS = 8 * 1024;
 
-export { safeTextPrefix };
-
 export const clipWithMarker = (value: string, maximum: number, marker: string): string =>
   value.length <= maximum
     ? value
     : `${safeTextPrefix(value, Math.max(0, maximum - marker.length))}${marker}`;
 
 export const clipUtf8Text = (value: string, maximumBytes: number): string => {
-  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
+  if (utf8ByteLength(value) <= maximumBytes) return value;
   const marker = "…";
-  const prefix = utf8Prefix(value, Math.max(0, maximumBytes - Buffer.byteLength(marker, "utf8")));
+  const prefix = utf8Prefix(value, Math.max(0, maximumBytes - utf8ByteLength(marker)));
   return `${prefix}${marker}`;
 };
 

@@ -46,7 +46,10 @@ export type DiffWordEmphasis = SchemaSettings["wordEmphasis"];
 export type ToolCallBackgroundMode = SchemaSettings["toolCallBackground"];
 export type ToolCallCollapsedStyle = SchemaSettings["toolCallCollapsedStyle"];
 export type PathIconMode = SchemaSettings["pathIcons"];
-export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
+/** Settings edited by value; the tool selection has its own submenu. */
+export type CodePreviewEditableSettingId =
+  | Exclude<keyof CodePreviewSettings, "tools">
+  | "resetToDefaults";
 
 export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(
   // SAFETY: The authoritative struct fields and CodePreviewSettings are derived from the same schema.

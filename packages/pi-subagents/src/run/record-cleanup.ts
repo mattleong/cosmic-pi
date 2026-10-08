@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import { SubagentProcessError } from "./errors.ts";
+import { processError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { isTerminalRunState } from "./model.ts";
 import { recordRunWarning } from "./warnings.ts";
@@ -14,7 +14,7 @@ import { recordRunWarning } from "./warnings.ts";
  * run record. Every field mutation stays under the shared service lock.
  */
 export function makeRunRecordCleanup(dependencies: RunContext) {
-  const { withLock, publish, recheckAdmission, writerPools } = dependencies;
+  const { withLock, publish, writerPools } = dependencies;
 
   const reclaimRecordRunState = (record: RunRecord) =>
     Effect.gen(function* () {
@@ -36,11 +36,11 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
             duration: "5 seconds",
             orElse: () =>
               Effect.fail(
-                new SubagentProcessError({
-                  operation: "reclaim private run state",
-                  code: "run_state_reclaim_timeout",
-                  message: "Timed out while reclaiming private subagent run state.",
-                }),
+                processError(
+                  "reclaim private run state",
+                  "run_state_reclaim_timeout",
+                  "Timed out while reclaiming private subagent run state.",
+                ),
               ),
           }),
           Effect.tapError((error) =>
@@ -86,8 +86,8 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
           const { pid: _pid, ...view } = record.view;
           record.view = view;
         }
-        // Publishing rechecks admission; a pid-less, non-terminal release still frees a slot.
-        yield* publishRelease ? publish : recheckAdmission;
+        // A pid-less, non-terminal release still frees a slot; the lock release rechecks it.
+        if (publishRelease) yield* publish;
         return { owned: true as const, shouldReclaim, cleanupSettlement };
       }),
     ).pipe(
@@ -139,10 +139,7 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
           return true;
         }),
       );
-      if (retained)
-        yield* Effect.sync(() => {
-          Deferred.doneUnsafe(record.cleanupSettlement, Effect.succeed("quarantined"));
-        });
+      if (retained) yield* Deferred.succeed(record.cleanupSettlement, "quarantined");
     });
   const detachWriterPoolAfterCleanup = (record: RunRecord, scope: Scope.Closeable) =>
     Effect.gen(function* () {
@@ -155,7 +152,7 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
             : undefined,
         ),
       );
-      if (preparation) yield* Deferred.await(preparation).pipe(Effect.catch(() => Effect.void));
+      if (preparation) yield* Deferred.await(preparation).pipe(Effect.ignore);
       const release = yield* withLock(
         Effect.sync(() => {
           if (record.scope !== scope || record.writerPool !== pool) return undefined;
@@ -268,7 +265,7 @@ export function makeRunRecordCleanup(dependencies: RunContext) {
           ),
           Effect.catch((error) => quarantine(`Subagent cleanup failed: ${error.message}`)),
           Effect.onInterrupt(() => retainCleanupQuarantine(record, scope)),
-          Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(closeSettled, Effect.void))),
+          Effect.ensuring(Deferred.succeed(closeSettled, undefined)),
         );
       }),
     );

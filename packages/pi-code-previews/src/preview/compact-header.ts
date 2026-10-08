@@ -53,7 +53,8 @@ export function layoutCompactHeader(
 ) {
   // Select semantically before measuring: narrow rows must not substitute lower-priority detail.
   counters = counters.filter((value) => value.trim());
-  optional = counters.length ? [] : optional.filter((value) => value?.trim()).slice(0, 1);
+  // Without counters, the first routine detail may fill a row that has room for it.
+  const extra = counters.length ? undefined : optional.find((value) => value?.trim());
   const remaining = width - visibleWidth(identity);
   if (remaining <= 0) return { row: clipToWidth(identity, width, ""), counter: undefined };
   const subjectWidth = visibleWidth(subject);
@@ -72,16 +73,10 @@ export function layoutCompactHeader(
       ? timingToken
       : "";
   const target = middleElide(subject, remaining - counterWidth - visibleWidth(timingText) - 1);
-  let row = identity + (target ? ` ${target}` : "") + counterText;
-  if (target !== subject) return { row: row + timingText, counter };
-  let used = visibleWidth(row) + visibleWidth(timingText);
-  for (const value of optional) {
-    if (!value) continue;
-    const token = `${separator}${value}`;
-    const tokenWidth = visibleWidth(token);
-    if (used + tokenWidth > width) continue;
-    row += token;
-    used += tokenWidth;
-  }
-  return { row: row + timingText, counter };
+  const row = identity + (target ? ` ${target}` : "") + counterText;
+  const token = extra === undefined ? "" : `${separator}${extra}`;
+  const fits =
+    target === subject &&
+    visibleWidth(row) + visibleWidth(timingText) + visibleWidth(token) <= width;
+  return { row: row + (fits ? token : "") + timingText, counter };
 }

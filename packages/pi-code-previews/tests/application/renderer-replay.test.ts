@@ -1,11 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  initTheme,
-  ToolExecutionComponent,
-  type ToolInfo,
-  type ToolRendererResolver,
-  type ToolRenderers,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type ToolInfo, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { beforeAll, afterEach, it } from "vitest";
 import { it as effectIt } from "@effect/vitest";
@@ -17,6 +11,7 @@ import {
   extensionContextFixture,
   opaqueFixture,
   plainTheme,
+  recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import {
   CodePreviewPresentationOwner,
@@ -30,26 +25,20 @@ import { clearCodePreviewSessionCapability } from "../../src/application/capabil
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { renderContextFixture } from "../../testing";
+import { drawToolRow, hostToolRow, renderContextFixture } from "../../testing";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { step } from "../support/effect-test";
+import {
+  builtinToolInfo as info,
+  inertScheduler as scheduler,
+  presentationResolver,
+  setPlainPreviewSettings,
+} from "../support/renderer-host";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => {
   clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
-});
-const info = (name: string): ToolInfo => ({
-  name,
-  description: name,
-  parameters: opaqueFixture({}),
-  exposure: "direct",
-  sourceInfo: {
-    source: "builtin",
-    path: name === "tool_search" ? "builtin:tool-search" : `builtin:${name}`,
-    scope: "temporary",
-    origin: "top-level",
-  },
 });
 const output = {
   content: [{ type: "text" as const, text: "COMPLETE RETAINED OUTPUT" }],
@@ -60,22 +49,8 @@ const downstream: ToolRenderers = {
   renderCall: () => new Text("NATIVE CALL CONTENT", 0, 0),
   renderResult: () => new Text("NATIVE RESULT CONTENT", 0, 0),
 };
-const scheduler = { defer: () => () => undefined, schedule: () => () => undefined };
-type ReplayArguments = { command: string } | { code: string } | { query: string; limit?: number };
-const hostRow = (
-  renderers: ToolRenderers | undefined,
-  name = "bash",
-  args: ReplayArguments = { command: "echo EXACT_SOURCE" },
-) =>
-  new ToolExecutionComponent(
-    name,
-    "replay",
-    args,
-    { showImages: false },
-    renderers,
-    opaqueFixture({ requestRender() {} }),
-    "/project",
-  );
+const hostRow = (renderers: ToolRenderers | undefined) =>
+  hostToolRow("bash", { command: "echo EXACT_SOURCE" }, renderers, { result: output });
 
 for (const name of ["bash", "codemode", "tool_search"] as const)
   for (const discovery of ["empty", "error"] as const)
@@ -83,27 +58,24 @@ for (const name of ["bash", "codemode", "tool_search"] as const)
       it(`cold ${name} replay survives ${discovery} metadata then ${admission} readiness`, () => {
         let metadata: ToolInfo[] = [];
         let broken = discovery === "error";
-        const pi = extensionApiFixture({
+        const { owner, resolver } = presentationResolver({
           getAllTools: () => {
             if (broken) throw new Error("public metadata not bound");
             return metadata;
           },
-          getCommands: () => [],
         });
-        const owner = new CodePreviewPresentationOwner();
-        const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
         const renderers = resolver(name, () => downstream);
         assert.equal(renderers?.renderShell, "self");
-        const row = hostRow(
-          renderers,
+        const row = hostToolRow(
           name,
           name === "bash"
             ? { command: "echo EXACT_SOURCE" }
             : name === "codemode"
               ? { code: "text('EXACT_SOURCE');" }
               : { query: "EXACT_SOURCE" },
+          renderers,
+          { result: output },
         );
-        row.updateResult(output);
         assert.match(row.render(100).join("\n"), /NATIVE RESULT CONTENT/);
         broken = admission === "error";
         if (admission === "native") metadata = [info(name)];
@@ -111,18 +83,13 @@ for (const name of ["bash", "codemode", "tool_search"] as const)
           metadata = [
             { ...info(name), sourceInfo: { ...info(name).sourceInfo, source: "foreign" } },
           ];
-        setCodePreviewSettings({
-          ...defaultCodePreviewSettings,
-          syntaxHighlighting: false,
-          toolCallTiming: false,
+        setPlainPreviewSettings({
           toolCallCollapsedStyle: "compact",
           toolCallBackground: "border",
           tools: [name],
         });
         owner.publish("/project", new Set([name]), scheduler);
-        row.setExpanded(true);
-        row.invalidate();
-        const rendered = row.render(100).join("\n");
+        const rendered = drawToolRow(row, true, 100);
         if (admission === "native") {
           assert.match(rendered, /EXACT_SOURCE/);
           assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
@@ -138,29 +105,21 @@ for (const name of ["bash", "codemode", "tool_search"] as const)
 for (const style of ["preview", "compact"] as const)
   for (const mode of ["on", "off", "border"] as const) {
     it(`a real retained host row adopts first-ready ${style}/${mode} with complete call and result`, () => {
-      const owner = new CodePreviewPresentationOwner();
-      const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
-      const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+      const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
       // Exactly one resolver evaluation: this is Pi's replay construction boundary.
       const renderers = resolver("bash", () => downstream);
       assert.equal(renderers?.renderShell, "self");
       const row = hostRow(renderers);
-      row.updateResult(output);
       assert.match(row.render(80).join("\n"), /NATIVE CALL CONTENT/);
       assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
-      setCodePreviewSettings({
-        ...defaultCodePreviewSettings,
-        syntaxHighlighting: false,
-        toolCallTiming: false,
+      setPlainPreviewSettings({
         toolCallCollapsedStyle: style,
         toolCallBackground: mode,
         tools: ["bash"],
       });
       owner.publish("/project", new Set(["bash"]), scheduler);
       for (const expanded of [true, false, true]) {
-        row.setExpanded(expanded);
-        row.invalidate();
-        const rendered = row.render(80).join("\n");
+        const rendered = drawToolRow(row, expanded, 80);
         assert.match(rendered, /EXACT_SOURCE/);
         if (expanded || style === "preview") assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
         assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
@@ -189,8 +148,9 @@ for (const style of ["preview", "compact"] as const)
       const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
       const renderers = resolver("tool_search", () => downstream);
       assert.equal(renderers?.renderShell, "self");
-      const row = hostRow(renderers, "tool_search", { query: "EXACT_QUERY", limit: 7 });
-      row.updateResult({ ...output, details: { loaded: ["docs_lookup"] } });
+      const row = hostToolRow("tool_search", { query: "EXACT_QUERY", limit: 7 }, renderers, {
+        result: { ...output, details: { loaded: ["docs_lookup"] } },
+      });
       assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
       setCodePreviewSettings({
         ...defaultCodePreviewSettings,
@@ -200,9 +160,7 @@ for (const style of ["preview", "compact"] as const)
       });
       owner.publish("/first", new Set(["tool_search"]), scheduler);
       for (const expanded of [false, true, false, true]) {
-        row.setExpanded(expanded);
-        row.invalidate();
-        const rendered = row.render(80).join("\n");
+        const rendered = drawToolRow(row, expanded, 80);
         assert.match(rendered, /EXACT_QUERY/);
         assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
         assert.equal(rendered.includes("COMPLETE RETAINED OUTPUT"), expanded);
@@ -234,15 +192,13 @@ for (const style of ["preview", "compact"] as const)
 
 for (const name of ["bash", "tool_search"] as const)
   it(`lazy ${name} draw adoption refeeds stored result without host refresh or execution events`, () => {
-    const owner = new CodePreviewPresentationOwner();
     const context = renderContextFixture({
       args: name === "bash" ? { command: "echo EXACT_SOURCE" } : { query: "EXACT_SOURCE" },
       expanded: true,
       isPartial: false,
       invalidate() {},
     });
-    const pi = extensionApiFixture({ getAllTools: () => [info(name)], getCommands: () => [] });
-    const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+    const { owner, resolver } = presentationResolver({ getAllTools: () => [info(name)] });
     const renderers = resolver(name, () => downstream)!;
     const call = renderers.renderCall!(context.args, plainTheme, context);
     const result = renderers.renderResult!(
@@ -251,10 +207,7 @@ for (const name of ["bash", "tool_search"] as const)
       plainTheme,
       context,
     );
-    setCodePreviewSettings({
-      ...defaultCodePreviewSettings,
-      syntaxHighlighting: false,
-      toolCallTiming: false,
+    setPlainPreviewSettings({
       toolCallCollapsedStyle: "compact",
       toolCallBackground: "border",
       tools: [name],
@@ -267,8 +220,7 @@ for (const name of ["bash", "tool_search"] as const)
   });
 
 it("cold and declined rows preserve independent downstream caches and live panel state", () => {
-  const owner = new CodePreviewPresentationOwner();
-  const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
+  const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
   const panels: ToolRenderers = {
     renderCall: (_args, _theme, context) => {
       assert.ok(context.lastComponent === undefined || context.lastComponent instanceof Text);
@@ -284,9 +236,7 @@ it("cold and declined rows preserve independent downstream caches and live panel
       return panel;
     },
   };
-  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
   const row = hostRow(resolver("bash", () => panels));
-  row.updateResult(output);
   row.invalidate();
   assert.match(row.render(80).join("\n"), /CALL SAW OUTPUT/);
   // Disabled preview selection must not erase the downstream renderer's live state.
@@ -303,13 +253,9 @@ for (const close of ["replacement", "shutdown"] as const)
     const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
     const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
     const old = hostRow(resolver("bash", () => downstream));
-    old.updateResult(output);
     owner.retire();
     owner = new CodePreviewPresentationOwner();
-    setCodePreviewSettings({
-      ...defaultCodePreviewSettings,
-      syntaxHighlighting: false,
-      toolCallTiming: false,
+    setPlainPreviewSettings({
       toolCallCollapsedStyle: "compact",
       toolCallBackground: "border",
       tools: ["bash"],
@@ -319,7 +265,6 @@ for (const close of ["replacement", "shutdown"] as const)
     old.setExpanded(true);
     assert.match(old.render(80).join("\n"), /NATIVE RESULT CONTENT/);
     const fresh = hostRow(resolver("bash", () => downstream));
-    fresh.updateResult(output);
     fresh.setExpanded(true);
     assert.match(fresh.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
     owner.retire();
@@ -329,18 +274,14 @@ effectIt.effect(
   "factory replay stays native through pending and failed settings, then only new rows adopt replacement",
   () =>
     Effect.gen(function* () {
-      const handlers = new Map<string, (event: never, ctx: never) => void | Promise<void>>();
-      const resolvers: ToolRendererResolver[] = [];
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let loads = 0;
-      const pi = extensionApiFixture({
-        on: (name: string, handler: (event: never, ctx: never) => void | Promise<void>) =>
-          handlers.set(name, handler),
-        registerToolRenderer: (resolver: ToolRendererResolver) => resolvers.push(resolver),
+      const host = recordingExtensionHost(undefined, {
         getAllTools: () => [info("bash")],
         getCommands: () => [],
       });
+      const resolvers = host.toolRenderers;
       const settings: CodePreviewSettings = {
         ...defaultCodePreviewSettings,
         syntaxHighlighting: false,
@@ -349,7 +290,7 @@ effectIt.effect(
         tools: ["bash"],
       };
       const deps: CodePreviewExtensionDependencies = {
-        makeRuntime: (host) => makePiManagedRuntime(host, codePreviewApplicationLayer),
+        makeRuntime: (api) => makePiManagedRuntime(api, codePreviewApplicationLayer),
         registerCommands() {},
         registerRenderers() {},
         initializeSyntax: () => Effect.void,
@@ -364,16 +305,14 @@ effectIt.effect(
                 return settings;
               }),
       };
-      yield* step(() => codePreviewsWithDependencies(pi, deps));
+      yield* step(() => codePreviewsWithDependencies(host.pi, deps));
       const context = extensionContextFixture({
         cwd: "/project",
         isProjectTrusted: () => true,
         ui: { notify() {} },
       });
-      const dispatch = (name: string) =>
-        Promise.resolve(handlers.get(name)?.(opaqueFixture({}), opaqueFixture(context)));
+      const dispatch = (name: string) => host.emit(name, context);
       const row = hostRow(resolvers[0]!("bash", () => downstream));
-      row.updateResult(output);
       const starting = dispatch("session_start");
       yield* Deferred.await(entered);
       assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
@@ -384,7 +323,6 @@ effectIt.effect(
       row.invalidate();
       assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
       const fresh = hostRow(resolvers[0]!("bash", () => downstream));
-      fresh.updateResult(output);
       fresh.setExpanded(true);
       assert.match(fresh.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
       yield* step(() => dispatch("session_shutdown"));

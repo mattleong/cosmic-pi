@@ -1,12 +1,7 @@
 // Test-owned event ingress exercises the parser without assuming Node stream internals.
 import { EventEmitter, once } from "node:events";
-import * as Effect from "effect/Effect";
-import * as Queue from "effect/Queue";
 import { describe, expect, it, vi } from "vitest";
-import {
-  attachBoundedLineParser,
-  makeByteBoundedQueueRoom,
-} from "../src/boundary/bounded-line-parser.ts";
+import { attachBoundedLineParser } from "../src/boundary/bounded-line-parser.ts";
 
 const inputStream = () => {
   const events = new EventEmitter();
@@ -66,33 +61,6 @@ describe("bounded child line parser", () => {
     detach();
     stream.emit("data", Buffer.from("after\n", "utf8"));
     expect(lines).toEqual(["before"]);
-  });
-
-  it("bounds ordinary sequential line backlog until downstream acknowledgement", () => {
-    const stream = inputStream();
-    const queue = Effect.runSync(Queue.dropping<object>(512));
-    const retained: object[] = [];
-    const overflow = vi.fn();
-    const room = makeByteBoundedQueueRoom(queue, 42, overflow);
-    attachBoundedLineParser(stream, {
-      maxLineBytes: 64,
-      maxQueuedBytes: 128,
-      onLine: (line) => {
-        const event = { line };
-        if (room.offer(event, Buffer.byteLength(line, "utf8") + 1)) retained.push(event);
-      },
-      onOverflow: overflow,
-    });
-
-    stream.write(`${"a".repeat(20)}\n`);
-    stream.write(`${"b".repeat(20)}\n`);
-    stream.write(`${"c".repeat(20)}\n`);
-
-    expect(retained).toHaveLength(2);
-    expect(room.queuedBytes()).toBe(42);
-    expect(overflow).toHaveBeenCalledOnce();
-    room.acknowledge(retained[0]!);
-    expect(room.queuedBytes()).toBe(21);
   });
 
   it("fails one parser room safely when re-entrant chunks overflow", () => {

@@ -9,7 +9,20 @@ import type { WorkspaceIntegrationOutcome } from "../../src/run/workspace-integr
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
 import { compactWorkspaceSummary } from "../../src/tools/compact-workspace-summary.ts";
 import type { WorkspaceRecord } from "../../src/workspace/model.ts";
-import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
+import {
+  subagentServiceDouble,
+  type SubagentServiceDoubleInput,
+} from "./fixtures/subagent-service-double.ts";
+
+/** Runs one workspace action against a service double with only `overrides` implemented. */
+const run = (
+  operation: Parameters<typeof executeWorkspaceAction>[0],
+  caller?: string,
+  overrides: SubagentServiceDoubleInput = {},
+) =>
+  executeWorkspaceAction(operation, caller).pipe(
+    Effect.provideService(SubagentService, subagentServiceDouble(overrides)),
+  );
 
 describe("workspace tool", () => {
   effectTest(
@@ -17,7 +30,6 @@ describe("workspace tool", () => {
     function* () {
       const diff = "diff --git a/file b/file\n" + "content\n".repeat(3_000);
       const service = {
-        ...subagentServiceDouble({}),
         workspaceReview: (
           workspaceId: string,
           options: { revisionId?: string; offset?: number; limit?: number } = {},
@@ -29,7 +41,6 @@ describe("workspace tool", () => {
           const offset = options.offset ?? 0;
           const next = Math.min(diff.length, offset + (options.limit ?? 16_000));
           return Effect.succeed({
-            workspaceId,
             revisionId: "immutable",
             changedPaths: ["file"],
             diff: diff.slice(offset, next),
@@ -39,20 +50,22 @@ describe("workspace tool", () => {
           });
         },
       };
-      const first = yield* executeWorkspaceAction(
+      const first = yield* run(
         { action: "review", workspaceId: "workspace" },
         "parent",
-      ).pipe(Effect.provideService(SubagentService, service), Effect.orDie);
+        service,
+      ).pipe(Effect.orDie);
       expect(first.details).toMatchObject({
         revisionId: "immutable",
         offset: 0,
         totalChars: diff.length,
         nextOffset: 16_000,
       });
-      const second = yield* executeWorkspaceAction(
+      const second = yield* run(
         { action: "review", workspaceId: "workspace", revisionId: "immutable", offset: 16_000 },
         "parent",
-      ).pipe(Effect.provideService(SubagentService, service), Effect.orDie);
+        service,
+      ).pipe(Effect.orDie);
       for (const [page, expected] of [
         [first, diff.slice(0, 16_000)],
         [second, diff.slice(16_000)],
@@ -75,39 +88,29 @@ describe("workspace tool", () => {
         code: "workspace_owner_unavailable",
         message: "Direct parent required.",
       });
-      const service = {
-        ...subagentServiceDouble({}),
-        workspaceIntegrate: (
-          workspaceId: string,
-          revisionId: string,
-          preparationId: string,
-          caller?: string,
-        ) => {
-          expect([workspaceId, revisionId, preparationId, caller]).toEqual([
-            "w",
-            "r",
-            "p",
-            "child",
-          ]);
-          return Effect.fail(denial);
-        },
-      };
-      const failed = yield* executeWorkspaceAction(
+      const failed = yield* run(
         { action: "integrate", workspaceId: "w", revisionId: "r", preparationId: "p" },
         "child",
-      ).pipe(Effect.provideService(SubagentService, service), Effect.flip, Effect.orDie);
+        {
+          workspaceIntegrate: (workspaceId, revisionId, preparationId, caller) => {
+            expect([workspaceId, revisionId, preparationId, caller]).toEqual([
+              "w",
+              "r",
+              "p",
+              "child",
+            ]);
+            return Effect.fail(denial);
+          },
+        },
+      ).pipe(Effect.flip, Effect.orDie);
       expect(failed).toBe(denial);
     },
   );
 
   effectTest("persists bounded empty-list counts without changing orphan guidance", function* () {
-    const response = yield* executeWorkspaceAction({ action: "list" }).pipe(
-      Effect.provideService(SubagentService, {
-        ...subagentServiceDouble({}),
-        workspaceList: () => Effect.succeed({ records: [], unavailable: [] }),
-      }),
-      Effect.orDie,
-    );
+    const response = yield* run({ action: "list" }, undefined, {
+      workspaceList: () => Effect.succeed({ records: [], unavailable: [] }),
+    }).pipe(Effect.orDie);
     expect(response.details).toMatchObject({
       operation: "list",
       workspaceCount: 0,
@@ -141,15 +144,11 @@ describe("workspace tool", () => {
         status: "unavailable",
         reason: "recovery-record-unavailable",
       } as const;
-      const service = subagentServiceDouble({
-        workspaceList: () => Effect.succeed({ records, unavailable: [artifact] }),
-      });
       const all: unknown[] = [];
       for (const offset of [0, 8]) {
-        const response = yield* executeWorkspaceAction({ action: "list", offset }).pipe(
-          Effect.provideService(SubagentService, service),
-          Effect.orDie,
-        );
+        const response = yield* run({ action: "list", offset }, undefined, {
+          workspaceList: () => Effect.succeed({ records, unavailable: [artifact] }),
+        }).pipe(Effect.orDie);
         expect(response.details).toMatchObject({
           workspaceCount: 10,
           unavailableCount: 1,
@@ -162,9 +161,7 @@ describe("workspace tool", () => {
         if (text?.type === "text") {
           const rows = text.text.slice(span.offset, span.offset + span.length).split("\n");
           all.push(
-            ...rows.map((line) =>
-              Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(line),
-            ),
+            ...rows.map((line) => Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(line)),
           );
           if (offset === 0) expect(rows.join("\n")).not.toContain(artifact.workspaceId);
           const summary = compactWorkspaceSummary(response.details, "list");
@@ -188,42 +185,40 @@ describe("workspace tool", () => {
     },
   );
 
-  effectTest("rejects incomplete integration before calling the service", function* () {
-    const failed = yield* executeWorkspaceAction({
-      action: "integrate",
-      workspaceId: "w",
-      revisionId: "r",
-    }).pipe(
-      Effect.provideService(SubagentService, subagentServiceDouble({})),
+  effectTest("rejects invalid operations before calling the service", function* () {
+    const failed = yield* run({ action: "integrate", workspaceId: "w", revisionId: "r" }).pipe(
       Effect.flip,
       Effect.orDie,
     );
     expect(failed).toMatchObject({ code: "workspace_input_invalid" });
+    // Pi `tool_call` handlers can mutate arguments after Pi validated them.
+    for (const operation of [
+      { action: "bogus" },
+      { action: "review", workspaceId: "w", limit: 10_000_000 },
+    ])
+      // SAFETY: These operations deliberately violate the parameter schema.
+      expect(yield* run(operation as never).pipe(Effect.flip, Effect.orDie)).toMatchObject({
+        code: "workspace_input_invalid",
+        message: "Workspace arguments failed strict validation.",
+      });
   });
 
   effectTest("warns about what a committed integration left behind", function* () {
     const integrate = (outcome: Partial<WorkspaceIntegrationOutcome>) =>
-      executeWorkspaceAction({
-        action: "integrate",
-        workspaceId: "w",
-        revisionId: "r",
-        preparationId: "p",
-      }).pipe(
-        Effect.provideService(
-          SubagentService,
-          subagentServiceDouble({
-            workspaceIntegrate: () =>
-              Effect.succeed({
-                workerRoot: "/agent/git-workspaces/w/worker",
-                uncapturedPaths: [],
-                treeRemovalFailed: false,
-                leaseReleaseUnconfirmed: false,
-                ...outcome,
-              }),
-          }),
-        ),
-        Effect.orDie,
-      );
+      run(
+        { action: "integrate", workspaceId: "w", revisionId: "r", preparationId: "p" },
+        undefined,
+        {
+          workspaceIntegrate: () =>
+            Effect.succeed({
+              workerRoot: "/agent/git-workspaces/w/worker",
+              uncapturedPaths: [],
+              treeRemovalFailed: false,
+              leaseReleaseUnconfirmed: false,
+              ...outcome,
+            }),
+        },
+      ).pipe(Effect.orDie);
     const clean = yield* integrate({});
     expect(compactWorkspaceSummary(clean.details, "integrate")).toMatchObject({
       issues: [],

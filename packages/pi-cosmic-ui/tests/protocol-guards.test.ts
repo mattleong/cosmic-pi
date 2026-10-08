@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  normalizeCosmicFooterInvalidateEvent,
   normalizeCosmicFooterRemoveEvent,
   normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
@@ -26,7 +25,6 @@ describe("Cosmic UI protocol guards", () => {
       normalizeCosmicUiHostStateEvent,
       normalizeCosmicFooterUpsertEvent,
       normalizeCosmicFooterRemoveEvent,
-      normalizeCosmicFooterInvalidateEvent,
     ]) {
       expect(() => normalize(input())).not.toThrow();
       expect(normalize(input())).toBeUndefined();

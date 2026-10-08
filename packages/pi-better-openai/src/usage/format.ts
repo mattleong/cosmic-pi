@@ -1,11 +1,10 @@
-import * as Predicate from "effect/Predicate";
-
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
+  decodeUnknownOrUndefined,
   formatPercent,
   formatWindowedUsageLine,
   JsonHttpClient,
@@ -22,7 +21,6 @@ export type UsageSnapshot = {
   sevenDayLeftPercent: number | null;
   fiveHourResetInSeconds: number | null;
   sevenDayResetInSeconds: number | null;
-  isLimited: boolean;
 };
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const SPARK_MODEL_ID = "gpt-5.3-codex-spark";
@@ -62,14 +60,8 @@ export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("Code
 }) {}
 
 function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
-  const additional = data.additional_rate_limits;
-  const values = Array.isArray(additional)
-    ? additional
-    : additional
-      ? Object.values(additional)
-      : [];
-  for (const value of values) {
-    const entry = Option.getOrUndefined(Schema.decodeUnknownOption(AdditionalEntrySchema)(value));
+  for (const value of Object.values(data.additional_rate_limits ?? {})) {
+    const entry = decodeUnknownOrUndefined(AdditionalEntrySchema, value);
     if (entry?.limit_name === SPARK_LIMIT_NAME && entry.rate_limit) return entry.rate_limit;
   }
   return null;
@@ -118,7 +110,6 @@ export function parseUsageSnapshot(
     sevenDayLeftPercent: usedToLeftPercent(sevenDay?.used_percent),
     fiveHourResetInSeconds: resetSeconds(fiveHour, now),
     sevenDayResetInSeconds: resetSeconds(sevenDay, now),
-    isLimited: bucket?.limit_reached === true || bucket?.allowed === false,
   };
 }
 

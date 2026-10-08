@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import {
   createModelPickerChoices,
-  makeModelPickerPage,
+  ModelPickerPage,
   modelSelector,
   type ModelPickerModel,
   type ModelPickerPageOptions,
@@ -38,7 +38,7 @@ describe("ModelPickerPage", () => {
   const picker = (overrides: Partial<ModelPickerPageOptions<ModelPickerModel>> = {}) => {
     const select = vi.fn();
     const cancel = vi.fn();
-    const page = makeModelPickerPage({
+    const page = new ModelPickerPage({
       theme: plainTheme,
       scopedModels: scoped,
       allModels: all,

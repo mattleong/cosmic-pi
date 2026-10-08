@@ -1,6 +1,8 @@
 import { invokeHostCallback } from "pi-cosmic-core";
-import { detachCosmicFooterContribution } from "../protocol/canonicalization.ts";
-import type { CosmicFooterContribution } from "../protocol/protocol.ts";
+import {
+  detachCosmicFooterContribution,
+  type CosmicFooterContribution,
+} from "../protocol/protocol.ts";
 
 /** Reentrant operations accepted behind one outermost operation; the excess is dropped. */
 export const FOOTER_REENTRANT_OPERATION_LIMIT = 128;
@@ -20,7 +22,6 @@ export interface FooterRegistry {
   readonly snapshot: () => FooterRegistrySnapshot;
   readonly upsert: (owner: string, contribution: CosmicFooterContribution) => void;
   readonly remove: (owner: string, id?: string) => void;
-  readonly invalidate: () => void;
   /** Drops every contribution and any queued operation without rendering. */
   readonly clear: () => void;
 }
@@ -93,7 +94,6 @@ export const makeFooterRegistry = (options: {
         publish(next);
         options.requestRender();
       }),
-    invalidate: () => serialized(options.requestRender),
     clear: () => {
       queued.length = 0;
       publish([]);

@@ -40,21 +40,16 @@ type ThrowingOperation =
   | "append"
   | "appendAfterMutation";
 
-interface HarnessOptions {
-  readonly initialEntries?: ReadonlyArray<CustomEntryFixture>;
-  readonly initialThrow?: ThrowingOperation | undefined;
-}
-
 interface MutableOwner {
   readonly sessionId?: string | undefined;
   readonly sessionPath?: string | undefined;
 }
 
-const harness = (options: HarnessOptions = {}) => {
-  const entries = [...(options.initialEntries ?? [])];
+const harness = (initialThrow?: ThrowingOperation) => {
+  const entries: CustomEntryFixture[] = [];
   let currentOwner: MutableOwner = { ...OWNER };
   let currentProbe: SessionHeaderProbe = { _tag: "valid", header: { id: OWNER.sessionId } };
-  let throwing = options.initialThrow;
+  let throwing = initialThrow;
   const getSessionId = vi.fn(() => {
     if (throwing === "sessionId") throw new Error("session-id-secret");
     return currentOwner.sessionId;
@@ -81,7 +76,7 @@ const harness = (options: HarnessOptions = {}) => {
     extensionApiFixture({ appendEntry }),
     extensionContextFixture({ sessionManager: { getSessionId, getSessionFile, getEntries } }),
     OWNER,
-    { probeSessionHeader },
+    probeSessionHeader,
   );
 
   return {
@@ -107,7 +102,7 @@ type Harness = ReturnType<typeof harness>;
 
 describe("host reusable-link store", () => {
   it("uses the supplied launch owner without recapturing it at construction", () => {
-    const h = harness({ initialThrow: "sessionId" });
+    const h = harness("sessionId");
 
     expect(h.getSessionId).not.toHaveBeenCalled();
     expect(h.getSessionFile).not.toHaveBeenCalled();
@@ -150,31 +145,14 @@ describe("host reusable-link store", () => {
     ]);
   });
 
-  it("ignores an inherited ancestor link", () => {
-    const inherited: HerdrBtwLink = {
-      ...LINK,
-      parentSessionId: "ancestor-session",
-      parentSessionPath: "/sessions/ancestor.jsonl",
-    };
-    const h = harness({
-      initialEntries: [{ type: "custom", customType: HERDR_BTW_LINK_ENTRY_TYPE, data: inherited }],
-    });
-
-    expect(h.store.restore()).toEqual({ _tag: "none" });
-  });
-
   it("contains entry-read failures and treats any append throw as uncertain", () => {
-    const readFailure = harness();
-    readFailure.setThrowing("entries");
-    expect(readFailure.store.restore()).toEqual({ _tag: "malformed" });
+    expect(harness("entries").store.restore()).toEqual({ _tag: "malformed" });
 
-    const appendFailure = harness();
-    appendFailure.setThrowing("append");
+    const appendFailure = harness("append");
     expect(appendFailure.store.record(RECORD)).toBe("uncertain");
     expect(appendFailure.entries).toEqual([]);
 
-    const mutationThenThrow = harness();
-    mutationThenThrow.setThrowing("appendAfterMutation");
+    const mutationThenThrow = harness("appendAfterMutation");
     expect(mutationThenThrow.store.record(RECORD)).toBe("uncertain");
     expect(mutationThenThrow.entries).toEqual([
       { type: "custom", customType: HERDR_BTW_LINK_ENTRY_TYPE, data: LINK },

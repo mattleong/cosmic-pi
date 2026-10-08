@@ -12,7 +12,7 @@ export class ModelRegistryAuthError extends Schema.TaggedError<ModelRegistryAuth
   },
 ) {}
 
-type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
+type Registry = ExtensionContext["modelRegistry"];
 
 /**
  * Named Pi boundary for the model registry's credential lookup. Pi resolves, refreshes under its

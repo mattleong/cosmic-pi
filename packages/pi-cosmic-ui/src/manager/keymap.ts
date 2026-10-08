@@ -61,12 +61,6 @@ const action = (value: FullScreenAction): FullScreenResolution => ({
   action: value,
 });
 
-const configuredMatch = (
-  data: string,
-  id: FullScreenSelectionKeybindingId,
-  matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"],
-): boolean => Boolean(matchesKeybinding?.(data, id));
-
 const SELECTION_MOTIONS: ReadonlyArray<
   readonly [KeyId, FullScreenAction, FullScreenSelectionKeybindingId?]
 > = [
@@ -102,6 +96,9 @@ export class FullScreenKeymap {
   resolve(data: string, options: FullScreenKeymapOptions): FullScreenResolution | undefined {
     const { mode, matchesKeybinding } = options;
     const printable = decodeFullScreenPrintable(data);
+    // Every input ends a pending `gg` chord except a lone `g`, which re-arms it below.
+    const pendingFirst = this.pendingFirst;
+    this.pendingFirst = false;
 
     const textOwnsPrintable =
       (mode === "search" || mode === "text-input") && printable !== undefined;
@@ -109,84 +106,33 @@ export class FullScreenKeymap {
       mode === "navigation" &&
       printable !== undefined &&
       FULL_SCREEN_NAVIGATION_SHORTCUTS.has(printable);
+    const configured = (id: FullScreenSelectionKeybindingId): boolean =>
+      !textOwnsPrintable && !sharedActionOwnsPrintable && Boolean(matchesKeybinding?.(data, id));
     if (
       (mode === "navigation" || mode === "confirmation") &&
       printable !== undefined &&
       options.reservedKeys?.has(printable)
-    ) {
-      this.resetChord();
+    )
       return isKeyRepeat(data) ? undefined : { _tag: "Shortcut", key: printable };
-    }
-    if (mode === "confirmation" && isKeyRepeat(data)) {
-      this.resetChord();
-      return undefined;
-    }
-    if (
-      matchesKey(data, Key.escape) ||
-      (!textOwnsPrintable &&
-        !sharedActionOwnsPrintable &&
-        configuredMatch(data, "tui.select.cancel", matchesKeybinding))
-    ) {
-      this.resetChord();
-      return action("cancel");
-    }
+    if (mode === "confirmation" && isKeyRepeat(data)) return undefined;
+    if (matchesKey(data, Key.escape) || configured("tui.select.cancel")) return action("cancel");
+    if (mode === "busy") return printable?.toLowerCase() === "q" ? action("quit") : undefined;
+    if (mode === "confirmation" && printable?.toLowerCase() === "q") return action("cancel");
+    if (matchesKey(data, Key.enter) || configured("tui.select.confirm")) return action("confirm");
+    if (mode === "confirmation" || mode === "text-input" || textOwnsPrintable) return undefined;
 
-    if (mode === "busy") {
-      this.resetChord();
-      return printable?.toLowerCase() === "q" ? action("quit") : undefined;
-    }
-
-    if (mode === "confirmation") {
-      this.resetChord();
-      if (printable?.toLowerCase() === "q") return action("cancel");
-      return matchesKey(data, Key.enter) ||
-        configuredMatch(data, "tui.select.confirm", matchesKeybinding)
-        ? action("confirm")
-        : undefined;
-    }
-
-    if (
-      matchesKey(data, Key.enter) ||
-      (!textOwnsPrintable &&
-        !sharedActionOwnsPrintable &&
-        configuredMatch(data, "tui.select.confirm", matchesKeybinding))
-    ) {
-      this.resetChord();
-      return action("confirm");
-    }
-
-    if (mode === "text-input" || textOwnsPrintable) {
-      this.resetChord();
-      return undefined;
-    }
-
-    for (const [key, motion, id] of SELECTION_MOTIONS) {
-      if (
-        matchesKey(data, key) ||
-        (id !== undefined &&
-          !sharedActionOwnsPrintable &&
-          configuredMatch(data, id, matchesKeybinding))
-      ) {
-        this.resetChord();
-        return action(motion);
-      }
-    }
-
-    if (mode === "search") {
-      this.resetChord();
-      return undefined;
-    }
-
-    if (this.pendingFirst && printable === "g" && isKeyRepeat(data)) return undefined;
-    if (this.pendingFirst) {
-      this.pendingFirst = false;
-      if (printable === "g") return action("first");
-    }
+    for (const [key, motion, id] of SELECTION_MOTIONS)
+      if (matchesKey(data, key) || (id !== undefined && configured(id))) return action(motion);
+    if (mode === "search") return undefined;
 
     if (printable === "g") {
-      if (isKeyRepeat(data)) return undefined;
-      this.pendingFirst = true;
-      return action("pending-first");
+      // A held `g` neither completes nor starts the chord.
+      if (isKeyRepeat(data)) {
+        this.pendingFirst = pendingFirst;
+        return undefined;
+      }
+      this.pendingFirst = !pendingFirst;
+      return action(pendingFirst ? "first" : "pending-first");
     }
     if (printable === "G") return action("last");
     if (printable === "k") return action("up");
@@ -200,8 +146,6 @@ export class FullScreenKeymap {
     if (printable === "/") return action("search");
     if (printable?.toLowerCase() === "q") return action("quit");
     if (printable === "?") return action("help");
-
-    this.resetChord();
     return undefined;
   }
 }

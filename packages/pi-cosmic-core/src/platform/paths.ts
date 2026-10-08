@@ -2,7 +2,7 @@
 import { nodeDisplayHomeDirectory, nodePath } from "./node-builtins.ts";
 
 /** Minimal path-module surface; satisfied by node:path and @effect/platform Path.Path. */
-export interface PathContainmentAdapter {
+interface PathContainmentAdapter {
   relative(root: string, candidate: string): string;
   isAbsolute(value: string): boolean;
   readonly sep: string;
@@ -36,9 +36,6 @@ export function abbreviateHomePath(path: string, home?: string): string {
   return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
 }
 
-const isParentRelative = (path: string) =>
-  path === ".." || path.startsWith("../") || path.startsWith("..\\");
-
 /**
  * A path as users read it: relative to `cwd` when inside it ("src/a.ts", or "." for `cwd`
  * itself), else under the home directory ("~/notes/a.md"), else unchanged.
@@ -56,8 +53,7 @@ export function formatDisplayPath(
     if (!root) continue;
     const relative = nodePath.relative(root, path);
     if (!relative) return prefix ? "~" : ".";
-    if (!isParentRelative(relative) && !nodePath.isAbsolute(relative))
-      return `${prefix}${relative}`;
+    if (isStrictlyInsidePath(root, path)) return `${prefix}${relative}`;
   }
   return path;
 }

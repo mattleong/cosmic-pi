@@ -5,25 +5,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
 
-export interface CapturedDirectorySession {
-  readonly cwd: string;
-  readonly signal: AbortSignal | undefined;
-  readonly fresh: boolean;
-}
-
-export function captureDirectorySession(
-  event: SessionStartEvent,
-  ctx: ExtensionContext,
-): CapturedDirectorySession | undefined {
+/** Captures cwd, signal, and freshness; undefined means the session is unavailable. */
+export function captureDirectorySession(event: SessionStartEvent, ctx: ExtensionContext) {
   const host = captureSessionHost(ctx);
   if (host._tag === "Unavailable") return undefined;
-  if (event.reason === "new") return { cwd: host.cwd, signal: host.signal, fresh: true };
-  if (event.reason !== "startup") return { cwd: host.cwd, signal: host.signal, fresh: false };
-
-  const sessionContext = invokeHostCallback(
-    () => buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()),
-    undefined,
-  );
-  if (!sessionContext) return undefined;
-  return { cwd: host.cwd, signal: host.signal, fresh: sessionContext.messages.length === 0 };
+  // Only startup resolves the active leaf; other starts never read session entries.
+  const fresh =
+    event.reason === "startup"
+      ? invokeHostCallback(
+          () =>
+            buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId())
+              .messages.length === 0,
+          undefined,
+        )
+      : event.reason === "new";
+  return fresh === undefined ? undefined : { cwd: host.cwd, signal: host.signal, fresh };
 }

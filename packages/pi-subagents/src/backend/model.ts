@@ -38,7 +38,6 @@ export interface BackendReport {
 export interface BackendLaunchRequest {
   readonly runId: string;
   readonly name: string;
-  readonly closeOnReport: boolean;
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
@@ -145,7 +144,6 @@ export type BackendEvent =
     }
   | {
       readonly type: "warning";
-      readonly source: "runtime-extension";
       readonly message: string;
     }
   | ({
@@ -160,7 +158,6 @@ export type BackendEvent =
       /** A child's submitted result arguments; `respond` must always answer the waiting child. */
       readonly type: "structured_result";
       readonly assignmentEpoch: number;
-      readonly requestId: string;
       readonly valueJson: string;
       readonly respond: (
         ok: boolean,
@@ -171,22 +168,17 @@ export type BackendEvent =
   | {
       readonly type: "exit";
       readonly exitCode: number | null;
-      readonly signal?: string | undefined;
       readonly diagnostic: string;
       /** Primary backend cause, latched before a termination request. */
       readonly failure?: SubagentProcessError | undefined;
     };
 
-export type BackendExit = Extract<BackendEvent, { readonly type: "exit" }>;
+type BackendExit = Extract<BackendEvent, { readonly type: "exit" }>;
 
 export const toBackendExit = (exit: {
   readonly exitCode: number | null;
-  readonly signal?: string | null | undefined;
   readonly stderr: string;
-}): BackendExit => {
-  const base = { type: "exit" as const, exitCode: exit.exitCode, diagnostic: exit.stderr };
-  return exit.signal == null ? base : { ...base, signal: exit.signal };
-};
+}): BackendExit => ({ type: "exit", exitCode: exit.exitCode, diagnostic: exit.stderr });
 
 /** Runtime-independent controls advertised by a backend driver's capabilities. */
 export interface BackendControls {

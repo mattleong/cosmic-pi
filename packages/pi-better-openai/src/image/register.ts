@@ -27,7 +27,7 @@ import {
 } from "./presentation.ts";
 import { imageResultText } from "./result-text.ts";
 import { OpenAIImageService } from "./service.ts";
-import { OpenAIBoundaryError } from "../usage/controller.ts";
+import { sessionNotStarted } from "../usage/controller.ts";
 import {
   TOOL_PARAMS,
   type CodexImageDetails,
@@ -90,18 +90,7 @@ export function registerOpenAIImage(
 ) {
   const generateEffect = (params: ToolParams) =>
     OpenAIImageService.use((service) => service.generate(params));
-  const retired = () =>
-    Promise.reject(
-      new OpenAIBoundaryError({
-        operation: "runtime",
-        message: "Better OpenAI session has not started.",
-      }),
-    );
-  const generate = (params: ToolParams, ctx: ExtensionContext, signal?: AbortSignal) => {
-    if (!isCurrent()) return retired();
-    updateContext(ctx);
-    return run(generateEffect(params), signal);
-  };
+  const retired = () => Promise.reject(sessionNotStarted());
   command.add({
     name: "image",
     arguments: "<prompt>",
@@ -134,7 +123,6 @@ export function registerOpenAIImage(
         .then((result) => {
           if (Option.isNone(result)) return undefined;
           const image = result.value;
-          const details = imageDetails(image);
           return Promise.resolve()
             .then(() => {
               // Promise delivery has a separate microtask: recheck immediately beside send.
@@ -146,7 +134,7 @@ export function registerOpenAIImage(
                   { type: "image", data: image.data, mimeType: image.mimeType },
                 ],
                 display: true,
-                details,
+                details: imageDetails(image),
               });
             })
             .catch(() => {
@@ -178,7 +166,10 @@ export function registerOpenAIImage(
       noteCwd(ctx);
       const projectionText = `Requesting OpenAI image_generation via ${ctx.model?.id ?? "configured model"}…`;
       onUpdate?.({ content: [{ type: "text", text: projectionText }], details: undefined });
-      return generate(params, ctx, signal).then((result) => ({
+      // Progress is a host callback: recheck authority before the context write.
+      if (!isCurrent()) return retired();
+      updateContext(ctx);
+      return run(generateEffect(params), signal).then((result) => ({
         content: [
           { type: "text", text: imageResultText(result) },
           { type: "image" as const, data: result.data, mimeType: result.mimeType },

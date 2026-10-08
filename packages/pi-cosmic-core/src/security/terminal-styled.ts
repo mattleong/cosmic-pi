@@ -4,14 +4,20 @@ const SAFE_SGR_PARAMETERS = /^[0-9;]*$/u;
 const MAX_SAFE_SGR_PARAMETER_LENGTH = 128;
 const MAX_PRESERVED_SGR_SEQUENCES_PER_LINE = 256;
 const MAX_PRESERVED_SGR_BYTES_PER_LINE = 4_096;
-const TERMINAL_STRING_INTRODUCERS = new Set([0x90, 0x98, 0x9d, 0x9e, 0x9f]);
+/** Terminal-string introducers: C1 DCS, SOS, OSC, PM, APC, and their 7-bit `ESC` finals. */
+export const TERMINAL_STRING_INTRODUCERS = new Set([0x90, 0x98, 0x9d, 0x9e, 0x9f]);
+export const ESCAPE_STRING_INTRODUCERS = new Set(["]", "P", "X", "^", "_"]);
 
-export interface TerminalStyledFragment<Channel extends string = string> {
+/** Not a C0, DEL, or C1 control. */
+export const isPrintableCode = (code: number): boolean =>
+  code >= 32 && code !== 127 && !(code >= 0x80 && code <= 0x9f);
+
+interface TerminalStyledFragment<Channel extends string = string> {
   readonly channel: Channel;
   readonly text: string;
 }
 
-export interface SanitizedTerminalStyledFragment<
+interface SanitizedTerminalStyledFragment<
   Channel extends string = string,
 > extends TerminalStyledFragment<Channel> {
   /** Compact safe SGR state active before this fragment, for reopening after another channel. */
@@ -27,12 +33,8 @@ type TerminalParserMode =
   | "terminal-string-escape";
 
 interface SgrState {
-  bold: boolean;
-  dim: boolean;
-  italic: boolean;
-  underline: boolean;
-  inverse: boolean;
-  strikethrough: boolean;
+  /** Active attribute codes: 1 bold, 2 dim, 3 italic, 4 underline, 7 inverse, 9 strikethrough. */
+  readonly attributes: Set<number>;
   foreground?: string;
   background?: string;
 }
@@ -47,66 +49,45 @@ interface StyledChannelState {
   lineBudgetExhausted: boolean;
 }
 
-const emptySgrState = (): SgrState => ({
-  bold: false,
-  dim: false,
-  italic: false,
-  underline: false,
-  inverse: false,
-  strikethrough: false,
-});
-
 const emptyStyledChannelState = (): StyledChannelState => ({
   mode: "text",
   csi: "",
   csiInvalid: false,
-  sgr: emptySgrState(),
+  sgr: { attributes: new Set() },
   lineSequences: 0,
   lineBytes: 0,
   lineBudgetExhausted: false,
 });
 
 const resetSgrState = (state: SgrState): void => {
-  Object.assign(state, emptySgrState());
+  state.attributes.clear();
   delete state.foreground;
   delete state.background;
 };
 
+/** Attribute codes in reopen order; code + 20 resets each one, and 22 also resets bold. */
+const SGR_ATTRIBUTES = [1, 2, 3, 4, 7, 9];
+
+/** Basic foreground (`base` 30) or background (`base` 40) color, including the bright range. */
+const isBasicColor = (code: number, base: number): boolean =>
+  (code >= base && code <= base + 7) || (code >= base + 60 && code <= base + 67);
+
 const sgrStatePrefix = (state: SgrState): string => {
   const parameters = [
-    state.bold ? "1" : undefined,
-    state.dim ? "2" : undefined,
-    state.italic ? "3" : undefined,
-    state.underline ? "4" : undefined,
-    state.inverse ? "7" : undefined,
-    state.strikethrough ? "9" : undefined,
-    state.foreground,
-    state.background,
-  ].filter((parameter): parameter is string => parameter !== undefined);
+    ...SGR_ATTRIBUTES.filter((code) => state.attributes.has(code)).map(String),
+    ...[state.foreground, state.background].filter((color) => color !== undefined),
+  ];
   return parameters.length === 0 ? "" : `\u001b[${parameters.join(";")}m`;
 };
 
-const SIMPLE_SAFE_SGR = new Set([
-  0,
-  1,
-  2,
-  3,
-  4,
-  7,
-  9,
-  21,
-  22,
-  23,
-  24,
-  27,
-  29,
-  39,
-  49,
-  ...Array.from({ length: 8 }, (_, index) => 30 + index),
-  ...Array.from({ length: 8 }, (_, index) => 40 + index),
-  ...Array.from({ length: 8 }, (_, index) => 90 + index),
-  ...Array.from({ length: 8 }, (_, index) => 100 + index),
-]);
+const isSimpleSafeSgr = (code: number): boolean =>
+  code === 0 ||
+  code === 39 ||
+  code === 49 ||
+  SGR_ATTRIBUTES.includes(code) ||
+  SGR_ATTRIBUTES.includes(code - 20) ||
+  isBasicColor(code, 30) ||
+  isBasicColor(code, 40);
 
 const parseSafeSgr = (parameters: string): ReadonlyArray<number> | undefined => {
   if (parameters.length > MAX_SAFE_SGR_PARAMETER_LENGTH || !SAFE_SGR_PARAMETERS.test(parameters))
@@ -118,7 +99,7 @@ const parseSafeSgr = (parameters: string): ReadonlyArray<number> | undefined => 
   for (let index = 0; index < values.length; index += 1) {
     const code = values[index] ?? -1;
     if (code !== 38 && code !== 48) {
-      if (!SIMPLE_SAFE_SGR.has(code)) return undefined;
+      if (!isSimpleSafeSgr(code)) return undefined;
       continue;
     }
     const mode = values[index + 1];
@@ -143,25 +124,13 @@ const applySafeSgr = (state: SgrState, values: ReadonlyArray<number>): void => {
   for (let index = 0; index < values.length; index += 1) {
     const code = values[index] ?? 0;
     if (code === 0) resetSgrState(state);
-    else if (code === 1) state.bold = true;
-    else if (code === 2) state.dim = true;
-    else if (code === 3) state.italic = true;
-    else if (code === 4) state.underline = true;
-    else if (code === 7) state.inverse = true;
-    else if (code === 9) state.strikethrough = true;
-    else if (code === 21) state.bold = false;
-    else if (code === 22) {
-      state.bold = false;
-      state.dim = false;
-    } else if (code === 23) state.italic = false;
-    else if (code === 24) state.underline = false;
-    else if (code === 27) state.inverse = false;
-    else if (code === 29) state.strikethrough = false;
-    else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
-      state.foreground = String(code);
+    else if (SGR_ATTRIBUTES.includes(code)) state.attributes.add(code);
+    else if (SGR_ATTRIBUTES.includes(code - 20)) {
+      state.attributes.delete(code - 20);
+      if (code === 22) state.attributes.delete(1);
+    } else if (isBasicColor(code, 30)) state.foreground = String(code);
     else if (code === 39) delete state.foreground;
-    else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
-      state.background = String(code);
+    else if (isBasicColor(code, 40)) state.background = String(code);
     else if (code === 49) delete state.background;
     else if (code === 38 || code === 48) {
       const count = values[index + 1] === 5 ? 3 : 5;
@@ -219,7 +188,7 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
         output += character;
         resetStyledLineBudget(state);
       } else if (character === "\t") output += "   ";
-      else if (code >= 32 && code !== 127 && !(code >= 0x80 && code <= 0x9f)) output += character;
+      else if (isPrintableCode(code)) output += character;
     };
     const processText = (character: string, code: number): void => {
       if (code === 0x1b) state.mode = "escape";
@@ -252,7 +221,7 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
           state.mode = "csi";
           state.csi = "";
           state.csiInvalid = false;
-        } else if (["]", "P", "X", "^", "_"].includes(character)) state.mode = "terminal-string";
+        } else if (ESCAPE_STRING_INTRODUCERS.has(character)) state.mode = "terminal-string";
         else if (code >= 0x20 && code <= 0x2f) state.mode = "escape-intermediate";
         else if (code >= 0x30 && code <= 0x7e) state.mode = "text";
         else {
@@ -280,12 +249,4 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
     }
     return { channel: fragment.channel, text: output, reopenSgr };
   });
-}
-
-/**
- * Remove terminal controls except bounded, allowlisted SGR colors/styles.
- * Cursor motion, screen erasure, hyperlinks, clipboard controls, and terminal strings are stripped.
- */
-export function sanitizeTerminalStyledText(value: string): string {
-  return sanitizeTerminalStyledFragments([{ channel: "text", text: value }])[0]?.text ?? "";
 }

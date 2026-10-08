@@ -1,15 +1,17 @@
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import {
+  buildSessionProjection,
   estimateTokens,
   findCutPoint,
   findTurnStartIndex,
   prepareBranchEntries,
   sessionEntryToContextMessages,
+  type CompactionEntry,
   type SessionBeforeCompactEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { hasExactPrefix, reconstructOpenAIContext } from "./context.ts";
 
 const FileDetails = Schema.Struct({
@@ -27,7 +29,7 @@ export function prepareOpenAIFallback(
   if (!restored) return undefined;
   // Pi snapshots its unfiltered session when persisting the ordinary result. We cannot
   // safely supersede repair if that would freeze obsolete legacy prompt/tool authority.
-  const nativeSystem = getCurrentSystemMessage(restored.nativeMessages);
+  const nativeSystem = getCurrentSystemMessage(buildSessionProjection([...branch]).messages);
   const canonicalSystem = getCurrentSystemMessage(restored.messages);
   if (
     !hasExactPrefix(
@@ -63,7 +65,9 @@ export function prepareOpenAIFallback(
   )
     return undefined;
   const summarized = entries.slice(0, cut.firstKeptEntryIndex);
-  const previous = summarized.findLast((entry) => entry.type === "compaction");
+  const previous = summarized.findLast(
+    (entry): entry is CompactionEntry => entry.type === "compaction",
+  );
   const turnStart = findTurnStartIndex(entries, retainedMessageIndex, 0);
   const isSplitTurn = turnStart >= 0 && turnStart < cut.firstKeptEntryIndex;
   const historyEnd = isSplitTurn ? turnStart : cut.firstKeptEntryIndex;
@@ -77,13 +81,10 @@ export function prepareOpenAIFallback(
     : [];
   if (!messagesToSummarize.length && !turnPrefixMessages.length) return undefined;
   const fileOps = prepareBranchEntries(summarized, 0).fileOps;
-  const details =
-    previous?.type === "compaction"
-      ? Option.getOrUndefined(Schema.decodeUnknownOption(FileDetails)(previous.details))
-      : undefined;
+  const details = previous && decodeUnknownOrUndefined(FileDetails, previous.details);
   for (const path of details?.readFiles ?? []) fileOps.read.add(path);
   for (const path of details?.modifiedFiles ?? []) fileOps.edited.add(path);
-  const preparation: SessionBeforeCompactEvent["preparation"] = {
+  return {
     firstKeptEntryId: kept.id,
     messagesToSummarize,
     turnPrefixMessages,
@@ -94,7 +95,6 @@ export function prepareOpenAIFallback(
     ),
     fileOps,
     settings: original.settings,
+    ...(previous && { previousSummary: previous.summary }),
   };
-  if (previous?.type === "compaction") preparation.previousSummary = previous.summary;
-  return preparation;
 }

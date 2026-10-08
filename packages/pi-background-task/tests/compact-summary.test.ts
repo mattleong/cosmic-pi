@@ -79,6 +79,7 @@ describe("background task compact semantics", () => {
     // The first counter counts every state; later ones are shorter fallbacks for narrow rows.
     for (const count of ["2 failed", "1 stopping"]) expect(summary?.counters?.[0]).toContain(count);
     expect(summary?.counters?.at(-1)).toMatch(/^3 tasks$/u);
+    expect(project({ action: "list", tasks: [] }, "list")?.counters).toEqual(["0 tasks"]);
     expect(severities(summary, "error")).toEqual(["one:exit-code", "two:exit-code"]);
     expect(severities(summary, "warning")).toEqual(["three:cleanup-unconfirmed", "three:log-loss"]);
     // Failures lead, whatever the tasks' order.
@@ -379,7 +380,6 @@ describe("background task compact semantics", () => {
     const status = project({ action: "status", snapshot: ended });
     expect(result?.metadata).toEqual(status?.metadata);
     expect(result?.outcome).toBe(status?.outcome);
-    expect(project({ action: "list", tasks: [] }, "list")?.counters).toEqual(["0 tasks"]);
   });
 
   it.each([snapshot, { ...snapshot, state: "exited", exitCode: 0 }])(

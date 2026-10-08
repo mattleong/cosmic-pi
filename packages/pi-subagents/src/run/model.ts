@@ -77,19 +77,18 @@ export type SubagentSessionEvent =
       readonly createdAt: number;
     };
 
-export interface PendingParentQuestion {
+interface PendingParentQuestion {
   readonly requestId: string;
   readonly message: string;
-  readonly createdAt: number;
 }
 
-export interface WriteClaimViolation {
+interface WriteClaimViolation {
   readonly path: string;
   readonly toolName: string;
   readonly observedAt: number;
 }
 
-export interface SubagentNativeActivity {
+interface SubagentNativeActivity {
   readonly active: number;
   readonly total: number;
   readonly latest?:
@@ -102,7 +101,7 @@ export interface SubagentNativeActivity {
     | undefined;
 }
 
-export interface SubagentWriteAudit {
+interface SubagentWriteAudit {
   readonly observedFileWrites: ReadonlyArray<string>;
   readonly violations: ReadonlyArray<WriteClaimViolation>;
   readonly bashWriteHints: number;
@@ -205,21 +204,13 @@ export interface SubagentRunView {
 
 export const SUBAGENT_ROOT_RUN_ID = "root";
 
-export interface SubagentTreeRootView {
-  readonly id: typeof SUBAGENT_ROOT_RUN_ID;
-  readonly depth: 0;
-  readonly directChildCount: number;
-  readonly descendantCount: number;
-}
-
 export interface SubagentProjection {
   readonly revision: number;
-  readonly root?: SubagentTreeRootView | undefined;
   readonly runs: ReadonlyArray<SubagentRunView>;
 }
 
 export const FAILED_START_CLEANUP_DISPOSITIONS = ["pending", "confirmed", "quarantined"] as const;
-export type FailedStartCleanupDisposition = (typeof FAILED_START_CLEANUP_DISPOSITIONS)[number];
+type FailedStartCleanupDisposition = (typeof FAILED_START_CLEANUP_DISPOSITIONS)[number];
 
 export const FAILED_START_RETRY_DISPOSITIONS = [
   "eligible",
@@ -228,7 +219,7 @@ export const FAILED_START_RETRY_DISPOSITIONS = [
   "exhausted",
   "unavailable",
 ] as const;
-export type FailedStartRetryDisposition = (typeof FAILED_START_RETRY_DISPOSITIONS)[number];
+type FailedStartRetryDisposition = (typeof FAILED_START_RETRY_DISPOSITIONS)[number];
 
 /** Settled, privacy-bounded recovery facts for a start that already admitted a run. */
 export interface FailedStartRecovery {
@@ -250,7 +241,6 @@ export interface StartSubagentRequest {
   readonly parentRunId?: string | undefined;
   /** One immutable policy revision captured by the complete start batch. */
   readonly nestingPolicy?: SubagentNestingPolicy | undefined;
-  readonly nestingPolicyRevision?: number | undefined;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
@@ -304,7 +294,7 @@ export const isParentActionRequiredRun = (
   (run.writeAdmissionPaused === true &&
     (run.writeViolationOffender !== true || isTerminalRunState(run.state)));
 
-export const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
+const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",
   "running",
   "waiting_for_parent",
@@ -315,7 +305,7 @@ export const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 
 export const isActiveRunState = (state: SubagentRunState): boolean => ACTIVE_RUN_STATES.has(state);
 
-export const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
+const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "completed",
   "failed",
   "stopped",

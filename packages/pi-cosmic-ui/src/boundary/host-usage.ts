@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-import type { FooterTotals } from "../footer/builtin-contributions.ts";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
 const NonNegativeFiniteNumberSchema = Schema.Number.check(
@@ -16,10 +15,7 @@ const AssistantUsageSchema = Schema.Struct({
 });
 
 const FooterTotalsSchema = Schema.Struct({
-  input: NonNegativeFiniteNumberSchema,
-  output: NonNegativeFiniteNumberSchema,
-  cacheRead: NonNegativeFiniteNumberSchema,
-  cacheWrite: NonNegativeFiniteNumberSchema,
+  ...AssistantUsageSchema.fields,
   cost: NonNegativeFiniteNumberSchema,
 });
 
@@ -29,6 +25,7 @@ const ContextUsageSchema = Schema.Struct({
   percent: Schema.NullOr(NonNegativeFiniteNumberSchema),
 });
 
+export type FooterTotals = typeof FooterTotalsSchema.Type;
 export type DecodedAssistantUsage = typeof AssistantUsageSchema.Type;
 export type DecodedContextUsage = typeof ContextUsageSchema.Type;
 

@@ -1,24 +1,20 @@
 import assert from "node:assert/strict";
-import {
-  initTheme,
-  ToolExecutionComponent,
-  type ToolInfo,
-  type ToolRenderers,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type ToolInfo, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, it } from "vitest";
-import { extensionApiFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
-import {
-  CodePreviewPresentationOwner,
-  createCodePreviewRendererResolver,
-} from "../../src/application/tool-renderers";
+import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
-import { createToolPresentationHarness, renderContextFixture } from "../../testing";
+import {
+  createToolPresentationHarness,
+  drawToolRow,
+  hostToolRow,
+  renderContextFixture,
+} from "../../testing";
+import { inertScheduler as scheduler, presentationResolver } from "../support/renderer-host";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
-const scheduler = { defer: () => () => undefined, schedule: () => () => undefined };
 const info = (name = "web_search"): ToolInfo => ({
   name,
   description: name,
@@ -36,24 +32,22 @@ const downstream: ToolRenderers = {
   renderCall: () => new Text("ORIGINAL CALL", 0, 0),
   renderResult: () => new Text("ORIGINAL OUTPUT", 0, 0),
 };
-function setup(tools: () => ToolInfo[], ready = true) {
-  const pi = extensionApiFixture({
-    getAllTools: tools,
-    getCommands: () => [],
-    registerTool: () => {
-      throw new Error("execution registration");
+const setup = (tools: () => ToolInfo[], ready = true) =>
+  presentationResolver(
+    {
+      getAllTools: tools,
+      registerTool: () => {
+        throw new Error("execution registration");
+      },
+      getActiveTools: () => {
+        throw new Error("activation access");
+      },
+      setActiveTools: () => {
+        throw new Error("activation mutation");
+      },
     },
-    getActiveTools: () => {
-      throw new Error("activation access");
-    },
-    setActiveTools: () => {
-      throw new Error("activation mutation");
-    },
-  });
-  const owner = new CodePreviewPresentationOwner();
-  if (ready) owner.publish("/project", new Set(), scheduler);
-  return { owner, resolver: createCodePreviewRendererResolver(pi, () => owner, new Set()) };
-}
+    ready ? [] : undefined,
+  );
 
 it("admits supported npm identities without executing, enabling, or reading private definition fields", () => {
   for (const source of [
@@ -169,20 +163,18 @@ for (const style of ["preview", "compact"] as const)
     it(`verified cold replay adopts ${style}/${mode} while retaining exact input, output, and downstream extras`, () => {
       const { owner, resolver } = setup(() => [info()], false);
       const args = { queries: ["first query", "QUERY_TAIL"], domainFilter: ["example.test"] };
-      const row = new ToolExecutionComponent(
+      const row = hostToolRow(
         "web_search",
-        "replay",
         args,
-        { showImages: false },
         resolver("web_search", () => downstream),
-        opaqueFixture({ requestRender() {} }),
-        "/project",
+        {
+          result: {
+            content: [{ type: "text", text: "COMPLETE OUTPUT RECOVERY_TAIL" }],
+            details: { queryCount: 2, successfulQueries: 2, totalResults: 4 },
+            isError: false,
+          },
+        },
       );
-      row.updateResult({
-        content: [{ type: "text", text: "COMPLETE OUTPUT RECOVERY_TAIL" }],
-        details: { queryCount: 2, successfulQueries: 2, totalResults: 4 },
-        isError: false,
-      });
       assert.match(row.render(100).join("\n"), /ORIGINAL OUTPUT/);
       setCodePreviewSettings({
         ...defaultCodePreviewSettings,
@@ -191,9 +183,7 @@ for (const style of ["preview", "compact"] as const)
         toolCallTiming: false,
       });
       owner.publish("/project", new Set(), scheduler);
-      row.setExpanded(true);
-      row.invalidate();
-      const expanded = row.render(100).join("\n");
+      const expanded = drawToolRow(row, true, 100);
       for (const marker of [
         "QUERY_TAIL",
         "example.test",

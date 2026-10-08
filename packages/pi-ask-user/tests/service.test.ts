@@ -1,14 +1,17 @@
-import { asyncRequest, defaultQuestion, emptyForm, formOwner } from "./support/questionnaire.ts";
+import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { MAX_PENDING_QUESTIONNAIRES } from "../src/questionnaire/queue.ts";
+import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
-import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
-
-const provideLayer = Effect.provide;
+import {
+  AskUserService,
+  noQuestionnaireActivity,
+  type AskUserHost,
+} from "../src/questionnaire/service.ts";
 
 const request = { questions: [defaultQuestion] } satisfies AskUserRequest;
 
@@ -25,18 +28,18 @@ const invalidRequest: AskUserRequest = {
 const outcome: AskUserOutcome = { outcome: "submitted", answers: [] };
 
 it.effect(
-  "async, owned, ordinary and form requests share FIFO; cancelled callers never mount or steer answers",
+  "async, owned and ordinary requests share FIFO; cancelled callers never mount or steer answers",
   () =>
     Effect.gen(function* () {
       const firstAnswer = yield* Deferred.make<AskUserOutcome>();
       const calls: string[] = [];
       const owners: string[] = [];
       let delivered = 0;
-      const host: AskUserHost = (input, opened) =>
+      const host: AskUserHost = (input, presence) =>
         Effect.gen(function* () {
-          calls.push(opened ? "async" : input.questions[0]!.key);
-          if (opened) yield* Deferred.succeed(opened, undefined);
-          return opened ? yield* Deferred.await(firstAnswer) : outcome;
+          calls.push(presence ? "async" : input.questions[0]!.key);
+          if (presence) yield* Deferred.succeed(presence.opened, undefined);
+          return presence ? yield* Deferred.await(firstAnswer) : outcome;
         });
       const keyed = (key: string) => ({ questions: [{ ...request.questions[0]!, key }] });
       yield* Effect.gen(function* () {
@@ -44,16 +47,13 @@ it.effect(
         const receipt = yield* service.startAsync(asyncRequest);
         const fork = <A, E>(effect: Effect.Effect<A, E>) =>
           Effect.forkChild(effect, { startImmediately: true });
-        const cancelled = [
-          yield* fork(
-            service.askOwned(request, {
-              runId: "cancelled",
-              assignmentEpoch: 1,
-              requestId: "first",
-            }),
-          ),
-          yield* fork(service.askForm(emptyForm, formOwner)),
-        ];
+        const cancelled = yield* fork(
+          service.askOwned(request, {
+            runId: "cancelled",
+            assignmentEpoch: 1,
+            requestId: "first",
+          }),
+        );
         const owned = yield* fork(
           service.askOwned(keyed("owned"), {
             runId: "live",
@@ -62,14 +62,12 @@ it.effect(
           }),
         );
         const ordinary = yield* fork(service.ask(keyed("ordinary")));
-        const form = yield* fork(service.askForm(emptyForm, { ...formOwner, requestId: "next" }));
-        yield* Fiber.interruptAll(cancelled);
+        yield* Fiber.interrupt(cancelled);
         expect(calls).toEqual(["async"]);
         yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });
         expect(yield* Fiber.join(owned)).toEqual(outcome);
         yield* Fiber.join(ordinary);
-        expect(yield* Fiber.join(form)).toEqual({ action: "accept", content: {} });
-        expect(calls).toEqual(["async", "owned", "ordinary", "form"]);
+        expect(calls).toEqual(["async", "owned", "ordinary"]);
         expect(owners).toEqual(["cancelled", "live"]);
         expect(delivered).toBe(0);
       }).pipe(
@@ -82,23 +80,65 @@ it.effect(
               }),
             "test",
             {
+              ...noQuestionnaireActivity,
               admitted: (_id, _request, _cancel, owner) =>
                 Effect.sync(() => {
-                  if (owner && "runId" in owner) owners.push(owner.runId);
+                  if (owner) owners.push(owner.runId);
                 }),
-              presenting: () => Effect.void,
-              settled: () => Effect.void,
-              removed: () => Effect.void,
             },
-            () =>
-              Effect.sync(() => {
-                calls.push("form");
-                return { action: "accept", content: {} } as const;
-              }),
           ),
         ),
       );
     }),
+);
+
+it.effect("settles blocking Activity rows as the presented outcome, failure or cancellation", () =>
+  Effect.gen(function* () {
+    const settled: string[] = [];
+    const cancels: Effect.Effect<void>[] = [];
+    const interruptOpened = yield* Deferred.make<void>();
+    const cancelOpened = yield* Deferred.make<void>();
+    const presentations: Effect.Effect<AskUserOutcome, AskUserHostError>[] = [
+      Effect.succeed({ outcome: "cancelled", answers: [] }),
+      Effect.succeed(outcome),
+      Effect.fail(new AskUserHostError({ operation: "render", message: "broken" })),
+      Deferred.succeed(interruptOpened, undefined).pipe(Effect.andThen(Effect.never)),
+      Deferred.succeed(cancelOpened, undefined).pipe(Effect.andThen(Effect.never)),
+    ];
+    yield* Effect.gen(function* () {
+      const service = yield* AskUserService;
+      expect((yield* service.ask(request)).outcome).toBe("cancelled");
+      expect(yield* service.ask(request)).toEqual(outcome);
+      expect(yield* Effect.flip(service.ask(request))).toMatchObject({ _tag: "AskUserHostError" });
+      const interrupted = yield* Effect.forkChild(service.ask(request), {
+        startImmediately: true,
+      });
+      yield* Deferred.await(interruptOpened);
+      yield* Fiber.interrupt(interrupted);
+      const cancelled = yield* Effect.forkChild(
+        service.askOwned(request, { runId: "run", assignmentEpoch: 0, requestId: "activity" }),
+        { startImmediately: true },
+      );
+      yield* Deferred.await(cancelOpened);
+      yield* cancels[4]!;
+      expect(yield* Fiber.join(cancelled)).toEqual({ outcome: "cancelled", answers: [] });
+    }).pipe(
+      Effect.provide(
+        AskUserService.layer(() => presentations.shift()!, undefined, "test", {
+          ...noQuestionnaireActivity,
+          admitted: (_id, _request, cancel) => Effect.sync(() => cancels.push(cancel)),
+          settled: (id, status) => Effect.sync(() => settled.push(`${id}:${status}`)),
+        }),
+      ),
+    );
+    expect(settled).toEqual([
+      "test-blocking-1:cancelled",
+      "test-blocking-2:submitted",
+      "test-blocking-3:failed",
+      "test-blocking-4:cancelled",
+      "test-blocking-5:cancelled",
+    ]);
+  }),
 );
 
 it.effect("shares one bounded queue across blocking, owned and async requests", () =>
@@ -171,52 +211,6 @@ it.effect("rejects an invalid ask while a valid host dialog holds the permit", (
         yield* Fiber.join(first);
       }),
     );
-    yield* provideLayer(program, serviceLayer, { local: true });
-  }).pipe(Effect.scoped),
-);
-
-it.effect("serializes host asks and removes an interrupted queued caller", () =>
-  Effect.gen(function* () {
-    const firstEntered = yield* Deferred.make<void>();
-    const laterEntered = yield* Deferred.make<void>();
-    const releaseFirst = yield* Deferred.make<void>();
-    let calls = 0;
-
-    const host: AskUserHost = () =>
-      Effect.gen(function* () {
-        calls += 1;
-        yield* Deferred.succeed(calls === 1 ? firstEntered : laterEntered, undefined);
-        if (calls === 1) yield* Deferred.await(releaseFirst);
-        return outcome;
-      });
-    const serviceLayer = AskUserService.layer(host);
-
-    const program = AskUserService.use((service) =>
-      Effect.gen(function* () {
-        const first = yield* service
-          .ask(request)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* Deferred.await(firstEntered);
-
-        const queued = yield* service
-          .ask(request)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* Effect.yieldNow;
-        expect(calls).toBe(1);
-        yield* Fiber.interrupt(queued);
-
-        const later = yield* service
-          .ask(request)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* Deferred.succeed(releaseFirst, undefined);
-        yield* Deferred.await(laterEntered);
-        yield* Fiber.join(first);
-        yield* Fiber.join(later);
-
-        expect(calls).toBe(2);
-      }),
-    );
-    // One provided service instance must own the semaphore for all three calls.
-    yield* provideLayer(program, serviceLayer, { local: true });
+    yield* Effect.provide(program, serviceLayer, { local: true });
   }).pipe(Effect.scoped),
 );

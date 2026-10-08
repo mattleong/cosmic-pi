@@ -6,11 +6,6 @@ import { type SafeFileContract } from "pi-cosmic-core";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
-class ClaudeModelPreferenceError extends Schema.TaggedError<ClaudeModelPreferenceError>()(
-  "ClaudeModelPreferenceError",
-  {},
-) {}
-
 const MAX_SETTINGS_BYTES = 64 * 1024;
 const UserModelPreference = Schema.fromJsonString(
   Schema.Struct({
@@ -28,10 +23,9 @@ export const readClaudeModelPreference = (
     const home = environment.HOME || homedir();
     if (!nodePath.isAbsolute(home) || home.length > 4_096 || /\p{Cc}/u.test(home)) return "default";
     // Follow only this user-owned config link, including common dotfile-manager layouts.
-    const path = yield* Effect.tryPromise({
-      try: () => fs.realpath(nodePath.join(home, ".claude", "settings.json")),
-      catch: () => new ClaudeModelPreferenceError(),
-    });
+    const path = yield* Effect.tryPromise(() =>
+      fs.realpath(nodePath.join(home, ".claude", "settings.json")),
+    );
     const file = yield* safeFile.readContainedRegularFile(
       path,
       nodePath.dirname(path),

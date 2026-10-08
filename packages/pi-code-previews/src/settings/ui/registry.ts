@@ -10,12 +10,10 @@ import {
 
 export type SettingsUiItemId = CodePreviewEditableSettingId | "settingsFile";
 
-export type CodePreviewSettingValueOptions = readonly [string, ...string[]];
-
 export interface SettingItemDefinition {
   label: string;
   description: string;
-  values?: CodePreviewSettingValueOptions;
+  values?: readonly [string, ...string[]];
 }
 
 export const SETTING_ITEM_DEFINITIONS = {
@@ -146,11 +144,6 @@ export const SETTING_ITEM_DEFINITIONS = {
     label: "Find/ls path icons",
     description: "Choose icons for find and ls path-list previews. Nerd mode requires a Nerd Font.",
     values: PATH_ICON_MODES,
-  },
-  tools: {
-    label: "Preview tools",
-    description:
-      "Open granular tool preview toggles. Changes take effect after /reload. Tools already owned by another extension are skipped automatically.",
   },
   settingsFile: {
     label: "Settings file",

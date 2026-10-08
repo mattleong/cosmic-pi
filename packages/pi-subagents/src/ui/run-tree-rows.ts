@@ -1,11 +1,11 @@
 import type { SubagentRunView } from "../run/model.ts";
 
-export interface RunTreeNode {
+interface RunTreeNode {
   readonly id: string;
   readonly parentRunId?: string | undefined;
 }
 
-export interface RunTreeRow<Node extends RunTreeNode> {
+interface RunTreeRow<Node extends RunTreeNode> {
   readonly run: Node;
   readonly isLastSibling: boolean;
   /** For each ancestor, whether its connector continues through this row. */
@@ -101,7 +101,7 @@ export interface FleetTreeRow<Node extends RunTreeNode = SubagentRunView> extend
   readonly expanded: boolean;
 }
 
-export interface FleetTreeProjection<Node extends RunTreeNode = SubagentRunView> {
+interface FleetTreeProjection<Node extends RunTreeNode = SubagentRunView> {
   /** Every run inside the authenticated subtree, including descendants hidden by collapse. */
   readonly runs: ReadonlyArray<Node>;
   /** Parent-before-child rows currently visible in the manager. */
@@ -116,7 +116,7 @@ export interface FleetTreeProjection<Node extends RunTreeNode = SubagentRunView>
 export const projectFleetTree = <Node extends RunTreeNode = SubagentRunView>(
   runs: ReadonlyArray<Node>,
   visibilityRootId: string,
-  collapsedRunIds: ReadonlySet<string>,
+  collapsedRunIds: ReadonlySet<string> = NO_COLLAPSE,
 ): FleetTreeProjection<Node> => {
   const children = new Map<string, Node[]>();
   for (const run of runs) addChild(children, run.parentRunId ?? "root", run);
@@ -125,17 +125,12 @@ export const projectFleetTree = <Node extends RunTreeNode = SubagentRunView>(
   const rows: FleetTreeRow<Node>[] = [];
   // Pre-visiting the root keeps it out of the rows even if a cycle points back at it.
   const visited = new Set<string>([visibilityRootId]);
-  walkRunTree(children.get(visibilityRootId) ?? [], children, visited, collapsedRunIds, (row) => {
+  const roots = children.get(visibilityRootId) ?? [];
+  walkRunTree(roots, children, visited, collapsedRunIds, ({ hidden, ...row }) => {
     scopedRuns.push(row.run);
     // A collapsed ancestor hides this row while keeping it inside the scoped run set.
-    if (row.hidden) return;
-    rows.push({
-      run: row.run,
-      isLastSibling: row.isLastSibling,
-      ancestorContinues: row.ancestorContinues,
-      hasChildren: row.hasChildren,
-      expanded: row.hasChildren && !collapsedRunIds.has(row.run.id),
-    });
+    if (!hidden)
+      rows.push({ ...row, expanded: row.hasChildren && !collapsedRunIds.has(row.run.id) });
   });
   return { runs: scopedRuns, rows };
 };

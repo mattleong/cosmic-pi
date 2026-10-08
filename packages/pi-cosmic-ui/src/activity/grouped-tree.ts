@@ -5,18 +5,14 @@ import {
   declaredPlanned,
   emptyGroupSummary,
   phaseFinished,
-  phaseProgress,
   phaseState,
   summarizeGroup,
   type GroupSummary,
   type PhaseCounts,
   type PhaseState,
 } from "./group-summary.ts";
-export { groupSummaryLabels, phaseFinished } from "./group-summary.ts";
-export type { GroupSummary, PhaseCounts, PhaseState } from "./group-summary.ts";
 import { isFinished, resolveActivityOwnership, type ActivityRow } from "./model.ts";
 import type { ActivityPhase } from "./protocol.ts";
-import type { ActivityTreeOptions } from "./tree.ts";
 import type { ActivitySection } from "./view-protocol.ts";
 
 type Section = ActivitySection | "attention";
@@ -100,14 +96,12 @@ const SECTIONS = [
   ["tasks", "Tasks"],
   ["attention", "Attention"],
 ] as const;
-const rootSection = (row: ActivityRow): Section =>
-  row.kind === "workflow"
-    ? "workflows"
-    : row.kind === "agent"
-      ? "subagents"
-      : row.kind === "command"
-        ? "tasks"
-        : "attention";
+const ROOT_SECTIONS = {
+  workflow: "workflows",
+  agent: "subagents",
+  command: "tasks",
+  question: "attention",
+} as const satisfies Record<ActivityRow["kind"], Section>;
 const blankNode = (id: string, title: string, type: Node["type"]): Node => ({
   id,
   title,
@@ -121,9 +115,12 @@ const blankNode = (id: string, title: string, type: Node["type"]): Node => ({
   history: false,
 });
 
-export interface GroupedActivityTreeOptions extends ActivityTreeOptions {
-  /** With `hideHistory`, keep settled phase rows so a workflow's checklist stays whole. */
-  readonly retainPhaseHistory?: boolean;
+interface GroupedActivityTreeOptions {
+  readonly collapsed?: ReadonlySet<string>;
+  readonly expandedHistory?: ReadonlySet<string>;
+  readonly focus?: string;
+  /** Hides settled rows but keeps settled phase rows, so a workflow's checklist stays whole. */
+  readonly hideHistory?: boolean;
   /**
    * With `hideHistory`, keep up to this many failed direct members of each live workflow, most
    * recent first, so failures stay visible while the run continues.
@@ -191,7 +188,7 @@ export function groupedActivityTree(
       owner?.type === "workflow" && row.phase !== undefined
         ? phases.get(owner.id)?.get(row.phase)
         : undefined;
-    const branch = phase ?? owner ?? sectionNodes.get(rootSection(row))!;
+    const branch = phase ?? owner ?? sectionNodes.get(ROOT_SECTIONS[row.kind])!;
     node.parentId = branch.id;
     branch.children.push(node);
   }
@@ -229,14 +226,13 @@ export function groupedActivityTree(
         workflow,
         node.index!,
         current === undefined || current < 0 ? undefined : current,
-        phaseProgress(node.phase!, node.total),
+        node.total,
       );
       node.history = settled && phaseFinished(node.state);
     } else node.history = node.type !== "section" && settled;
   };
   for (const section of sections) complete(section, section.section);
-  const pinned = (node: Node) =>
-    (options.retainPhaseHistory === true && node.type === "phase") || failures.pinned.has(node.id);
+  const pinned = (node: Node) => node.type === "phase" || failures.pinned.has(node.id);
   const visible = (node: Node) => !options.hideHistory || !node.history || pinned(node);
   const result: GroupedActivityRow[] = [];
   const visit = (node: Node, continuations: readonly boolean[], breadcrumbs: readonly string[]) => {
@@ -319,7 +315,9 @@ function liveFailures(nodes: Iterable<Node>, limit: number) {
 /**
  * Replaces visible counts with the producer's own, which include rows it doesn't publish and rows
  * retention dropped: a phase's `work` and `planned`, and a workflow's `unphasedPlanned` for
- * planned members outside its phases. Workflow and section totals then agree with the phase rows.
+ * planned members outside its phases. Workflow and section totals then agree with the phase rows,
+ * and a phase that ran never reads as skipped. A producer that does not count failures leaves them
+ * to the visible members.
  */
 function withProducerCounts(node: Node, total: GroupSummary): GroupSummary {
   if (node.type === "phase") {

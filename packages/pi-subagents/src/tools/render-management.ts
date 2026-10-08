@@ -5,136 +5,30 @@ import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
+import { failureRecovery } from "./compact-action-failures.ts";
 import type {
   CompactSubagentToolDetails,
+  CompactToolActionFailure,
   SubagentProfileCandidateCard,
   SubagentProfileRouteCard,
-  SubagentRunCard,
 } from "./details-schema.ts";
+import { ACTION_FAILURE_SECTIONS } from "./format.ts";
 import {
   actionFailureDisposition,
   countActionFailures,
-  isUncertainToolFailure,
-  unconfirmedActionRecovery,
   type ActionFailureCounts,
 } from "./outcome.ts";
+import {
+  expandedRunReportSections,
+  renderExpandedRunsResult,
+  runOverviewComponent,
+} from "./render-run-overview.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
 
-/** [lower-cased code substrings, recovery text, optional message-only substrings]. */
-type FailureRecoveryRule = readonly [
-  codes: ReadonlyArray<string>,
-  recovery: string,
-  messages?: ReadonlyArray<string>,
-];
-
-const SCRIPTED_WRITER_RECOVERY: FailureRecoveryRule = [
-  ["scripted_subtree_writer_not_supported", "scripted_writer_not_supported"],
-  "Hand writer work back to the root main agent for authorization and a separate launch outside the script-origin tree.",
-];
-const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
-  SCRIPTED_WRITER_RECOVERY,
-  [
-    ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
-    "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.",
-  ],
-  [
-    ["capacity", "writer"],
-    "Resolve the reported capacity or writer-ownership constraint, then retry the launch.",
-  ],
-];
-const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
-  SCRIPTED_WRITER_RECOVERY,
-  [
-    ["workflow_owned_run"],
-    "The run reports to its workflow, whose notification starts your next turn; end your turn rather than waiting on it, and stop the workflow with subagent_workflow only when the user asks or it is clearly broken.",
-  ],
-  [["notfound", "not_found"], "Refresh run IDs with subagent_list.", ["not found"]],
-  [
-    ["completion_claim_conflict"],
-    "Wait for or cancel the operation that already owns this completion, then retry.",
-  ],
-  [
-    ["retry_route_exhausted"],
-    "The original profile route is exhausted; only now consider a generalist replacement.",
-  ],
-  [
-    ["retry_claim", "retry_already"],
-    "Inspect the predecessor and its linked successor with subagent_status.",
-  ],
-  [
-    ["report_delivery_backlog"],
-    "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.",
-  ],
-  [
-    ["reply_send_failed"],
-    "The reply was never delivered and the question is still pending; resend it with subagent_reply.",
-  ],
-  [["reply_too_large"], "The question is still pending; send a shorter reply with subagent_reply."],
-  [
-    ["question_transport_closed"],
-    "The helper connection closed and the question was cancelled; inspect subagent_status before taking another action.",
-  ],
-  [
-    ["question_ownership_mismatch"],
-    "The question is no longer pending; refresh the run with subagent_status before taking another action.",
-  ],
-  [
-    ["waiting_for_parent", "parent_question"],
-    "Reply with subagent_reply, then await the run again.",
-    ["waiting for a parent reply"],
-  ],
-  [["capability", "unsupported"], "Inspect the run's capabilities with subagent_status."],
-  [
-    ["profile", "candidate", "auth", "harness", "model"],
-    "Inspect the effective route with subagent_models or edit it with /subagents profiles.",
-  ],
-];
-/** Uncertain outcomes never reach retry-shaped rules; these keep their specific no-resend hints. */
-const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
-  [
-    ["retry_cleanup_unconfirmed", "retry_outcome_uncertain"],
-    "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.",
-  ],
-  [
-    ["reply_outcome_uncertain"],
-    "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.",
-  ],
-];
 const PENDING_DELIVERY_RECOVERY =
   "Delivery is still tracked; do not resend, retry, interrupt, or replace for this. Continue or await; stop remains available.";
-
-export const failureRecovery = (
-  code: string | undefined,
-  message: string,
-  context: "start" | "action" = "action",
-): string => {
-  const normalizedCode = code?.toLowerCase() ?? "";
-  const normalizedMessage = message.toLowerCase();
-  const [rules, fallback] = isUncertainToolFailure({ code: normalizedCode })
-    ? [
-        UNCERTAIN_FAILURE_RECOVERY_RULES,
-        context === "start"
-          ? "Do not retry the launch automatically; it may already have taken effect. Inspect subagent_list and subagent_status before recovery."
-          : unconfirmedActionRecovery,
-      ]
-    : context === "start"
-      ? [
-          START_FAILURE_RECOVERY_RULES,
-          "Review the launch failure and profile route before retrying.",
-        ]
-      : [
-          ACTION_FAILURE_RECOVERY_RULES,
-          "Review the failure detail and current subagent_status before retrying.",
-        ];
-  const matched = rules.find(
-    ([codes, , messages]) =>
-      codes.some((needle) => normalizedCode.includes(needle)) ||
-      messages?.some((needle) => normalizedMessage.includes(needle)),
-  );
-  return matched?.[1] ?? fallback;
-};
 
 const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
   `${formatRunRoute({
@@ -237,13 +131,7 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
       return count > 0 ? countLabel(count, "subagent") : "No subagents";
     case "status":
       return `${count} found`;
-    case "send": {
-      // closeOnReport=false targets started their next assignment; others got guidance.
-      const retained = details.cards.filter((card) => card.closeOnReport === false).length;
-      return retained > 0 && retained === details.cards.length
-        ? `${countLabel(count, "next assignment")} started`
-        : `${count} delivered`;
-    }
+    case "send":
     case "reply":
       return `${count} delivered`;
     case "rename":
@@ -273,21 +161,15 @@ const countersText = (details: RunToolDetails, count: number, failures: ActionFa
   ].join(" · ");
 };
 
-export type RunCardRenderer = (
-  cards: ReadonlyArray<SubagentRunCard>,
-  expanded: boolean,
-  counters: string,
-  showReports: boolean,
-) => Component;
-
 /** Failed targets by ID, code, and recovery: agent evidence, so only once expanded. */
-const failedTargetLines = (details: RunToolDetails, width: number, theme: Theme): string[] =>
-  (details.actionFailures ?? []).flatMap((failure) => {
+const failedTargetLines = (
+  failures: ReadonlyArray<CompactToolActionFailure>,
+  recovery: (failure: CompactToolActionFailure) => string,
+  width: number,
+  theme: Theme,
+): string[] =>
+  failures.flatMap((failure) => {
     const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-    const recovery =
-      actionFailureDisposition(details.action, failure) === "pending"
-        ? PENDING_DELIVERY_RECOVERY
-        : failureRecovery(failure.code, failure.message);
     return [
       ...wrapTextWithAnsi(
         theme.fg(
@@ -296,30 +178,58 @@ const failedTargetLines = (details: RunToolDetails, width: number, theme: Theme)
         ),
         width,
       ),
-      ...wrapTextWithAnsi(theme.fg("dim", `  Next: ${recovery}`), width),
+      ...wrapTextWithAnsi(theme.fg("dim", `  Next: ${recovery(failure)}`), width),
     ];
+  });
+
+/** Pending delivery is neither delivered nor failed, so each disposition has its own section. */
+const failureSections = (details: RunToolDetails, theme: Theme): ReadonlyArray<Component> =>
+  ACTION_FAILURE_SECTIONS.flatMap(([disposition, title]) => {
+    const failures = (details.actionFailures ?? []).filter(
+      (failure) => actionFailureDisposition(details.action, failure) === disposition,
+    );
+    const recovery = (failure: CompactToolActionFailure) =>
+      disposition === "pending"
+        ? PENDING_DELIVERY_RECOVERY
+        : failureRecovery(failure.code, failure.message);
+    return failures.length === 0
+      ? []
+      : [
+          expandedSection(
+            theme,
+            title,
+            renderComponent((width) =>
+              failedTargetLines(failures, recovery, Math.max(1, width), theme),
+            ),
+          ),
+        ];
   });
 
 export const renderCompactResultComponent = (
   details: RunToolDetails,
   expanded: boolean,
   theme: Theme,
-  renderRuns: RunCardRenderer,
 ): Component => {
-  const failures = countActionFailures(details.action, details.actionFailures);
-  const failed = expandedSection(
-    theme,
-    failures.failed > 0 ? "Failed targets" : "Unconfirmed targets",
-    renderComponent((width) => failedTargetLines(details, Math.max(1, width), theme)),
+  const counters = countersText(
+    details,
+    details.runCount,
+    countActionFailures(details.action, details.actionFailures),
   );
+  const failures = expanded ? failureSections(details, theme) : [];
+  // A status says where each report went; a list draws its runs as a tree.
+  const showReports = details.action === "status";
+  const hierarchy = details.action === "list" ? {} : undefined;
   return renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const counters = countersText(details, details.runCount, failures);
-    return [
-      ...renderRuns(details.cards, expanded, counters, details.action === "status").render(
-        safeWidth,
-      ),
-      ...(expanded && (details.actionFailures?.length ?? 0) > 0 ? failed.render(safeWidth) : []),
-    ];
+    const runs = expanded
+      ? renderExpandedRunsResult(details.cards, theme, counters, showReports, hierarchy)
+      : runOverviewComponent(details.cards, theme, {
+          expanded: false,
+          reportSections: showReports ? expandedRunReportSections(details.cards) : [],
+          counters,
+          showReportOutcomes: showReports,
+          hierarchy,
+        });
+    return [runs, ...failures].flatMap((component) => component.render(safeWidth));
   });
 };

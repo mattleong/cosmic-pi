@@ -6,11 +6,10 @@ export class PiExecError extends Schema.TaggedError<PiExecError>()("PiExecError"
   operation: Schema.String,
   message: Schema.String,
 }) {}
-export interface PiExecResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly code: number;
-}
+export type PiExecResult = Pick<
+  Awaited<ReturnType<ExtensionAPI["exec"]>>,
+  "stdout" | "stderr" | "code"
+>;
 export interface PiExecContract {
   readonly exec: (
     command: "git" | "gh",

@@ -22,11 +22,6 @@ export interface WorkflowViewStatus {
   readonly attention: ReadonlyArray<WorkflowAgentAttention>;
 }
 
-const attentionOf = (view: SubagentRunView): WorkflowAgentAttention | undefined => {
-  const attention = runAttention(view);
-  return attention && { ...attention, runId: view.id, writer: view.writeIntent === "writer" };
-};
-
 /** The run's running agents whose subagents need a person, in call order. */
 export const workflowAttention = (
   run: WorkflowRunView,
@@ -35,8 +30,10 @@ export const workflowAttention = (
   const views = new Map(subagents.map((view) => [view.id, view]));
   return run.agents.flatMap((agent) => {
     const view = agent.state === "running" ? views.get(agent.runId) : undefined;
-    const attention = view && attentionOf(view);
-    return attention ? [attention] : [];
+    const attention = view && runAttention(view);
+    return attention
+      ? { ...attention, runId: agent.runId, writer: view.writeIntent === "writer" }
+      : [];
   });
 };
 

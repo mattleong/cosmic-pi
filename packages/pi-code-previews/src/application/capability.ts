@@ -13,7 +13,7 @@ type SessionRequirements =
   | CodePreviewWriteService
   | Layer.Success<typeof nodeFilePlatformLayer>;
 
-export class CodePreviewSessionUnavailable extends Schema.TaggedError<CodePreviewSessionUnavailable>()(
+class CodePreviewSessionUnavailable extends Schema.TaggedError<CodePreviewSessionUnavailable>()(
   "CodePreviewSessionUnavailable",
   { operation: Schema.String, message: Schema.String },
 ) {}

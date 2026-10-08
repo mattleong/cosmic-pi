@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
@@ -9,7 +8,10 @@ import {
   type ProfileRouteDraft,
   type ProfileWorkspaceTarget,
 } from "../src/settings/profile-route-editor.ts";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
+import {
+  jsonObject as json,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
 import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 
 const session: ProfileWorkspaceTarget = { kind: "session" };
@@ -20,7 +22,6 @@ const saved = (name = "one", scope: "global" | "project" = "global"): ProfileWor
 const candidate = defaultRouteCandidate("worker");
 const explicit: ProfileRouteDraft = { kind: "explicit", candidates: [candidate] };
 const disabled: ProfileRouteDraft = { kind: "disabled", candidates: [] };
-const json = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson));
 const inspect = (
   global: JsonObject = { version: 6, profileSets: { one: { profiles: {} } } },
   seed?: SessionProfileOverrideSeed,

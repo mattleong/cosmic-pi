@@ -1,9 +1,9 @@
+import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { bundledLanguages } from "shiki";
 import { nodeBasename, nodeExtname } from "../boundary/node";
 import { codePreviewPerformanceConfig } from "../config/state";
 
 const EXACT_BASENAMES = new Map<string, string>([
-  ["dockerfile", "dockerfile"],
   ["makefile", "makefile"],
   ["gnumakefile", "makefile"],
   ["justfile", "makefile"],
@@ -11,10 +11,7 @@ const EXACT_BASENAMES = new Map<string, string>([
   ["gemfile", "ruby"],
   ["rakefile", "ruby"],
   ["cargo.lock", "toml"],
-  ["package-lock.json", "json"],
   ["composer.lock", "json"],
-  ["pnpm-lock.yaml", "yaml"],
-  ["pnpm-lock.yml", "yaml"],
   ["yarn.lock", "yaml"],
 ]);
 
@@ -37,61 +34,46 @@ export function normalizePreviewLanguageAlias(language: string): string {
   return LANGUAGE_ALIASES.get(normalized) ?? normalized;
 }
 
-const EXTENSION_ALIASES = new Map<string, string>([
-  [".env", "dotenv"],
-  [".sh", normalizePreviewLanguageAlias("sh")],
-  [".bash", normalizePreviewLanguageAlias("bash")],
-  [".zsh", normalizePreviewLanguageAlias("zsh")],
-  [".ts", normalizePreviewLanguageAlias("ts")],
-  [".tsx", normalizePreviewLanguageAlias("tsx")],
-  [".js", normalizePreviewLanguageAlias("js")],
-  [".jsx", normalizePreviewLanguageAlias("jsx")],
-  [".mjs", normalizePreviewLanguageAlias("js")],
-  [".cjs", normalizePreviewLanguageAlias("js")],
-  [".md", normalizePreviewLanguageAlias("md")],
-  [".yml", normalizePreviewLanguageAlias("yml")],
-  [".yaml", normalizePreviewLanguageAlias("yaml")],
-  [".json", normalizePreviewLanguageAlias("json")],
-  [".toml", normalizePreviewLanguageAlias("toml")],
+/** Pi's extension table maps JSX sources to grammars without JSX. */
+const JSX_LANGUAGES = new Map<string, string>([
+  [".tsx", "tsx"],
+  [".jsx", "jsx"],
 ]);
 
 const SHEBANG_ALIASES = new Map<string, string>([
-  ["bash", normalizePreviewLanguageAlias("bash")],
-  ["sh", normalizePreviewLanguageAlias("sh")],
-  ["zsh", normalizePreviewLanguageAlias("zsh")],
-  ["python", normalizePreviewLanguageAlias("python")],
-  ["python3", normalizePreviewLanguageAlias("python")],
-  ["node", normalizePreviewLanguageAlias("js")],
-  ["deno", normalizePreviewLanguageAlias("ts")],
-  ["ruby", normalizePreviewLanguageAlias("ruby")],
-  ["php", normalizePreviewLanguageAlias("php")],
+  ["bash", "bash"],
+  ["sh", "bash"],
+  ["zsh", "bash"],
+  ["python", "python"],
+  ["node", "javascript"],
+  ["deno", "typescript"],
+  ["ruby", "ruby"],
+  ["php", "php"],
 ]);
 
 export function resolvePreviewLanguage({
   path,
   content,
-  piLanguage,
 }: {
   path?: string | undefined;
   content?: string | undefined;
-  piLanguage?: string | undefined;
 }): string | undefined {
   return firstSupported(
-    piLanguage,
+    path && JSX_LANGUAGES.get(nodeExtname(path).toLowerCase()),
+    path && getLanguageFromPath(path),
     languageFromPath(path),
     languageFromShebang(content),
     languageFromContent(content),
   );
 }
 
+/** Names Pi's extension table does not know. */
 function languageFromPath(path: string | undefined): string | undefined {
   if (!path) return undefined;
   const name = nodeBasename(path).toLowerCase();
-  if (name.startsWith(".env")) return "dotenv";
+  if (name.startsWith(".env") || name.endsWith(".env")) return "dotenv";
   if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
-  const exact = EXACT_BASENAMES.get(name);
-  if (exact) return exact;
-  return EXTENSION_ALIASES.get(nodeExtname(name));
+  return EXACT_BASENAMES.get(name);
 }
 
 function languageFromShebang(content: string | undefined): string | undefined {
@@ -105,9 +87,12 @@ function languageFromShebang(content: string | undefined): string | undefined {
   const command =
     envIndex >= 0 ? parts.slice(envIndex + 1).find((part) => !part.startsWith("-")) : parts[0];
   if (!command) return undefined;
-  const rawExecutable = nodeBasename(command).toLowerCase();
-  const executable = rawExecutable.replace(/\d+(\.\d+)?$/, "");
-  return SHEBANG_ALIASES.get(executable) ?? SHEBANG_ALIASES.get(rawExecutable);
+  // Versioned interpreters such as python3 or ruby3.2 share their unversioned grammar.
+  return SHEBANG_ALIASES.get(
+    nodeBasename(command)
+      .toLowerCase()
+      .replace(/\d+(\.\d+)?$/, ""),
+  );
 }
 
 function languageFromContent(content: string | undefined): string | undefined {

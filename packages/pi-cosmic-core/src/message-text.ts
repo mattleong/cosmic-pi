@@ -3,7 +3,7 @@
  * issues and user notifications.
  */
 import { clipText } from "./display.ts";
-import { stripTerminalControls } from "./security.ts";
+import { sanitizeTerminalLine } from "./security.ts";
 
 /** Longest message one of these helpers returns by default. */
 export const MESSAGE_TEXT_LIMIT = 240;
@@ -20,6 +20,8 @@ const ADVICE =
 
 const STRUCTURED = /^[[{]\s*(?:"|\{|\[|$)/u;
 
+const withoutFinalPeriod = (text: string): string => text.replace(/(?<!\.)\.$/u, "");
+
 function tidy(line: string): string {
   let text = line;
   for (let pass = 0; pass < 3; pass++) {
@@ -31,7 +33,7 @@ function tidy(line: string): string {
   const [first = "", ...rest] = text.split(SENTENCE_BREAK);
   const advice = rest.findIndex((sentence) => ADVICE.test(sentence));
   text = [first, ...(advice === -1 ? rest : rest.slice(0, advice))].join(" ");
-  return text.replace(/(?<!\.)\.$/u, "").trim();
+  return withoutFinalPeriod(text).trim();
 }
 
 /**
@@ -43,10 +45,7 @@ export function firstLineMessage(
   fallback: string,
   limit = MESSAGE_TEXT_LIMIT,
 ): string {
-  const line = text
-    .split(/\r?\n/u)
-    .map((value) => stripTerminalControls(value).replace(/\s+/gu, " ").trim())
-    .find(Boolean);
+  const line = text.split(/\r?\n/u).map(sanitizeTerminalLine).find(Boolean);
   // Structured data, such as a JSON reply, is not a message; the raw text stays with the caller.
   const message = line === undefined || STRUCTURED.test(line) ? "" : tidy(line);
   return clipText(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
@@ -54,17 +53,11 @@ export function firstLineMessage(
 
 /** Whether `message` already says all of `text`: one line, bar spacing and its final period. */
 export function restatesText(text: string, message: string): boolean {
-  return (
-    message !== "" &&
-    text
-      .trim()
-      .replace(/\s+/gu, " ")
-      .replace(/(?<!\.)\.$/u, "") === message
-  );
+  return message !== "" && withoutFinalPeriod(text.trim().replace(/\s+/gu, " ")) === message;
 }
 
 /** A quoted line in people's terms, and the full text when the line does not say all of it. */
-export interface QuotedText {
+interface QuotedText {
   /** Absent when the text opens with agent guidance or has nothing to quote. */
   readonly line?: string;
   readonly detail?: string;
@@ -128,7 +121,7 @@ const PHRASE_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
  * first line. Classification reads only the first line, so bodies and stacks cannot match.
  */
 export function failureMessage(text: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string {
-  const line = firstLineMessage(text, "", Number.MAX_SAFE_INTEGER);
+  const line = firstLineMessage(text, "");
   const status = STATUS.exec(line)?.[1];
   const code = status === undefined ? undefined : Number(status);
   const phrase =
@@ -146,6 +139,5 @@ export function failureMessage(text: string, fallback: string, limit = MESSAGE_T
  */
 export function notificationText(message: string): string {
   if (/\n/u.test(message.trim())) return message;
-  const line = stripTerminalControls(message).replace(/\s+/gu, " ").trim();
-  return line.replace(/(?<!\.)\.$/u, "");
+  return withoutFinalPeriod(sanitizeTerminalLine(message));
 }

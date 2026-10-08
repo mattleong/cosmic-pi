@@ -1,12 +1,17 @@
 // Actual registered execute results plus Pi's compositional tool_result boundary.
-import type {
-  AgentToolResult,
-  ExtensionHandler,
-  ToolDefinition,
-  ToolResultEvent,
+import {
+  createEventBus,
+  type AgentToolResult,
+  type ExtensionHandler,
+  type ToolDefinition,
+  type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
 import * as Schema from "effect/Schema";
 import { effectTest, step } from "../support/effect-test.ts";
@@ -24,9 +29,8 @@ import {
   makeStartDetails,
 } from "../../src/tools/details.ts";
 import { decodeCompactToolDetails } from "../../src/tools/details-schema.ts";
+import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
-import { eventBus } from "../support/questionnaire.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   context,
@@ -37,8 +41,15 @@ import {
 } from "./fixtures/tool-harness.ts";
 
 type Handler = ExtensionHandler<any, any>;
+type HookEvent = Parameters<Handler>[0];
 type Tool = ToolDefinition<any, any, any>;
 const toolHosts = new WeakMap<Tool, Map<string, Handler[]>>();
+const runHooks = (
+  hooks: ReadonlyMap<string, Handler[]> | undefined,
+  name: string,
+  event: HookEvent,
+) =>
+  Effect.forEach(hooks?.get(name) ?? [], (hook) => step(() => Promise.resolve(hook(event, ctx))));
 const execute = (
   tool: Tool,
   args: Parameters<Tool["execute"]>[1],
@@ -46,34 +57,13 @@ const execute = (
 ) =>
   Effect.gen(function* () {
     // Owned host fixture follows Pi start and admission provenance before execution.
-    for (const hook of toolHosts.get(tool)?.get("tool_execution_start") ?? [])
-      yield* step(() =>
-        Promise.resolve(
-          hook(
-            {
-              type: "tool_execution_start",
-              toolName: tool.name,
-              toolCallId: options?.callID ?? "call",
-              args,
-            },
-            ctx,
-          ),
-        ),
-      );
-    for (const hook of toolHosts.get(tool)?.get("tool_call") ?? []) {
-      const result = yield* step(() =>
-        Promise.resolve(
-          hook(
-            {
-              type: "tool_call",
-              toolName: tool.name,
-              toolCallId: options?.callID ?? "call",
-              input: args,
-            },
-            ctx,
-          ),
-        ),
-      );
+    const hooks = toolHosts.get(tool);
+    const call = { toolName: tool.name, toolCallId: options?.callID ?? "call" };
+    yield* runHooks(hooks, "tool_execution_start", { type: "tool_execution_start", ...call, args });
+    const admission = { type: "tool_call", ...call, input: args } as const;
+    // Like Pi, admission stops at the first blocking hook.
+    for (const hook of hooks?.get("tool_call") ?? []) {
+      const result = yield* step(() => Promise.resolve(hook(admission, ctx)));
       if (result?.block) return yield* Effect.die(new Error(result.reason));
     }
     return yield* step(() => executeTool(tool, args, options));
@@ -89,34 +79,20 @@ const ctx = extensionContextFixture({
 });
 
 function host() {
-  const hooks = new Map<string, Handler[]>();
-  const tools = new Map<string, Tool>();
-  let active: string[] = [];
-  const pi = extensionApiFixture({
-    events: eventBus(),
-    on: (name: string, handler: Handler) => {
-      hooks.set(name, [...(hooks.get(name) ?? []), handler]);
-      return () => undefined;
+  const {
+    pi,
+    handlers: hooks,
+    tools,
+  } = recordingExtensionHost(
+    {},
+    {
+      events: createEventBus(),
+      registerFlag: () => undefined,
+      registerProvider: () => undefined,
+      getFlag: (name: string) => (name === "pi-subagents-supervisor-config" ? "/unused" : false),
     },
-    registerTool: (tool: Tool) => tools.set(tool.name, tool),
-    registerCommand: () => undefined,
-    registerFlag: () => undefined,
-    registerProvider: () => undefined,
-    sendMessage: () => undefined,
-    getActiveTools: () => active,
-    setActiveTools: (names: string[]) => {
-      active = names;
-    },
-    getFlag: (name: string) => (name === "pi-subagents-supervisor-config" ? "/unused" : false),
-  });
-  const emit = (name: string) =>
-    Effect.forEach(
-      hooks.get(name) ?? [],
-      (handler) => step(() => Promise.resolve(handler({}, ctx))),
-      {
-        discard: true,
-      },
-    );
+  );
+  const emit = (name: string) => runHooks(hooks, name, {}).pipe(Effect.asVoid);
   const result = (event: ToolResultEvent) =>
     Effect.gen(function* () {
       let current = event;
@@ -126,8 +102,58 @@ function host() {
       }
       return current;
     });
-  return { pi, hooks, tools, emit, result };
+  /** The one registered receipt hook for `name`; a missing hook fails the test. */
+  const dispatch = (name: string, event: HookEvent) =>
+    step(() => Promise.resolve(hooks.get(name)![0]!(event, ctx)));
+  /** Pi's start event; `parentToolCallId` is present only when supplied. */
+  const startCall = (
+    toolCallId: string,
+    extra: { readonly toolName?: string; readonly parentToolCallId?: string } = {},
+  ) =>
+    dispatch("tool_execution_start", {
+      type: "tool_execution_start",
+      toolCallId,
+      toolName: "subagent_start",
+      args: {},
+      ...extra,
+    });
+  /** Pi's admission event; `parentToolCallId` is present only when supplied. */
+  const admitCall = (
+    toolCallId: string,
+    extra: { readonly input?: object; readonly parentToolCallId?: string } = {},
+  ) =>
+    dispatch("tool_call", {
+      type: "tool_call",
+      toolCallId,
+      toolName: "subagent_start",
+      input: {},
+      ...extra,
+    });
+  return { pi, hooks, tools, emit, result, dispatch, startCall, admitCall };
 }
+
+/** A host with active error receipts; `earlierResult` is tool_result middleware installed first. */
+function receiptHost(earlierResult?: Handler) {
+  const h = host();
+  if (earlierResult) h.pi.on("tool_result", earlierResult);
+  const receipts = registerSubagentErrorReceipts(h.pi);
+  return { ...h, receipts, owner: receipts.activate() };
+}
+
+/** Registers proxied coordinator tools whose every call resolves through `proxyCall`. */
+const proxiedTools = (
+  h: ReturnType<typeof receiptHost>,
+  proxyCall: NonNullable<SubagentToolRuntime["proxyCall"]>,
+) =>
+  registerSubagentTools(
+    h.pi,
+    {
+      environment: { cwd: "/project", projectTrusted: false },
+      proxyCall,
+      run: () => Promise.reject(new Error("proxy only")),
+    },
+    { receipts: h.receipts, owner: h.owner },
+  );
 
 const event = (
   response: AgentToolResult<unknown>,
@@ -146,8 +172,8 @@ const failure = (code = "claude_steering_outcome_uncertain", id = "uncertain") =
   code,
   message: "Input may already have been sent. Do not resend this guidance.",
 });
-const pendingFailure = (id = "pending") => ({
-  id,
+const pendingFailure = () => ({
+  id: "pending",
   code: "steer_outcome_uncertain",
   message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
   pendingDelivery: true as const,
@@ -166,10 +192,7 @@ const failed = () => ({
 });
 
 function ownedTools(service = subagentServiceDouble({}), earlierResult?: Handler) {
-  const h = host();
-  if (earlierResult) h.pi.on("tool_result", earlierResult);
-  const receipts = registerSubagentErrorReceipts(h.pi);
-  const owner = receipts.activate();
+  const h = receiptHost(earlierResult);
   registerSubagentTools(
     h.pi,
     {
@@ -184,68 +207,35 @@ function ownedTools(service = subagentServiceDouble({}), earlierResult?: Handler
           signal ? { signal } : undefined,
         ),
     },
-    { receipts, owner },
+    { receipts: h.receipts, owner: h.owner },
   );
   for (const tool of h.tools.values()) toolHosts.set(tool, h.hooks);
-  return { ...h, receipts, owner };
+  return h;
 }
 
 effectTest("fails closed on unknown origin and releases aborted call provenance", function* () {
-  const h = host();
-  const receipts = registerSubagentErrorReceipts(h.pi);
-  const owner = receipts.activate();
+  const { receipts, owner, startCall, admitCall, dispatch } = receiptHost();
   const admit = (id: string, nested = true) =>
-    step(() =>
-      Promise.resolve(
-        h.hooks.get("tool_call")![0]!(
-          {
-            type: "tool_call",
-            toolCallId: id,
-            toolName: "subagent_start",
-            input: { parentToolCallId: "argument-does-not-authorize" },
-            ...(nested && { parentToolCallId: "native-parent" }),
-          },
-          ctx,
-        ),
-      ),
-    );
-  const start = (id: string, parentToolCallId?: string) =>
-    step(() =>
-      Promise.resolve(
-        h.hooks.get("tool_execution_start")![0]!(
-          {
-            type: "tool_execution_start",
-            toolCallId: id,
-            toolName: "subagent_start",
-            args: {},
-            ...(parentToolCallId !== undefined && { parentToolCallId }),
-          },
-          ctx,
-        ),
-      ),
-    );
+    admitCall(id, {
+      input: { parentToolCallId: "argument-does-not-authorize" },
+      ...(nested && { parentToolCallId: "native-parent" }),
+    });
   expect(receipts.isNested(owner, "unknown")).toBe(true);
-  yield* start("codemode-looking-model-id");
+  yield* startCall("codemode-looking-model-id");
   expect(receipts.isNested(owner, "codemode-looking-model-id")).toBe(true);
   yield* admit("codemode-looking-model-id", false);
   expect(receipts.isNested(owner, "codemode-looking-model-id")).toBe(false);
-  for (let i = 0; i < 255; i++) yield* start(`pending-${i}`, "native-parent");
-  yield* start("over-cap", "");
+  for (let i = 0; i < 255; i++)
+    yield* startCall(`pending-${i}`, { parentToolCallId: "native-parent" });
+  yield* startCall("over-cap", { parentToolCallId: "" });
   expect(yield* admit("over-cap", false)).toMatchObject({ block: true });
-  yield* step(() =>
-    Promise.resolve(
-      h.hooks.get("tool_execution_end")![0]!(
-        {
-          type: "tool_execution_end",
-          toolName: "subagent_start",
-          toolCallId: "pending-0",
-          isError: true,
-          result: {},
-        },
-        ctx,
-      ),
-    ),
-  );
+  yield* dispatch("tool_execution_end", {
+    type: "tool_execution_end",
+    toolName: "subagent_start",
+    toolCallId: "pending-0",
+    isError: true,
+    result: {},
+  });
   // The overflow start was not retained. A freed slot must not turn its lost empty
   // parent into model privilege when admission finally arrives.
   expect(yield* admit("over-cap", false)).toBeUndefined();
@@ -257,131 +247,45 @@ effectTest("fails closed on unknown origin and releases aborted call provenance"
 effectTest(
   "keeps empty-parent and missing-start origins scripted across later root-looking events",
   function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    const owner = receipts.activate();
-    const start = (id: string, parentToolCallId?: string) =>
-      step(() =>
-        Promise.resolve(
-          h.hooks.get("tool_execution_start")![0]!(
-            {
-              type: "tool_execution_start",
-              toolCallId: id,
-              toolName: "subagent_start",
-              args: {},
-              ...(parentToolCallId !== undefined && { parentToolCallId }),
-            },
-            ctx,
-          ),
-        ),
-      );
-    const admit = (id: string) =>
-      step(() =>
-        Promise.resolve(
-          h.hooks.get("tool_call")![0]!(
-            {
-              type: "tool_call",
-              toolCallId: id,
-              toolName: "subagent_start",
-              input: {},
-            },
-            ctx,
-          ),
-        ),
-      );
-    yield* start("opaque", "");
-    yield* admit("opaque"); // Pi's admission hook drops the empty parent ID.
+    const { receipts, owner, startCall, admitCall } = receiptHost();
+    yield* startCall("opaque", { parentToolCallId: "" });
+    yield* admitCall("opaque"); // Pi's admission hook drops the empty parent ID.
     expect(receipts.isNested(owner, "opaque")).toBe(true);
-    yield* start("opaque");
-    yield* admit("opaque");
+    yield* startCall("opaque");
+    yield* admitCall("opaque");
     expect(receipts.isNested(owner, "opaque")).toBe(true);
 
-    yield* admit("missing-start");
+    yield* admitCall("missing-start");
     expect(receipts.isNested(owner, "missing-start")).toBe(true);
-    yield* start("missing-start");
-    yield* admit("missing-start");
+    yield* startCall("missing-start");
+    yield* admitCall("missing-start");
     expect(receipts.isNested(owner, "missing-start")).toBe(true);
   },
 );
 
 for (const reset of ["activation", "agent_end"] as const)
   effectTest(`does not grant model origin after ${reset} loses start evidence`, function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    const owner = receipts.activate();
-    yield* step(() =>
-      Promise.resolve(
-        h.hooks.get("tool_execution_start")![0]!(
-          {
-            type: "tool_execution_start",
-            toolCallId: "pending",
-            toolName: "subagent_start",
-            args: {},
-          },
-          ctx,
-        ),
-      ),
-    );
-    const currentOwner = reset === "activation" ? receipts.activate() : owner;
+    const h = receiptHost();
+    yield* h.startCall("pending");
+    const currentOwner = reset === "activation" ? h.receipts.activate() : h.owner;
     if (reset === "agent_end") yield* h.emit("agent_end");
-    yield* step(() =>
-      Promise.resolve(
-        h.hooks.get("tool_call")![0]!(
-          {
-            type: "tool_call",
-            toolCallId: "pending",
-            toolName: "subagent_start",
-            input: {},
-          },
-          ctx,
-        ),
-      ),
-    );
-    expect(receipts.isNested(currentOwner, "pending")).toBe(true);
-    expect(receipts.isNested(owner, "pending")).toBe(true);
+    yield* h.admitCall("pending");
+    expect(h.receipts.isNested(currentOwner, "pending")).toBe(true);
+    expect(h.receipts.isNested(h.owner, "pending")).toBe(true);
   });
 
 effectTest(
   "ignores oversized and foreign starts without stealing owned-call capacity",
   function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    const owner = receipts.activate();
-    const start = (id: string, toolName = "subagent_start") =>
-      step(() =>
-        Promise.resolve(
-          h.hooks.get("tool_execution_start")![0]!(
-            {
-              type: "tool_execution_start",
-              toolCallId: id,
-              toolName,
-              args: {},
-            },
-            ctx,
-          ),
-        ),
-      );
-    yield* start("inactive");
+    const { receipts, owner, startCall, admitCall } = receiptHost();
+    yield* startCall("inactive");
     receipts.deactivate();
-    yield* start("while-inactive");
+    yield* startCall("while-inactive");
     const activeOwner = receipts.activate();
-    yield* start("foreign", "read");
-    yield* start("x".repeat(1_025));
-    for (let i = 0; i < 256; i++) yield* start(`owned-${i}`);
-    const admission = yield* step(() =>
-      Promise.resolve(
-        h.hooks.get("tool_call")![0]!(
-          {
-            type: "tool_call",
-            toolCallId: "owned-255",
-            toolName: "subagent_start",
-            input: {},
-          },
-          ctx,
-        ),
-      ),
-    );
-    expect(admission).toBeUndefined();
+    yield* startCall("foreign", { toolName: "read" });
+    yield* startCall("x".repeat(1_025));
+    for (let i = 0; i < 256; i++) yield* startCall(`owned-${i}`);
+    expect(yield* admitCall("owned-255")).toBeUndefined();
     expect(receipts.isNested(activeOwner, "owned-255")).toBe(false);
     expect(receipts.isNested(owner, "owned-255")).toBe(true);
   },
@@ -485,7 +389,6 @@ effectTest(
         runIds: ids,
         message: "guidance",
       });
-      const text = response.content.map((part) => ("text" in part ? part.text : "")).join("\n");
       const flagged = ids.filter((id) => id.startsWith("pending"));
       expect(response.details).toMatchObject({
         action: "send",
@@ -496,15 +399,6 @@ effectTest(
       expect(failures.filter((entry) => entry.pendingDelivery === true)).toHaveLength(
         flagged.length,
       );
-      // Pending guidance is neither claimed delivered nor reported as a failed target.
-      if (flagged.length > 0) {
-        expect(text).toContain("awaiting confirmation");
-        expect(text).toContain("Do not resend");
-      }
-      if (!ids.includes("good")) expect(text).not.toContain("delivered");
-      if (!ids.some((id) => id === "bad")) expect(text).not.toContain("Failed targets");
-      if (ids.some((id) => id === "unflagged" || id === "wrong-code"))
-        expect(text).toContain("Unconfirmed targets");
       // Content middleware may add native images; receipts never replace content or details.
       const content = [...response.content, image];
       const patched = yield* h.result(event({ ...response, content }));
@@ -518,9 +412,7 @@ effectTest(
 effectTest(
   "classifies structurally decoded pending flags by action and code before marking receipts",
   function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    const owner = receipts.activate();
+    const { receipts, owner, result } = receiptHost();
     const base = makeCompactToolDetails({ action: "send", runs: [], actionFailures: [failure()] });
     for (const [tool, action, entry, isError] of [
       ["subagent_send", "send", pendingFailure(), false],
@@ -531,7 +423,7 @@ effectTest(
     ] as const) {
       const details = { ...base, action, actionFailures: [entry] };
       receipts.retain(owner, tool, "call", action, details);
-      const patched = yield* h.result(event({ content: [], details }, tool));
+      const patched = yield* result(event({ content: [], details }, tool));
       expect(patched.isError).toBe(isError);
       expect(patched.details).toBe(details);
     }
@@ -541,9 +433,7 @@ effectTest(
 effectTest(
   "does not mark successful status/list/await observations of failed workers or cancelled waits",
   function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    const owner = receipts.activate();
+    const h = receiptHost();
     const run = view({ id: "failed", state: "failed", error: "worker failure" });
     for (const action of ["status", "list", "await"] as const) {
       for (const cancelled of [false, true]) {
@@ -554,15 +444,7 @@ effectTest(
               ? makeAwaitDetails({ runs: [run], awaitUntil: "all_finished", cancelled })
               : makeCompactToolDetails({ action, runs: [run] }),
         };
-        registerSubagentTools(
-          h.pi,
-          {
-            environment: { cwd: "/project", projectTrusted: false },
-            proxyCall: () => Promise.resolve(response),
-            run: () => Promise.reject(new Error("proxy only")),
-          },
-          { receipts, owner },
-        );
+        proxiedTools(h, () => Promise.resolve(response));
         const tool = `subagent_${action}` as const;
         const result = yield* execute(h.tools.get(tool)!, {
           runIds: [run.id],
@@ -575,26 +457,16 @@ effectTest(
 );
 
 effectTest("retains only final resolved results and rejects stale late completions", function* () {
-  const h = host();
-  const receipts = registerSubagentErrorReceipts(h.pi);
-  const owner = receipts.activate();
+  const h = receiptHost();
   const pending = deferredPromise<AgentToolResult<unknown>>();
-  registerSubagentTools(
-    h.pi,
-    {
-      environment: { cwd: "/project", projectTrusted: false },
-      proxyCall: () => pending.promise,
-      run: () => Promise.reject(new Error("proxy only")),
-    },
-    { receipts, owner },
-  );
+  proxiedTools(h, () => pending.promise);
   const response = failed();
   const executing = executeTool(h.tools.get("subagent_send")!, {
     runIds: ["uncertain"],
     message: "once",
   });
   expect((yield* h.result(event(response))).isError).toBe(false);
-  receipts.activate();
+  h.receipts.activate();
   pending.resolve(response);
   expect(yield* step(() => executing)).toBe(response);
   expect((yield* h.result(event(response))).isError).toBe(false);
@@ -603,9 +475,9 @@ effectTest("retains only final resolved results and rejects stale late completio
 effectTest(
   "bounds exact-identity receipts and revokes turn/replacement/shutdown ownership",
   function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    let owner = receipts.activate();
+    const h = receiptHost();
+    const { receipts } = h;
+    let owner = h.owner;
     const response = failed();
     const retain = (id = "call") =>
       receipts.retain(owner, "subagent_send", id, "send", response.details);
@@ -640,16 +512,14 @@ effectTest(
 effectTest(
   "declines malformed, mismatched and unbounded details rather than labelling foreign failures",
   function* () {
-    const h = host();
-    const receipts = registerSubagentErrorReceipts(h.pi);
-    const owner = receipts.activate();
+    const { receipts, owner, result } = receiptHost();
     for (const details of [
       { actionFailures: [failure()] },
       { ...failed().details, action: "reply" },
       { ...failed().details, foreign: "x".repeat(48_001) },
     ]) {
       receipts.retain(owner, "subagent_send", "call", "send", details);
-      expect((yield* h.result(event({ content: [], details }))).isError).toBe(false);
+      expect((yield* result(event({ content: [], details }))).isError).toBe(false);
     }
   },
 );
@@ -760,9 +630,7 @@ describe("local Pi serialized proxy", () => {
 });
 
 effectTest("marks failed start receipts without changing the proxy wire format", function* () {
-  const h = host();
-  const receipts = registerSubagentErrorReceipts(h.pi);
-  const owner = receipts.activate();
+  const h = receiptHost();
   const response = {
     content: [{ type: "text" as const, text: "startup outcome is uncertain; do not retry" }],
     details: makeStartDetails({
@@ -778,15 +646,7 @@ effectTest("marks failed start receipts without changing the proxy wire format",
       startFailures: [{ index: 0, message: "startup uncertain", code: "start_outcome_uncertain" }],
     }),
   };
-  registerSubagentTools(
-    h.pi,
-    {
-      environment: { cwd: "/project", projectTrusted: false },
-      proxyCall: () => Promise.resolve(response),
-      run: () => Promise.reject(new Error("proxy only")),
-    },
-    { receipts, owner },
-  );
+  proxiedTools(h, () => Promise.resolve(response));
   const actual = yield* execute(h.tools.get("subagent_start")!, { agents: [{ task: "task" }] });
   expect(actual).toBe(response);
   expect((yield* h.result(event(actual, "subagent_start"))).isError).toBe(true);

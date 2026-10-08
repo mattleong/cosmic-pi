@@ -29,12 +29,7 @@ import {
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 import { getShikiStatus, renderWithShiki } from "../../src/syntax/render";
 
-/** A token whose color may be a probe that counts ANSI color conversions. */
-type TokenFixture = {
-  readonly content: string;
-  readonly color: string | { readonly replace: () => string };
-  readonly offset?: number;
-};
+type TokenFixture = { readonly content: string; readonly color: string; readonly offset?: number };
 
 const highlighter = (
   dispose: () => void = () => undefined,
@@ -50,17 +45,6 @@ const syntaxLayer = (
   CodePreviewSyntaxService.layer.pipe(
     Layer.provide(Layer.succeed(ShikiAdapter, ShikiAdapter.of({ create, loadLanguage }))),
   );
-
-const makeAnsiColorProbe = () => {
-  let conversions = 0;
-  const color = {
-    replace: () => {
-      conversions++;
-      return "#ffffff";
-    },
-  };
-  return { color, conversions: () => conversions };
-};
 
 /** Renders like Pi's host, which renders again on every invalidation. */
 const hostRender = (code: string, lang: string) => {
@@ -466,36 +450,6 @@ describe("session syntax service", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("bounds duplicate initialization ingress without losing invalidations", () => {
-    const requests = 200;
-    let callbacks = 0;
-    let creates = 0;
-    return Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const layer = syntaxLayer(() => {
-        creates++;
-        return Deferred.succeed(started, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-          Effect.as(highlighter()),
-        );
-      });
-      yield* CodePreviewSyntaxService.use(() =>
-        Effect.gen(function* () {
-          for (let index = 0; index < requests; index++)
-            requestSyntaxInitialize("dark-plus", () => callbacks++);
-          yield* Deferred.await(started);
-          assert.ok(callbacks > 0, "overflow callbacks should invalidate immediately");
-          assert.ok(callbacks < requests, "bounded retained callbacks should await completion");
-          yield* Deferred.succeed(release, undefined);
-          for (let attempt = 0; attempt < 20; attempt++) yield* Effect.yieldNow;
-          assert.equal(creates, 1);
-          assert.equal(callbacks, requests);
-        }),
-      ).pipe(provideBuiltLayer(layer));
-    }).pipe(Effect.scoped);
-  });
-
   it.effect("bounds duplicate language ingress and isolates invalidation failures", () => {
     const requests = 200;
     let callbacks = 0;
@@ -639,12 +593,29 @@ describe("session syntax service", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("a finalized session never creates a highlighter it would not dispose", () => {
+    let creates = 0;
+    const layer = syntaxLayer(() =>
+      Effect.sync(() => {
+        creates++;
+        return highlighter();
+      }),
+    );
+    return Effect.gen(function* () {
+      const retained = yield* CodePreviewSyntaxService.use((service) =>
+        Effect.succeed(service),
+      ).pipe(provideBuiltLayer(layer));
+      // A caller outliving the session, such as a joiner retrying an interrupted flight.
+      yield* retained.initialize("dark-plus");
+      assert.equal(creates, 0);
+    });
+  });
+
   it.effect("session finalization discards caches owned by its highlighter", () => {
     let renders = 0;
-    const color = makeAnsiColorProbe();
     const reused = highlighter(undefined, (code) => {
       renders++;
-      return [[{ content: `${renders}:${code}`, color: color.color }]];
+      return [[{ content: `${renders}:${code}`, color: "#ffffff" }]];
     });
     const renderSession = CodePreviewSyntaxService.use((service) =>
       service
@@ -656,41 +627,16 @@ describe("session syntax service", () => {
       yield* renderSession;
       yield* renderSession;
       assert.equal(renders, 2);
-      assert.equal(color.conversions(), 2);
     });
-  });
-
-  it.effect("replacement discards color conversions owned by the previous highlighter", () => {
-    const color = makeAnsiColorProbe();
-    const previous = highlighter(undefined, (code) => [
-      [{ content: `previous:${code}`, color: color.color }],
-    ]);
-    const next = highlighter(undefined, (code) => [
-      [{ content: `next:${code}`, color: color.color }],
-    ]);
-    const layer = syntaxLayer((theme) => Effect.succeed(theme === "old" ? previous : next));
-
-    return CodePreviewSyntaxService.use((service) =>
-      Effect.gen(function* () {
-        setCodePreviewSettings({ ...codePreviewSettings, shikiTheme: "old" });
-        yield* service.initialize("old");
-        assert.ok(renderWithShiki("same source", "typescript"));
-        setCodePreviewSettings({ ...codePreviewSettings, shikiTheme: "next" });
-        yield* service.initialize("next");
-        assert.ok(renderWithShiki("same source", "typescript"));
-        assert.equal(color.conversions(), 2);
-      }),
-    ).pipe(provideBuiltLayer(layer));
   });
 
   it.effect("stale highlighter cleanup preserves a newer highlighter's caches", () =>
     Effect.gen(function* () {
       const staleCandidate = yield* Deferred.make<ShikiHighlighter>();
       let currentRenders = 0;
-      const color = makeAnsiColorProbe();
       const current = highlighter(undefined, (code) => {
         currentRenders++;
-        return [[{ content: `current:${code}`, color: color.color }]];
+        return [[{ content: `current:${code}`, color: "#ffffff" }]];
       });
       const layer = syntaxLayer((theme) =>
         theme === "github-dark" ? Deferred.await(staleCandidate) : Effect.succeed(current),
@@ -707,7 +653,6 @@ describe("session syntax service", () => {
           assert.ok(renderWithShiki("same source", "typescript"));
           assert.ok(renderWithShiki("different source", "typescript"));
           assert.equal(currentRenders, 2);
-          assert.equal(color.conversions(), 1);
         }),
       ).pipe(provideBuiltLayer(layer));
     }).pipe(Effect.scoped),

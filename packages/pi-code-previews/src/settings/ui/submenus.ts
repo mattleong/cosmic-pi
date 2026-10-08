@@ -18,7 +18,6 @@ import { bundledThemes } from "shiki";
 import { ON_OFF_VALUES, formatOnOff } from "../../config/values";
 import {
   ALL_CODE_PREVIEW_TOOLS,
-  parseCodePreviewTools,
   parseToolToggleId,
   toolToggleId,
   type CodePreviewToolName,
@@ -35,13 +34,13 @@ export class ToolPreviewSettingsSubmenu extends Container {
   private readonly settingsList: SettingsList;
 
   constructor(
-    currentValue: string,
+    tools: readonly CodePreviewToolName[],
     done: (selectedValue?: string) => void,
-    theme?: Theme,
-    required: ReadonlySet<CodePreviewToolName> = new Set(),
+    theme: Theme | undefined,
+    required: ReadonlySet<CodePreviewToolName>,
   ) {
     super();
-    this.selectedTools = parseCodePreviewTools(currentValue) ?? new Set(ALL_CODE_PREVIEW_TOOLS);
+    this.selectedTools = new Set(tools);
     this.settingsList = new SettingsList(
       createToolToggleItems(this.selectedTools, getCodePreviewToolStatuses(), required),
       ALL_CODE_PREVIEW_TOOLS.length + 2,
@@ -52,7 +51,12 @@ export class ToolPreviewSettingsSubmenu extends Container {
         if (value === "on") this.selectedTools.add(tool);
         else this.selectedTools.delete(tool);
       },
-      () => done(this.formatSelectedTools()),
+      () =>
+        done(
+          formatToolsSettingValue(
+            ALL_CODE_PREVIEW_TOOLS.filter((tool) => this.selectedTools.has(tool)),
+          ),
+        ),
     );
 
     this.addChild(new Text("Preview tools", 0, 0));
@@ -69,12 +73,6 @@ export class ToolPreviewSettingsSubmenu extends Container {
 
   handleInput(data: string): void {
     this.settingsList.handleInput(data);
-  }
-
-  private formatSelectedTools(): string {
-    return formatToolsSettingValue(
-      ALL_CODE_PREVIEW_TOOLS.filter((tool) => this.selectedTools.has(tool)),
-    );
   }
 }
 

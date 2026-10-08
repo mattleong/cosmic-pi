@@ -1,5 +1,5 @@
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
-
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
@@ -140,7 +140,7 @@ const StructuredResultAckSchema = piSubagentsMessage("structured_result_ack", {
     Schema.String.check(Schema.isMaxLength(MAX_STRUCTURED_RESULT_REJECTION_CHARS)),
   ),
 });
-export const LocalPiContactSchema = Schema.Union([
+const LocalPiContactSchema = Schema.Union([
   ContactParentSchema,
   ContactCancelSchema,
   ParentReplyAckSchema,
@@ -150,7 +150,7 @@ export const LocalPiContactSchema = Schema.Union([
   TurnInputBarrierAckSchema,
   StructuredResultSchema,
 ]);
-export const LocalPiParentControlSchema = Schema.Union([
+const LocalPiParentControlSchema = Schema.Union([
   ParentReplySchema,
   PeerNoticeSchema,
   ProxyResponseSchema,
@@ -229,7 +229,7 @@ const RpcStateDataSchema = Schema.Struct({
   sessionId: RpcStateSessionIdSchema,
 });
 
-export type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
+type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
 
 export const decodeRpcStateData = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(RpcStateDataSchema)(value);
@@ -260,10 +260,7 @@ const TextPartSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schem
 
 export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessageSchema>): string =>
   message.content
-    .flatMap((part) => {
-      const decoded = Schema.decodeUnknownOption(TextPartSchema)(part);
-      return decoded._tag === "Some" ? [decoded.value.text] : [];
-    })
+    .flatMap((part) => decodeUnknownOrUndefined(TextPartSchema, part)?.text ?? [])
     .join("\n")
     .trim();
 

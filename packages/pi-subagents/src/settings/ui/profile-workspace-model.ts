@@ -1,6 +1,7 @@
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
+  MAX_PROFILE_CANDIDATES,
   isLocalPiProfileCandidate,
   supportsSubagentFastMode,
   type ProfileCandidate,
@@ -8,7 +9,9 @@ import {
 } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
+  CANDIDATE_LIMIT_REACHED,
   loadProfileRouteDraft,
+  profileRouteOptionLabel,
   profileWorkspaceScope,
   runtimeEfforts,
   runtimeLabel,
@@ -54,9 +57,6 @@ export interface CandidateFieldChoice {
   readonly description: string;
 }
 
-export const profileRouteOptionLabel = (index: number): string =>
-  index <= 0 ? "Primary" : `Fallback ${index}`;
-
 export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
   switch (draft.kind) {
     case "explicit":
@@ -77,25 +77,16 @@ const profileDefaultEffort = (profile: ProfileId): SubagentEffort | undefined =>
   return "defaultEffort" in definition ? definition.defaultEffort : undefined;
 };
 
-export const effectiveCandidateEffort = (
-  profile: ProfileId,
-  candidate: ProfileCandidate,
-  parentEffort: SubagentEffort,
-): SubagentEffort =>
-  candidate.effort === "default"
-    ? (profileDefaultEffort(profile) ?? parentEffort)
-    : candidate.effort;
-
 export const candidateEffortLabel = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   parentEffort: SubagentEffort,
-): string => {
-  const effective = effectiveCandidateEffort(profile, candidate, parentEffort);
-  return candidate.effort === "default" ? `${effective} (profile default)` : effective;
-};
+): string =>
+  candidate.effort === "default"
+    ? `${profileDefaultEffort(profile) ?? parentEffort} (profile default)`
+    : candidate.effort;
 
-const candidateFastModeAvailable = (
+export const candidateFastModeAvailable = (
   candidate: ProfileCandidate,
   parentModel: string | undefined,
 ): boolean => {
@@ -113,15 +104,15 @@ export const candidateFastModeApplied = (
 export const runWithValue = (candidate: ProfileCandidate): string =>
   `${candidate.host}/${candidate.runtime}`;
 
-export const runWithLabel = (candidate: Pick<ProfileCandidate, "host" | "runtime">): string =>
+export const runWithLabel = (candidate: Pick<ProfileCandidate, "runtime">): string =>
   `Local ${runtimeLabel(candidate.runtime)}`;
 
 export const targetProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
   target: ProfileWorkspaceTarget,
   profile: ProfileId,
-  draft: ProfileRouteDraft = loadProfileRouteDraft(inspection, target, profile),
 ): string => {
+  const draft = loadProfileRouteDraft(inspection, target, profile);
   const kind = draftKindLabel(draft, profileWorkspaceScope(target));
   const primary = draft.candidates[0];
   if (primary) return `${kind} · ${primary.model}`;
@@ -209,20 +200,68 @@ export const candidateFieldRows = (
   ];
 };
 
+export type ProfileWorkspaceRow = ProfileWorkspaceFieldRow &
+  (
+    | { readonly scope: "candidate"; readonly candidateIndex: number }
+    | { readonly scope: "profile"; readonly candidateIndex?: undefined }
+  );
+
+/** Headings and section spacing are presentation, never keyboard navigation stops. */
+export const profileWorkspaceRows = (
+  draft: ProfileRouteDraft,
+  profile: ProfileId,
+  parentEffort: SubagentEffort,
+  parentModel: string | undefined,
+  expanded: ReadonlySet<number>,
+  canUndo = false,
+): ReadonlyArray<ProfileWorkspaceRow> => [
+  ...draft.candidates.flatMap((candidate, candidateIndex) =>
+    candidateFieldRows(
+      candidate,
+      profile,
+      parentEffort,
+      parentModel,
+      expanded.has(candidateIndex),
+      candidateIndex,
+    ).map((row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex })),
+  ),
+  {
+    scope: "profile",
+    field: draft.candidates.length === 0 ? "model" : "add",
+    label: draft.candidates.length === 0 ? "Add model…" : "Add fallback…",
+    value:
+      draft.kind === "invalid"
+        ? "repair this profile"
+        : draft.kind === "disabled"
+          ? "enable this profile"
+          : "",
+    fixed: draft.candidates.length >= MAX_PROFILE_CANDIDATES,
+    fixedReason: CANDIDATE_LIMIT_REACHED,
+  },
+  {
+    scope: "profile",
+    field: "reset",
+    label: "Undo changes",
+    value: "",
+    fixed: !canUndo,
+    fixedReason: "No undoable changes from this visit.",
+  },
+];
+
 export type SelectableCandidateField = Exclude<
   ProfileWorkspaceField,
   "model" | "advanced" | "actions" | "add" | "reset"
 >;
 
-const RUN_WITH_CHOICES = (["local"] as const).flatMap((host) =>
-  (["pi", "claude", "codex"] as const).map((runtime) => ({
-    value: `${host}/${runtime}`,
-    label: runWithLabel({ host, runtime }),
-    description: `Run ${runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex"} locally on this computer`,
-    host,
-    runtime,
-  })),
-);
+const RUN_WITH_PRODUCTS = { pi: "Pi", claude: "Claude Code", codex: "Codex" } as const;
+
+const RUN_WITH_CHOICES = (["pi", "claude", "codex"] as const).map((runtime) => ({
+  value: `local/${runtime}`,
+  label: runWithLabel({ runtime }),
+  description: `Run ${RUN_WITH_PRODUCTS[runtime]} locally on this computer`,
+  host: "local" as const,
+  runtime,
+}));
 
 export const runWithChoice = (
   value: string,
@@ -273,14 +312,11 @@ export const candidateFieldChoices = (
         description: "May change files within its assigned safety restrictions",
       },
     ];
-  if (field === "openaiFastMode") {
-    const available =
-      options.fastModeAvailable ??
-      (candidate.model !== "parent" &&
-        supportsSubagentFastMode(candidate.runtime, candidate.model));
+  if (field === "openaiFastMode")
     return [
       { value: "false", label: "Off", description: "Do not request priority service" },
-      ...(available
+      // The fast-mode picker always opens with the selected model's checked availability.
+      ...(options.fastModeAvailable === true
         ? [
             {
               value: "true",
@@ -290,7 +326,6 @@ export const candidateFieldChoices = (
           ]
         : []),
     ];
-  }
   return [];
 };
 
@@ -306,7 +341,7 @@ export function selectCandidateField(
   if (field === "runWith") {
     const choice = runWithChoice(value);
     return choice
-      ? updateCandidateControls(candidate, { host: choice.host, runtime: choice.runtime }, {})
+      ? updateCandidateControls(candidate, choice, {})
       : { error: "Invalid Run with selection.", notices: [] };
   }
   if (field === "effort") {

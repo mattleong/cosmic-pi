@@ -1,12 +1,13 @@
-// Private JSONL process ownership shared by Pi RPC, the native CLI adapters, and Codex hook trust.
+// Private JSONL process ownership shared by Pi RPC and the native Claude/Codex CLI adapters.
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
-import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
+import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
@@ -17,23 +18,30 @@ const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
 const WRITE_TIMEOUT = "10 seconds";
 
+export interface ProcessExit {
+  readonly exitCode: number | null;
+  readonly signal?: string;
+  readonly stderr: string;
+}
+
+/** Process exit is published only through `awaitExit`, never on the event queue. */
 export type ProcessWireEvent<Message> =
   | Message
-  | { readonly type: "protocol_error"; readonly message: string }
-  | {
-      readonly type: "exit";
-      readonly exitCode: number | null;
-      readonly signal?: string;
-      readonly stderr: string;
-    };
-type ProcessExit = Extract<ProcessWireEvent<never>, { readonly type: "exit" }>;
+  | { readonly type: "protocol_error"; readonly message: string };
 
-export interface ChildProcessReleaseOperations {
-  readonly platform: NodeJS.Platform;
-  readonly requestAbort: Effect.Effect<void>;
+/** The owned process surface the local Pi, Claude, and Codex adapters consume. */
+export interface ProcessTransportHandle<Message, Frame> {
+  readonly pid: number;
+  readonly events: Queue.Dequeue<ProcessWireEvent<Message>, Cause.Done>;
+  /** Release byte-weighted transport backlog ownership after one event is processed. */
+  readonly acknowledge: (event: ProcessWireEvent<Message>) => void;
+  readonly awaitExit: Effect.Effect<ProcessExit, SubagentProcessError>;
+  readonly send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
-  readonly awaitExit: Effect.Effect<unknown>;
 }
+
+// Frames are locally constructed protocol values, each serialized as one JSONL line.
+const encodeFrame = <Frame>(frame: Frame): string => `${JSON.stringify(frame)}\n`;
 
 const cleanupUnconfirmed = () =>
   processCauseError(
@@ -42,45 +50,12 @@ const cleanupUnconfirmed = () =>
     "cleanup_unconfirmed",
   );
 
-export const releaseChildProcess = (
-  operations: ChildProcessReleaseOperations,
-): Effect.Effect<void, SubagentProcessError> =>
-  Effect.gen(function* () {
-    const waitForExit = operations.awaitExit.pipe(
-      Effect.interruptible,
-      Effect.as(true),
-      Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
-    );
-    yield* operations.requestAbort;
-    yield* Effect.sleep("100 millis");
-    const gracefulAttempt = yield* Effect.exit(operations.terminate("graceful"));
-    if (yield* waitForExit) {
-      if (operations.platform === "win32") {
-        if (Exit.isFailure(gracefulAttempt)) return yield* cleanupUnconfirmed();
-        return;
-      }
-      yield* Effect.sleep("100 millis");
-      // POSIX descendants remain owned after the detached group leader exits.
-      return yield* operations.terminate("force");
-    }
-    const forceAttempt = yield* Effect.exit(operations.terminate("force"));
-    // Wait even when the forced terminate failed, so a late exit is still observed.
-    const forcedExit = yield* waitForExit;
-    if (Exit.isFailure(forceAttempt) || !forcedExit) return yield* cleanupUnconfirmed();
-  });
-
 /** Owned process operations, injectable without replacing Node or provider modules. */
 export interface ProcessTransportRuntime {
   readonly spawn: (...args: Parameters<typeof nodeSpawn>) => NodeChildProcess;
   readonly terminate: typeof terminateProcessTree;
-  /** Fire-and-forget termination from synchronous stream callbacks. */
-  readonly force: typeof terminateProcessTree;
 }
-const nodeRuntime: ProcessTransportRuntime = {
-  spawn: nodeSpawn,
-  terminate: terminateProcessTree,
-  force: terminateProcessTree,
-};
+const nodeRuntime: ProcessTransportRuntime = { spawn: nodeSpawn, terminate: terminateProcessTree };
 
 interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly spawn: (spawn: ProcessTransportRuntime["spawn"]) => NodeChildProcess;
@@ -91,29 +66,28 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
     error?: ErrorInput,
     code?: string,
   ) => SubagentProcessError;
-  /** `bytes` is the parsed line's UTF-8 length. */
-  readonly message: <ValueInput>(value: ValueInput, bytes: number) => Message;
-  readonly encode: (frame: Frame) => string;
-  /** Defaults to MAX_PROCESS_LINE_BYTES. */
-  readonly maxLineBytes?: number | undefined;
+  readonly message: <ValueInput>(value: ValueInput) => Message;
   readonly maxOutboundBytes?: number;
   readonly terminateOnParserOverflow: boolean;
   readonly synchronousWriteFailure: "not_sent" | "defect";
   readonly requestAbort?: (
     send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>,
   ) => Effect.Effect<void>;
-  /** Attach extra channels before waiting for spawn, and detach only this acquisition's listeners. */
+  /** Attach extra channels before waiting for spawn; `detach` removes only these listeners. */
   readonly attach: (
     child: NodeChildProcess,
     offer: (event: ProcessWireEvent<Message>) => void,
-  ) => { readonly value: Attachment; readonly detach: () => void };
+  ) => Attachment;
 }
 
-/** Callers hand the acquired release to acquireRelease without an interruptible gap. */
+/**
+ * Spawns one owned process in the caller's scope. Spawn through release-finalizer registration
+ * stays masked, so scope closure always releases a process that exists.
+ */
 export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(function* <
   Message extends object,
   Frame,
-  Attachment,
+  Attachment extends { readonly detach: () => void },
 >(
   options: ProcessTransportOptions<Message, Frame, Attachment>,
   runtime: ProcessTransportRuntime = nodeRuntime,
@@ -121,8 +95,14 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
   const events = yield* Queue.dropping<ProcessWireEvent<Message>, Cause.Done>(EVENT_CAPACITY);
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<ProcessExit>();
+  // Synchronous stream callbacks fork forced termination into this scope rather than a daemon.
+  const runFork = yield* FiberSet.makeRuntime();
   const { platform, label, error: processError } = options;
   const stderr: Buffer[] = [];
+  // Queued events stay weighted by their line bytes until the consumer acknowledges them; the
+  // count-bounded queue remains the final item guard.
+  const weights = new WeakMap<ProcessWireEvent<Message>, number>();
+  let queuedBytes = 0;
   let stderrBytes = 0;
   let settled = false;
   let spawned = false;
@@ -133,14 +113,17 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
 
   return yield* Effect.uninterruptible(
     Effect.gen(function* () {
-      const services = yield* Effect.context();
       const child = yield* Effect.try({
         try: () => options.spawn(runtime.spawn),
         catch: (error) => processError("spawn", error),
       });
+      // Scope closure joins rather than interrupts an in-flight forced termination, so a Windows
+      // taskkill /T /F always finishes walking the tree within its own deadline.
       const force = () => {
-        Effect.runForkWith(services)(
-          runtime.force(child, "force", { platform }).pipe(Effect.ignore),
+        runFork(
+          Effect.uninterruptible(runtime.terminate(child, "force", { platform })).pipe(
+            Effect.ignore,
+          ),
         );
       };
       const appendStderr = (chunk: Buffer) => {
@@ -155,38 +138,49 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           stderrBytes -= Math.min(first.byteLength, excess);
         }
       };
-      const room = makeByteBoundedQueueRoom(events, MAX_QUEUED_BYTES, () => {
-        backlogOverflowed = true;
-        appendStderr(Buffer.from(`\n${label} event backlog exceeded ${MAX_QUEUED_BYTES} bytes.`));
-        Queue.offerUnsafe(events, {
-          type: "protocol_error" as const,
-          message: `${label} event backlog exceeded its byte budget.`,
-        });
-        force();
-      });
       const offer = (event: ProcessWireEvent<Message>, bytes = 0) => {
-        if (room.offer(event, bytes) || backlogOverflowed || queueOverflowed) return;
+        if (backlogOverflowed) return;
+        if (queuedBytes + bytes > MAX_QUEUED_BYTES) {
+          backlogOverflowed = true;
+          appendStderr(Buffer.from(`\n${label} event backlog exceeded ${MAX_QUEUED_BYTES} bytes.`));
+          Queue.offerUnsafe(events, {
+            type: "protocol_error",
+            message: `${label} event backlog exceeded its byte budget.`,
+          });
+          return force();
+        }
+        if (Queue.offerUnsafe(events, event)) {
+          weights.set(event, bytes);
+          queuedBytes += bytes;
+          return;
+        }
+        if (queueOverflowed) return;
         queueOverflowed = true;
         appendStderr(
           Buffer.from(`\n${label} event queue exceeded ${EVENT_CAPACITY} pending events.`),
         );
         force();
       };
+      const acknowledge = (event: ProcessWireEvent<Message>) => {
+        const weight = weights.get(event);
+        if (weight === undefined) return;
+        weights.delete(event);
+        queuedBytes -= weight;
+      };
       const detachStdout = child.stdout
         ? attachBoundedLineParser(child.stdout, {
-            maxLineBytes: options.maxLineBytes ?? MAX_PROCESS_LINE_BYTES,
+            maxLineBytes: MAX_PROCESS_LINE_BYTES,
             maxQueuedBytes: MAX_QUEUED_BYTES,
             onLine: (line) => {
               const decoded = decodeUnknownJsonOption(line);
-              const bytes = Buffer.byteLength(line, "utf8");
               offer(
                 Option.isSome(decoded)
-                  ? options.message(decoded.value, bytes)
+                  ? options.message(decoded.value)
                   : {
                       type: "protocol_error",
                       message: `${label} emitted malformed JSONL.`,
                     },
-                bytes + 1,
+                Buffer.byteLength(line, "utf8") + 1,
               );
             },
             onOverflow: () => {
@@ -221,7 +215,6 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         Deferred.doneUnsafe(
           exited,
           Effect.succeed({
-            type: "exit",
             exitCode,
             ...(signal && { signal }),
             stderr: Buffer.concat(stderr).toString("utf8"),
@@ -271,7 +264,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
             return notSent("send frame to", stdinError ?? "Process input is closed.");
           let encoded: string;
           try {
-            encoded = options.encode(frame);
+            encoded = encodeFrame(frame);
           } catch (error) {
             return notSent("encode frame for", error);
           }
@@ -309,23 +302,40 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         runtime
           .terminate(child, mode, { platform })
           .pipe(Effect.mapError((error) => processError("terminate", error)));
-      // Mask through cache publication too: restoring interruption before cached's onExit
-      // would remember interruption instead of the completed cleanup outcome.
-      const release = yield* releaseChildProcess({
-        platform,
-        requestAbort: options.requestAbort?.(send) ?? Effect.void,
-        terminate,
-        awaitExit: Deferred.await(exited),
-      }).pipe(Effect.ensuring(Effect.sync(cleanup)), Effect.cached);
+      const waitForExit = Deferred.await(exited).pipe(
+        Effect.interruptible,
+        Effect.as(true),
+        Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
+      );
+      const release = Effect.gen(function* () {
+        yield* options.requestAbort?.(send) ?? Effect.void;
+        yield* Effect.sleep("100 millis");
+        const gracefulAttempt = yield* Effect.exit(terminate("graceful"));
+        if (yield* waitForExit) {
+          if (platform === "win32") {
+            if (Exit.isFailure(gracefulAttempt)) return yield* cleanupUnconfirmed();
+            return;
+          }
+          yield* Effect.sleep("100 millis");
+          // POSIX descendants remain owned after the detached group leader exits.
+          return yield* terminate("force");
+        }
+        const forceAttempt = yield* Effect.exit(terminate("force"));
+        // Wait even when the forced terminate failed, so a late exit is still observed.
+        const forcedExit = yield* waitForExit;
+        if (Exit.isFailure(forceAttempt) || !forcedExit) return yield* cleanupUnconfirmed();
+      });
+      yield* Effect.addFinalizer(() =>
+        release.pipe(Effect.ensuring(Effect.sync(cleanup)), Effect.orDie),
+      );
       return {
         pid,
         events,
-        acknowledge: room.acknowledge,
+        acknowledge,
         awaitExit: Deferred.await(exited),
         send,
         terminate,
-        release: Effect.uninterruptible(release),
-        attachment: attachment.value,
+        attachment,
       };
     }),
   );

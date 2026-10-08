@@ -6,7 +6,6 @@ import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { expect, vi } from "vitest";
 import type { makeAskUserPromptGate } from "../../src/boundary/host-prompt.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../../src/boundary/host-ui.ts";
-import type { QuestionnaireEvents } from "../../src/protocol.ts";
 import type { AskUserOutcome } from "../../src/questionnaire/model.ts";
 
 type Factory = (
@@ -111,9 +110,14 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
 
 type TuiHost = ReturnType<typeof makeTuiHost>;
 
+/** An unrelated overlay that owned closes must leave in place. */
+export const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
+
+/** Polls `assertion` until it passes, as one test step. */
+export const eventually = (assertion: () => void) => Effect.promise(() => vi.waitFor(assertion));
+
 /** Waits for the custom factory; the test still decides when onHandle mounts it. */
-export const waitMounted = (h: TuiHost) =>
-  Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+export const waitMounted = (h: TuiHost) => eventually(() => expect(h.mount).toBeDefined());
 
 /** Starts an abortable presentation on a fresh dialog bridge and waits for its factory. */
 export const openPresentation = <A, E>(
@@ -127,21 +131,3 @@ export const openPresentation = <A, E>(
     yield* waitMounted(h);
     return { bridge, controller, pending };
   });
-
-/** Models Pi's multi-listener extension event bus. */
-export const makeEventBus = (): QuestionnaireEvents => {
-  const callbacks = new Map<string, Set<Parameters<QuestionnaireEvents["on"]>[1]>>();
-  return {
-    on: (name, listener) => {
-      const listeners = callbacks.get(name) ?? new Set();
-      listeners.add(listener);
-      callbacks.set(name, listeners);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    emit: (name, data) => {
-      for (const callback of callbacks.get(name) ?? []) callback(data);
-    },
-  };
-};

@@ -1,5 +1,5 @@
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
-
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { SubagentUsage } from "../run/model.ts";
@@ -174,7 +174,6 @@ export type ClaudeProtocolEvent =
       readonly type: "assistant";
       readonly text?: string | undefined;
       readonly messageId?: string | undefined;
-      readonly parentToolUseId?: string | undefined;
       readonly tools: ReadonlyArray<{
         readonly id: string;
         readonly name: string;
@@ -211,12 +210,7 @@ export type ClaudeProtocolEvent =
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
   Predicate.isString(content)
     ? content
-    : content
-        .flatMap((part) => {
-          const decoded = Schema.decodeUnknownOption(TextPart)(part);
-          return decoded._tag === "Some" ? [decoded.value.text] : [];
-        })
-        .join("\n");
+    : content.flatMap((part) => decodeUnknownOrUndefined(TextPart, part)?.text ?? []).join("\n");
 
 /** Chosen total-token definition: input + output + cache-read + cache-write. */
 const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): SubagentUsage => {
@@ -237,10 +231,8 @@ const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
   const toolResults = Predicate.isString(event.message.content)
     ? []
     : event.message.content.flatMap((part) => {
-        const decoded = Schema.decodeUnknownOption(ToolResultPart)(part);
-        return decoded._tag === "Some"
-          ? [{ id: decoded.value.tool_use_id, isError: decoded.value.is_error === true }]
-          : [];
+        const result = decodeUnknownOrUndefined(ToolResultPart, part);
+        return result ? [{ id: result.tool_use_id, isError: result.is_error === true }] : [];
       });
   const text = textFromContent(event.message.content);
   return {
@@ -263,17 +255,14 @@ const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
 
 const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEvent => {
   const tools = event.message.content.flatMap((part) => {
-    const decoded = Schema.decodeUnknownOption(ToolUsePart)(part);
-    return decoded._tag === "Some"
-      ? [{ id: decoded.value.id, name: decoded.value.name, input: decoded.value.input }]
-      : [];
+    const tool = decodeUnknownOrUndefined(ToolUsePart, part);
+    return tool ? [{ id: tool.id, name: tool.name, input: tool.input }] : [];
   });
   const text = textFromContent(event.message.content).trim();
   return {
     type: "assistant",
     ...(text && { text }),
     ...(event.message.id && { messageId: event.message.id }),
-    ...(event.parent_tool_use_id && { parentToolUseId: event.parent_tool_use_id }),
     tools,
     usage: usageFromNative(event.message.usage),
   };
@@ -343,15 +332,13 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           yield* Schema.decodeUnknownEffect(Schema.Struct({ request_id: Id }))(value);
           return { type: "ignored" } as const;
         }
-        const success = event.response?.subtype === "success";
-        const protocolEvent: ClaudeProtocolEvent = {
+        return {
           type: "control_response",
           requestId,
-          success,
+          success: event.response?.subtype === "success",
           ...(event.response?.error && { diagnostic: event.response.error }),
           ...(event.response?.response !== undefined && { response: event.response.response }),
         };
-        return protocolEvent;
       }
       default:
         return { type: "ignored" };
@@ -365,14 +352,9 @@ export const decodeClaudeMcpStatusControlResponse = <ValueInput>(value: ValueInp
   Schema.decodeUnknownEffect(McpStatusControlResponse)(value);
 
 export type ClaudeUserFrame = ReturnType<typeof claudeUserFrame>;
-export type ClaudeInitializeFrame = ReturnType<typeof claudeInitializeFrame>;
-export type ClaudeMcpStatusFrame = ReturnType<typeof claudeMcpStatusFrame>;
-export type ClaudeInterruptFrame = ReturnType<typeof claudeInterruptFrame>;
-
-export type ClaudeControlRequestFrame =
-  | ClaudeInitializeFrame
-  | ClaudeMcpStatusFrame
-  | ClaudeInterruptFrame;
+export type ClaudeControlRequestFrame = ReturnType<
+  typeof claudeInitializeFrame | typeof claudeMcpStatusFrame | typeof claudeInterruptFrame
+>;
 
 export const claudeUserFrame = (
   message: string,

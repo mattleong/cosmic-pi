@@ -1,12 +1,8 @@
 /** Native MCP remains an independent public SDK extension; presentation never composes it. */
 import assert from "node:assert/strict";
 import {
-  createAgentSession,
   createMcpExtension,
-  DefaultResourceLoader,
-  ModelRuntime,
   SessionManager,
-  SettingsManager,
   type ExtensionAPI,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
@@ -14,18 +10,14 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { makePiManagedRuntime, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { afterEach, vi } from "vitest";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { vi } from "vitest";
 import { opaqueFixture } from "pi-cosmic-core/testing";
-import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
-import { codePreviewApplicationLayer } from "../../src/layer";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
 import { nativeManagerFixture } from "../support/native-mcp";
 import { step } from "../support/effect-test";
+import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
+import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness } from "../../testing";
-
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
 const serializeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
@@ -38,10 +30,16 @@ function presentationFactory(
   agentDir: string,
   report: PresentationRegistrations,
 ): ExtensionFactory {
-  return (pi) =>
-    codePreviewsWithDependencies(
-      {
-        ...pi,
+  return codePreviewsUnderTest(
+    agentDir,
+    {
+      tools: [],
+      syntaxHighlighting: false,
+      toolCallCollapsedStyle: "compact",
+      toolCallBackground: "off",
+    },
+    {
+      api: (pi) => ({
         registerTool(definition) {
           report.tools.push(definition.name);
           pi.registerTool(definition);
@@ -50,31 +48,9 @@ function presentationFactory(
           report.resolvers++;
           pi.registerToolRenderer(resolver);
         },
-      },
-      {
-        makeRuntime: (api) =>
-          makePiManagedRuntime(api, codePreviewApplicationLayer, {
-            agentDirectory: () => agentDir,
-            packageName: "pi-code-previews",
-          }),
-        registerCommands: (api) =>
-          api.registerCommand("code-previews", { handler: () => Promise.resolve() }),
-        loadSettings: () =>
-          Effect.sync(() => {
-            const preview = {
-              ...defaultCodePreviewSettings,
-              tools: [],
-              syntaxHighlighting: false,
-              toolCallCollapsedStyle: "compact" as const,
-              toolCallBackground: "off" as const,
-            };
-            setCodePreviewSettings(preview);
-            return preview;
-          }),
-        initializeSyntax: () => Effect.void,
-        registerRenderers: () => undefined,
-      },
-    );
+      }),
+    },
+  );
 }
 
 for (const builtinFirst of [false, true])
@@ -94,28 +70,13 @@ for (const builtinFirst of [false, true])
         );
         vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
         yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
-        const settings = SettingsManager.inMemory({
-          retry: { enabled: false },
-          compaction: { enabled: false },
-        });
-        const models = yield* step(() =>
-          ModelRuntime.create({
-            authPath: `${cwd}/auth.json`,
-            modelsPath: null,
-            modelsStorePath: `${cwd}/models.json`,
-            refreshOnCreate: false,
-            allowModelNetwork: false,
-          }),
-        );
+        const settings = quietSettings();
+        const models = yield* offlineModels(cwd);
         const report: PresentationRegistrations = { tools: [], resolvers: 0 };
-        const loader = new DefaultResourceLoader({
+        const loader = yield* quietLoader({
           cwd,
           agentDir,
           settingsManager: settings,
-          noSkills: true,
-          noPromptTemplates: true,
-          noThemes: true,
-          noContextFiles: true,
           extensionsOverride: (base) => ({
             ...base,
             extensions: base.extensions.toSorted((a, b) => {
@@ -129,7 +90,6 @@ for (const builtinFirst of [false, true])
             { name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
           ],
         });
-        yield* step(() => loader.reload());
         const order = loader.getExtensions().extensions.map((extension) => extension.path);
         assert.deepEqual(
           order,
@@ -137,21 +97,7 @@ for (const builtinFirst of [false, true])
             ? ["builtin:mcp", "<inline:code-previews>"]
             : ["<inline:code-previews>", "builtin:mcp"],
         );
-        const { session } = yield* step(() =>
-          createAgentSession({
-            cwd,
-            agentDir,
-            modelRuntime: models,
-            settingsManager: settings,
-            sessionManager: SessionManager.inMemory(cwd),
-            resourceLoader: loader,
-          }),
-        );
-        yield* Effect.addFinalizer(() =>
-          step(() =>
-            session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-          ).pipe(Effect.ensuring(Effect.sync(() => session.dispose()))),
-        );
+        const session = yield* scopedSession({ cwd, agentDir, models, settings, loader });
         const errors: string[] = [];
         yield* step(() =>
           session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
@@ -192,27 +138,12 @@ it.live(
       let block = false;
       let resultHooks = 0;
       const report: PresentationRegistrations = { tools: [], resolvers: 0 };
-      const settings = SettingsManager.inMemory({
-        retry: { enabled: false },
-        compaction: { enabled: false },
-      });
-      const models = yield* step(() =>
-        ModelRuntime.create({
-          authPath: `${cwd}/auth.json`,
-          modelsPath: null,
-          modelsStorePath: `${cwd}/models.json`,
-          refreshOnCreate: false,
-          allowModelNetwork: false,
-        }),
-      );
-      const loader = new DefaultResourceLoader({
+      const settings = quietSettings();
+      const models = yield* offlineModels(cwd);
+      const loader = yield* quietLoader({
         cwd,
         agentDir,
         settingsManager: settings,
-        noSkills: true,
-        noPromptTemplates: true,
-        noThemes: true,
-        noContextFiles: true,
         extensionFactories: [
           { name: "code-previews", factory: presentationFactory(agentDir, report) },
           { name: "mcp", builtin: true, factory: manager.factory },
@@ -233,7 +164,6 @@ it.live(
           },
         ],
       });
-      yield* step(() => loader.reload());
       const sessionManager = SessionManager.inMemory(cwd);
       sessionManager.appendMessage(
         opaqueFixture({
@@ -243,21 +173,14 @@ it.live(
           timestamp: 0,
         }),
       );
-      const { session } = yield* step(() =>
-        createAgentSession({
-          cwd,
-          agentDir,
-          modelRuntime: models,
-          settingsManager: settings,
-          sessionManager,
-          resourceLoader: loader,
-        }),
-      );
-      yield* Effect.addFinalizer(() =>
-        step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })).pipe(
-          Effect.ensuring(Effect.sync(() => session.dispose())),
-        ),
-      );
+      const session = yield* scopedSession({
+        cwd,
+        agentDir,
+        models,
+        settings,
+        loader,
+        sessionManager,
+      });
       yield* step(() => session.bindExtensions({ mode: "print" }));
       const name = "mcp__docs__lookup";
       const original = manager.definitions.get(name);

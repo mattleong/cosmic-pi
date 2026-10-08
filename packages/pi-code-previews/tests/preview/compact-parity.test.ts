@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
-import type { CompactChild, CompactSummary } from "../../src/tools/compact-summary";
+import type { CompactSummary } from "../../src/tools/compact-summary";
 import { compactChildren, plainTheme as theme, stripAnsi } from "../support/render";
 import { formatDuration } from "pi-cosmic-core";
 
@@ -76,26 +76,7 @@ describe("shared semantic row", () => {
           }
   });
 
-  it("shows selected children's own issues and counts hidden failures", () => {
-    const entries: CompactChild[] = Array.from({ length: 8 }, (_, index) => ({
-      label: `read-${index}`,
-      status: "error",
-      issues: [
-        {
-          severity: "error",
-          code: "delivery",
-          message: `delivery-${index} failed`,
-          detail: "Do not replay the request.",
-        },
-      ],
-    }));
-    const rows = compactChildren(entries, 100).map(stripAnsi);
-    expect(rows.filter((row) => row.includes("delivery-"))).toHaveLength(5);
-    const text = rows.join("\n");
-    expect(text).not.toContain("Do not replay");
-    expect(rows.at(-1)).toContain("3 more");
-    expect(rows.at(-1)).toContain("3 failed");
-    // Delivery status belongs to the child, whatever its routine detail says.
+  it("shows each child's own delivery status, whatever its routine detail says", () => {
     const success = compactChildren([{ label: "read", status: "success" }], 100);
     const failure = compactChildren([{ label: "read", status: "error" }], 100);
     expect(stripAnsi(failure.join(""))).not.toBe(stripAnsi(success.join("")));

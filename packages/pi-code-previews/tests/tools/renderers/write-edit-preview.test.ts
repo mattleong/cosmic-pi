@@ -4,17 +4,16 @@ import assert from "node:assert/strict";
 import {
   generateDiffString,
   initTheme,
-  ToolExecutionComponent,
   type AgentToolResult,
+  type ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import { opaqueFixture } from "pi-cosmic-core/testing";
 import { afterEach, beforeAll, test } from "vitest";
+import { hostToolRow } from "../../../testing";
 import { defaultCodePreviewSettings } from "../../../src/config/defaults";
 import type { CodePreviewSettings } from "../../../src/config/schema";
 import { setCodePreviewSettings } from "../../../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../../src/tools/names";
-import { createBuiltinPreviewRenderers } from "../../../src/tools/renderers/registration";
-import { stripAnsi } from "../../support/render";
+import { builtinRenderers, stripAnsi } from "../../support/render";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -39,20 +38,8 @@ function liveRow(
     tools: [...ALL_CODE_PREVIEW_TOOLS],
     ...settings,
   });
-  const renderers = createBuiltinPreviewRenderers(name, {
-    cwd: "/project",
-    selfShell: false,
-    scheduleAnimation: () => () => undefined,
-  });
-  const row = new ToolExecutionComponent(
-    name,
-    `${name}-call`,
-    args,
-    { showImages: false },
-    renderers,
-    opaqueFixture({ requestRender() {} }),
-    "/project",
-  );
+  const renderers = builtinRenderers(name);
+  const row = hostToolRow(name, args, renderers, { id: `${name}-call` });
   row.setArgsComplete();
   return row;
 }

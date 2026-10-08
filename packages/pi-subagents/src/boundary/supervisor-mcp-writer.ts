@@ -1,22 +1,21 @@
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import { MAX_SUPERVISOR_CHANNEL_LINE_BYTES } from "../supervisor/protocol.ts";
 
 const MAX_PENDING_WRITES = 64;
-const MAX_LINE_BYTES = MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 
-export class McpWriteFailure extends Data.TaggedError("McpWriteFailure")<{
-  readonly reason: "capacity" | "closed" | "size" | "stream";
-}> {}
+export class McpWriteFailure extends Schema.TaggedError<McpWriteFailure>()("McpWriteFailure", {
+  reason: Schema.Literals(["capacity", "closed", "size", "stream"]),
+}) {}
 
 export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerializedWriter")(
-  function* (stream: Pick<NodeJS.WritableStream, "write">, maximumWrites = MAX_PENDING_WRITES) {
+  function* (stream: Pick<NodeJS.WritableStream, "write">) {
     const frames = yield* Queue.bounded<{
       readonly line: string;
       readonly ack: Deferred.Deferred<void, McpWriteFailure>;
-    }>(maximumWrites);
+    }>(MAX_PENDING_WRITES);
     const acknowledgements = new Set<Deferred.Deferred<void, McpWriteFailure>>();
     let closed = false;
     const writeLine = (line: string) =>
@@ -39,10 +38,10 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
     // frame's acknowledgement; interrupting its waiter cannot enqueue or publish a second frame.
     const write = <ValueInput>(value: ValueInput): Effect.Effect<void, McpWriteFailure> => {
       if (closed) return Effect.fail(new McpWriteFailure({ reason: "closed" }));
-      if (acknowledgements.size >= maximumWrites)
+      if (acknowledgements.size >= MAX_PENDING_WRITES)
         return Effect.fail(new McpWriteFailure({ reason: "capacity" }));
       const line = `${JSON.stringify(value)}\n`;
-      if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES)
+      if (Buffer.byteLength(line, "utf8") > MAX_SUPERVISOR_CHANNEL_LINE_BYTES)
         return Effect.fail(new McpWriteFailure({ reason: "size" }));
       const ack = Deferred.makeUnsafe<void, McpWriteFailure>();
       acknowledgements.add(ack);

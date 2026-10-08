@@ -17,6 +17,8 @@ import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 
 const relayQueries = makeSessionCapabilityProtocol({ version: 1 });
+const encodeOutcome = Schema.encodeSync(Schema.fromJsonString(QuestionnaireOutcomeSchema));
+const encodeRequest = Schema.encodeSync(Schema.fromJsonString(QuestionnaireRequestSchema));
 
 const unavailable = () =>
   new InvalidSubagentRequestError({
@@ -57,14 +59,7 @@ export const askParentQuestionnaire = (
             const decoded = decodeQuestionnaireOutcome(outcome);
             if (!decoded) throw new Error("Invalid questionnaire result.");
             return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: Schema.encodeSync(Schema.fromJsonString(QuestionnaireOutcomeSchema))(
-                    decoded,
-                  ),
-                },
-              ],
+              content: [{ type: "text" as const, text: encodeOutcome(decoded) }],
               details: decoded,
             };
           });
@@ -108,20 +103,14 @@ export const publishChildQuestionnaireRelay = (
       const request = decodeQuestionnaireRequest(input);
       if (!request || signal.aborted || !isCurrent())
         throw new Error("Child questionnaire relay unavailable.");
-      return call(
-        {
-          tool: "ask_user",
-          argumentsJson: Schema.encodeSync(Schema.fromJsonString(QuestionnaireRequestSchema))(
-            request,
-          ),
+      return call({ tool: "ask_user", argumentsJson: encodeRequest(request) }, signal).then(
+        (result) => {
+          if (signal.aborted || !isCurrent()) throw new Error("Child questionnaire relay expired.");
+          const outcome = decodeQuestionnaireOutcome(result.details);
+          if (!outcome) throw new Error("Parent questionnaire returned an invalid result.");
+          return outcome;
         },
-        signal,
-      ).then((result) => {
-        if (signal.aborted || !isCurrent()) throw new Error("Child questionnaire relay expired.");
-        const outcome = decodeQuestionnaireOutcome(result.details);
-        if (!outcome) throw new Error("Parent questionnaire returned an invalid result.");
-        return outcome;
-      });
+      );
     },
   };
   return events.on(QUESTIONNAIRE_RELAY_QUERY, (input) => {

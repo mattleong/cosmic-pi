@@ -1,8 +1,7 @@
-import type { ExtensionAPI, SourceInfo } from "@earendil-works/pi-coding-agent";
-import type { PreviewToolInfo } from "../application/renderer-contract";
+import type { ExtensionAPI, SourceInfo, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 export interface PreviewHostTools {
-  readonly tools: ReadonlyMap<string, PreviewToolInfo>;
+  readonly tools: ReadonlyMap<string, ToolInfo>;
   readonly nativeManager: boolean;
   readonly previewSource: SourceInfo | undefined;
 }
@@ -12,7 +11,7 @@ export function capturePreviewHostTools(
   pi: ExtensionAPI,
   anchorCommand = "code-previews",
 ): PreviewHostTools {
-  const tools = new Map<string, PreviewToolInfo>();
+  const tools = new Map<string, ToolInfo>();
   const repeated = new Set<string>();
   for (const tool of pi.getAllTools()) {
     if (tools.has(tool.name)) repeated.add(tool.name);

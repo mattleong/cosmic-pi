@@ -1,52 +1,53 @@
+import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback } from "pi-cosmic-core";
-import { expandPreviewTabs } from "../shared/helpers";
+import { expandPreviewTabs, getObjectValue, isToolOutputNoticeLine } from "../shared/helpers";
 import { escapeControlChars, injectVisibleRanges } from "../shared/terminal-text";
-import { isToolOutputNoticeLine } from "../shared/helpers";
-import { resolvePreviewLanguage } from "../syntax/language";
 import { renderHighlightedText } from "../syntax/render";
+import { pathPreviewLanguage } from "./renderers/shared/preview-text";
 
-export type ParsedGrepOutputLine = {
+type ParsedGrepOutputLine = {
   path: string;
   lineNumber: string;
   code: string;
   kind: "match" | "context";
 };
 
-export function renderGrepOutputLines(
+/** Grep output grouped under file headings; literal searches highlight their matches. */
+export function renderGrepOutputLines<Args>(
   output: string,
   theme: Theme,
-  search: { pattern: string; literal: boolean; ignoreCase: boolean },
+  args: Args,
   invalidate?: () => void,
-  options: { syntaxHighlight?: boolean } = {},
+  syntaxHighlight = true,
 ): string[] {
+  const pattern = getObjectValue(args, "pattern");
+  // Match the original text: lowercasing can change its length and shift every later offset.
+  const search =
+    Predicate.isString(pattern) && pattern && getObjectValue(args, "literal") === true
+      ? new RegExp(
+          pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
+          getObjectValue(args, "ignoreCase") === true ? "giu" : "g",
+        )
+      : undefined;
   const rendered: string[] = [];
   let currentPath = "";
   let currentLanguage: string | undefined;
-  const syntaxHighlight = options.syntaxHighlight !== false;
   for (const rawLine of output.split("\n")) {
     if (!rawLine) {
       rendered.push("");
       continue;
     }
-    if (isToolOutputNoticeLine(rawLine)) {
-      rendered.push(theme.fg("warning", escapeControlChars(rawLine)));
-      continue;
-    }
+    // A bracketed path such as `[slug]/page.tsx` still forms a row; only other lines are notices.
     const parsed = parseGrepOutputLine(rawLine);
     if (!parsed) {
-      rendered.push(theme.fg("toolOutput", escapeControlChars(rawLine)));
+      const color = isToolOutputNoticeLine(rawLine) ? "warning" : "toolOutput";
+      rendered.push(theme.fg(color, escapeControlChars(rawLine)));
       continue;
     }
     if (parsed.path !== currentPath) {
       currentPath = parsed.path;
-      currentLanguage = syntaxHighlight
-        ? resolvePreviewLanguage({
-            path: currentPath,
-            piLanguage: getLanguageFromPath(currentPath),
-          })
-        : undefined;
+      currentLanguage = syntaxHighlight ? pathPreviewLanguage(currentPath) : undefined;
       rendered.push(theme.fg("accent", escapeControlChars(currentPath)));
     }
     rendered.push(renderGrepParsedLine(parsed, currentLanguage, theme, search, invalidate));
@@ -73,46 +74,28 @@ function renderGrepParsedLine(
   parsed: ParsedGrepOutputLine,
   lang: string | undefined,
   theme: Theme,
-  search: { pattern: string; literal: boolean; ignoreCase: boolean },
+  search: RegExp | undefined,
   invalidate: (() => void) | undefined,
 ): string {
   const code = expandPreviewTabs(parsed.code);
+  const match = parsed.kind === "match";
   let highlighted =
     renderHighlightedText(code, lang, theme, invalidate)[0] ?? theme.fg("toolOutput", code);
-  const matchRanges = parsed.kind === "match" ? grepMatchRanges(code, search) : [];
+  const matchRanges =
+    match && search
+      ? Array.from(code.matchAll(search), (found): [number, number] => [
+          found.index,
+          found.index + found[0].length,
+        ])
+      : [];
   if (matchRanges.length > 0)
     highlighted = injectVisibleRanges(highlighted, matchRanges, {
       open: "\x1b[48;2;90;74;28m",
-      close: getToolBackground(theme) || "\x1b[49m",
+      // A theme without ANSI accessors closes the highlight with the default background.
+      close: invokeHostCallback(() => theme.getBgAnsi("toolSuccessBg"), "") || "\x1b[49m",
       reopenAfterSgr: (sequence) => sequence === "\x1b[39m",
     });
-  const paddedLineNumber = parsed.lineNumber.padStart(4);
-  const lineNumber =
-    parsed.kind === "match"
-      ? theme.fg("accent", paddedLineNumber)
-      : theme.fg("dim", paddedLineNumber);
-  const marker = parsed.kind === "match" ? theme.fg("warning", "│") : theme.fg("dim", "┆");
+  const lineNumber = theme.fg(match ? "accent" : "dim", parsed.lineNumber.padStart(4));
+  const marker = match ? theme.fg("warning", "│") : theme.fg("dim", "┆");
   return `${theme.fg("dim", "  ")}${lineNumber} ${marker} ${highlighted}`;
-}
-
-function grepMatchRanges(
-  code: string,
-  search: { pattern: string; literal: boolean; ignoreCase: boolean },
-): Array<[number, number]> {
-  if (!search.pattern || !search.literal) return [];
-  const haystack = search.ignoreCase ? code.toLowerCase() : code;
-  const needle = search.ignoreCase ? search.pattern.toLowerCase() : search.pattern;
-  const ranges: Array<[number, number]> = [];
-  let index = haystack.indexOf(needle);
-  while (index >= 0) {
-    ranges.push([index, index + needle.length]);
-    index = haystack.indexOf(needle, index + needle.length);
-  }
-  return ranges;
-}
-
-function getToolBackground(theme: Theme): string {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const themed = theme as Theme & { getBgAnsi?: (key: string) => string };
-  return invokeHostCallback(() => themed.getBgAnsi?.("toolSuccessBg") ?? "", "");
 }

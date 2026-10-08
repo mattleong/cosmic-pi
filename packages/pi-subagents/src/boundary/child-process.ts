@@ -1,5 +1,5 @@
 // Node process and session-file ownership is intentionally isolated at this boundary.
-import { sha256Text, synchronousRandomUuid, synchronousNow } from "pi-cosmic-core";
+import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
@@ -9,12 +9,10 @@ import {
   SessionManager,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -27,10 +25,10 @@ import { processCauseError as processError, SubagentProcessError } from "../run/
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
   acquireProcessTransport,
+  type ProcessTransportHandle,
   type ProcessTransportRuntime,
   type ProcessWireEvent,
 } from "./process-transport.ts";
-export { releaseChildProcess, type ChildProcessReleaseOperations } from "./process-transport.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import {
@@ -55,29 +53,20 @@ const BLOCKED_ENV_KEYS = new Set([
   RUNTIME_API_PROVIDER_ENV,
 ]);
 
-export type ChildLaunchRequest = Omit<BackendLaunchRequest, "closeOnReport" | "resumeToken"> & {
+export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
   readonly resumeSessionFile?: string | undefined;
 };
 
-export type ChildWireEvent = ProcessWireEvent<
+type ChildMessage =
   | { readonly type: "rpc_message"; readonly value: unknown }
-  | { readonly type: "parent_contact"; readonly value: LocalPiContact }
->;
+  | { readonly type: "parent_contact"; readonly value: LocalPiContact };
 
-export interface ChildProcessHandle {
-  readonly pid: number;
-  readonly events: Queue.Dequeue<ChildWireEvent, Cause.Done>;
-  /** Release byte-weighted transport backlog ownership after one event is processed. */
-  readonly acknowledge?: ((event: ChildWireEvent) => void) | undefined;
-  readonly awaitExit: Effect.Effect<
-    Extract<ChildWireEvent, { readonly type: "exit" }>,
-    SubagentProcessError
-  >;
-  readonly send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>;
+export type ChildWireEvent = ProcessWireEvent<ChildMessage>;
+
+export interface ChildProcessHandle extends ProcessTransportHandle<ChildMessage, RpcCommand> {
   readonly sendContactControl: (
     control: LocalPiParentControl,
   ) => Effect.Effect<void, SubagentProcessError>;
-  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
 
 export interface ChildProcessContract {
@@ -95,11 +84,7 @@ export function safeSubagentDirectorySegment(value: string): string {
   return `id-${sha256Text(value).slice(0, 32)}`;
 }
 
-export const subagentRunDirectory = (
-  agentDirectory: string,
-  parentSessionId: string,
-  runId: string,
-): string =>
+const subagentRunDirectory = (agentDirectory: string, parentSessionId: string, runId: string) =>
   join(
     agentDirectory,
     "subagents",
@@ -107,37 +92,30 @@ export const subagentRunDirectory = (
     safeSubagentDirectorySegment(runId),
   );
 
+/** One owned filesystem step, failing typed with its operation name. */
+const fileStep = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({ try: evaluate, catch: (error) => processError(operation, error) });
+
 const reclaimChildRunState = (
   agentDirectory: string,
   request: { readonly parentSessionId: string; readonly runId: string },
 ) =>
-  Effect.tryPromise({
-    try: () => {
-      const runDirectory = subagentRunDirectory(
-        agentDirectory,
-        request.parentSessionId,
-        request.runId,
-      );
-      return rm(runDirectory, { recursive: true, force: true }).then(() =>
-        rmdir(join(runDirectory, "..")).catch((error) => {
-          const code = nodeErrorCode(error);
-          if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
-            throw error;
-        }),
-      );
-    },
-    catch: (error) => processError("reclaim subagent run state", error),
+  fileStep("reclaim subagent run state", () => {
+    const runDirectory = subagentRunDirectory(
+      agentDirectory,
+      request.parentSessionId,
+      request.runId,
+    );
+    return rm(runDirectory, { recursive: true, force: true }).then(() =>
+      rmdir(join(runDirectory, "..")).catch((error) => {
+        const code = nodeErrorCode(error);
+        if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
+          throw error;
+      }),
+    );
   });
 
-export interface ChildToolPolicy {
-  readonly enabled: ReadonlyArray<string>;
-  readonly excluded: string;
-}
-
-export const childToolPolicy = (
-  rootActiveTools: ReadonlyArray<string>,
-  returnsResult = false,
-): ChildToolPolicy => ({
+export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>, returnsResult = false) => ({
   enabled: [
     ...new Set([
       ...rootActiveTools,
@@ -163,21 +141,16 @@ const writeResultContract = (request: ChildLaunchRequest, runDir: string) =>
       parameters: contract.parameters,
       strictSafe: contract.strictSafe,
     }).pipe(Effect.mapError((error) => processError("encode subagent result schema", error)));
-    yield* Effect.tryPromise({
-      try: () => writeFile(path, source, { encoding: "utf8", mode: 0o600 }),
-      catch: (error) => processError("write subagent result schema", error),
-    });
+    yield* fileStep("write subagent result schema", () =>
+      writeFile(path, source, { encoding: "utf8", mode: 0o600 }),
+    );
     return [`--${LOCAL_PI_RESULT_CONTRACT_FLAG}`, path];
   });
 
 export const requestCooperativeAbort = (
   send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>,
 ): Effect.Effect<void> =>
-  send({ type: "abort" }).pipe(
-    Effect.interruptible,
-    Effect.timeoutOrElse({ duration: "250 millis", orElse: () => Effect.void }),
-    Effect.catch(() => Effect.void),
-  );
+  send({ type: "abort" }).pipe(Effect.interruptible, Effect.timeout("250 millis"), Effect.ignore);
 
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   return {
@@ -201,6 +174,10 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
 const isEncryptedWorkspaceCheckpoint = Schema.is(
   Schema.Struct({ type: Schema.Literal("pi-better-openai.compaction.v1") }),
 );
+const isSessionHeader = Schema.is(
+  Schema.Struct({ type: Schema.Literal("session"), id: Schema.String }),
+);
+const encodeJsonLine = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
   if (
@@ -239,28 +216,22 @@ const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry 
 export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")(
   function* (request: ChildLaunchRequest, runDir: string) {
     if (!request.parentSessionFile || !request.parentLeafId)
-      return yield* Effect.fail(
-        processError(
-          "fork parent session",
-          "Forked context requires a persisted parent session and stable parent leaf.",
-        ),
+      return yield* processError(
+        "fork parent session",
+        "Forked context requires a persisted parent session and stable parent leaf.",
       );
     const parentSessionFile = request.parentSessionFile;
-    const content = yield* Effect.tryPromise({
-      try: () => readFile(parentSessionFile, "utf8"),
-      catch: (error) => processError("read parent session", error),
-    });
+    const content = yield* fileStep("read parent session", () =>
+      readFile(parentSessionFile, "utf8"),
+    );
     const parsedEntries = yield* Effect.try({
       try: () => parseSessionEntries(content),
       catch: (error) => processError("parse parent session", error),
     });
-    if (
-      !Schema.is(Schema.Struct({ type: Schema.Literal("session"), id: Schema.String }))(
-        parsedEntries[0],
-      )
-    )
-      return yield* Effect.fail(
-        processError("fork parent session", "The parent session has no valid session header."),
+    if (!isSessionHeader(parsedEntries[0]))
+      return yield* processError(
+        "fork parent session",
+        "The parent session has no valid session header.",
       );
     // Native loading migrates entries, but persistence must stay disabled: open() can repair the parent.
     const branch = yield* Effect.try({
@@ -271,8 +242,9 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       catch: (error) => processError("load parent branch", error),
     });
     if (branch.length === 0)
-      return yield* Effect.fail(
-        processError("fork parent session", "The selected parent session branch is empty."),
+      return yield* processError(
+        "fork parent session",
+        "The selected parent session branch is empty.",
       );
     const sessionId = synchronousRandomUuid();
     const sessionFile = join(runDir, `session-${sessionId}.jsonl`);
@@ -280,7 +252,7 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       type: "session" as const,
       version: 3,
       id: sessionId,
-      timestamp: DateTime.formatIso(DateTime.makeUnsafe(synchronousNow())),
+      timestamp: DateTime.formatIso(yield* DateTime.now),
       cwd: request.cwd,
       parentSession: request.parentSessionFile,
     };
@@ -290,24 +262,16 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       parentId = cloned.id;
       return cloned;
     });
-    const lines = yield* Effect.forEach([header, ...entries], (entry) =>
-      Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(entry),
+    const lines = yield* Effect.forEach([header, ...entries], (entry) => encodeJsonLine(entry));
+    yield* fileStep("write forked session", () =>
+      writeFile(sessionFile, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 }),
     );
-    yield* Effect.tryPromise({
-      try: () => writeFile(sessionFile, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 }),
-      catch: (error) => processError("write forked session", error),
-    });
     return sessionFile;
   },
   Effect.mapError((error) => processError("fork parent session", error)),
 );
 
-function extensionPath(): string {
-  return fileURLToPath(new URL("./host-child.ts", import.meta.url));
-}
-
-// Locally constructed RPC command frames are serialized by this pure protocol encoder.
-const encodeRpcCommandFrame = (command: RpcCommand): string => `${JSON.stringify(command)}\n`;
+const extensionPath = fileURLToPath(new URL("./host-child.ts", import.meta.url));
 
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   agentDirectory: string,
@@ -315,15 +279,13 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   runtime?: ProcessTransportRuntime,
 ) {
   const runDir = subagentRunDirectory(agentDirectory, request.parentSessionId, request.runId);
-  yield* Effect.tryPromise({
-    try: () => mkdir(runDir, { recursive: true, mode: 0o700 }),
-    catch: (error) => processError("create subagent run directory", error),
-  });
+  yield* fileStep("create subagent run directory", () =>
+    mkdir(runDir, { recursive: true, mode: 0o700 }),
+  );
   const promptPath = join(runDir, "system-prompt.md");
-  yield* Effect.tryPromise({
-    try: () => writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
-    catch: (error) => processError("write subagent system prompt", error),
-  });
+  yield* fileStep("write subagent system prompt", () =>
+    writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
+  );
   const resultContractArgs = yield* writeResultContract(request, runDir);
   const sessionFile =
     request.resumeSessionFile === undefined && request.context === "fork"
@@ -352,7 +314,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     request.name,
     request.projectTrusted ? "--approve" : "--no-approve",
     "--extension",
-    extensionPath(),
+    extensionPath,
     ...(request.resumeSessionFile
       ? ["--session", request.resumeSessionFile]
       : sessionFile
@@ -374,19 +336,15 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       label: "Subagent RPC",
       error: processError,
       message: (value): ChildWireEvent => ({ type: "rpc_message", value }),
-      encode: encodeRpcCommandFrame,
       // Pi reports parser overflow to its backend; unlike native CLIs it does not kill here.
       terminateOnParserOverflow: false,
       synchronousWriteFailure: "not_sent",
       requestAbort: requestCooperativeAbort,
-      attach: (child, offer) => {
-        const ipc = attachLocalPiParentIpc(child, {
+      attach: (child, offer) =>
+        attachLocalPiParentIpc(child, {
           onContact: (contact) => offer({ type: "parent_contact", value: contact }),
           onProtocolError: (message) => offer({ type: "protocol_error", message }),
-          onDisconnect: () => {},
-        });
-        return { value: ipc, detach: ipc.detach };
-      },
+        }),
     },
     runtime,
   );
@@ -404,11 +362,10 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessCont
   ) => {
     const agentDirectory = options.agentDirectory ?? getAgentDir();
     return Layer.succeed(this, {
+      // Preparation and spawn settle as one masked acquisition, so an interrupted launch never
+      // leaves a run-state write still in flight behind it.
       spawn: (request) =>
-        Effect.acquireRelease(
-          acquireChild(agentDirectory, request, options.transportRuntime),
-          (handle) => handle.release.pipe(Effect.orDie),
-        ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
+        Effect.uninterruptible(acquireChild(agentDirectory, request, options.transportRuntime)),
       reclaimRunState: (request) => reclaimChildRunState(agentDirectory, request),
     });
   };

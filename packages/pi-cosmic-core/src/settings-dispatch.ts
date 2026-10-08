@@ -1,6 +1,6 @@
 /** Pure slash-command argument dispatch shared by extension settings surfaces. */
 
-export interface SettingsDispatchDescriptor {
+interface SettingsDispatchDescriptor {
   readonly id: string;
   readonly values?: ReadonlyArray<string> | undefined;
   /**
@@ -15,7 +15,7 @@ export interface SettingsDispatchDescriptor {
  * opening pickers, printing help or status, applying values, and wording error messages.
  * Every extension's settings command shares one caller, Cosmic UI's settings command shell.
  */
-export type SettingsCommandDispatch =
+type SettingsCommandDispatch =
   | { readonly _tag: "OpenInteractive" }
   | { readonly _tag: "Help" }
   | { readonly _tag: "Status" }

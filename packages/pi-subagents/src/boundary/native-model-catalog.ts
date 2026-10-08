@@ -6,7 +6,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -18,16 +17,8 @@ import {
   SafeFile,
 } from "pi-cosmic-core";
 import { readClaudeModelPreference } from "./claude-model-preference.ts";
-import {
-  initializeRequest,
-  initializedNotification,
-  type CodexInitializeRequest,
-  type CodexInitializedNotification,
-} from "../backend/local-codex-protocol.ts";
-import {
-  claudeInitializeFrame,
-  type ClaudeInitializeFrame,
-} from "../backend/local-claude-protocol.ts";
+import { initializeRequest, initializedNotification } from "../backend/local-codex-protocol.ts";
+import { claudeInitializeFrame } from "../backend/local-claude-protocol.ts";
 import { SUBAGENT_EFFORTS, type SubagentEffort } from "../domain/routing.ts";
 import {
   codexArgv,
@@ -136,12 +127,8 @@ const CodexCatalogResponse = Schema.Struct({
   }),
 });
 
-const isClaudeCatalogCorrelatedFrame = Schema.is(ClaudeCatalogCorrelatedFrame);
-const isCodexCatalogCorrelatedFrame = Schema.is(CodexCatalogCorrelatedFrame);
-const isClaudeCatalogErrorResponse = Schema.is(ClaudeCatalogErrorResponse);
-const isCodexCatalogErrorResponse = Schema.is(CodexCatalogErrorResponse);
-const decodeClaudeCatalogResponseEffect = Schema.decodeUnknownEffect(ClaudeCatalogResponse);
-const decodeCodexCatalogResponseEffect = Schema.decodeUnknownEffect(CodexCatalogResponse);
+const decodeClaudeCatalog = Schema.decodeUnknownEffect(ClaudeCatalogResponse);
+const decodeCodexCatalog = Schema.decodeUnknownEffect(CodexCatalogResponse);
 
 export interface NativeRuntimeModel {
   readonly selector: string;
@@ -187,8 +174,7 @@ const supportedEffortSet: ReadonlySet<string> = new Set(
 const normalizeEfforts = (values: ReadonlyArray<string>): ReadonlyArray<SubagentEffort> =>
   values.filter((value): value is SubagentEffort => supportedEffortSet.has(value));
 
-const normalizeDescription = (value: string): string =>
-  value.replaceAll("\r", " ").replaceAll("\n", " ").replaceAll("\t", " ").trim();
+const normalizeDescription = (value: string): string => value.replace(/[\t\n\r]/gu, " ").trim();
 
 const claudeArgs = (probeSelector: string): ReadonlyArray<string> => [
   "--print",
@@ -217,31 +203,6 @@ const claudeArgs = (probeSelector: string): ReadonlyArray<string> => [
   "",
 ];
 
-interface CodexModelListRequest {
-  readonly id: typeof CATALOG_REQUEST_ID;
-  readonly method: "model/list";
-  readonly params: { readonly includeHidden: false; readonly limit: 100 };
-}
-
-type CatalogRequestFrame =
-  | ClaudeInitializeFrame
-  | CodexInitializeRequest
-  | CodexInitializedNotification
-  | CodexModelListRequest;
-
-const catalogFrames = (runtime: LocalCliRuntime): ReadonlyArray<CatalogRequestFrame> =>
-  runtime === "claude"
-    ? [claudeInitializeFrame(CATALOG_REQUEST_ID)]
-    : [
-        initializeRequest("pi-subagents-initialize"),
-        initializedNotification(),
-        {
-          id: CATALOG_REQUEST_ID,
-          method: "model/list",
-          params: { includeHidden: false, limit: 100 },
-        },
-      ];
-
 const runCatalogProcess = (
   runtime: LocalCliRuntime,
   executable: string,
@@ -252,13 +213,8 @@ const runCatalogProcess = (
   Effect.scoped(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const isCorrelated =
-          runtime === "codex" ? isCodexCatalogCorrelatedFrame : isClaudeCatalogCorrelatedFrame;
-        const input = new TextEncoder().encode(
-          `${catalogFrames(runtime)
-            .map((frame) => JSON.stringify(frame))
-            .join("\n")}\n`,
-        );
+        const protocol = CATALOG_PROTOCOLS[runtime];
+        const input = new TextEncoder().encode(protocol.request);
         const child = yield* restore(
           ChildProcess.make(executable, [...args], {
             cwd,
@@ -308,35 +264,38 @@ const runCatalogProcess = (
         const reply = bounded(child.stdout, "output").pipe(
           Stream.decodeText,
           Stream.splitLines,
-          Stream.mapEffect((line) => {
-            if (!line.trim()) return Effect.succeedNone;
-            const parsed = decodeUnknownJsonOption(line);
-            if (Option.isNone(parsed))
-              return Effect.fail(
+          Stream.filter((line) => line.trim().length > 0),
+          Stream.mapEffect((line) =>
+            Effect.fromOption(decodeUnknownJsonOption(line), () =>
+              catalogError(
+                runtime,
+                "catalog_protocol_invalid",
+                `${runtime} catalog emitted invalid JSONL.`,
+              ),
+            ),
+          ),
+          Stream.filter((frame) => protocol.isCorrelated(frame)),
+          Stream.runHead,
+          Effect.flatMap((frame) =>
+            Effect.fromOption(frame, () =>
+              catalogError(
+                runtime,
+                "catalog_response_missing",
+                `${runtime} model catalog closed without a model list.`,
+              ),
+            ),
+          ),
+          Effect.timeoutOrElse({
+            duration: CATALOG_TIMEOUT_MILLIS,
+            orElse: () =>
+              Effect.fail(
                 catalogError(
                   runtime,
-                  "catalog_protocol_invalid",
-                  `${runtime} catalog emitted invalid JSONL.`,
+                  "catalog_timeout",
+                  `${runtime} model catalog did not respond within its bounded deadline.`,
                 ),
-              );
-            return Effect.succeed(
-              isCorrelated(parsed.value) ? Option.some(parsed.value) : Option.none(),
-            );
+              ),
           }),
-          Stream.filter(Option.isSome),
-          Stream.map((value) => value.value),
-          Stream.runHead,
-          Effect.flatMap((value) =>
-            Option.isSome(value)
-              ? Effect.succeed(value.value)
-              : Effect.fail(
-                  catalogError(
-                    runtime,
-                    "catalog_response_missing",
-                    `${runtime} model catalog closed without a model list.`,
-                  ),
-                ),
-          ),
         );
         const diagnostics = bounded(child.stderr, "diagnostics").pipe(
           Stream.runDrain,
@@ -344,20 +303,7 @@ const runCatalogProcess = (
           // Stay pending after clean EOF while still surfacing overflow/stream failures.
           Effect.andThen(Effect.never),
         );
-        const deadline = Effect.sleep(CATALOG_TIMEOUT_MILLIS).pipe(
-          Effect.andThen(
-            Effect.fail(
-              catalogError(
-                runtime,
-                "catalog_timeout",
-                `${runtime} model catalog did not respond within its bounded deadline.`,
-              ),
-            ),
-          ),
-        );
-        const outcome = yield* restore(
-          Effect.raceFirst(reply, Effect.raceFirst(diagnostics, deadline)),
-        ).pipe(Effect.exit);
+        const outcome = yield* restore(Effect.raceFirst(reply, diagnostics)).pipe(Effect.exit);
         const cleanupConfirmed = yield* confirmEffectProcessClose(child, 2_000);
         if (!cleanupConfirmed)
           return yield* catalogError(
@@ -417,28 +363,51 @@ const withExplicitClaudeModels = (
   });
 };
 
-const decodeClaudeModels = <ValueInput>(value: ValueInput) =>
-  decodeClaudeCatalogResponseEffect(value).pipe(
-    Effect.map((response) => withExplicitClaudeModels(response.response.response.models)),
-  );
+const jsonLines = (...frames: ReadonlyArray<Schema.Json>): string =>
+  `${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`;
 
-const decodeCodexModels = <ValueInput>(value: ValueInput) =>
-  decodeCodexCatalogResponseEffect(value).pipe(
-    Effect.map((response) =>
-      response.result.data.map(
-        (model): NativeRuntimeModel => ({
-          selector: model.model,
-          label: model.displayName,
-          description: normalizeDescription(model.description),
-          supportedEfforts: normalizeEfforts(
-            model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
-          ),
-          supportedServiceTiers: [...new Set((model.serviceTiers ?? []).map((tier) => tier.id))],
-          isDefault: model.isDefault,
-        }),
+/** How each native CLI is asked for its model list, and how its reply reads. */
+const CATALOG_PROTOCOLS = {
+  claude: {
+    product: "Claude Code",
+    request: jsonLines(claudeInitializeFrame(CATALOG_REQUEST_ID)),
+    isCorrelated: Schema.is(ClaudeCatalogCorrelatedFrame),
+    isRejected: Schema.is(ClaudeCatalogErrorResponse),
+    decode: <Frame>(frame: Frame) =>
+      decodeClaudeCatalog(frame).pipe(
+        Effect.map((response) => withExplicitClaudeModels(response.response.response.models)),
       ),
-    ),
-  );
+  },
+  codex: {
+    product: "Codex",
+    request: jsonLines(initializeRequest("pi-subagents-initialize"), initializedNotification(), {
+      id: CATALOG_REQUEST_ID,
+      method: "model/list",
+      params: { includeHidden: false, limit: 100 },
+    }),
+    isCorrelated: Schema.is(CodexCatalogCorrelatedFrame),
+    isRejected: Schema.is(CodexCatalogErrorResponse),
+    decode: <Frame>(frame: Frame) =>
+      decodeCodexCatalog(frame).pipe(
+        Effect.map((response) =>
+          response.result.data.map(
+            (model): NativeRuntimeModel => ({
+              selector: model.model,
+              label: model.displayName,
+              description: normalizeDescription(model.description),
+              supportedEfforts: normalizeEfforts(
+                model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
+              ),
+              supportedServiceTiers: [
+                ...new Set((model.serviceTiers ?? []).map((tier) => tier.id)),
+              ],
+              isDefault: model.isDefault,
+            }),
+          ),
+        ),
+      ),
+  },
+};
 
 const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
   runtime: LocalCliRuntime,
@@ -448,11 +417,12 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
 ) {
   const executable = options.executables?.[runtime] ?? runtime;
   const sourceEnvironment = options.environment ?? process.env;
+  const args = runtime === "claude" ? claudeArgs(probeSelector) : codexArgv();
   if (runtime !== "codex" || !options.agentDirectory)
     return yield* runCatalogProcess(
       runtime,
       executable,
-      runtime === "claude" ? claudeArgs(probeSelector) : codexArgv(),
+      args,
       cwd,
       sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
     );
@@ -465,7 +435,7 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
         catalogError(runtime, "catalog_failed", "Unable to prepare the Codex model catalog."),
       ),
     ),
-    (harness) => runCatalogProcess(runtime, executable, harness.args, cwd, harness.env),
+    (harness) => runCatalogProcess(runtime, executable, args, cwd, harness.env),
     (harness) =>
       harness.release.pipe(
         Effect.mapError(() =>
@@ -491,30 +461,30 @@ const loadNativeModelCatalog =
     key: CatalogCacheKey,
   ): Effect.Effect<ReadonlyArray<NativeRuntimeModel>, NativeModelCatalogError> => {
     const { runtime, cwd } = key;
+    const protocol = CATALOG_PROTOCOLS[runtime];
     const load = (probeSelector: string) =>
       discoverCatalog(runtime, cwd, options, probeSelector).pipe(
-        Effect.flatMap((value) => {
-          if (
-            (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||
-            (runtime === "claude" && isClaudeCatalogErrorResponse(value))
-          )
-            return Effect.fail(
-              catalogError(
-                runtime,
-                "catalog_request_rejected",
-                `${runtime === "claude" ? "Claude Code" : "Codex"} rejected the bounded model catalog request.`,
-              ),
-            );
-          return (runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)).pipe(
-            Effect.mapError(() =>
-              catalogError(
-                runtime,
-                "catalog_protocol_invalid",
-                `${runtime} returned an invalid model catalog.`,
-              ),
-            ),
-          );
-        }),
+        Effect.flatMap((frame) =>
+          protocol.isRejected(frame)
+            ? Effect.fail(
+                catalogError(
+                  runtime,
+                  "catalog_request_rejected",
+                  `${protocol.product} rejected the bounded model catalog request.`,
+                ),
+              )
+            : protocol
+                .decode(frame)
+                .pipe(
+                  Effect.mapError(() =>
+                    catalogError(
+                      runtime,
+                      "catalog_protocol_invalid",
+                      `${runtime} returned an invalid model catalog.`,
+                    ),
+                  ),
+                ),
+        ),
       );
     return Effect.gen(function* () {
       const defaults = yield* load("default");

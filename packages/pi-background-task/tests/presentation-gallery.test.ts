@@ -1,5 +1,4 @@
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
 import {
   applyPresentationSettings,
   captureRegistrations,
@@ -11,61 +10,53 @@ import {
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
 import { backgroundTaskNotFound, InvalidBackgroundCwdError } from "../src/task/errors.ts";
-import type {
-  BackgroundLogEvent,
-  BackgroundLogSlice,
-  BackgroundTaskState,
-  BackgroundTaskStatus,
-  BackgroundTaskStatusWait,
-} from "../src/task/model.ts";
-import { BackgroundTaskService, type BackgroundTaskServiceContract } from "../src/task/service.ts";
+import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
+import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
+import {
+  provideTaskService,
+  taskLogSlice as slice,
+  taskServiceDouble,
+  taskServiceRunner,
+  taskStatus,
+  taskWait,
+} from "./support/task-service-double.ts";
 
-const base = {
-  command: "pnpm test",
-  cwd: "/project",
-  startedAt: 1,
-  logCursor: 12,
-  droppedLogBytes: 0,
-};
-const failed: BackgroundTaskStatus = {
-  ...base,
+/** A gallery task: the neutral fixture defaults, with output through cursor 12. */
+const task = (fields: Parameters<typeof taskStatus>[0]) => taskStatus({ logCursor: 12, ...fields });
+const failed = task({
   id: "task-1",
   name: "tests",
   state: "failed",
   endedAt: 2,
   exitCode: 1,
   failureCause: "FAIL tests/auth.test.ts > rejects expired tokens",
-};
-const killed: BackgroundTaskStatus = {
-  ...base,
+});
+const killed = task({
   id: "task-2",
   name: "build",
   command: "pnpm build",
   state: "failed",
   endedAt: 2,
   exitCode: 137,
-};
-const running: BackgroundTaskStatus = {
-  ...base,
+});
+const running = task({
   id: "task-3",
   name: "server",
   command: "pnpm dev",
   state: "running",
   pid: 48213,
-};
-const stopping: BackgroundTaskStatus = {
-  ...base,
+});
+const stopping = task({
   id: "task-4",
   name: "e2e",
   command: "pnpm test:e2e",
   state: "stopping",
   pid: 48377,
-};
-const timedOut: BackgroundTaskStatus = {
-  ...base,
+});
+const timedOut = task({
   id: "task-5",
   name: "migrate",
   command: "pnpm db:migrate",
@@ -74,18 +65,16 @@ const timedOut: BackgroundTaskStatus = {
   endedAt: 301_400,
   exitCode: null,
   signal: "SIGTERM",
-};
-const exitUnknown: BackgroundTaskStatus = {
-  ...base,
+});
+const exitUnknown = task({
   id: "task-6",
   name: "lint",
   command: "pnpm lint",
   state: "exited",
   endedAt: 2,
   exitCode: null,
-};
-const spawnFailed: BackgroundTaskStatus = {
-  ...base,
+});
+const spawnFailed = task({
   id: "task-7",
   name: "deploy",
   command: "./scripts/deploy.sh",
@@ -93,16 +82,15 @@ const spawnFailed: BackgroundTaskStatus = {
   endedAt: 2,
   logCursor: 0,
   error: "Couldn't start the process",
-};
-const finished: BackgroundTaskStatus = {
-  ...base,
+});
+const finished = task({
   id: "task-8",
   name: "typecheck",
   command: "pnpm typecheck",
   state: "exited",
   endedAt: 2,
   exitCode: 0,
-};
+});
 const stoppedServer: BackgroundTaskStatus = {
   ...running,
   state: "stopped",
@@ -110,8 +98,7 @@ const stoppedServer: BackgroundTaskStatus = {
   exitCode: null,
   signal: "SIGTERM",
 };
-const noisy: BackgroundTaskStatus = {
-  ...base,
+const noisy = task({
   id: "task-9",
   name: "watch",
   command: "pnpm build --watch",
@@ -119,7 +106,7 @@ const noisy: BackgroundTaskStatus = {
   pid: 48455,
   logCursor: 230,
   droppedLogBytes: 18_432,
-};
+});
 const stoppedWatcher: BackgroundTaskStatus = {
   ...noisy,
   state: "stopped",
@@ -127,14 +114,13 @@ const stoppedWatcher: BackgroundTaskStatus = {
   exitCode: null,
   signal: "SIGTERM",
 };
-const unnamed: BackgroundTaskStatus = {
-  ...base,
+const unnamed = task({
   id: "task-12",
   command: "node scripts/seed.js --fixtures=large",
   state: "failed",
   endedAt: 2,
   exitCode: 127,
-};
+});
 const byId = new Map(
   [
     failed,
@@ -154,70 +140,28 @@ type Line = Pick<BackgroundLogEvent, "stream" | "text">;
 const out = (text: string): Line => ({ stream: "stdout", text: `${text}\n` });
 const err = (text: string): Line => ({ stream: "stderr", text: `${text}\n` });
 
-/** A log slice whose retained output starts at `from`, after `droppedBytes` were discarded. */
-const slice = (
-  id: string,
-  state: BackgroundTaskState,
-  lines: ReadonlyArray<Line>,
-  { from = 1, droppedBytes = 0 }: { readonly from?: number; readonly droppedBytes?: number } = {},
-): BackgroundLogSlice => ({
-  id,
-  state,
-  nextCursor: from + lines.length,
-  earliestAvailableCursor: from,
-  droppedBytes,
-  events: lines.map((line, index) => ({
-    ...line,
-    cursor: from + index,
-    timestamp: from + index,
-    bytes: line.text.length,
-  })),
-});
-
-const waitFor = (
-  snapshot: BackgroundTaskStatus,
-  outcome: BackgroundTaskStatusWait["outcome"],
-  matchCursor?: number,
-): BackgroundTaskStatusWait => ({
-  id: snapshot.id,
-  outcome,
-  snapshot,
-  nextCursor: snapshot.logCursor + 1,
-  earliestAvailableCursor: 1,
-  droppedBytes: 0,
-  ...(matchCursor !== undefined && { matchCursor }),
-  appliedWaitSeconds: 30,
-});
-
-const unexpected = () => Effect.die("Gallery reached an unexpected service call");
-const service: BackgroundTaskServiceContract = {
-  start: unexpected,
+const service: Partial<BackgroundTaskServiceContract> = {
   list: () => Effect.succeed([running, failed, killed]),
   status: (id) => {
     const task = byId.get(id);
     return task ? Effect.succeed(task) : Effect.fail(backgroundTaskNotFound(id));
   },
-  logs: unexpected,
-  wait: unexpected,
-  stop: unexpected,
-  stopAll: unexpected,
-  clear: unexpected(),
 };
 
 /** The service's start: the requested task, now running. */
 const started =
   (id: string, pid: number): BackgroundTaskServiceContract["start"] =>
   (request) =>
-    Effect.succeed({
-      ...base,
-      id,
-      command: request.command,
-      cwd: request.cwd,
-      ...(request.name && { name: request.name }),
-      state: "running",
-      pid,
-      logCursor: 0,
-    });
+    Effect.succeed(
+      taskStatus({
+        id,
+        command: request.command,
+        cwd: request.cwd,
+        ...(request.name && { name: request.name }),
+        state: "running",
+        pid,
+      }),
+    );
 
 interface Scenario {
   readonly title: string;
@@ -334,22 +278,22 @@ const scenarios: ReadonlyArray<Scenario> = [
   {
     title: "wait matched output",
     input: { action: "wait", id: "task-3", until: "output", contains: "ready in" },
-    service: { wait: () => Effect.succeed(waitFor(running, "matched", 9)) },
+    service: { wait: () => Effect.succeed(taskWait(running, "matched", { matchCursor: 9 })) },
   },
   {
     title: "wait completed",
     input: { action: "wait", id: "task-8", until: "exit" },
-    service: { wait: () => Effect.succeed(waitFor(finished, "completed")) },
+    service: { wait: () => Effect.succeed(taskWait(finished, "completed")) },
   },
   {
     title: "wait completed with a failure",
     input: { action: "wait", id: "task-1", until: "exit" },
-    service: { wait: () => Effect.succeed(waitFor(failed, "completed")) },
+    service: { wait: () => Effect.succeed(taskWait(failed, "completed")) },
   },
   {
     title: "wait timed out",
     input: { action: "wait", id: "task-3", until: "exit", waitSeconds: 30 },
-    service: { wait: () => Effect.succeed(waitFor(running, "timeout")) },
+    service: { wait: () => Effect.succeed(taskWait(running, "timeout")) },
   },
   {
     title: "stop",
@@ -408,8 +352,7 @@ const settle = (scenario: Scenario): Effect.Effect<GalleryScenario> => {
   const call = { title: scenario.title, args: scenario.input };
   if (scenario.phase) return Effect.succeed({ ...call, phase: scenario.phase });
   return executeBackgroundTaskCommand(scenario.input, "/project").pipe(
-    Effect.provideService(BackgroundTaskService, { ...service, ...scenario.service }),
-    Effect.provide(Path.layer),
+    provideTaskService(taskServiceDouble({ ...service, ...scenario.service })),
     Effect.match({
       // Pi turns a rejected execution into an error result carrying only the message.
       onFailure: (error) => ({
@@ -452,14 +395,7 @@ const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
 const settleRegistered = (scenario: RegisteredScenario): Effect.Effect<GalleryScenario> => {
   const tool = captureRegistrations((pi) =>
     registerBackgroundTaskTool(pi, {
-      run: (effect, signal) =>
-        Effect.runPromise(
-          effect.pipe(
-            Effect.provideService(BackgroundTaskService, { ...service, ...scenario.service }),
-            Effect.provide(Path.layer),
-          ),
-          signal ? { signal } : undefined,
-        ),
+      run: taskServiceRunner(taskServiceDouble({ ...service, ...scenario.service })),
     }),
   ).tools[0]!;
   const ctx = extensionContextFixture({ cwd: "/project" });

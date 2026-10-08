@@ -3,12 +3,33 @@ import { Box, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui"
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import type { CodePreviewToolShell } from "./tool-shell";
 
+/** One self-shell row per tool call: Pi shares renderer state between its call and result slots. */
+export function rowPerState<Row>(create: (context: ToolRenderContext, theme: Theme) => Row) {
+  const rows = new WeakMap<object, Row>();
+  return (context: ToolRenderContext, theme: Theme): Row => {
+    const current = rows.get(context.state);
+    if (current) return current;
+    const row = create(context, theme);
+    rows.set(context.state, row);
+    return row;
+  };
+}
+
+/** The result slot shows its row only while no call slot has mounted that row. */
+export const resultStandIn = (row: Component, callMounted: () => boolean): Component => ({
+  render: (width) => (callMounted() ? [] : row.render(width)),
+  handleMouse: (event) => (callMounted() ? undefined : row.handleMouse?.(event)),
+  invalidate: () => {
+    if (!callMounted()) row.invalidate();
+  },
+});
+
 /** A fixed self shell can adopt settings after Pi has retained a replayed row. */
 class SelfBackgroundRow implements Component {
   private readonly box: Box;
   private call: Component | undefined;
   private result: Component | undefined;
-  readonly resultSlot: Component;
+  readonly resultSlot = resultStandIn(this, () => this.call !== undefined);
 
   private context: ToolRenderContext;
   private theme: Theme;
@@ -27,13 +48,6 @@ class SelfBackgroundRow implements Component {
         text,
       ),
     );
-    this.resultSlot = {
-      render: (width) => (this.call ? [] : this.render(width)),
-      handleMouse: (event) => (this.call ? undefined : this.handleMouse(event)),
-      invalidate: () => {
-        if (!this.call) this.invalidate();
-      },
-    };
   }
 
   set(slot: "call" | "result", component: Component, context: ToolRenderContext, theme: Theme) {
@@ -64,15 +78,7 @@ class SelfBackgroundRow implements Component {
 
 /** Reproduce the default host background without changing Pi's retained shell selection. */
 export function withSelfBackground(shell: CodePreviewToolShell): CodePreviewToolShell {
-  const rows = new WeakMap<object, SelfBackgroundRow>();
-  const row = (context: ToolRenderContext, theme: Theme) => {
-    let current = rows.get(context.state);
-    if (!current) {
-      current = new SelfBackgroundRow(context, theme);
-      rows.set(context.state, current);
-    }
-    return current;
-  };
+  const row = rowPerState((context, theme) => new SelfBackgroundRow(context, theme));
   return {
     renderShell: "self",
     renderCall(context, theme, render, content) {

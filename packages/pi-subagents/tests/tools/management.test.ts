@@ -3,7 +3,7 @@ import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { beforeAll, describe, expect, vi } from "vitest";
+import { beforeAll, describe, expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import {
@@ -317,7 +317,7 @@ describe("subagent tool", () => {
     const waiting = view({
       id: "agent-question",
       state: "waiting_for_parent",
-      question: { requestId: "question", message: "Which fixture?", createdAt: 2 },
+      question: { requestId: "question", message: "Which fixture?" },
     });
     const cancelService = subagentServiceDouble({
       withAwaitTerminalObservations: (_ids, _until, onUpdate) =>
@@ -444,30 +444,6 @@ describe("subagent tool", () => {
       },
     );
   }
-
-  effectTest("scopes persistent await presentation to tool execution", function* () {
-    const service = subagentServiceDouble({ withAwaitTerminalObservations: () => Effect.never });
-    const release = vi.fn();
-    const presentation = {
-      beginStart: vi.fn(() => () => undefined),
-      beginAwait: vi.fn(() => release),
-      isLiveHierarchyAvailable: vi.fn(() => true),
-    };
-    const controller = new AbortController();
-    const executing = executeTool(
-      captureSubagentTools(service, { toolPresentation: presentation }).get("subagent_await")!,
-      { runIds: ["agent-1"], until: "all_finished" },
-      { signal: controller.signal },
-    );
-
-    yield* step(() => Promise.resolve());
-    expect(presentation.beginAwait).toHaveBeenCalledWith(["agent-1"], "all_finished");
-    expect(release).not.toHaveBeenCalled();
-    controller.abort();
-    const cancelled = yield* step(() => executing);
-    expect(cancelled.details).toMatchObject({ cancelled: true });
-    expect(release).toHaveBeenCalledOnce();
-  });
 
   effectTest(
     "reports per-target management outcomes without hiding successful side effects",
@@ -865,7 +841,6 @@ describe("subagent tool", () => {
       question: {
         requestId: "question-1",
         message: "Should I update the fixture?",
-        createdAt: 2,
       },
     });
     const result = yield* awaitSingle(waiting);
@@ -1031,9 +1006,6 @@ describe("subagent tool", () => {
       selection: {
         source: "profile-candidate",
         routeSource: "global",
-        host: "local",
-        runtime: "claude",
-        closeOnReport: true,
         candidateIndex: 0,
         reason: "Profile reviewer selected candidate 1.",
         skippedCandidates: [],
@@ -1173,6 +1145,42 @@ describe("subagent tool", () => {
       expect(reopened?.content[0]?.text).not.toContain(
         "send the resulting authoritative claim set",
       );
+    },
+  );
+
+  effectTest(
+    "leaves a finished writer's report for delivery when listing its claims",
+    function* () {
+      const completed = view({
+        id: "agent-writer",
+        state: "completed",
+        endedAt: 2,
+        writeIntent: "writer",
+        writeClaims: ["src/a.ts"],
+        finalText: "Writer report to deliver.",
+      });
+      const receipt = { id: completed.id, generation: 1, claimToken: "claim-1" };
+      const consumed: Array<typeof receipt> = [];
+      const tools = captureSubagentTools(
+        subagentServiceDouble({
+          withStatusObservations: (_ids, use) =>
+            use({ observations: [{ run: completed, completionReceipt: receipt }], missingIds: [] }),
+          consumeCompletions: (receipts) => Effect.sync(() => void consumed.push(...receipts)),
+        }),
+      );
+      const listed = yield* invokeOptionalTool(tools.get("subagent_claims"), {
+        action: "list",
+        runIds: [completed.id],
+      });
+      // The claims listing never shows the report, so it must not consume it either.
+      expect(listed?.content[0]?.text).toContain("agent-writer: src/a.ts");
+      expect(listed?.content[0]?.text).not.toContain("Writer report to deliver.");
+      expect(consumed).toEqual([]);
+      const status = yield* invokeOptionalTool(tools.get("subagent_status"), {
+        runIds: [completed.id],
+      });
+      expect(status?.content[0]?.text).toContain("Writer report to deliver.");
+      expect(consumed).toEqual([receipt]);
     },
   );
 

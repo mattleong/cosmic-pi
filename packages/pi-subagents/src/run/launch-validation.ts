@@ -1,4 +1,4 @@
-export const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
+const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
   "execution",
   "context",
   "writeIntent",

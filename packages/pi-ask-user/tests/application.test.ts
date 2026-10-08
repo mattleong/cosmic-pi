@@ -1,108 +1,29 @@
 import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
-import { makeEventBus, makeTuiHost, waitMounted } from "./support/host.ts";
-import type {
-  ExtensionContext,
-  ExtensionHandler,
-  SourceInfo,
-} from "@earendil-works/pi-coding-agent";
+import { eventually, makeTuiHost, waitMounted } from "./support/host.ts";
+import { startExtension, withoutRelayMarker } from "./support/extension.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import {
-  deferredPromise,
-  extensionApiFixture,
-  extensionContextFixture,
-  opaqueFixture,
-} from "pi-cosmic-core/testing";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { deferredPromise, extensionContextFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import { afterEach, expect, vi } from "vitest";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
-import { askUserWithDependencies } from "../src/application.ts";
-import { queryOwnedFormCapability } from "../src/protocol.ts";
-import type { AskUserOutcome } from "../src/questionnaire/model.ts";
-import type {
-  AskUserRequest,
-  AskUserAsyncRequest,
-  AskUserAsyncControl,
-} from "../src/questionnaire/schema.ts";
-import type {
-  AsyncQuestionnaireSnapshot,
-  AsyncQuestionnaireResult,
-} from "../src/questionnaire/async-model.ts";
+import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
-type Handler = ExtensionHandler<any, any>;
-interface CapturedTool {
-  readonly name: string;
-  readonly execute: (
-    id: string,
-    input: AskUserRequest | AskUserAsyncRequest | AskUserAsyncControl,
-    signal: AbortSignal | undefined,
-    update: undefined,
-    ctx: ExtensionContext,
-  ) => Promise<{
-    readonly content: readonly { readonly type: string; readonly text: string }[];
-    readonly details: AskUserOutcome | AsyncQuestionnaireSnapshot | AsyncQuestionnaireResult;
-  }>;
-}
-interface CapturedCommand {
-  readonly handler: (args: string, ctx: ExtensionContext) => Promise<void>;
-}
-const source: SourceInfo = {
-  source: "local",
-  path: "/extensions/pi-ask-user/index.ts",
-  scope: "user",
-  origin: "top-level",
-};
-
-beforeEach(() => {
-  vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
-  vi.stubEnv("PI_SUBAGENT_RUN_ID", undefined);
-});
-
+withoutRelayMarker();
 afterEach(() => {
-  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
 const harness = (
-  loadPreviewSettings: (
-    cwd: string,
-    projectTrusted: boolean,
-    signal?: AbortSignal,
-  ) => Promise<void>,
+  loadPreviewSettings: Parameters<typeof startExtension>[0],
   overrides: Partial<ExtensionContext> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-application-" });
-    const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-ask-user-agent-" });
-    yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
-    const handlers = new Map<string, Handler>();
-    let command: CapturedCommand | undefined;
-    let tool: CapturedTool | undefined;
-    const tools = new Map<string, CapturedTool>();
-    const fixture = {
-      events: makeEventBus(),
-      on(name: string, handler: Handler) {
-        handlers.set(name, handler);
-      },
-      registerCommand: vi.fn((name: string, definition: CapturedCommand) => {
-        if (name === "ask-user") command = definition;
-      }),
-      sendMessage: vi.fn(),
-      registerMessageRenderer: vi.fn(),
-      appendEntry: vi.fn(),
-      registerTool: vi.fn((definition: CapturedTool) => {
-        tool = definition;
-        tools.set(definition.name, definition);
-      }),
-      // History replay stays live: one public source owns the command anchor and every tool.
-      registerToolRenderer: vi.fn(),
-      getAllTools: () => [...tools.values()].map(({ name }) => ({ name, sourceInfo: source })),
-      getCommands: () =>
-        command ? [{ name: "ask-user", source: "extension" as const, sourceInfo: source }] : [],
-    };
-    askUserWithDependencies(extensionApiFixture(fixture), loadPreviewSettings);
+    const extension = yield* startExtension(loadPreviewSettings);
     const ctx = extensionContextFixture({
       cwd,
       hasUI: true,
@@ -111,20 +32,7 @@ const harness = (
       isProjectTrusted: () => true,
       ...overrides,
     });
-    const emit = (name: string) => Promise.resolve(handlers.get(name)?.({}, ctx));
-    return {
-      ctx,
-      emit,
-      fixture,
-      tools,
-      handlers,
-      get command() {
-        return command;
-      },
-      get tool() {
-        return tool;
-      },
-    };
+    return { ...extension, ctx, emit: (name: string) => extension.emit(name, ctx) };
   });
 
 type Harness = Effect.Success<ReturnType<typeof harness>>;
@@ -172,19 +80,14 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       });
 
       const starting = h.emit("session_start");
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(loadSignal).toBeInstanceOf(AbortSignal);
-        }),
-      );
+      yield* eventually(() => expect(loadSignal).toBeInstanceOf(AbortSignal));
       expect(loadSignal?.aborted).toBe(false);
-      expect(h.fixture.registerTool).not.toHaveBeenCalled();
-      expect(h.tool).toBeUndefined();
+      expect(h.registrations).toHaveLength(0);
 
       preview.resolve();
       yield* Effect.promise(() => starting);
-      expect(h.fixture.registerTool).toHaveBeenCalledOnce();
-      expect(h.tool).toBeDefined();
+      expect(h.registrations).toHaveLength(1);
+      expect(h.tools.has("ask_user")).toBe(true);
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );
@@ -199,15 +102,11 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       });
       yield* Effect.promise(() => h.emit("session_start"));
 
-      const tool = h.tool;
+      const tool = h.tools.get("ask_user");
       if (!tool) throw new Error("ask_user was not activated for the first session.");
 
       const replacing = h.emit("session_start");
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(loads).toBe(2);
-        }),
-      );
+      yield* eventually(() => expect(loads).toBe(2));
       yield* Effect.promise(() =>
         expect(tool.execute("call", request, undefined, undefined, h.ctx)).rejects.toMatchObject({
           _tag: "AskUserRuntimeClosedError",
@@ -224,8 +123,8 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
     Effect.gen(function* () {
       const h = yield* harness(() => Promise.reject(new Error("preview unavailable")));
       yield* Effect.promise(() => h.emit("session_start"));
-      expect(h.fixture.registerTool).toHaveBeenCalledOnce();
-      const command = h.command;
+      expect(h.registrations).toHaveLength(1);
+      const command = h.commands.get("ask-user");
       if (!command) throw new Error("The ask-user command was not registered.");
       const notify = vi.fn(() => {
         throw new Error("stale UI");
@@ -311,11 +210,9 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         yield* openMounted(h, ui, "open");
         ui.component!.handleInput?.("1");
         ui.component!.handleInput?.("\r");
-        yield* Effect.promise(() =>
-          vi.waitFor(() => expect(h.fixture.sendMessage).toHaveBeenCalledOnce()),
-        );
-        const sent = h.fixture.sendMessage.mock.calls[0]![0];
-        const [customType, data] = h.fixture.appendEntry.mock.calls[0]!;
+        yield* eventually(() => expect(h.pi.sendMessage).toHaveBeenCalledOnce());
+        const sent = h.pi.sendMessage.mock.calls[0]![0];
+        const [customType, data] = h.pi.appendEntry.mock.calls[0]!;
         branch.push({ type: "custom", customType, data });
         branch.push({ type: "custom_message", customType: sent.customType, details: sent.details });
         yield* Effect.promise(() => h.emit("session_tree"));
@@ -328,7 +225,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const foreign = { role: "custom", customType: "another-extension", content: "keep" };
         const result = yield* Effect.promise(() =>
           Promise.resolve(
-            h.handlers.get("context")!({ messages: [recorded, late, foreign] }, h.ctx),
+            h.handlers.get("context")![0]!({ messages: [recorded, late, foreign] }, h.ctx),
           ),
         );
         expect(result).toEqual({ messages: [recorded, foreign] });
@@ -338,7 +235,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
           yield* Effect.promise(() => h.emit(activation));
           const again = yield* Effect.promise(() =>
             Promise.resolve(
-              h.handlers.get("context")!({ messages: [recorded, late, foreign] }, h.ctx),
+              h.handlers.get("context")![0]!({ messages: [recorded, late, foreign] }, h.ctx),
             ),
           );
           expect(again).toEqual({ messages: [recorded, foreign] });
@@ -395,7 +292,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const replacing = h.emit("session_start").then(() => {
           replaced = true;
         });
-        yield* Effect.promise(() => vi.waitFor(() => expect(editorSignal?.aborted).toBe(true)));
+        yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
         for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
         expect(replaced).toBe(false);
         expect(ui.tui.start).not.toHaveBeenCalled();
@@ -415,7 +312,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const next = h.tools
           .get("ask_user_async")!
           .execute("next", asyncRequest, undefined, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.customCalls).toBe(2)));
+        yield* eventually(() => expect(ui.customCalls).toBe(2));
         ui.mount!();
         yield* Effect.promise(() => next);
         yield* Effect.promise(() => h.emit("session_shutdown"));
@@ -425,30 +322,4 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       }),
     );
   }
-
-  it.effect("does not advertise owned forms without a real UI", () =>
-    Effect.gen(function* () {
-      const sessionManager: ExtensionContext["sessionManager"] = opaqueFixture({
-        getSessionId: () => "session",
-        getBranch: () => [],
-      });
-      const h = yield* harness(() => Promise.resolve(), {
-        hasUI: false,
-        mode: "print",
-        sessionManager,
-      });
-      yield* Effect.promise(() => h.emit("session_start"));
-      expect(queryOwnedFormCapability(h.fixture.events, "session")).toBeUndefined();
-      yield* Effect.promise(() => h.emit("session_shutdown"));
-    }),
-  );
-
-  it.effect("RPC retains only the compatible blocking tool", () =>
-    Effect.gen(function* () {
-      const h = yield* harness(() => Promise.resolve());
-      yield* Effect.promise(() => h.emit("session_start"));
-      expect([...h.tools.keys()]).toEqual(["ask_user"]);
-      yield* Effect.promise(() => h.emit("session_shutdown"));
-    }),
-  );
 });

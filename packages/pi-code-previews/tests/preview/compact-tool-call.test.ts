@@ -3,7 +3,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { layoutCompactHeader, middleElide } from "../../src/preview/compact-header";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
-import { compactStatus } from "../../src/tools/compact-summary";
 import { plainTheme as theme, stripAnsi } from "../support/render";
 
 const allocateCompactHeader = (...args: Parameters<typeof layoutCompactHeader>) =>
@@ -151,32 +150,6 @@ test("middle elision keeps combining, ZWJ and wide graphemes intact", () => {
   assert.ok(visibleWidth(row) < 200);
 });
 
-test("card issues keep every character at narrow widths", () => {
-  const message = "日本語recover\r\n文字retry";
-  for (const severity of ["warning", "error"] as const) {
-    for (const width of [2, 3, 6, 7, 12, 40]) {
-      const rows = renderCompactToolCall(
-        {
-          name: "read",
-          phase: "settled",
-          summary: {
-            subject: "file",
-            outcome: "warning",
-            issues: [{ severity, code: "wide", message }],
-          },
-        },
-        theme,
-        width,
-      )
-        .slice(1)
-        .map(stripAnsi);
-      assert.ok(rows.every((row) => visibleWidth(row) <= width));
-      const text = rows.join("");
-      for (const character of "日本語recover文字retry") assert.ok(text.includes(character));
-    }
-  }
-});
-
 test("collapsed cards show the heading, then attention issues, then the call tree", () => {
   const rows = renderCompactToolCall(
     {
@@ -227,27 +200,6 @@ test("collapsed cards show the heading, then attention issues, then the call tre
   assert.equal(parent, stripAnsi(alone));
 });
 
-test("issue text is inert and width bounded", () => {
-  for (const width of [1, 4, 16, 40, 100]) {
-    const rows = renderCompactToolCall(
-      {
-        name: "read",
-        phase: "settled",
-        summary: {
-          subject: "file.ts",
-          outcome: "error",
-          issues: [{ severity: "error", code: "x", message: "日本語/👩‍💻 failed\u001b[2J" }],
-        },
-      },
-      theme,
-      width,
-    );
-    assert.ok(rows.every((row) => visibleWidth(row) <= width));
-    assert.equal(rows.join("").includes("\u001b[2J"), false);
-    if (width >= 40) assert.match(stripAnsi(rows.join("\n")), /failed/u);
-  }
-});
-
 test("pending rows do not display an execution duration or outcome from a premature provider", () => {
   const rows = renderCompactToolCall(
     {
@@ -259,8 +211,6 @@ test("pending rows do not display an execution duration or outcome from a premat
     theme,
     100,
   );
-  assert.equal(compactStatus("pending", { subject: "file.ts", outcome: "success" }), "pending");
-  assert.equal(compactStatus("pending", { subject: "file.ts", outcome: "error" }), "pending");
   assert.doesNotMatch(rows[0]!, /3s/u);
   assert.equal(
     stripAnsi(rows[0]!),

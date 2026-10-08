@@ -10,11 +10,10 @@ export function expandedSection(
   theme: Theme,
   label: string | undefined,
   ...children: Component[]
-): Component & { readonly content: Container } {
+): Component {
   const content = new Container();
   for (const child of children) content.addChild(child);
   return {
-    content,
     render(width) {
       if (width <= 0) return [];
       const heading = label ? [clipToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];

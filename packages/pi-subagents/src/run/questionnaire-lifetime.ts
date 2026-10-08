@@ -3,13 +3,13 @@ import * as Effect from "effect/Effect";
 import type { QuestionnaireOwner } from "pi-ask-user/protocol";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
-import { InvalidSubagentRequestError, type SubagentError } from "./errors.ts";
+import { invalidRequest, type SubagentError } from "./errors.ts";
 
 const expired = () =>
-  new InvalidSubagentRequestError({
-    code: "questionnaire_owner_expired",
-    message: "The questionnaire's owning Pi assignment is no longer active.",
-  });
+  invalidRequest(
+    "questionnaire_owner_expired",
+    "The questionnaire's owning Pi assignment is no longer active.",
+  );
 
 /** Synchronous registry transitions; no read-modify-write crosses an Effect yield. */
 export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
@@ -76,11 +76,10 @@ export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
               : { epoch: owner.assignmentEpoch, ids: new Set<string>() };
           if (history.ids.has(requestId) || history.ids.size >= 256)
             return Effect.fail(
-              new InvalidSubagentRequestError({
-                code: "questionnaire_request_conflict",
-                message:
-                  "The questionnaire identity was already used or this assignment reached its questionnaire limit.",
-              }),
+              invalidRequest(
+                "questionnaire_request_conflict",
+                "The questionnaire identity was already used or this assignment reached its questionnaire limit.",
+              ),
             );
           history.ids.add(requestId);
           seen.set(record, history);
@@ -90,9 +89,7 @@ export const makeQuestionnaireLifetimes = (isClosed: () => boolean) => {
         () =>
           Effect.suspend(() => (current() ? execute(owner) : Effect.fail(expired()))).pipe(
             Effect.raceFirst(Deferred.await(revoked).pipe(Effect.andThen(Effect.fail(expired())))),
-            Effect.flatMap((result) =>
-              current() ? Effect.succeed(result) : Effect.fail(expired()),
-            ),
+            Effect.filterOrFail(() => current(), expired),
           ),
         () =>
           Effect.sync(() => {

@@ -1,14 +1,13 @@
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { ImageOutputFormatSchema } from "../config/schema.ts";
+import { ImageOutputFormatSchema, type ImageOutputFormat } from "../config/schema.ts";
 import {
   ImageModelSchema,
   type ExtractedImageResult,
   type ImageAction,
   type ImageInput,
   type ImageModel,
-  type ImageOutputFormat,
 } from "./types.ts";
 
 const ImageGenerationItemSchema = Schema.Struct({
@@ -18,6 +17,10 @@ const ImageGenerationItemSchema = Schema.Struct({
   revised_prompt: Schema.optional(Schema.String),
   result: Schema.optional(Schema.String),
   b64_json: Schema.optional(Schema.String),
+});
+const OutputItemDoneSchema = Schema.Struct({
+  type: Schema.Literal("response.output_item.done"),
+  item: Schema.Struct({ type: Schema.String }),
 });
 const CompletedEventSchema = Schema.Struct({
   type: Schema.Literal("response.output_item.done"),
@@ -83,6 +86,9 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
 >(value: Value, fallbackMimeType: string, fallbackId: string) {
   const discriminant = yield* Schema.decodeUnknownEffect(EventDiscriminantSchema)(value);
   if (discriminant.type === "response.output_item.done") {
+    // Every output item completes this way; reasoning and message items carry no image.
+    const done = yield* Schema.decodeUnknownEffect(OutputItemDoneSchema)(value);
+    if (done.item.type !== "image_generation_call") return ignoredEvent;
     const event = yield* Schema.decodeUnknownEffect(CompletedEventSchema)(value);
     return normalizeImageItem(event.item, fallbackMimeType, fallbackId);
   }
@@ -106,9 +112,7 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
   }
   if (
     discriminant.type === undefined &&
-    hasObjectRuntimeType(value) &&
-    value !== null &&
-    ("partial_image_b64" in value || "b64_json" in value)
+    (Predicate.hasProperty(value, "partial_image_b64") || Predicate.hasProperty(value, "b64_json"))
   ) {
     yield* Schema.decodeUnknownEffect(PartialEventSchema)(value);
     return ignoredEvent;

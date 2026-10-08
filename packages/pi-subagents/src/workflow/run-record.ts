@@ -65,7 +65,7 @@ const WorkflowRunRecordSchema = Schema.Struct({
 });
 
 export type WorkflowRunRecord = typeof WorkflowRunRecordSchema.Type;
-export type WorkflowRunRecordState = WorkflowRunRecord["state"];
+type WorkflowRunRecordState = WorkflowRunRecord["state"];
 
 const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(WorkflowRunRecordSchema));
 
@@ -78,20 +78,15 @@ export const decodeWorkflowRunRecord = (
 
 export const workflowRunRecordText = (record: WorkflowRunRecord): string => JSON.stringify(record);
 
-/** The Pi process that runs a starting run, and when its machine booted. */
-export interface WorkflowRunProcess {
-  readonly pid: number;
-  readonly bootedAt: number;
-}
-
 /**
- * A starting run's record, owned by `owner` in session `sessionKey`. The run's args aren't kept:
- * a resume after a restart passes them again, from the session's transcript.
+ * A starting run's record in session `sessionKey`, owned by the Pi process `owner.pid`, whose
+ * machine booted at `owner.bootedAt`. The run's args aren't kept: a resume after a restart passes
+ * them again, from the session's transcript.
  */
 export const startedWorkflowRunRecord = (
   run: Pick<WorkflowRunView, "id" | "name" | "source" | "scriptPath" | "startedAt">,
   sessionKey: string,
-  owner: WorkflowRunProcess,
+  owner: { readonly pid: number; readonly bootedAt: number },
 ): WorkflowRunRecord => ({
   version: 1,
   runId: run.id,
@@ -128,12 +123,6 @@ export const endedWorkflowRunRecord = (
     ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
   };
 };
-
-/** Notes who asked the run to stop, so a notice after a crash doesn't offer a restart. */
-export const stoppingWorkflowRunRecord = (
-  record: WorkflowRunRecord,
-  origin: WorkflowStopOrigin,
-): WorkflowRunRecord => ({ ...record, stoppedBy: origin });
 
 /**
  * Marks the run's notification or notice as accepted. A record still `running` belongs to a Pi

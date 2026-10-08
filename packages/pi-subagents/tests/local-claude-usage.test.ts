@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { usageComponentsTotal } from "../src/backend/local-claude-correlation.ts";
-import { makeLocalClaudeUsage } from "../src/backend/local-claude-usage.ts";
+import { makeLocalClaudeUsage, usageComponentsTotal } from "../src/backend/local-claude-usage.ts";
 
 const tokens = (input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({
   input,

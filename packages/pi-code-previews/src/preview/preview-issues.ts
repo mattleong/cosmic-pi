@@ -6,8 +6,9 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { toolStatusLine } from "pi-cosmic-ui/tool";
+import { composeToolComponent, toolStatusLine } from "pi-cosmic-ui/tool";
 import { codePreviewSettings } from "../config/state";
 import type { CompactIssue } from "../tools/compact-issues";
 import { planCompactPresentation } from "../tools/compact-presentation";
@@ -52,13 +53,10 @@ interface PreviewIssues {
 const cache = new WeakMap<object, { inputs: readonly unknown[]; value: PreviewIssues }>();
 
 /** Remembers the result Pi last rendered, so the call slot can explain it. */
-export function recordPreviewResult(
-  context: Context,
-  result: AgentToolResult<unknown> | undefined,
-): void {
+export function recordPreviewResult(context: Context, result: AgentToolResult<unknown>): void {
   const state = frameState(context);
   state.codePreviewFrameContext = context;
-  if (result) state.codePreviewFrameResult = { result, partial: context.isPartial };
+  state.codePreviewFrameResult = { result, partial: context.isPartial };
 }
 
 function currentResult(context: Context): AgentToolResult<unknown> | undefined {
@@ -67,10 +65,32 @@ function currentResult(context: Context): AgentToolResult<unknown> | undefined {
   return recorded && recorded.partial === context.isPartial ? recorded.result : undefined;
 }
 
+/** Pi renders the call before the result, so only a result it no longer streams settles. */
+export const compactPhase = (
+  result: AgentToolResult<unknown> | undefined,
+  context: Context,
+): CompactPhase =>
+  result && !context.isPartial ? "settled" : context.executionStarted ? "running" : "pending";
+
+/** Presentation-planning evidence. A broken projector loses semantic ownership, not the shell. */
+export const compactPresentationInput = (
+  provider: Provider,
+  phase: CompactPhase,
+  result: AgentToolResult<unknown> | undefined,
+  context: Context,
+) => ({
+  summary: invokeHostCallback<CompactSummary | undefined>(
+    () => provider({ phase, args: context.args, result, context }),
+    undefined,
+  ),
+  phase,
+  isError: context.isError,
+  errorText: context.isError ? getTextContent(result?.content ?? []) : "",
+});
+
 function previewIssues(provider: Provider, context: Context): PreviewIssues {
   const result = currentResult(context);
-  const phase: CompactPhase =
-    result && !context.isPartial ? "settled" : context.executionStarted ? "running" : "pending";
+  const phase = compactPhase(result, context);
   // Pi builds a new result envelope on every update, including each animation tick, but keeps
   // its content and details. Settings replace atomically, covering the policy providers read.
   const inputs = [
@@ -84,17 +104,8 @@ function previewIssues(provider: Provider, context: Context): PreviewIssues {
   const cached = cache.get(context.state);
   if (cached && inputs.every((value, index) => Object.is(value, cached.inputs[index])))
     return cached.value;
-  let summary: CompactSummary | undefined;
-  try {
-    summary = provider({ phase, args: context.args, result, context });
-  } catch {
-    summary = undefined;
-  }
   const { collapsedSummary } = planCompactPresentation({
-    summary,
-    phase,
-    isError: context.isError,
-    errorText: context.isError ? getTextContent(result?.content ?? []) : "",
+    ...compactPresentationInput(provider, phase, result, context),
     expanded: true,
   });
   const value = {
@@ -126,7 +137,7 @@ class PreviewIssuesFrame extends Container {
 const unwrapPreviewIssues = (component: Component | undefined): Component | undefined =>
   component instanceof PreviewIssuesFrame ? component.body : component;
 
-const EMPTY: Component = { render: () => [], invalidate: () => undefined };
+const EMPTY = composeToolComponent(() => []);
 const UNSTYLED: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
 interface IssueSlot {
@@ -158,25 +169,22 @@ export function renderWithPreviewIssues(
 ): Component {
   const state = frameState(context);
   state.codePreviewFrameContext = context;
-  const lines: Component = {
-    render: (width) => {
-      const current = latestContext(context);
-      const { issues, cancelled } = previewIssues(provider, current);
-      const draw = (style: Pick<Theme, "fg">) => {
-        const rows = renderCompactIssues(issues, style, width, current.expanded, "");
-        return rows.length === 0 && cancelled && width > 0
-          ? [clipToWidth(toolStatusLine(style, "stopped", "Cancelled"), width, "")]
-          : rows;
-      };
-      try {
-        return draw(theme);
-      } catch {
-        // A failing host theme cannot hide what went wrong, nor widen the row past the terminal.
-        return draw(UNSTYLED);
-      }
-    },
-    invalidate: () => undefined,
-  };
+  const lines = composeToolComponent((width) => {
+    const current = latestContext(context);
+    const { issues, cancelled } = previewIssues(provider, current);
+    const draw = (style: Pick<Theme, "fg">) => {
+      const rows = renderCompactIssues(issues, style, width, current.expanded, "");
+      return rows.length === 0 && cancelled && width > 0
+        ? [clipToWidth(toolStatusLine(style, "stopped", "Cancelled"), width, "")]
+        : rows;
+    };
+    try {
+      return draw(theme);
+    } catch {
+      // A failing host theme cannot hide what went wrong, nor widen the row past the terminal.
+      return draw(UNSTYLED);
+    }
+  });
   const slot: IssueSlot = { lines, placed: false };
   state.codePreviewIssueSlot = slot;
   try {

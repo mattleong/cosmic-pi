@@ -36,7 +36,7 @@ export const initialUsageProjection = <Resolved, Snapshot>(): UsageProjectionBas
   authFound: false,
 });
 
-export type UsageVisibilityFields = {
+type UsageVisibilityFields = {
   readonly eligible: boolean;
   readonly snapshot: unknown;
   readonly statusLine: string | undefined;
@@ -81,30 +81,23 @@ export function withUsageEligibility<T extends UsageVisibilityFields>(
 }
 
 /**
- * Frozen-projection ref factory shared by provider usage controllers: one mutable ref
- * holding a deeply frozen initial projection extended with provider-specific fields.
+ * Frozen-projection ref factory shared by provider usage controllers: one mutable ref holding a
+ * deeply frozen copy of the provider's initial projection.
  */
-export function makeFrozenUsageProjection<Resolved, Snapshot, Extra extends object>(
-  extra: Extra,
-): MutableRef.MutableRef<UsageProjectionBase<Resolved, Snapshot> & Extra> {
-  return MutableRef.make(
-    freezeSnapshot({ ...initialUsageProjection<Resolved, Snapshot>(), ...extra }),
-  );
-}
+export const makeFrozenUsageProjection = <Projection>(
+  initialProjection: () => Projection,
+): MutableRef.MutableRef<Projection> => MutableRef.make(freezeSnapshot(initialProjection()));
 
 /** Reset companion of `makeFrozenUsageProjection`; rebuilds and republishes the frozen snapshot. */
-export function resetFrozenUsageProjection<Resolved, Snapshot, Extra extends object>(
-  projection: MutableRef.MutableRef<UsageProjectionBase<Resolved, Snapshot> & Extra>,
-  initialExtra: () => Extra,
-): void {
-  MutableRef.set(
-    projection,
-    freezeSnapshot({ ...initialUsageProjection<Resolved, Snapshot>(), ...initialExtra() }),
-  );
-}
+export const resetFrozenUsageProjection = <Projection>(
+  projection: MutableRef.MutableRef<Projection>,
+  initialProjection: () => Projection,
+): void => {
+  MutableRef.set(projection, freezeSnapshot(initialProjection()));
+};
 
 /** Provider-specific eligibility decision for the current host context. */
-export interface UsageEligibilityDecision {
+interface UsageEligibilityDecision {
   readonly eligible: boolean;
   readonly clearUsage: boolean;
   /** Overrides for the hidden/unavailable status texts; defaults apply when omitted. */

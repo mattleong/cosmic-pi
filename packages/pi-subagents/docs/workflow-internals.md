@@ -100,7 +100,7 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
   After each admission-revision release it asks `queuedWriterConflict` again, and once no transient conflict remains it waits for a run slot again.
   Other refusals resolve the call to `null` with a warning.
 - On the root side, `run/admission-signal.ts` keeps an admission revision that advances only when a holding that can end a writer conflict is released: a writer slot, file a writer or retry claims, unfinished cleanup, retry or eviction claim, or unavailable writer pool.
-  The service rechecks it on every exit from the run lock and every publication; release points outside both call `RunContext.recheckAdmission`.
+  The service rechecks it on every exit from the run lock and every publication, so a release that publishes nothing is still observed when its lock exits.
 - `queuedWriterConflict` checks under the run lock, without validation, backend resolution, or preflight.
   It reports only conflicts that clear by themselves, with a release that advances the revision, so it never keeps waiting a start that a full start would admit.
 - Own concurrency: workflow starts (`request.workflow`) are exempt from the root's `maxDirectChildren`, and a run its workflow still owns (`workflowOwned`: its view keeps that `workflow` placement and its owner is live) occupies no root direct-child slot, so the main agent's own starts count only non-workflow children.
@@ -127,6 +127,7 @@ This page covers how the runner in `src/workflow/` owns runs, admits agents, per
   An entry taken from the replay is settled, journal line included, before a stop takes effect.
 - A journaled worktree writer is reused only while the subagent service's `workspaceBindingStatus` reports its worktree `pending` (listed again as a proposal) or `integrated` (not listed).
   The binding is read in the call's turn; otherwise (`closed` or `unbound`) the entry misses, the call runs again, and the run logs why.
+  A reused integrated writer is journaled again without its worktree, in memory as in its results line, so a later resume reuses it without a binding check and a teardown notice never lists it for recovery.
   The workflow service keeps no worktree set of its own.
 - A worktree writer whose worktree was discarded because it made no changes is journaled like a reader: its memory entry has no `workspaceId`, and a results line with `unchanged: true` replays without one, so a resume reuses it without a binding check and never lists it as a proposal.
   A writer whose discard failed keeps its proposal and follows the binding rules above.

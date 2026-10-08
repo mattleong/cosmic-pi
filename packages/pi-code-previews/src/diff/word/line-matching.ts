@@ -1,16 +1,15 @@
-import type { WordChangeConfidence } from "./types";
+import { requiredAt, type WordChangeConfidence } from "./types";
 import type { AddedDiffLine, RemovedDiffLine } from "../parse";
 import { prefixAlignedPairs } from "./alignment";
 import {
-  changedLineSimilarityDocuments,
-  similarityTokenListWeight,
-  similarityTokenWeight,
-  tokenSimilarity,
+  changedLineSimilarity,
+  lineSimilarity,
+  type ChangedLineSimilarity,
 } from "./line-similarity";
-import { changedLineAt, type IndexedChangedLine } from "./changed-line";
+import type { IndexedChangedLine } from "./changed-line";
 import {
   competingCandidateValues,
-  competingChangedLineScoreAt,
+  competingChangedLineScores,
   isAmbiguousChangedLinePairScore,
   isReciprocalBestChangedLinePair,
   linePairConfidence,
@@ -18,6 +17,8 @@ import {
   MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE,
   MIN_POSITIONAL_FALLBACK_PAIR_SCORE,
   type ChangedLinePositionMatch,
+  type ChangedLineScoreAt,
+  type CompetingChangedLineScoreAt,
 } from "./line-pair-scoring";
 import { matchChangedLinesSparse } from "./sparse-line-matching";
 
@@ -34,71 +35,57 @@ export function matchChangedLines(
   added: Array<IndexedChangedLine<AddedDiffLine>>,
 ): ChangedLinePair[] {
   if (removed.length === 0 || added.length === 0) return [];
+  const similarity = changedLineSimilarity(removed, added);
   const pairs =
     removed.length * added.length > MAX_CHANGED_LINE_PAIR_CELLS
-      ? matchChangedLinesSparse(removed, added)
-      : matchChangedLinesDense(removed, added);
+      ? matchChangedLinesSparse(similarity)
+      : matchChangedLinesDense(similarity);
   return pairs
     .toSorted((a, b) => a.removedPosition - b.removedPosition)
     .map(({ removedPosition, addedPosition, confidence }) => ({
-      removedIndex: changedLineAt(removed, removedPosition).index,
-      addedIndex: changedLineAt(added, addedPosition).index,
+      removedIndex: requiredAt(removed, removedPosition, "changed line").index,
+      addedIndex: requiredAt(added, addedPosition, "changed line").index,
       confidence,
     }));
 }
 
 const MAX_CHANGED_LINE_PAIR_CELLS = 1024;
 
-function matchChangedLinesDense(
-  removed: Array<IndexedChangedLine<RemovedDiffLine>>,
-  added: Array<IndexedChangedLine<AddedDiffLine>>,
-): ChangedLinePositionMatch[] {
-  const similarityDocuments = changedLineSimilarityDocuments(removed, added);
-  const tokenWeight = similarityTokenWeight(similarityDocuments);
-  const { removedFeatures, addedFeatures } = similarityDocuments;
-  const removedWeights = removedFeatures.map((tokens) =>
-    similarityTokenListWeight(tokens, tokenWeight),
-  );
-  const addedWeights = addedFeatures.map((tokens) =>
-    similarityTokenListWeight(tokens, tokenWeight),
-  );
-  const scores = removedFeatures.map((beforeTokens, removedPosition) =>
-    addedFeatures.map((afterTokens, addedPosition) =>
-      tokenSimilarity(
-        beforeTokens,
-        afterTokens,
-        tokenWeight,
+function matchChangedLinesDense(similarity: ChangedLineSimilarity): ChangedLinePositionMatch[] {
+  const removedLength = similarity.removed.length;
+  const addedLength = similarity.added.length;
+  const scores = similarity.removed.map((_removedLine, removedPosition) =>
+    similarity.added.map((_addedLine, addedPosition) =>
+      lineSimilarity(
+        similarity,
+        removedPosition,
+        addedPosition,
         MIN_POSITIONAL_FALLBACK_PAIR_SCORE,
-        removedWeights[removedPosition],
-        addedWeights[addedPosition],
       ),
     ),
   );
+  const scoreAt: ChangedLineScoreAt = (removedPosition, addedPosition) =>
+    scores[removedPosition]?.[addedPosition] ?? 0;
+  const competingScoreAt = competingChangedLineScores(removedLength, addedLength, scoreAt);
   const similarPairs = prefixAlignedPairs(
-    removed.length,
-    added.length,
+    removedLength,
+    addedLength,
     (removedPosition, addedPosition) => {
-      const score = scores[removedPosition]?.[addedPosition] ?? 0;
+      const score = scoreAt(removedPosition, addedPosition);
       return score >= MIN_CHANGED_LINE_PAIR_SCORE ? score + 0.01 : Number.NEGATIVE_INFINITY;
     },
   );
-  if (similarPairs.length === 0 && removed.length === 1 && added.length === 1)
+  if (similarPairs.length === 0 && removedLength === 1 && addedLength === 1)
     return [{ removedPosition: 0, addedPosition: 0, confidence: "medium" }];
-  const confidentPairs = confidentChangedLinePairs(
-    scores,
-    positionalFallbackPairs(removed.length, added.length, scores, similarPairs),
-  );
-  return addCrossingPairs(scores, confidentPairs);
-}
-
-function confidentChangedLinePairs(
-  scores: number[][],
-  pairs: ChangedLinePositionPair[],
-): ChangedLinePositionMatch[] {
   const confidentPairs: ChangedLinePositionMatch[] = [];
-  for (const [removedPosition, addedPosition] of pairs) {
-    const score = scores[removedPosition]?.[addedPosition] ?? 0;
-    const competingScore = competingChangedLineScore(scores, removedPosition, addedPosition);
+  for (const [removedPosition, addedPosition] of positionalFallbackPairs(
+    removedLength,
+    addedLength,
+    scoreAt,
+    similarPairs,
+  )) {
+    const score = scoreAt(removedPosition, addedPosition);
+    const competingScore = competingScoreAt(removedPosition, addedPosition);
     if (isAmbiguousChangedLinePairScore(score, competingScore)) continue;
     confidentPairs.push({
       removedPosition,
@@ -106,31 +93,13 @@ function confidentChangedLinePairs(
       confidence: linePairConfidence(score, competingScore),
     });
   }
-  return confidentPairs;
-}
-
-function competingChangedLineScore(
-  scores: number[][],
-  removedPosition: number,
-  addedPosition: number,
-  usedRemoved?: ReadonlySet<number>,
-  usedAdded?: ReadonlySet<number>,
-): number {
-  return competingChangedLineScoreAt(
-    scores.length,
-    scores[removedPosition]?.length ?? 0,
-    removedPosition,
-    addedPosition,
-    (candidateRemovedPosition, candidateAddedPosition) =>
-      scores[candidateRemovedPosition]?.[candidateAddedPosition] ?? 0,
-    usedRemoved,
-    usedAdded,
-  );
+  return addCrossingPairs(scores, confidentPairs, competingScoreAt);
 }
 
 function addCrossingPairs(
   scores: number[][],
   pairs: ChangedLinePositionMatch[],
+  competingScoreAt: CompetingChangedLineScoreAt,
 ): ChangedLinePositionMatch[] {
   const usedRemoved = new Set(pairs.map((pair) => pair.removedPosition));
   const usedAdded = new Set(pairs.map((pair) => pair.addedPosition));
@@ -153,8 +122,7 @@ function addCrossingPairs(
       continue;
     let confidence: WordChangeConfidence | undefined;
     if (candidate.score >= MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE) {
-      const availableCompetingScore = competingChangedLineScore(
-        scores,
+      const availableCompetingScore = competingScoreAt(
         candidate.removedPosition,
         candidate.addedPosition,
         usedRemoved,
@@ -183,7 +151,7 @@ function addCrossingPairs(
 function positionalFallbackPairs(
   removedLength: number,
   addedLength: number,
-  scores: number[][],
+  scoreAt: ChangedLineScoreAt,
   similarPairs: ChangedLinePositionPair[],
 ): ChangedLinePositionPair[] {
   const pairs: ChangedLinePositionPair[] = [];
@@ -193,9 +161,8 @@ function positionalFallbackPairs(
   for (const [removedPosition, addedPosition] of anchors) {
     const count = Math.min(removedPosition - removedCursor, addedPosition - addedCursor);
     for (let offset = 0; offset < count; offset++) {
-      const score = scores[removedCursor + offset]?.[addedCursor + offset] ?? 0;
-      if (score < MIN_POSITIONAL_FALLBACK_PAIR_SCORE) continue;
-      pairs.push([removedCursor + offset, addedCursor + offset]);
+      const pair: ChangedLinePositionPair = [removedCursor + offset, addedCursor + offset];
+      if (scoreAt(...pair) >= MIN_POSITIONAL_FALLBACK_PAIR_SCORE) pairs.push(pair);
     }
     if (removedPosition < removedLength) pairs.push([removedPosition, addedPosition]);
     removedCursor = removedPosition + 1;

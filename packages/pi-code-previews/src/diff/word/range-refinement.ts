@@ -1,17 +1,10 @@
 import {
-  mergeRanges,
-  mergeRangesByStart,
-  pushTokenRange,
-  rangesForTokenGroup,
-  type TextRange,
-  type TokenGroup,
-} from "./ranges";
-import {
   commonPrefixLength,
   commonSuffixLength,
+  needsBoundarySafeOffsets,
   rangesAtGraphemeBoundaries,
 } from "./text-boundaries";
-import { changedTokenGaps, type ChangedTokenGap } from "./token-alignment";
+import { changedTokenGaps, type ChangedTokenGap, type TokenGroup } from "./token-alignment";
 import { unorderedTokenSimilarity } from "./line-similarity";
 import {
   identifierSimilarityParts,
@@ -23,9 +16,8 @@ import {
   wordEmphasisTokenWeight,
   type WordEmphasisToken,
 } from "./tokens";
-import { hasWordChangeRanges, type WordChangeRanges } from "./types";
+import { hasWordChangeRanges, type TextRange, type WordChangeRanges } from "./types";
 import { suffixAlignedPairs } from "./alignment";
-import { refinedTokenTextRanges } from "./token-text-refinement";
 
 const MAX_SOFT_TOKEN_ALIGNMENT_CELLS = 4096;
 const MIN_SOFT_TOKEN_SUBSTITUTION_SIMILARITY = 0.45;
@@ -76,6 +68,23 @@ function nonEmptyTokenGroup(group: TokenGroup): TokenGroup | undefined {
   return group.start < group.end ? group : undefined;
 }
 
+function rangesForTokenGroup(tokens: WordEmphasisToken[], group: TokenGroup): TextRange[] {
+  return mergeRanges(
+    tokens.slice(group.start, group.end).map((token): TextRange => [token.start, token.end]),
+  );
+}
+
+/** Joins start-sorted ranges separated by at most one character. */
+function mergeRanges(ranges: TextRange[]): TextRange[] {
+  const merged: TextRange[] = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range[0] - previous[1] <= 1) previous[1] = range[1];
+    else merged.push([...range]);
+  }
+  return merged;
+}
+
 function refinedSingleTokenRanges(
   beforeTokens: WordEmphasisToken[],
   beforeGroup: TokenGroup,
@@ -110,11 +119,8 @@ function refinedTokenPairRanges(
   return textRanges ?? identifierRanges;
 }
 
-function highlightedRangeWidth(ranges: WordChangeRanges): number {
-  let width = 0;
-  for (const [start, end] of ranges.removed) width += end - start;
-  for (const [start, end] of ranges.added) width += end - start;
-  return width;
+function highlightedRangeWidth({ removed, added }: WordChangeRanges): number {
+  return [...removed, ...added].reduce((width, [start, end]) => width + end - start, 0);
 }
 
 function shouldSuppressUnbalancedIdentifierPartRefinement(
@@ -127,6 +133,58 @@ function shouldSuppressUnbalancedIdentifierPartRefinement(
   const beforePartCount = identifierSimilarityParts(beforeToken.value).length;
   const afterPartCount = identifierSimilarityParts(afterToken.value).length;
   return Math.min(beforePartCount, afterPartCount) === 1 && beforePartCount !== afterPartCount;
+}
+
+/** Narrows a token pair to the text between their shared prefix and suffix. */
+function refinedTokenTextRanges(
+  beforeToken: WordEmphasisToken,
+  afterToken: WordEmphasisToken,
+): WordChangeRanges | undefined {
+  if (beforeToken.value === afterToken.value) return undefined;
+  const prefix = commonPrefixLength(beforeToken.value, afterToken.value);
+  const suffix = commonSuffixLength(beforeToken.value, afterToken.value, prefix);
+  if (!shouldRefineTokenText(beforeToken.value, afterToken.value, prefix, suffix)) return undefined;
+  // Distinct values leave a non-empty middle on at least one side.
+  return {
+    removed: tokenMiddleRange(beforeToken, prefix, suffix),
+    added: tokenMiddleRange(afterToken, prefix, suffix),
+  };
+}
+
+function tokenMiddleRange(token: WordEmphasisToken, prefix: number, suffix: number): TextRange[] {
+  const end = token.value.length - suffix;
+  return prefix < end ? [[token.start + prefix, token.start + end]] : [];
+}
+
+function shouldRefineTokenText(
+  before: string,
+  after: string,
+  prefix: number,
+  suffix: number,
+): boolean {
+  const sharedEdgeLength = prefix + suffix;
+  if (sharedEdgeLength === 0) return false;
+  if (isIdentifierToken(before) && isIdentifierToken(after)) {
+    if (
+      sharedEdgeLength < 2 &&
+      !needsBoundarySafeOffsets(before) &&
+      !needsBoundarySafeOffsets(after)
+    )
+      return false;
+    if (prefix === 0 && suffix > 0) {
+      const beforeChangedLength = before.length - suffix;
+      const afterChangedLength = after.length - suffix;
+      if (
+        beforeChangedLength !== afterChangedLength &&
+        Math.min(beforeChangedLength, afterChangedLength) < 2
+      )
+        return false;
+    }
+    return true;
+  }
+  if (isNumberToken(before) && isNumberToken(after)) return true;
+  if (isMeaningfulOperatorToken(before) && isMeaningfulOperatorToken(after)) return true;
+  return false;
 }
 
 function refinedSoftTokenGroupRanges(
@@ -157,20 +215,21 @@ function refinedSoftTokenGroupRanges(
       removed.push(...refined.removed);
       added.push(...refined.added);
     } else {
-      pushTokenRange(removed, beforeToken);
-      pushTokenRange(added, afterToken);
+      removed.push([beforeToken.start, beforeToken.end]);
+      added.push([afterToken.start, afterToken.end]);
     }
   }
 
-  for (let index = 0; index < before.length; index++) {
-    if (!pairedBefore.has(index)) pushTokenRange(removed, tokenAt(before, index));
-  }
-  for (let index = 0; index < after.length; index++) {
-    if (!pairedAfter.has(index)) pushTokenRange(added, tokenAt(after, index));
-  }
+  for (const [index, token] of before.entries())
+    if (!pairedBefore.has(index)) removed.push([token.start, token.end]);
+  for (const [index, token] of after.entries())
+    if (!pairedAfter.has(index)) added.push([token.start, token.end]);
 
-  const result = { removed: mergeRangesByStart(removed), added: mergeRangesByStart(added) };
-  return result.removed.length > 0 || result.added.length > 0 ? result : undefined;
+  const result = {
+    removed: mergeRanges(removed.toSorted((a, b) => a[0] - b[0])),
+    added: mergeRanges(added.toSorted((a, b) => a[0] - b[0])),
+  };
+  return hasWordChangeRanges(result) ? result : undefined;
 }
 
 function softAlignedTokenPairs(

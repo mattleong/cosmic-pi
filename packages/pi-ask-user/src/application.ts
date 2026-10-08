@@ -31,10 +31,7 @@ import {
   makeQuestionnaireActivity,
   type QuestionnaireActivityBridge,
 } from "./boundary/host-activity.ts";
-import {
-  registerOwnedFormCapability,
-  registerQuestionnaireCapability,
-} from "./boundary/host-owned-calls.ts";
+import { registerQuestionnaireCapability } from "./boundary/host-owned-calls.ts";
 import { askAtQuestionnaireBoundary, requiresQuestionnaireRelay } from "./boundary/host-relay.ts";
 import {
   registerAsyncAskUserMessageRenderer,
@@ -57,8 +54,7 @@ interface AskUserSessionInput {
   readonly publishesReplay: boolean;
   active: boolean;
   activity?: QuestionnaireActivityBridge;
-  revokeCapability?: () => void;
-  revokeForms?: () => void;
+  revokeCapability?: (() => void) | undefined;
 }
 
 type PreviewSettingsLoader = (
@@ -80,12 +76,8 @@ export function askUserWithDependencies(
     command: "ask-user",
     tools: ["ask_user", "ask_user_async", "ask_user_async_control"],
   });
-  pi.on("ui_prompt_start", () => {
-    promptGate.started();
-  });
-  pi.on("ui_prompt_end", () => {
-    promptGate.ended();
-  });
+  pi.on("ui_prompt_start", () => promptGate.started());
+  pi.on("ui_prompt_end", () => promptGate.ended());
   let currentGeneration: string | undefined;
   let historicalDeliveries: ReadonlySet<string> = new Set();
 
@@ -132,9 +124,8 @@ export function askUserWithDependencies(
         effect: Effect.Effect<A, E, AskUserApplication>,
         signal: AbortSignal | undefined,
         message = "The ask-user session runtime is not active.",
-        current = slot.isCurrent(token),
       ) =>
-        current
+        slot.isCurrent(token)
           ? slot.run(effect, signal)
           : Promise.reject(new AskUserRuntimeClosedError({ message }));
       const { ctx } = input;
@@ -142,46 +133,24 @@ export function askUserWithDependencies(
       currentGeneration = input.generation;
       bridge.setContext(ctx);
       const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), "");
+      const root = !requiresQuestionnaireRelay();
       // Activity is optional; questionnaires still open without it.
       if (sessionId)
         invokeHostCallback(() => input.activity?.activate(pi.events, sessionId), undefined);
-      if (sessionId && !requiresQuestionnaireRelay()) {
-        try {
-          input.revokeCapability = registerQuestionnaireCapability({
-            events: pi.events,
-            sessionId,
-            generation: input.generation,
-            isCurrent: () => input.active && slot.isCurrent(token),
-            run: (effect, signal) =>
-              runCurrent(effect, signal, "The root questionnaire session was replaced."),
-          });
-        } catch {
-          /* Missing host event bus leaves local questionnaires available. */
-        }
-      }
-      if (
-        sessionId &&
-        ctx.hasUI &&
-        (ctx.mode === "tui" || ctx.mode === "rpc") &&
-        !requiresQuestionnaireRelay()
-      ) {
-        try {
-          const isCurrent = () =>
-            input.active &&
-            slot.isCurrent(token) &&
-            ctx.sessionManager.getSessionId() === sessionId;
-          input.revokeForms = registerOwnedFormCapability({
-            events: pi.events,
-            sessionId,
-            generation: input.generation,
-            isCurrent,
-            canQueue: () => promptGate.canQueue(),
-            run: (effect, signal) =>
-              runCurrent(effect, signal, "The owned form session was replaced.", isCurrent()),
-          });
-        } catch {
-          /* Optional local-extension capability. */
-        }
+      if (sessionId && root) {
+        // A missing host event bus leaves local questionnaires available.
+        input.revokeCapability = invokeHostCallback(
+          () =>
+            registerQuestionnaireCapability({
+              events: pi.events,
+              sessionId,
+              generation: input.generation,
+              isCurrent: () => input.active && slot.isCurrent(token),
+              run: (effect, signal) =>
+                runCurrent(effect, signal, "The root questionnaire session was replaced."),
+            }),
+          undefined,
+        );
       }
       registerAskUserTool(
         pi,
@@ -190,7 +159,7 @@ export function askUserWithDependencies(
         scheduleAnimation,
         replay.shell,
       );
-      if (ctx.mode === "tui" && !requiresQuestionnaireRelay())
+      if (ctx.mode === "tui" && root)
         registerAsyncAskUserTools(
           pi,
           (request, signal) =>
@@ -214,7 +183,6 @@ export function askUserWithDependencies(
     onDeactivated: (input) => {
       input.active = false;
       input.revokeCapability?.();
-      input.revokeForms?.();
       input.activity?.dispose();
       currentGeneration = undefined;
       bridge.clear();

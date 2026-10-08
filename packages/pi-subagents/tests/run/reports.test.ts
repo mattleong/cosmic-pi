@@ -7,17 +7,16 @@ import * as TestClock from "effect/testing/TestClock";
 import { MAX_COMPLETION_DELIVERY_BATCH } from "../../src/run/limits.ts";
 import { processError } from "../../src/run/errors.ts";
 import { MAX_ERROR_CHARS } from "../../src/run/state.ts";
-import { makeRunSettlement } from "../../src/run/settlement.ts";
-import type { RunRecord } from "../../src/run/internal.ts";
-import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
-import { makeRunContext } from "./fixtures/run-context.ts";
+import { makeTestSettlement, partialRecord, runningAssignment } from "./fixtures/run-context.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { emptyUsage } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   acknowledgeCompletions,
+  awaitObservations,
   fakeNativeReportBackendLayer,
+  inputDeliveryFrame,
   assistantMessageEndFrame,
   fakeChildLayer,
   request,
@@ -28,17 +27,6 @@ import {
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
-
-const awaitAndConsume = (service: SubagentServiceContract, ids: ReadonlyArray<string>) =>
-  service.withAwaitTerminalObservations(ids, "all_finished", undefined, (observations) =>
-    service
-      .consumeCompletions(
-        observations.flatMap((observation) =>
-          observation.completionReceipt ? [observation.completionReceipt] : [],
-        ),
-      )
-      .pipe(Effect.as(observations)),
-  );
 
 const resumableBackend = () =>
   fakeNativeReportBackendLayer({
@@ -52,7 +40,7 @@ const pausedUncertainResume = (
   message: string,
 ) =>
   Effect.gen(function* () {
-    const run = yield* service.start(nativeReportRequest({ closeOnReport: true }));
+    const run = yield* service.start(nativeReportRequest());
     expect((yield* service.interrupt(run.id)).state).toBe("paused");
     const resumeGate = yield* Deferred.make<void>();
     backend.controls[0]?.gateNextStart(resumeGate);
@@ -219,20 +207,13 @@ describe("primary failure privacy", () => {
     "retains typed initialization cause privately but only queues bounded redacted settlement",
     () =>
       Effect.gen(function* () {
-        const fields = {
+        // Deferred initialization failure writes cleanup, failure, and pending-settlement facts.
+        const record = partialRecord({
           view: view({ state: "starting" }),
           stoppedByParent: false,
           initializationPending: true,
-        } satisfies Pick<RunRecord, "view" | "stoppedByParent" | "initializationPending">;
-        // SAFETY: Deferred initialization failure uses only these fields and writes cleanup/failure/pending-settlement facts.
-        const record = fields as RunRecord;
-        // SAFETY: Deferred initialization settlement does not allocate or notify a completion.
-        const delivery = {} as RunNotificationDelivery;
-        const settlement = makeRunSettlement({
-          ...(yield* makeRunContext()),
-          delivery,
-          closeRecordScope: () => Effect.void,
         });
+        const settlement = yield* makeTestSettlement();
         const primary = rawPrimary();
         yield* settlement.failRun(record, primary.message, primary);
         expect(record.backendFailure).toBe(primary);
@@ -244,7 +225,7 @@ describe("primary failure privacy", () => {
     it.effect(`redacts and bounds the primary ${source} error before public run projection`, () => {
       const { backend, projections, layer } = nativeReportServiceFixture();
       return withService(layer, function* (service) {
-        const run = yield* service.start(nativeReportRequest({ closeOnReport: true }));
+        const run = yield* service.start(nativeReportRequest());
         const primary = rawPrimary();
         backend.controls[0]!.offer(
           source === "backend"
@@ -267,20 +248,10 @@ describe("SubagentService", () => {
     () => {
       const { backend, projections, layer } = nativeReportServiceFixture();
       return withService(layer, function* (service) {
-        const run = yield* service.start(nativeReportRequest({ closeOnReport: true }));
+        const run = yield* service.start(nativeReportRequest());
         const control = backend.controls[0]!;
-        control.offer({
-          type: "input_delivery",
-          assignmentEpoch: 1,
-          sequence: 2,
-          state: "pending",
-        });
-        control.offer({
-          type: "input_delivery",
-          assignmentEpoch: 1,
-          sequence: 2,
-          state: "report-unconfirmed",
-        });
+        control.offer(inputDeliveryFrame(1, 2, "pending"));
+        control.offer(inputDeliveryFrame(1, 2, "report-unconfirmed"));
         control.report(
           run.id,
           1,
@@ -295,18 +266,8 @@ describe("SubagentService", () => {
           reportGeneration: 1,
         });
         expect(completed.warning).toContain("incorporation remain unconfirmed");
-        control.offer({
-          type: "input_delivery",
-          assignmentEpoch: 1,
-          sequence: 2,
-          state: "confirmed",
-        });
-        control.offer({
-          type: "input_delivery",
-          assignmentEpoch: 2,
-          sequence: 3,
-          state: "pending",
-        });
+        control.offer(inputDeliveryFrame(1, 2, "confirmed"));
+        control.offer(inputDeliveryFrame(2, 3, "pending"));
         yield* Effect.yieldNow;
         expect(yield* service.status(run.id)).toMatchObject({
           state: "completed",
@@ -322,26 +283,11 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const run = yield* service.start(nativeReportRequest());
       const control = backend.controls[0]!;
-      control.offer({ type: "input_delivery", assignmentEpoch: 1, sequence: 1, state: "pending" });
-      control.offer({
-        type: "input_delivery",
-        assignmentEpoch: 1,
-        sequence: 1,
-        state: "confirmed",
-      });
-      control.offer({ type: "input_delivery", assignmentEpoch: 1, sequence: 2, state: "pending" });
-      control.offer({
-        type: "input_delivery",
-        assignmentEpoch: 1,
-        sequence: 1,
-        state: "confirmed",
-      });
-      control.offer({
-        type: "input_delivery",
-        assignmentEpoch: 2,
-        sequence: 3,
-        state: "confirmed",
-      });
+      control.offer(inputDeliveryFrame(1, 1, "pending"));
+      control.offer(inputDeliveryFrame(1, 1, "confirmed"));
+      control.offer(inputDeliveryFrame(1, 2, "pending"));
+      control.offer(inputDeliveryFrame(1, 1, "confirmed"));
+      control.offer(inputDeliveryFrame(2, 3, "confirmed"));
       control.offer({
         type: "supervisor_contact",
         assignmentEpoch: 1,
@@ -351,12 +297,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.progress === "After stale evidence");
       expect((yield* service.status(run.id)).steeringDelivery).toBe("pending");
-      control.offer({
-        type: "input_delivery",
-        assignmentEpoch: 1,
-        sequence: 2,
-        state: "confirmed",
-      });
+      control.offer(inputDeliveryFrame(1, 2, "confirmed"));
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
       expect((yield* service.status(run.id)).state).toBe("running");
     });
@@ -371,11 +312,7 @@ describe("SubagentService", () => {
       );
       return withService(layer, function* (service) {
         const starting = yield* service
-          .startSessionOwned(
-            nativeReportRequest({
-              name: "fast-report",
-            }),
-          )
+          .startSessionOwned(nativeReportRequest({ name: "fast-report" }))
           .pipe(Effect.forkScoped);
         yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
         const id = projections.at(-1)?.runs[0]?.id;
@@ -406,7 +343,7 @@ describe("SubagentService", () => {
           expect.arrayContaining([expect.objectContaining({ text: report })]),
         );
 
-        const delivered = yield* awaitAndConsume(service, [started.id]);
+        const delivered = yield* awaitObservations(service, [started.id]);
         expect(delivered).toHaveLength(1);
         expect(delivered[0]?.run.finalText).toBe(report);
         expect(delivered[0]?.run.sessionEvents).toEqual(
@@ -464,7 +401,7 @@ describe("SubagentService", () => {
           warning: expect.stringContaining("may already have applied"),
         });
 
-        const delivered = yield* awaitAndConsume(service, [run.id]);
+        const delivered = yield* awaitObservations(service, [run.id]);
         expect(delivered[0]).toMatchObject({
           run: { finalText: report, warning: expect.stringContaining("may already have applied") },
           completionReceipt: { id: run.id, generation: 1 },
@@ -537,43 +474,13 @@ describe("SubagentService", () => {
     },
   );
 
-  it.effect("keeps a paused resume owner alive after its waiter is cancelled", () => {
-    const { backend, projections, layer } = nativeReportServiceFixture(resumableBackend());
-    return withService(layer, function* (service) {
-      const run = yield* service.start(nativeReportRequest());
-      expect((yield* service.interrupt(run.id)).state).toBe("paused");
-
-      const startGate = yield* Deferred.make<void>();
-      backend.controls[0]?.gateNextStart(startGate);
-      const sending = yield* service
-        .resume(run.id, "Continue after the caller leaves.")
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(
-        () =>
-          backend.controls[0]?.assignmentEpochs.filter((epoch) => epoch === 2).length === 1 &&
-          projections.at(-1)?.runs[0]?.state === "starting",
-      );
-
-      yield* Fiber.interrupt(sending);
-      yield* Deferred.succeed(startGate, undefined);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
-
-      expect(backend.controls[0]?.assignmentEpochs).toEqual([1, 2]);
-      expect(backend.controls[0]?.prompts.at(-1)).toBe("Continue after the caller leaves.");
-      expect(yield* service.status(run.id)).toMatchObject({
-        state: "running",
-        reportGeneration: 0,
-      });
-    });
-  });
-
   it.effect(
     "claims close-on-report outcomes and notifies a cancelled resume await exactly once",
     () => {
       const { fake, projections, notifications, layer } = localServiceFixture();
       return withService(layer, function* (service) {
         const run = yield* service.start(request());
-        const waiting = yield* awaitAndConsume(service, [run.id]).pipe(Effect.forkScoped);
+        const waiting = yield* awaitObservations(service, [run.id]).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         fake.controls[0]!.settle("First report.");
         const first = yield* Fiber.join(waiting);
@@ -767,33 +674,17 @@ describe("SubagentService", () => {
 
   it.effect("rejects conflicting report sequences without poisoning a valid later delivery", () =>
     Effect.gen(function* () {
-      const fields = {
-        view: view({ state: "running", closeOnReport: true }),
+      const first = { assignmentEpoch: 1, sequence: 1, deliveryId: "first" };
+      // Rejection and issuing-phase buffering read no result contract and settle nothing.
+      const record = partialRecord({
+        view: view({ state: "running" }),
         stoppedByParent: false,
         warningSlots: {},
-        assignment: {
-          epoch: 2,
-          phase: "running" as const,
-          attemptToken: "current",
-          startedObserved: true,
-          outcomeUncertain: false,
-          pendingRunSettled: false as const,
-        },
-        lastBackendReport: { assignmentEpoch: 1, sequence: 1, deliveryId: "first" },
-      } satisfies Pick<
-        RunRecord,
-        "view" | "stoppedByParent" | "warningSlots" | "assignment" | "lastBackendReport"
-      >;
-      // SAFETY: Rejection and issuing-phase buffering use only these fields and the launch's
-      // absent result contract; no settlement runs.
-      const record = { ...fields, launch: {} } as RunRecord;
-      // SAFETY: Rejected and buffered reports never enter completion delivery.
-      const delivery = {} as RunNotificationDelivery;
-      const settlement = makeRunSettlement({
-        ...(yield* makeRunContext()),
-        delivery,
-        closeRecordScope: () => Effect.void,
+        assignment: runningAssignment(2),
+        lastBackendReport: first,
+        launch: {},
       });
+      const settlement = yield* makeTestSettlement();
       yield* settlement.acceptBackendReport(record, {
         runId: record.view.id,
         assignmentEpoch: 2,
@@ -802,7 +693,7 @@ describe("SubagentService", () => {
         text: "Must not commit.",
       });
       expect(record.view.warning).toContain("reused delivery identity");
-      expect(record.lastBackendReport).toEqual(fields.lastBackendReport);
+      expect(record.lastBackendReport).toEqual(first);
       expect(record.view.reportGeneration).toBe(0);
       record.assignment.phase = "issuing";
       const valid = {

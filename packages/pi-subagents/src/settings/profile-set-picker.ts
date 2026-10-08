@@ -12,15 +12,20 @@ import {
   isMovementMotion,
   nextListMotionIndex,
 } from "pi-cosmic-ui/manager/list-navigation";
-import type { PersistentProfileSetRef, ProfileSettingsInspection } from "./profile-route-editor.ts";
+import {
+  SCOPE_LABELS,
+  type PersistentProfileSetRef,
+  type ProfileSettingsInspection,
+} from "./profile-route-editor.ts";
 import {
   initialProfileSetPickerIndex,
   profileSetPickerEntries,
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
 } from "./ui/profile-set-picker-model.ts";
-import { renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
-import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
+import { PROFILE_SET_SHORTCUTS, renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
+import { selectChoice } from "./ui/profile-workspace-selectors.ts";
+import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
@@ -59,10 +64,7 @@ const menuChoice = (
   description: string,
   disabledHint?: string,
 ): SearchableSelectPageChoice<ProfileSetPickerAction> => ({
-  value: payload.action,
-  item: { value: payload.action, label, description },
-  searchText: `${label} ${description}`,
-  payload,
+  ...selectChoice(payload.action, label, description, payload, `${label} ${description}`),
   ...(disabledHint && { enabled: false, disabledReason: description, disabledHint }),
 });
 
@@ -122,7 +124,7 @@ const savedSetMenuPage = (
     title:
       entry.kind === "set"
         ? qualifiedProfileSetLabel(entry.ref)
-        : `${entry.scope === "project" ? "Project" : "Global"} default`,
+        : `${SCOPE_LABELS[entry.scope]} default`,
     subtitle:
       entry.kind === "invalid-default"
         ? entry.description
@@ -150,8 +152,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   constructor(options: ProfileSetPickerOptions) {
     this.options = {
       ...options,
-      matchesKeybinding: (data, id) =>
-        !isWorkspaceNavigationKey(data) && (options.matchesKeybinding?.(data, id) ?? false),
+      matchesKeybinding: withoutNavigationKeys(options.matchesKeybinding),
     };
     this.allEntries = profileSetPickerEntries(options.inspection, options.projectTrusted);
     this.selectedIndex = initialProfileSetPickerIndex(this.allEntries);
@@ -296,24 +297,20 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     this.renderSoon();
   }
 
-  private startSearch(): void {
-    this.searching = true;
-    this.query = "";
-    this.selectedIndex = 0;
-  }
-
   private handleNavigationInput(data: string): void {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
-      reservedKeys: new Set(["/", "a", "u"]),
+      reservedKeys: PROFILE_SET_SHORTCUTS,
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
       if (resolution.key === "u") this.activate("use-current");
       else if (resolution.key === "a") this.openActions();
       else {
-        this.startSearch();
+        this.searching = true;
+        this.query = "";
+        this.selectedIndex = 0;
         this.message = undefined;
         this.renderSoon();
       }
@@ -336,8 +333,6 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       case "help":
         this.openActions();
         return;
-      case "search":
-        this.startSearch();
     }
     this.renderSoon();
   }

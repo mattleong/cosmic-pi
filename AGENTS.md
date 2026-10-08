@@ -54,7 +54,7 @@ ARCHITECTURE.md
 - Prefer one public entrypoint per role and small implementation files. Split before roughly 400 to 500 lines of hard logic; do not merge files merely to reduce file count.
 - Put tests under package-root `tests/`, never under `src/`, and use `*.test.ts`, never `*.spec.ts`. Large packages should mirror source structure; small packages may use flat test names.
 - Keep each package's `ARCHITECTURE.md` concise and focused on ownership, boundaries, and lifecycle, not a full file tree. Update it when those change. Package-level `AGENTS.md` files must not conflict with this file.
-- Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages. Group core modules by concern and keep its public `index.ts` and `testing.ts` exports stable.
+- Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages. Group core modules by concern. Keep the public `index.ts` and `testing.ts` exports that workspace packages use stable, and remove exports that nothing in the workspace uses.
 
 ## Tool rendering
 

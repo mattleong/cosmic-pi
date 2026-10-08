@@ -2,23 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import {
-  captureHostSignal,
-  invokeHostCallback,
-  sanitizeDiagnosticError,
-  notifyAtHostBoundary,
-} from "pi-cosmic-core";
-
-/** Best-effort Effect adapter for synchronous Pi UI callbacks. */
-export const ignoreHostUi = <Result>(callback: () => Result) =>
-  Effect.sync(() => {
-    invokeHostCallback<Result | undefined>(callback, undefined);
-  });
-
-/** Best-effort adapter for Pi callbacks that cannot enter the session runtime. */
-export function safeHostUi<Result>(callback: () => Result): void {
-  invokeHostCallback(callback, undefined);
-}
+import { captureHostSignal, sanitizeDiagnosticError, notifyAtHostBoundary } from "pi-cosmic-core";
 
 /** Materializes Pi's dynamic cancellation signal without allowing a host getter to defect. */
 export function safeHostSignal(ctx: ExtensionContext): AbortSignal | undefined {

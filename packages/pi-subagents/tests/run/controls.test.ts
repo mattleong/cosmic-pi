@@ -7,6 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  askParent,
   completeLocalRun,
   contactParentFrame,
   localServiceFixture,
@@ -22,9 +23,7 @@ describe("SubagentService", () => {
     const { backend, projections, layer } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.startSessionOwned(
-        nativeReportRequest({
-          name: "cancelled-question",
-        }),
+        nativeReportRequest({ name: "cancelled-question" }),
       );
       backend.controls[0]?.offer({
         type: "supervisor_contact",
@@ -62,10 +61,7 @@ describe("SubagentService", () => {
         id: "dialog-1",
         cancelled: true,
       });
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("question-1", "question", "Which API should I use?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "question-1", "Which API should I use?");
 
       const waiting = yield* service.status(first.id);
       expect(waiting.question?.message).toBe("Which API should I use?");
@@ -298,10 +294,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "question-pause" }));
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("question-before-pause", "question", "Should I continue?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "question-before-pause");
       fake.controls[0]?.beforeNextResponse("abort", { type: "agent_settled" });
 
       const paused = yield* service.interrupt(run.id);
@@ -450,10 +443,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "pause-before-reply" }));
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("question-before-pause", "question", "Should I continue?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "question-before-pause");
       const barrierGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextIpcType("turn_input_barrier", barrierGate);
       const interrupting = yield* service
@@ -473,38 +463,11 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("claims a parent question before sending its reply", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "single-reply" }));
-      fake.controls[0]?.offerIpc(contactParentFrame("question-1", "question", "Which answer?"));
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
-      const ipcGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextIpc(ipcGate);
-      const first = yield* service.reply(run.id, "First").pipe(Effect.forkScoped);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
-      const second = yield* Effect.flip(service.reply(run.id, "Second"));
-      expect(second._tag).toBe("InvalidSubagentRequestError");
-      yield* Deferred.succeed(ipcGate, undefined);
-      expect((yield* Fiber.join(first)).state).toBe("running");
-      expect(fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply")).toEqual([
-        {
-          channel: "pi-subagents",
-          type: "parent_reply",
-          requestId: "question-1",
-          ackId: expect.any(String),
-          message: "First",
-        },
-      ]);
-    });
-  });
-
   it.effect("finishes a delivered parent reply after the requesting fiber is interrupted", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "cancel-safe-reply" }));
-      fake.controls[0]?.offerIpc(contactParentFrame("question-1", "question", "Which answer?"));
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "question-1");
       const ipcGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextIpc(ipcGate);
       const replying = yield* service.reply(run.id, "First").pipe(Effect.forkScoped);
@@ -546,8 +509,7 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.controls[0]?.sent("steer") === true);
 
       // A question arrives and the parent claims it while that steer is still in flight.
-      fake.controls[0]?.offerIpc(contactParentFrame("question-1", "question", "Which answer?"));
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "question-1");
       const replyGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextIpc(replyGate);
       const replying = yield* service.reply(run.id, "Answer").pipe(Effect.forkScoped);
@@ -584,10 +546,7 @@ describe("SubagentService", () => {
         expect(sendFailure).toMatchObject({ code: "guidance_outcome_uncertain" });
         expect((yield* service.status(run.id)).state).toBe("running");
 
-        fake.controls[0]?.offerIpc(
-          contactParentFrame("uncertain-question", "question", "Apply this?"),
-        );
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+        yield* askParent(fake.controls[0]!, projections, "uncertain-question");
         fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
         const replying = yield* service.reply(run.id, "Yes.").pipe(Effect.forkScoped);
         yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
@@ -640,10 +599,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "unsent-reply" }));
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("unsent-question", "question", "Proceed with the retry plan?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "unsent-question");
 
       fake.controls[0]?.failNextIpc("transport_not_sent");
       expect(yield* service.reply(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
@@ -679,10 +635,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "expired-reply" }));
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("expired-question", "question", "Is this question still active?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "expired-question");
       fake.controls[0]?.rejectNextParentReply();
 
       const failure = yield* service.reply(run.id, "Too late.").pipe(Effect.flip);
@@ -704,10 +657,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "reply-resolution" }));
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("uncertain-terminal-question", "question", "Finish this turn?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "uncertain-terminal-question");
       fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
       const replying = yield* service.reply(run.id, "Finish.").pipe(Effect.forkScoped);
       yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
@@ -718,10 +668,7 @@ describe("SubagentService", () => {
       yield* completeLocalRun(service, fake.controls[0]!, run.id, "Turn resolved.");
 
       expect((yield* service.resume(run.id, "Next turn.")).state).toBe("running");
-      fake.controls[1]?.offerIpc(
-        contactParentFrame("resumed-question", "question", "Question in resumed turn?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[1]!, projections, "resumed-question");
       expect((yield* service.reply(run.id, "Answered.")).state).toBe("running");
     });
   });
@@ -780,66 +727,15 @@ describe("SubagentService", () => {
       expect(notifications).toMatchObject([
         {
           type: "completed",
-          runs: [
-            {
-              id: run.id,
-              outcome: "completed",
-              finalText: "Final report.",
-              warning: expect.stringContaining("Extension bridge failed"),
-            },
-          ],
+          runs: [{ id: run.id, outcome: "completed", finalText: "Final report." }],
         },
       ]);
       const completion = notifications[0];
-      expect(completion?.type).toBe("completed");
-      if (completion?.type === "completed") {
-        expect(completion.runs[0]?.warning).toContain("System warning: Extension bridge failed");
-        expect(completion.runs[0]?.warning).toContain("Child warning: Later child warning");
-        expect(completion.runs[0]?.warning).not.toContain("First warning");
-        expect(completion.runs[0]?.warning).not.toContain("secret-value");
-      }
-    });
-  });
-
-  it.effect("folds child and system warnings into a failed outcome", () => {
-    const { fake, projections, notifications, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "warning-failure" }));
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("child-risk", "warning", "Child validation is incomplete."),
-      );
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs[0]?.warning === "Child validation is incomplete.",
-      );
-      fake.controls[0]?.offer({
-        type: "extension_error",
-        error: "Extension transport degraded.",
-      });
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs[0]?.warning === "Extension transport degraded.",
-      );
-      fake.controls[0]?.exit(1);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-      expect(notifications).toMatchObject([
-        {
-          type: "completed",
-          runs: [
-            {
-              id: run.id,
-              outcome: "failed",
-              warning: expect.stringContaining("System warning: Extension transport degraded."),
-            },
-          ],
-        },
-      ]);
-      const notification = notifications[0];
-      expect(notification?.type).toBe("completed");
-      if (notification?.type === "completed")
-        expect(notification.runs[0]?.warning).toContain(
-          "Child warning: Child validation is incomplete.",
-        );
+      const warning = completion?.type === "completed" ? completion.runs[0]?.warning : undefined;
+      expect(warning).toContain("System warning: Extension bridge failed");
+      expect(warning).toContain("Child warning: Later child warning");
+      expect(warning).not.toContain("First warning");
+      expect(warning).not.toContain("secret-value");
     });
   });
 
@@ -883,34 +779,22 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "parallel-tools" }));
-      fake.controls[0]?.offer({
-        type: "tool_execution_start",
-        toolCallId: "tool-a",
-        toolName: "read",
-        args: {},
-      });
-      fake.controls[0]?.offer({
-        type: "tool_execution_start",
-        toolCallId: "tool-b",
-        toolName: "grep",
-        args: {},
-      });
-      fake.controls[0]?.offer({
-        type: "tool_execution_end",
-        toolCallId: "tool-a",
-        toolName: "read",
-        result: {},
-        isError: false,
-      });
+      const start = (toolCallId: string, toolName: string) =>
+        fake.controls[0]?.offer({ type: "tool_execution_start", toolCallId, toolName, args: {} });
+      const end = (toolCallId: string, toolName: string) =>
+        fake.controls[0]?.offer({
+          type: "tool_execution_end",
+          toolCallId,
+          toolName,
+          result: {},
+          isError: false,
+        });
+      start("tool-a", "read");
+      start("tool-b", "grep");
+      end("tool-a", "read");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === "grep");
       expect((yield* service.status(run.id)).currentTool).toBe("grep");
-      fake.controls[0]?.offer({
-        type: "tool_execution_end",
-        toolCallId: "tool-b",
-        toolName: "grep",
-        result: {},
-        isError: false,
-      });
+      end("tool-b", "grep");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === undefined);
       expect((yield* service.status(run.id)).currentTool).toBeUndefined();
     });

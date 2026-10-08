@@ -1,9 +1,14 @@
-import { compactIssueSeverity, getTextContent } from "pi-code-previews";
+import { compactIssueSeverity } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import { countLabel } from "pi-cosmic-core";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
+import type {
+  CompactIssue,
+  CompactPhase,
+  CompactSummary,
+  CompactSummaryProvider,
+} from "pi-code-previews";
 import {
   type SubagentRunCard,
   type SubagentStartDetails,
@@ -15,14 +20,13 @@ import { actionFailureIssues } from "./compact-action-failures.ts";
 import {
   applyArgumentLanes,
   argumentSummary,
-  isTypedReceipt,
   projectedSubject,
   rejectedCall,
   requestedRunIds,
-  type Phase,
+  requestedTargets,
   type SummaryArguments,
 } from "./compact-heading.ts";
-import { cardLabel, compactRunIssues, hasChangesToReview } from "./compact-run-issues.ts";
+import { compactRunIssues, hasChangesToReview } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { summarizeStart } from "./compact-start-summary.ts";
 
@@ -37,46 +41,29 @@ function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): 
   return [[...counts].map(([label, count]) => `${count} ${label}`).join(", ")].filter(Boolean);
 }
 
-/**
- * A settled error without the action's receipt: a thrown rejection carries only text, while a
- * receipt, even another action's, is never one and declines.
- */
-const rejectionSummary = (
-  input: SummaryArguments,
-  action: string,
-  operation: string,
-  lanes: CompactSummary,
-  result: { readonly content: Parameters<typeof getTextContent>[0]; readonly details?: unknown },
-): CompactSummary | undefined =>
-  isTypedReceipt(result.details)
-    ? undefined
-    : rejectedCall(input, action, operation, lanes, getTextContent(result.content));
-
 /** Decoded domain summaries classify attention; original evidence stays on expansion. */
 export function createSubagentCompactSummary(
   toolName: string,
 ): CompactSummaryProvider<unknown, unknown, unknown> {
+  const action = toolName.replace(/^subagent_/, "");
   return ({ phase, args, result, context }) => {
-    const action = toolName.replace(/^subagent_/, "");
     if (!Predicate.isObject(args)) return undefined;
     // SAFETY: Pi owns partial arguments; display fields are narrowed before use.
     const input = args as SummaryArguments;
     const operation = Predicate.isString(input.action) ? input.action : action;
     const lanes = argumentSummary(input, action, operation);
     if (!result) return context.isError || phase === "settled" ? undefined : lanes;
-    const settledError = context.isError && phase === "settled";
-    if (action === "workspace")
-      return context.isError
-        ? settledError
-          ? rejectionSummary(input, action, operation, lanes, result)
-          : undefined
-        : compactWorkspaceSummary(result.details, operation);
-    const details = decodeSubagentOutcomeDetails(
-      action === "claims" ? "claims" : operation,
-      result.details,
-    );
+    if (action === "workspace" && !context.isError)
+      return compactWorkspaceSummary(result.details, operation);
+    // Workspace receipts are not run receipts; a failed workspace call is only its rejection.
+    const details =
+      action === "workspace"
+        ? undefined
+        : decodeSubagentOutcomeDetails(action === "claims" ? "claims" : operation, result.details);
     if (!details)
-      return settledError ? rejectionSummary(input, action, operation, lanes, result) : undefined;
+      return context.isError && phase === "settled"
+        ? rejectedCall(input, action, operation, lanes, result)
+        : undefined;
     if (context.isError && !hasSubagentToolFailure(details)) return undefined;
     return summarizeReceipt(details, input, phase, lanes);
   };
@@ -86,19 +73,18 @@ export function createSubagentCompactSummary(
 function summarizeReceipt(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
   input: SummaryArguments,
-  phase: Phase,
+  phase: CompactPhase,
   lanes: CompactSummary,
 ): CompactSummary | undefined {
-  const requestedTargets = requestedRunIds(input);
   const targets =
-    details.action === "await" ? (requestedTargets ?? details.awaitedRunIds) : undefined;
+    details.action === "await" ? (requestedRunIds(input) ?? details.awaitedRunIds) : undefined;
   if (details.action === "await" && !targets?.length) return undefined;
   const summary = summarizeDetails(
     details,
     phase,
     projectedSubject(details, input, phase, lanes.subject, targets),
     targets,
-    Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
+    requestedTargets(input),
   );
   applyArgumentLanes(summary, details, phase, lanes);
   return summary;
@@ -115,7 +101,7 @@ function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject:
   const failed = count(["failed"]);
   const stopped = count(["stopped"]);
   return [
-    `${count(["completed", "reported"])}/${total} finished`,
+    `${count(["completed"])}/${total} finished`,
     ...(failed ? [`${failed} failed`] : []),
     ...(stopped ? [`${stopped} stopped`] : []),
   ].join(", ");
@@ -128,9 +114,6 @@ function awaitIssues(
   cards: readonly SubagentRunCard[],
   targets: readonly string[],
 ): void {
-  const unfinished = cards.filter(
-    (card) => !["reported", "completed", "failed", "stopped"].includes(card.state),
-  );
   summary.counters = [awaitCounter(cards, targets.length, summary.subject)];
   if (cards.length < targets.length) {
     issues.push({
@@ -162,20 +145,6 @@ function awaitIssues(
       detail: unconfirmed
         ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
         : "Await cancelled; child runs were NOT stopped. Wait cleanup is complete; await the requested targets again when needed.",
-    });
-  }
-  if (details.timedOut && !details.cancelled) {
-    summary.outcome = "warning";
-    issues.push({
-      severity: "warning",
-      code: "await-timeout",
-      message:
-        unfinished.length === 1
-          ? `Timed out waiting; ${cardLabel(unfinished[0]!)} hasn't finished`
-          : unfinished.length > 1
-            ? `Timed out waiting; ${unfinished.length} subagents haven't finished`
-            : "Timed out waiting; unfinished subagents continue running",
-      detail: "Await timed out; unfinished children continue. Inspect status or await again.",
     });
   }
   if (
@@ -331,7 +300,7 @@ function omissionIssue(
 
 function summarizeDetails(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-  phase: Phase,
+  phase: CompactPhase,
   subject: string,
   targets?: readonly string[],
   requested?: readonly string[],

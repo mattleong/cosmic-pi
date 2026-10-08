@@ -1,10 +1,10 @@
+import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core";
 import type {
   BackgroundLogEvent,
   BackgroundLogSlice,
   BackgroundLogStream,
   BackgroundTaskState,
 } from "./model.ts";
-import { utf8ByteLength, utf8Tail } from "./utf8.ts";
 
 /** Compact the store once the dead prefix outweighs the live events. */
 const COMPACTION_MIN_DEAD_EVENTS = 32;
@@ -41,22 +41,23 @@ export class LogBuffer {
   ): LogBuffer {
     if (!text) return this;
     const originalBytes = utf8ByteLength(text);
-    const tail = utf8Tail(text, maxBytes);
-    if (tail.text) {
+    const tail = utf8Suffix(text, maxBytes);
+    const bytes = utf8ByteLength(tail);
+    if (tail) {
       this.snapshot = undefined;
       this.store.push(
         Object.freeze({
           cursor: this.nextCursor,
           stream,
-          text: tail.text,
+          text: tail,
           timestamp,
-          bytes: tail.bytes,
-          ...((droppedBefore || tail.bytes < originalBytes) && { droppedBefore: true as const }),
+          bytes,
+          ...((droppedBefore || bytes < originalBytes) && { droppedBefore: true as const }),
         }),
       );
     }
-    this.bytes += tail.bytes;
-    this.droppedBytes += originalBytes - tail.bytes;
+    this.bytes += bytes;
+    this.droppedBytes += originalBytes - bytes;
     this.nextCursor += 1;
     while (this.bytes > maxBytes && this.oldestEvent) this.dropOldest();
     return this;

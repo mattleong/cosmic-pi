@@ -25,7 +25,7 @@ import {
   nativeEvidenceCoverage,
   type NativeCallEvidence,
 } from "./native-codemode-evidence";
-import { safeContent } from "./native-safe-content";
+import { runningLine, safeContent } from "./native-safe-content";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import {
   createNativeDiscoveryProjector,
@@ -34,14 +34,15 @@ import {
   type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
 
+const programSource = <Args>(args: Args): string =>
+  Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
+
 /** The complete program, highlighted, for the expanded view. */
 const renderSource =
   (discovery: NativeDiscoveryProjector): NonNullable<ToolRenderers["renderCall"]> =>
   (args, theme, context) => {
-    const source =
-      Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
     const program = renderNativeCodemodeProgram(
-      source,
+      programSource(args),
       theme,
       { expanded: true, invalidate: context.invalidate },
       discovery(args) ? nativeDiscoveryNote : undefined,
@@ -96,8 +97,7 @@ function renderCallList(
  */
 export function createNativeCodemodeRenderers(
   cwd: string,
-  appearance: Pick<CodePreviewRendererAppearance, "scheduleAnimation"> &
-    Partial<CodePreviewRendererAppearance>,
+  appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
   const discovery = createNativeDiscoveryProjector();
   const summary = nativeCodemodeSummary(cwd, discovery);
@@ -128,16 +128,7 @@ export function createNativeCodemodeRenderers(
         context.isPartial &&
         !children.entries.some((child) => child.status === "running")
       )
-        body.addChild({
-          render(width) {
-            return new Text(
-              toolRunningLine(theme, getCodePreviewAnimationFrame(context)),
-              0,
-              0,
-            ).render(width);
-          },
-          invalidate() {},
-        });
+        body.addChild(runningLine(theme, context));
       if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
         body.addChild(
           expandedSection(
@@ -171,11 +162,9 @@ export function createNativeCodemodeRenderers(
     { name: "codemode" },
     {
       renderCall(args, theme, context) {
-        const source =
-          Predicate.hasProperty(args, "code") && Predicate.isString(args.code) ? args.code : "";
         const label = nativeDiscoveryLabel(discovery(args));
         const program = renderNativeCodemodeProgram(
-          source,
+          programSource(args),
           theme,
           context,
           label ? nativeDiscoveryNote : undefined,

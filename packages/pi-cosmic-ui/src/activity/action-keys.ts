@@ -12,8 +12,15 @@ const ACTIVITY_ACTION_KEYS: ReadonlyArray<readonly [string, ReadonlyArray<string
   ["u", ["resume"]],
   ["m", ["reply", "message"]],
   ["e", ["rename"]],
-  ["c", ["clear", "clear-finished"]],
+  ["c", ["clear"]],
 ];
+
+/** Every letter and number the manager reserves from keybindings: views, actions and pages. */
+export const activityShortcuts: ReadonlySet<string> = new Set([
+  ..."arwzft",
+  ...ACTIVITY_ACTION_KEYS.map(([key]) => key),
+  ..."123456789",
+]);
 
 /** The action a direct key invokes: the first one, in the key's preference order, offered. */
 export const activityActionForKey = (

@@ -127,6 +127,20 @@ describe("compact child selection", () => {
     }
   });
 
+  it("wraps the flat layout's omitted count instead of clipping its digits", () => {
+    for (const width of [2, 3, 6, 12]) {
+      const rows = plain(
+        compactChildren([{ label: "read", status: "success" }], width, {
+          total: 1234,
+          layout: "flat",
+          all: true,
+        }),
+      );
+      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+      expect(rows.join("").replace(/\s/gu, "")).toContain("1233");
+    }
+  });
+
   it("bounds even all-active batches without manufacturing omitted entries", () => {
     const entries = Array.from(
       { length: 32 },
@@ -277,17 +291,6 @@ describe("compact child rows", () => {
       }
     },
   );
-
-  it("preserves call identity while eliding long targets like standalone headers", () => {
-    const subject = `src/${"long-directory/".repeat(20)}target.ts`;
-    for (const width of [40, 60, 80]) {
-      const rows = compactChildren([{ label: "read", subject, status: "success" }], width);
-      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-      expect(rows.join("")).toContain("read");
-      expect(rows.join("")).toContain("src/");
-      expect(rows.join("")).toContain("target.ts");
-    }
-  });
 
   it.each(["tree", "flat"] as const)(
     "shows measured %s durations only when timing is enabled",

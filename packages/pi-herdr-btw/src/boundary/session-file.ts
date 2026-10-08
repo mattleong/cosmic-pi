@@ -3,10 +3,9 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { synchronousRandomUuid } from "pi-cosmic-core";
-import { parseHerdrBtwSessionId } from "../btw/marker.ts";
+import { decodeUnknownOrUndefined, synchronousRandomUuid } from "pi-cosmic-core";
+import { BoundedId, BoundedPath, parseHerdrBtwSessionId } from "../btw/marker.ts";
 
 // Synchronous host-boundary validation needs raw Node fs semantics. Effect
 // FileSystem cannot express this pre-runtime, never-mutating no-follow probe.
@@ -22,10 +21,8 @@ const MAX_HEADER_LINE_BYTES = 256 * 1024;
 
 const SessionHeaderSchema = Schema.Struct({
   type: Schema.Literal("session"),
-  id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
-  parentSession: Schema.optional(
-    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SESSION_PATH_CHARS)),
-  ),
+  id: BoundedId,
+  parentSession: Schema.optional(BoundedPath),
 });
 const SessionHeaderFromJson = Schema.fromJsonString(SessionHeaderSchema);
 
@@ -41,15 +38,12 @@ export type SessionFileIdentityComparator = (
   rightPath: string,
 ) => SessionFileIdentityComparison;
 
-const INVALID: SessionHeaderProbe = { _tag: "invalid" };
-const IDENTITY_UNAVAILABLE: SessionFileIdentityComparison = "unavailable";
+const LINE_CONTROL = /[\0\r\n]/u;
 
 const isBoundedSessionPath = (path: string): boolean =>
   path.length > 0 &&
   path.length <= MAX_SESSION_PATH_CHARS &&
-  !path.includes("\0") &&
-  !path.includes("\n") &&
-  !path.includes("\r") &&
+  !LINE_CONTROL.test(path) &&
   isAbsolute(path);
 
 const withRegularSessionDescriptor = <A>(
@@ -86,8 +80,7 @@ const withRegularSessionDescriptor = <A>(
  * files are distinct.
  */
 export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPath, rightPath) => {
-  if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath))
-    return IDENTITY_UNAVAILABLE;
+  if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath)) return "unavailable";
 
   const comparison = withRegularSessionDescriptor(normalize(leftPath), (leftDescriptor) =>
     withRegularSessionDescriptor(normalize(rightPath), (rightDescriptor) => {
@@ -96,7 +89,7 @@ export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPa
       return left.dev === right.dev && left.ino === right.ino ? "same" : "distinct";
     }),
   );
-  return comparison ?? IDENTITY_UNAVAILABLE;
+  return comparison ?? "unavailable";
 };
 
 const readFirstLine = (path: string): string | undefined =>
@@ -121,10 +114,11 @@ const readFirstLine = (path: string): string | undefined =>
  */
 export const probeSessionHeader = (path: string): SessionHeaderProbe => {
   const line = readFirstLine(path);
-  if (line === undefined) return INVALID;
-  const header = Option.getOrUndefined(Schema.decodeUnknownOption(SessionHeaderFromJson)(line));
-  if (!header) return INVALID;
-  return { _tag: "valid", header: { id: header.id, parentSession: header.parentSession } };
+  const header =
+    line === undefined ? undefined : decodeUnknownOrUndefined(SessionHeaderFromJson, line);
+  return header
+    ? { _tag: "valid", header: { id: header.id, parentSession: header.parentSession } }
+    : { _tag: "invalid" };
 };
 
 export interface BlankChildSessionFileInput {
@@ -148,9 +142,7 @@ const createBlankChildSessionFileAt = (
     !isBoundedSessionPath(input.sessionDir) ||
     parseHerdrBtwSessionId(input.sessionId) === undefined ||
     !isAbsolute(input.cwd) ||
-    input.cwd.includes("\0") ||
-    input.cwd.includes("\n") ||
-    input.cwd.includes("\r")
+    LINE_CONTROL.test(input.cwd)
   )
     return { _tag: "invalid" };
   try {

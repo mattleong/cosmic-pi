@@ -11,7 +11,7 @@ import {
   stripTerminalControls,
 } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
 import { workflowStateLabel } from "./run-state.ts";
 
@@ -56,6 +56,11 @@ const Envelope = Schema.Struct({
 });
 
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+
+// Messages and their details carry fields of their own, such as role and timestamp.
+const decodeEnvelope = Schema.decodeUnknownOption(Envelope, { onExcessProperty: "ignore" });
+const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "ignore" });
+const isTextPart = Schema.is(TextPart);
 
 interface NotificationRow {
   readonly summary: CompactSummary;
@@ -179,43 +184,38 @@ export function renderSubagentNotification<Input>(
   compact: boolean,
   theme: Theme,
 ): Component {
-  const envelope = Option.getOrUndefined(Schema.decodeUnknownOption(Envelope)(input));
+  const envelope = Option.getOrUndefined(decodeEnvelope(input));
   if (options.expanded) {
     const content = envelope?.content;
     const text = Predicate.isString(content)
       ? content
       : (content ?? [])
-          .flatMap((part) => {
-            const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(TextPart)(part));
-            return decoded ? [decoded.text] : [];
-          })
+          .filter(isTextPart)
+          .map((part) => part.text)
           .join("\n");
     return new Text(stripTerminalControls(text), options.outputPad, 0);
   }
-  const details = Option.getOrUndefined(Schema.decodeUnknownOption(Details)(envelope?.details));
+  const details = Option.getOrUndefined(decodeDetails(envelope?.details));
   const { summary, status } = notificationRow(envelope?.customType, details);
   const hint = compact
     ? undefined
     : renderExpansionAffordance(expansionLabel(details), false, theme);
-  return {
-    render: (width) => {
-      const inner = Math.max(1, width - options.outputPad * 2);
-      const row = renderCompactRow(
-        {
-          name: details?.kind === "workflow" ? "workflow" : "subagents",
-          phase: "settled",
-          summary,
-          ...(status && { status }),
-        },
-        theme,
-        inner,
-      );
-      return new Text(
-        hint ? `${row}\n${clipToWidth(hint, inner)}` : row,
-        options.outputPad,
-        0,
-      ).render(width);
-    },
-    invalidate() {},
-  };
+  return composeToolComponent((width) => {
+    const inner = Math.max(1, width - options.outputPad * 2);
+    const row = renderCompactRow(
+      {
+        name: details?.kind === "workflow" ? "workflow" : "subagents",
+        phase: "settled",
+        summary,
+        ...(status && { status }),
+      },
+      theme,
+      inner,
+    );
+    return new Text(
+      hint ? `${row}\n${clipToWidth(hint, inner)}` : row,
+      options.outputPad,
+      0,
+    ).render(width);
+  });
 }

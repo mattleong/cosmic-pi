@@ -4,75 +4,34 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import {
   JsonDocumentStore,
   type JsonDocumentModification,
-  type JsonDocumentReadOptions,
   type JsonObject,
 } from "../src/platform/json-document.ts";
-import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { provideBuiltLayer } from "../index.ts";
 
+const fsFailure = (tag: PlatformError.SystemErrorTag, method: string) =>
+  PlatformError.systemError({ _tag: tag, module: "FileSystem", method });
+const toBytes = (source: string | Uint8Array) =>
+  source instanceof Uint8Array ? source : new TextEncoder().encode(source);
+
 /**
- * Owned in-memory FileSystem over Effect's real file-stream implementation with short reads.
- * Tests may reassign `fileSystem` members to inject faults; the store calls them through it.
+ * Owned in-memory FileSystem. Tests may reassign `fileSystem` members to inject faults; the
+ * store calls them through it.
  */
-function documentLayer(initial: Readonly<Record<string, string>>, chunkBytes = 64 * 1024) {
+function documentLayer(initial: Readonly<Record<string, string | Uint8Array>>) {
   const files = new Map(Object.entries(initial));
-  let readBytes = 0;
-  let readers = 0;
   let sequence = 0;
   const fileSystem = {
     ...FileSystem.make(
       FileSystem.makeNoop({
-        open: (path) =>
-          Effect.gen(function* () {
-            const source = files.get(path);
-            if (source === undefined)
-              return yield* PlatformError.systemError({
-                _tag: "NotFound",
-                module: "FileSystem",
-                method: "open",
-              });
-            const bytes = new TextEncoder().encode(source);
-            let offset = 0;
-            const file: FileSystem.File = {
-              [FileSystem.FileTypeId]: FileSystem.FileTypeId,
-              stat: Effect.die("bounded reads must not stat"),
-              seek: () => Effect.succeed(0n),
-              sync: Effect.void,
-              read: () => Effect.die("unexpected file read"),
-              readAlloc: (size) =>
-                Effect.sync(() => {
-                  const chunk = bytes.slice(offset, offset + Math.min(Number(size), chunkBytes));
-                  offset += chunk.length;
-                  readBytes += chunk.length;
-                  return chunk.length === 0 ? Option.none() : Option.some(chunk);
-                }),
-              truncate: () => Effect.die("unexpected truncate"),
-              write: () => Effect.die("unexpected file write"),
-              writeAll: () => Effect.die("unexpected file write"),
-            };
-            return yield* Effect.acquireRelease(
-              Effect.sync(() => {
-                readers++;
-                return file;
-              }),
-              () =>
-                Effect.sync(() => {
-                  readers--;
-                }),
-            );
-          }),
         // Yielding lets unlocked read-modify-write transactions interleave.
         readFile: (path) =>
-          Effect.yieldNow.pipe(
-            Effect.andThen(Effect.sync(() => new TextEncoder().encode(files.get(path) ?? ""))),
-          ),
+          Effect.yieldNow.pipe(Effect.andThen(Effect.sync(() => toBytes(files.get(path) ?? "")))),
         chmod: () => Effect.void,
         makeDirectory: () => Effect.void,
         makeTempFile: () =>
@@ -101,12 +60,6 @@ function documentLayer(initial: Readonly<Record<string, string>>, chunkBytes = 6
   return {
     files,
     fileSystem,
-    get readBytes() {
-      return readBytes;
-    },
-    get readers() {
-      return readers;
-    },
     layer: JsonDocumentStore.layer.pipe(
       Layer.provide(Layer.merge(Layer.succeed(FileSystem.FileSystem, fileSystem), Path.layer)),
     ),
@@ -221,14 +174,7 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
 it.effect("does not clean up a temporary path when exclusive acquisition fails", () => {
   const harness = documentLayer({});
   let removals = 0;
-  harness.fileSystem.makeTempFile = () =>
-    Effect.fail(
-      PlatformError.systemError({
-        _tag: "AlreadyExists",
-        module: "FileSystem",
-        method: "makeTempFile",
-      }),
-    );
+  harness.fileSystem.makeTempFile = () => Effect.fail(fsFailure("AlreadyExists", "makeTempFile"));
   harness.fileSystem.remove = () => Effect.sync(() => void removals++);
   return Effect.gen(function* () {
     const store = yield* JsonDocumentStore;
@@ -274,13 +220,7 @@ it.effect("does not run an after-commit hook when temporary writing fails", () =
   let renames = 0;
   harness.fileSystem.rename = () => Effect.sync(() => void renames++);
   harness.fileSystem.writeFileString = () =>
-    Effect.fail(
-      PlatformError.systemError({
-        _tag: "BadResource",
-        module: "FileSystem",
-        method: "writeFileString",
-      }),
-    );
+    Effect.fail(fsFailure("BadResource", "writeFileString"));
   return Effect.gen(function* () {
     const result = yield* Effect.result(
       modify({
@@ -353,14 +293,7 @@ it.effect("preserves a rename failure when best-effort cleanup also defects", ()
     Effect.sync(() => void cleanupAttempts++).pipe(
       Effect.andThen(Effect.die("expected cleanup defect")),
     );
-  harness.fileSystem.rename = () =>
-    Effect.fail(
-      PlatformError.systemError({
-        _tag: "AlreadyExists",
-        module: "FileSystem",
-        method: "rename",
-      }),
-    );
+  harness.fileSystem.rename = () => Effect.fail(fsFailure("AlreadyExists", "rename"));
   return Effect.gen(function* () {
     const result = yield* Effect.result(
       JsonDocumentStore.use((store) => store.writeObject("/config.json", { enabled: true })),
@@ -372,130 +305,19 @@ it.effect("preserves a rename failure when best-effort cleanup also defects", ()
   }).pipe(provideBuiltLayer(harness.layer));
 });
 
-it.effect(
-  "caps actual file bytes before parsing and never mutates or publishes an oversized read",
-  () => {
-    const source = "private-invalid-json".repeat(100);
-    const fixture = documentLayer({ "/config.json": source });
-    return Effect.gen(function* () {
-      const store = yield* JsonDocumentStore;
-      const { state, change } = trackedModification({});
-      const options = { maxBytes: 32 };
-      const operations = [
-        store.readObject("/config.json", options),
-        store.modifyObject("/config.json", change, options),
-      ];
-      for (const operation of operations) {
-        const before = fixture.readBytes;
-        const error = yield* operation.pipe(Effect.flip);
-        expect(error).toMatchObject({ _tag: "JsonDocumentError", operation: "read" });
-        expect(String(error)).not.toContain("private-invalid-json");
-        expect(fixture.readBytes - before).toBeLessThanOrEqual(options.maxBytes + 1);
-        expect(fixture.readers).toBe(0);
-      }
-      expect(state).toEqual({ mutated: false, published: false });
-      expect(fixture.files.get("/config.json")).toBe(source);
-    }).pipe(Effect.provide(fixture.layer));
-  },
-);
-
-for (const kind of ["filesystem", "memory"] as const) {
-  it.effect(`accepts the exact UTF-8 boundary and rejects one byte less in ${kind}`, () => {
-    const document = { text: "é😀" };
-    const source = `${JSON.stringify(document, null, 2)}\n`;
-    const maxBytes = new TextEncoder().encode(source).byteLength;
-    const layer =
-      kind === "filesystem"
-        ? documentLayer({ "/config.json": source }, 3).layer
-        : makeInMemoryDocuments({ "/config.json": document }).layer;
-    return Effect.gen(function* () {
-      const store = yield* JsonDocumentStore;
-      expect(yield* store.readObject("/config.json", { maxBytes })).toEqual(document);
-      expect(
-        (yield* store.readObject("/config.json", { maxBytes: maxBytes - 1 }).pipe(Effect.flip))
-          .operation,
-      ).toBe("read");
-      expect(yield* store.readObject("/config.json")).toEqual(document);
-      expect(yield* store.readObject("/missing.json", { maxBytes })).toBeUndefined();
-      yield* store.modifyObject(
-        "/missing.json",
-        () => Effect.succeed({ value: undefined, document: { created: true } }),
-        { maxBytes },
-      );
-      expect(yield* store.readObject("/missing.json")).toEqual({ created: true });
-    }).pipe(Effect.provide(layer));
-  });
-
-  it.effect(`bounds serialized replacements before committing in ${kind}`, () => {
-    const original = {};
-    const replacement = { text: "é😀" };
-    const compactBytes = new TextEncoder().encode(JSON.stringify(replacement)).byteLength;
-    const writtenBytes = new TextEncoder().encode(
-      `${JSON.stringify(replacement, null, 2)}\n`,
-    ).byteLength;
-    const layer =
-      kind === "filesystem"
-        ? documentLayer({ "/config.json": "{}\n" }).layer
-        : makeInMemoryDocuments({ "/config.json": original }).layer;
-    return Effect.gen(function* () {
-      const store = yield* JsonDocumentStore;
-      const { state, change } = trackedModification(replacement);
-      const failed = yield* store
-        .modifyObject("/config.json", change, {
-          maxBytes: compactBytes,
-        })
-        .pipe(Effect.flip);
-      expect(failed.operation).toBe("write");
-      expect(state.published).toBe(false);
-      expect(yield* store.readObject("/config.json")).toEqual(original);
-      yield* store.modifyObject("/config.json", change, { maxBytes: writtenBytes });
-      expect(state.published).toBe(true);
-      expect(yield* store.readObject("/config.json", { maxBytes: writtenBytes })).toEqual(
-        replacement,
-      );
-    }).pipe(Effect.provide(layer));
-  });
-
-  const invalidOptions: JsonDocumentReadOptions[] = [
-    0,
-    -1,
-    1.5,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    64 * 1024 * 1024 + 1,
-  ].map((maxBytes) => ({ maxBytes }));
-  it.effect.each(invalidOptions)(
-    `rejects invalid read limits before reading or mutating missing ${kind} documents: %j`,
-    (options) => {
-      const layer = kind === "filesystem" ? documentLayer({}).layer : makeInMemoryDocuments().layer;
-      return Effect.gen(function* () {
-        const store = yield* JsonDocumentStore;
-        expect(
-          (yield* store.readObject("/missing.json", options).pipe(Effect.flip)).operation,
-        ).toBe("read");
-        const { state, change } = trackedModification({});
-        expect(
-          (yield* store.modifyObject("/missing.json", change, options).pipe(Effect.flip)).operation,
-        ).toBe("read");
-        expect(state.mutated).toBe(false);
-      }).pipe(Effect.provide(layer));
-    },
-  );
-}
-
-it.effect(
-  "in-memory locked reads reject oversized external changes before mutation and publication",
-  () => {
-    const memory = makeInMemoryDocuments({ "/config.json": { enabled: true } });
-    const { state, change } = trackedModification({});
-    memory.injectBeforeNextUpdate(() => ({ private: "secret".repeat(100) }));
-    return Effect.gen(function* () {
-      const error = yield* memory.service
-        .modifyObject("/config.json", change, { maxBytes: 64 })
-        .pipe(Effect.flip);
-      expect(error.operation).toBe("read");
-      expect(state).toEqual({ mutated: false, published: false });
-      expect(memory.documents.get("/config.json")).toEqual({ enabled: true });
-    });
-  },
-);
+it.effect("rejects a truncated UTF-8 tail after the object", () => {
+  // A complete object followed by the first two bytes of a three-byte character.
+  const source = Uint8Array.of(...new TextEncoder().encode('{"a":1}\n'), 0xe2, 0x82);
+  const harness = documentLayer({ "/config.json": source });
+  return Effect.gen(function* () {
+    const store = yield* JsonDocumentStore;
+    const { state, change } = trackedModification({ a: 2 });
+    for (const operation of [
+      store.readObject("/config.json"),
+      store.modifyObject("/config.json", change),
+    ])
+      expect((yield* operation.pipe(Effect.flip)).operation).toBe("decode");
+    expect(state).toEqual({ mutated: false, published: false });
+    expect(harness.files.get("/config.json")).toBe(source);
+  }).pipe(provideBuiltLayer(harness.layer));
+});

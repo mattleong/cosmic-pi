@@ -8,9 +8,9 @@ import * as Schema from "effect/Schema";
 import type * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
-  isSupervisorMcpMessageArguments,
-  isSupervisorMcpReportArguments,
+  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
+  SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "./mcp-contract.ts";
 import {
@@ -19,6 +19,8 @@ import {
   type SupervisorChannelConfig,
   type SupervisorDeliveryId,
   SupervisorDeliveryIdSchema,
+  SupervisorMessageSchema,
+  SupervisorReportTextSchema,
   SupervisorRpcFailure,
   type SupervisorRpcGroup,
 } from "./protocol.ts";
@@ -53,21 +55,41 @@ export interface SupervisorToolResult {
   readonly isError: boolean;
 }
 
-/** Strict guards run before any RPC call because payload construction throws on invalid input. */
+/** Exactly the contract's argument keys, each decoded by the RPC payload schema it fills. */
+type ArgumentFields<Keys extends ReadonlyArray<string>> = Record<Keys[number], Schema.Top>;
+const exactArguments = { onExcessProperty: "error" } as const;
+const decodeMessageArguments = Schema.decodeUnknownOption(
+  Schema.Struct({
+    message: SupervisorMessageSchema,
+  } satisfies ArgumentFields<typeof SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS>),
+  exactArguments,
+);
+const decodeReportArguments = Schema.decodeUnknownOption(
+  Schema.Struct({
+    delivery_id: SupervisorDeliveryIdSchema,
+    report: SupervisorReportTextSchema,
+  } satisfies ArgumentFields<typeof SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS>),
+  exactArguments,
+);
+
+/** Arguments decode before any RPC call because payload construction throws on invalid input. */
 export const decodeSupervisorToolCall = <ArgumentsInput>(
   name: string,
   args: ArgumentsInput,
 ): SupervisorToolCall | undefined => {
-  if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
-    if (!isSupervisorMcpReportArguments(args)) return undefined;
-    const deliveryId = SupervisorDeliveryIdSchema.makeOption(args.delivery_id);
-    return Option.isSome(deliveryId)
-      ? { kind: "report", deliveryId: deliveryId.value, report: args.report }
-      : undefined;
-  }
+  if (name === SUPERVISOR_MCP_TOOL_NAMES[3])
+    return Option.getOrUndefined(
+      Option.map(decodeReportArguments(args), ({ delivery_id, report }) => ({
+        kind: "report" as const,
+        deliveryId: delivery_id,
+        report,
+      })),
+    );
   const kind = MESSAGE_KINDS[SUPERVISOR_MCP_MESSAGE_TOOL_NAMES.findIndex((tool) => tool === name)];
-  return kind && isSupervisorMcpMessageArguments(args)
-    ? { kind, message: args.message }
+  return kind
+    ? Option.getOrUndefined(
+        Option.map(decodeMessageArguments(args), ({ message }) => ({ kind, message })),
+      )
     : undefined;
 };
 

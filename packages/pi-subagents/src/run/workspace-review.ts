@@ -18,7 +18,6 @@ import {
 } from "./workspace-binding.ts";
 
 export interface WorkspaceReview extends WorkspaceRevision {
-  readonly workspaceId: string;
   readonly offset: number;
   readonly totalChars: number;
   readonly nextOffset?: number;
@@ -73,8 +72,7 @@ interface HeldBinding {
  * reopens an engine record whose revision a later assignment made stale.
  */
 export function makeWorkspaceReview(context: WorkspaceControlContext) {
-  const { withLock, state, records, requireBinding, requireEngine, operations, nextOperation } =
-    context;
+  const { withLock, state, records, requireBinding, requireEngine, operations } = context;
   /** Holds the caller's binding busy around `use`, under an operation permit already held. */
   const hold = <A>(
     workspaceId: string,
@@ -85,7 +83,7 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
       withLock(
         Effect.gen(function* () {
           const binding = yield* requireBinding(workspaceId, caller);
-          const token = nextOperation();
+          const token = Symbol("workspace operation");
           binding.busy = token;
           return {
             binding,
@@ -102,7 +100,7 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
           };
         }),
       ),
-      ({ binding, heldLocked }) => use({ binding, heldLocked }),
+      use,
       ({ binding, token }) =>
         withLock(
           Effect.sync(() => {
@@ -120,6 +118,15 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
   ): Effect.Effect<A, SubagentError> => operations.withPermits(1)(hold(workspaceId, caller, use));
+  /** The frozen revision the engine holds for a binding's workspace, if any. */
+  const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
+    service.list({ ownerId: handle.ownerId }).pipe(
+      Effect.mapError(mapWorkspaceError),
+      Effect.map(
+        (entries) =>
+          entries.find((entry) => entry.handle.workspaceId === handle.workspaceId)?.revision,
+      ),
+    );
   /** The revision a review reads: the named frozen one, or a fresh freeze of the worker. */
   const reviewedRevision = (
     service: WorkspaceServiceContract,
@@ -133,18 +140,14 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
         processCleanupConfirmed: true,
       };
       if (revisionId) {
-        const entry = (yield* service
-          .list({ ownerId: target.ownerId })
-          .pipe(Effect.mapError(mapWorkspaceError))).find(
-          (entry) => entry.handle.workspaceId === target.workspaceId,
-        );
+        const revision = yield* engineRevision(service, binding);
         // A pending reopen makes the revision the engine still holds stale.
-        if (binding.reopenPending || !entry?.revision || entry.revision.revisionId !== revisionId)
+        if (binding.reopenPending || revision?.revisionId !== revisionId)
           return yield* invalid(
             "workspace_revision_stale",
             "The immutable workspace revision no longer matches.",
           );
-        return entry.revision;
+        return revision;
       }
       if (binding.reopenPending)
         yield* service.revise(target).pipe(Effect.mapError(mapWorkspaceError));
@@ -192,7 +195,6 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
                 binding.reviewedThrough = Math.max(binding.reviewedThrough ?? 0, nextOffset);
               return {
                 ...revision,
-                workspaceId,
                 diff: revision.diff.slice(offset, nextOffset),
                 offset,
                 totalChars: revision.diff.length,
@@ -212,17 +214,12 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
       const service = yield* requireEngine;
       return yield* operate(workspaceId, caller, ({ binding }) =>
         Effect.gen(function* () {
-          const entry = (yield* service
-            .list({ ownerId: binding.handle.ownerId })
-            .pipe(Effect.mapError(mapWorkspaceError))).find(
-            (entry) => entry.handle.workspaceId === workspaceId,
-          );
+          const revision = yield* engineRevision(service, binding);
           // A pending reopen also cleared the reviewed revision.
           if (
             binding.reviewedRevision !== revisionId ||
-            !entry?.revision ||
-            entry.revision.revisionId !== revisionId ||
-            binding.reviewedThrough !== entry.revision.diff.length
+            revision?.revisionId !== revisionId ||
+            binding.reviewedThrough !== revision.diff.length
           )
             return yield* invalid(
               "workspace_review_incomplete",
@@ -241,22 +238,21 @@ export function makeWorkspaceReview(context: WorkspaceControlContext) {
     Effect.gen(function* () {
       const service = yield* requireEngine;
       yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
-        service
-          .discard({ workspaceId, ownerId: binding.handle.ownerId, processCleanupConfirmed: true })
-          .pipe(
-            Effect.mapError(mapWorkspaceError),
-            Effect.andThen(
-              withLock(
-                heldLocked().pipe(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      binding.finished = true;
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        Effect.gen(function* () {
+          yield* service
+            .discard({
+              workspaceId,
+              ownerId: binding.handle.ownerId,
+              processCleanupConfirmed: true,
+            })
+            .pipe(Effect.mapError(mapWorkspaceError));
+          yield* withLock(
+            Effect.gen(function* () {
+              yield* heldLocked();
+              binding.finished = true;
+            }),
+          );
+        }),
       );
     });
   /**

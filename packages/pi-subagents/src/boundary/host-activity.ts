@@ -1,5 +1,5 @@
 import { registerRevisionedActivityProvider, type ActivityEvents } from "pi-cosmic-ui/activity";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { notifyListeners, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -38,13 +38,7 @@ export const makeWorkflowActivitySource = (): WorkflowActivitySource => {
   const listeners = new Set<() => void>();
   const replace = (runs: ReadonlyArray<WorkflowRunView>) => {
     snapshot = Object.freeze({ runs });
-    for (const listener of listeners) {
-      try {
-        listener();
-      } catch {
-        // One failing subscriber cannot block the others.
-      }
-    }
+    notifyListeners(listeners);
   };
   return {
     publish: replace,
@@ -74,9 +68,8 @@ export const promptSubagentActivityInput = (
     try: (signal) => {
       const title = sanitizeDiagnosticContent(run.name, { maximumLength: 160 });
       const question = action === "reply" ? run.question?.message : undefined;
-      const label = action === "message" && run.state === "reported" ? "Next assignment" : action;
       return ctx.ui.input(
-        `${label[0]!.toUpperCase()}${label.slice(1)}: ${title}`,
+        `${action[0]!.toUpperCase()}${action.slice(1)}: ${title}`,
         question
           ? sanitizeDiagnosticContent(question, { maximumLength: 2000 })
           : action === "resume"

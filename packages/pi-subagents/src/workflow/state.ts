@@ -41,7 +41,7 @@ const WorkflowEventSchema = Schema.Union([
  * agent-facing, naming run and worktree ids and what to do, so it never becomes the narrator
  * line people read under the workflow; scripts can't send one.
  */
-export interface WorkflowServiceLog {
+interface WorkflowServiceLog {
   readonly type: "log";
   readonly level: "info" | "warning";
   readonly message: string;
@@ -58,27 +58,23 @@ export const workflowServiceLog = (
 ): WorkflowServiceLog => ({ type: "log", level, message, narrate: false });
 
 /** How a run's fiber ended, before it is applied to the view. */
-export interface WorkflowConclusion {
+interface WorkflowConclusion {
   readonly state: "completed" | "failed" | "stopped";
   readonly value?: Schema.Json | undefined;
   readonly failure?: WorkflowFailure | undefined;
   readonly output: ReadonlyArray<string>;
 }
 
-/** The narrator line after `message`; a blank line keeps the previous one. */
-const narrated = (run: WorkflowRunView, message: string): string | undefined =>
-  workflowNarratorLine(message) ?? run.lastLog;
-
 /**
- * Adds a log line, which becomes the narrator line unless `narrate` is false; a warning is also
- * kept apart, so the log's eviction can't drop it.
+ * Adds a log line, which becomes the narrator line unless `narrate` is false, and a blank line
+ * keeps the previous one; a warning is also kept apart, so the log's eviction can't drop it.
  */
 const withLogEntry = (
   run: WorkflowRunView,
   entry: WorkflowLogEntry,
   narrate = true,
 ): WorkflowRunView => {
-  const lastLog = narrate ? narrated(run, entry.message) : run.lastLog;
+  const lastLog = narrate ? (workflowNarratorLine(entry.message) ?? run.lastLog) : run.lastLog;
   return {
     ...run,
     logs: appendWorkflowLog(run.logs, entry),
@@ -269,33 +265,10 @@ export const workflowAgentFromDraft = (
 
 /**
  * Counts a result reused from the resumed run as finished work in the call's display phase; it
- * costs nothing in this run, so its earlier usage isn't added. An entry that still names a
- * worktree lists it as a proposal awaiting review; the caller drops the worktree of one already
- * integrated.
- */
-export const withReusedResult = (
-  run: WorkflowRunView,
-  entry: WorkflowJournalEntry,
-  phase?: string,
-): WorkflowRunView => ({
-  ...run,
-  reused: run.reused + 1,
-  ...(phase !== undefined && {
-    phases: addWorkflowPhase(run.phases, phase),
-    reusedPhases: addWorkflowReusedPhase(run.reusedPhases ?? [], phase),
-  }),
-  ...(entry.workspaceId !== undefined && {
-    reusedWorkspaces: [
-      ...(run.reusedWorkspaces ?? []),
-      { workspaceId: entry.workspaceId, label: entry.label ?? "reused agent" },
-    ],
-  }),
-});
-
-/**
- * Counts a reused result like {@link withReusedResult}; the call also claims its planned entry,
- * which then shows as reused work instead of planned, in the entry's phase when the call has
- * none. Returns the claimed entry.
+ * costs nothing in this run, so its earlier usage isn't added. The call also claims its planned
+ * entry, which then shows as reused work instead of planned, in the entry's phase when the call
+ * has none. An entry that still names a worktree lists it as a proposal awaiting review; the
+ * caller drops the worktree of one already integrated. Returns the claimed entry.
  */
 export const reuseWorkflowResult = (
   run: WorkflowRunView,
@@ -303,7 +276,24 @@ export const reuseWorkflowResult = (
   claim: WorkflowPlannedClaim,
 ): readonly [WorkflowPlannedAgent | undefined, WorkflowRunView] => {
   const [claimed, rest] = claimWorkflowPlanned(run, claim);
-  return [claimed, withReusedResult(rest, entry, claim.phase ?? claimed?.phase)];
+  const phase = claim.phase ?? claimed?.phase;
+  return [
+    claimed,
+    {
+      ...rest,
+      reused: rest.reused + 1,
+      ...(phase !== undefined && {
+        phases: addWorkflowPhase(rest.phases, phase),
+        reusedPhases: addWorkflowReusedPhase(rest.reusedPhases ?? [], phase),
+      }),
+      ...(entry.workspaceId !== undefined && {
+        reusedWorkspaces: [
+          ...(rest.reusedWorkspaces ?? []),
+          { workspaceId: entry.workspaceId, label: entry.label ?? "reused agent" },
+        ],
+      }),
+    },
+  ];
 };
 
 export const withAgentChange = (
@@ -352,24 +342,16 @@ export const finishWorkflowRun = (
   conclusion: WorkflowConclusion,
   result: WorkflowResult | undefined,
   at: number,
-): WorkflowRunView => {
-  const lastLog = conclusion.output.reduce(
-    (line: string | undefined, message) => workflowNarratorLine(message) ?? line,
-    run.lastLog,
-  );
-  return {
-    ...run,
-    state: conclusion.state,
-    endedAt: at,
-    logs: conclusion.output.reduce(
-      (logs, message) => appendWorkflowLog(logs, { at, level: "info", message }),
-      run.logs,
-    ),
-    ...(lastLog !== undefined && { lastLog }),
-    ...(result && { result }),
-    ...(conclusion.failure && { failure: conclusion.failure }),
-  };
-};
+): WorkflowRunView => ({
+  ...conclusion.output.reduce(
+    (current, message) => withLogEntry(current, { at, level: "info", message }),
+    run,
+  ),
+  state: conclusion.state,
+  endedAt: at,
+  ...(result && { result }),
+  ...(conclusion.failure && { failure: conclusion.failure }),
+});
 
 /** Keeps every live run and the newest finished ones. */
 export const retainWorkflowRuns = (

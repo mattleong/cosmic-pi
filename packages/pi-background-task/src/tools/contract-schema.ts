@@ -1,12 +1,12 @@
 /**
  * Version-1 machine-readable `background_task` result contract for native Code Mode scripts. It
- * is separate from the persisted display details and the frozen v1 Code Mode output: it carries
- * only projected domain facts, never formatted text, and encodes strictly, so an unexpected key
- * or out-of-bounds value is a producer invariant failure rather than silently accepted data.
+ * is separate from the persisted display details: it carries only projected domain facts, never
+ * formatted text, and encodes strictly, so an unexpected key or out-of-bounds value is a producer
+ * invariant failure rather than silently accepted data.
  */
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
   BackgroundLogMetadataSchema,
@@ -14,7 +14,6 @@ import {
   BackgroundTaskWaitResultSchema,
   MaxChars,
 } from "../task/schema.ts";
-import { utf8ByteLength } from "../task/utf8.ts";
 
 export const BACKGROUND_TASK_CONTRACT_ID = "pi-background-task/task";
 export const BACKGROUND_TASK_CONTRACT_VERSION = 1;
@@ -24,7 +23,7 @@ export const MAX_CONTRACT_LOG_OUTPUT_BYTES = 1_048_576;
 /** A failure cause is error-like metadata and shares the error bound. */
 export const MAX_CONTRACT_CAUSE_CHARS = BOUNDS.maxErrorChars;
 
-// Frozen v1 member fields are reused as values; their schemas and order stay unchanged.
+// The persisted member fields are reused as values; their schemas and order stay unchanged.
 const snapshot = BackgroundTaskSnapshotSchema.fields;
 const logs = BackgroundLogMetadataSchema.fields;
 const wait = BackgroundTaskWaitResultSchema.fields;

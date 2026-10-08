@@ -6,13 +6,14 @@ import {
 import { matchChangedLines, type ChangedLinePair } from "./line-matching";
 import type { DiffWordEmphasis } from "../../config/schema";
 import {
+  changedDiffBlocks,
   isAddedDiffLine,
   isRemovedDiffLine,
   type AddedDiffLine,
   type ParsedDiffLine,
   type RemovedDiffLine,
 } from "../parse";
-import { changedRangesWithConfidence } from "./emphasis";
+import { changedRangesWithConfidence, shouldEmphasizeChangedPair } from "./emphasis";
 import type { ConfidentWordChangeRanges } from "./types";
 
 type ChangedLineBlockAnalysis = {
@@ -27,8 +28,9 @@ type ChangedLineRangePair = {
   ranges: ConfidentWordChangeRanges;
 };
 
+/** Pairs one run of changed rows; pair indexes are relative to the run. */
 export function analyzeChangedLineBlock(
-  block: ParsedDiffLine[],
+  block: readonly (ParsedDiffLine | null)[],
   wordEmphasis: DiffWordEmphasis,
 ): ChangedLineBlockAnalysis {
   const removed: Array<IndexedChangedLine<RemovedDiffLine>> = [];
@@ -59,4 +61,23 @@ export function analyzeChangedLineBlock(
   }
 
   return { removed, added, pairs, ranges };
+}
+
+/** Line pairs confident enough to emphasize, indexed across the whole diff. */
+export function* emphasizedChangedPairs(
+  lines: readonly (ParsedDiffLine | null)[],
+  wordEmphasis: DiffWordEmphasis,
+): Generator<{ removedIndex: number; addedIndex: number; ranges: ConfidentWordChangeRanges }> {
+  if (wordEmphasis === "off") return;
+  for (const [start, end] of changedDiffBlocks(lines)) {
+    for (const { pair, ranges } of analyzeChangedLineBlock(lines.slice(start, end), wordEmphasis)
+      .ranges) {
+      if (!shouldEmphasizeChangedPair(ranges, pair.confidence)) continue;
+      yield {
+        removedIndex: start + pair.removedIndex,
+        addedIndex: start + pair.addedIndex,
+        ranges,
+      };
+    }
+  }
 }

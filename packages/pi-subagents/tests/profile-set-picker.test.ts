@@ -32,13 +32,8 @@ const projectDocument = {
   },
 };
 
-const inspection = (): ProfileSettingsInspection => {
-  return makeProfileSettingsInspection({
-    globalDocument,
-    projectDocument,
-    projectTrusted: true,
-  });
-};
+const inspection = (): ProfileSettingsInspection =>
+  makeProfileSettingsInspection({ globalDocument, projectDocument, projectTrusted: true });
 
 const invalidInspection = (): ProfileSettingsInspection =>
   makeProfileSettingsInspection({
@@ -50,37 +45,19 @@ const invalidInspection = (): ProfileSettingsInspection =>
   });
 
 const malformedDefaultInspection = (scope: "global" | "project"): ProfileSettingsInspection => {
-  const malformed = {
-    version: 6,
-    defaultProfileSet: 42,
-    profileSets: { saved: { profiles: {} } },
-  };
-  if (scope === "global") {
-    return makeProfileSettingsInspection({
-      globalDocument: malformed,
-      projectTrusted: true,
-    });
-  }
+  const malformed = { version: 6, defaultProfileSet: 42, profileSets: { saved: { profiles: {} } } };
   return makeProfileSettingsInspection({
-    globalDocument,
-    projectDocument: malformed,
+    globalDocument: scope === "global" ? malformed : globalDocument,
+    ...(scope === "project" && { projectDocument: malformed }),
     projectTrusted: true,
   });
 };
 
-const structurallyInvalidInspection = (): ProfileSettingsInspection => {
-  const document = {
-    version: 6,
-    profileSets: {
-      broken: null,
-      valid: { profiles: {} },
-    },
-  };
-  return makeProfileSettingsInspection({
-    globalDocument: document,
+const structurallyInvalidInspection = (): ProfileSettingsInspection =>
+  makeProfileSettingsInspection({
+    globalDocument: { version: 6, profileSets: { broken: null, valid: { profiles: {} } } },
     projectTrusted: false,
   });
-};
 
 const makePicker = (
   options: {
@@ -251,7 +228,7 @@ describe("saved profile-set library", () => {
     expect(menu(invalidInspection(), "global:broken")).toEqual([
       [{ action: "delete", target: { scope: "global", name: "broken" } }, true],
     ]);
-    expect(menu(malformedDefaultInspection("global"), "global:invalid-default")).toEqual([
+    expect(menu(malformedDefaultInspection("global"), "global/invalid-default")).toEqual([
       [{ action: "clear-scope-default", scope: "global" }, true],
     ]);
   });
@@ -321,6 +298,25 @@ describe("saved profile-set library", () => {
       expect(picker.close).toHaveBeenCalledWith({ action: "clear-scope-default", scope });
     },
   );
+
+  it("keeps a set named invalid-default selected beside the repair row across refreshes", () => {
+    const value = makeProfileSettingsInspection({
+      globalDocument: {
+        version: 6,
+        defaultProfileSet: 42,
+        profileSets: { "invalid-default": { profiles: {} } },
+      },
+      projectTrusted: false,
+    });
+    const picker = makePicker({ value, projectTrusted: false });
+    picker.component.handleInput("j");
+    picker.component.updateInspection(value, false);
+    picker.component.handleInput("\r");
+    expect(picker.close).toHaveBeenCalledWith({
+      action: "edit",
+      target: { scope: "global", name: "invalid-default" },
+    });
+  });
 
   it("never saves Current Session from the library", () => {
     for (const projectTrusted of [true, false]) {

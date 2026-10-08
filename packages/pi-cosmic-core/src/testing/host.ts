@@ -46,6 +46,31 @@ export const plainTheme =
     strikethrough: plain,
   }) as Theme;
 
+interface FailingThemeOptions {
+  /** The thrown message, so a test can prove the host error never leaks. */
+  readonly message?: string;
+  /** Throws only for matching `fg` calls; other calls stay identity. */
+  readonly when?: (token: string, text: string) => boolean;
+  /** Makes `bold` throw as well. */
+  readonly bold?: boolean;
+}
+
+/** A hostile host theme: `fg` (and optionally `bold`) throws; other styles stay identity. */
+export const failingTheme = ({
+  message = "theme unavailable",
+  when = () => true,
+  bold = false,
+}: FailingThemeOptions = {}): Theme => {
+  const fail = (): never => {
+    throw new Error(message);
+  };
+  return opaqueFixture({
+    ...plainTheme,
+    fg: (token: string, text: string) => (when(token, text) ? fail() : text),
+    ...(bold && { bold: fail }),
+  });
+};
+
 /** A Promise the test settles explicitly; later settlements are ignored. */
 export const deferredPromise = <A = void>() => {
   const deferred = Deferred.makeUnsafe<A, Error>();

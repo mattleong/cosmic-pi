@@ -1,32 +1,23 @@
 // Pi rebuilds history before session_start; those same rows adopt the first activation.
-import {
-  createEventBus,
-  initTheme,
-  ToolExecutionComponent,
-  type ExtensionContext,
-  type ExtensionHandler,
-  type SourceInfo,
-  type ToolDefinition,
-  type ToolInfo,
-  type ToolRendererResolver,
-  type ToolRenderers,
-} from "@earendil-works/pi-coding-agent";
+import { createEventBus, initTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import type { CodePreviewSettings } from "pi-code-previews";
-import { applyPresentationSettings } from "pi-code-previews/testing";
+import {
+  applyPresentationSettings,
+  drawToolRow,
+  hostToolRow,
+  toolRowFrames,
+} from "pi-code-previews/testing";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
   deferredPromise,
-  extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
+  recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { afterEach, beforeAll, vi } from "vitest";
 import { registerBackgroundTaskApplication } from "../src/application.ts";
-
-type Handler = ExtensionHandler<any, any>;
 
 beforeAll(() => initTheme("dark", false));
 
@@ -36,12 +27,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const source: SourceInfo = {
-  source: "local",
-  path: "/extensions/pi-background-task/index.ts",
-  scope: "user",
-  origin: "top-level",
-};
 const args = { action: "status", id: "task-1" };
 const text = "task-1 failed (exit 2)\ncause: FULL_CAUSE recovery /tmp/task-1.log";
 const details = {
@@ -76,105 +61,50 @@ const loads = (settings: Partial<CodePreviewSettings>) => () => {
   return Promise.resolve();
 };
 
-const draw = (row: ToolExecutionComponent, expanded = false) => {
-  row.setExpanded(expanded);
-  row.invalidate();
-  return row.render(120).join("\n");
-};
-const frames = (row: ToolExecutionComponent) => [draw(row), draw(row, true)];
-
 /** Actual factory callbacks over public metadata naming one source for command and tool. */
 const host = (load: () => Promise<void>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-background-replay-" });
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
-    const handlers = new Map<string, Handler>();
-    const commands = new Set<string>();
-    const resolvers: ToolRendererResolver[] = [];
-    const registered = new Map<string, ToolDefinition<any, any, any>>();
-    registerBackgroundTaskApplication(
-      extensionApiFixture({
-        events: createEventBus(),
-        on: (name: string, handler: Handler) => {
-          handlers.set(name, handler);
-        },
-        registerCommand: (name: string) => {
-          commands.add(name);
-        },
-        registerToolRenderer: (resolver: ToolRendererResolver) => {
-          resolvers.push(resolver);
-        },
-        registerTool: (tool: ToolDefinition<any, any, any>) => {
-          registered.set(tool.name, tool);
-        },
-        getActiveTools: () => [...registered.keys()],
-        getAllTools: (): ToolInfo[] =>
-          [...registered.values()].map(({ name, description, parameters }) => ({
-            name,
-            description,
-            parameters,
-            exposure: "direct",
-            sourceInfo: source,
-          })),
-        getCommands: () =>
-          [...commands].map((name) => ({
-            name,
-            description: name,
-            source: "extension" as const,
-            sourceInfo: source,
-          })),
-      }),
-      { loadSettings: load },
-    );
-    // Pi consults resolvers, then the registered definition, which is absent before startup.
-    const resolve = (name: string, index = 0): ToolRenderers | undefined =>
-      index < resolvers.length
-        ? resolvers[index]!(name, () => resolve(name, index + 1))
-        : registered.get(name);
-    const row = () => {
-      const component = new ToolExecutionComponent(
-        "background_task",
-        "background-task-call",
-        args,
-        { showImages: false },
-        resolve("background_task"),
-        opaqueFixture({ requestRender() {} }),
-        "/project",
-      );
-      component.updateResult({ content: [{ type: "text", text }], details, isError: false });
-      return component;
+    const host = recordingExtensionHost({}, { events: createEventBus() });
+    registerBackgroundTaskApplication(host.pi, { loadSettings: load });
+    const row = () =>
+      hostToolRow("background_task", args, host.resolve("background_task"), {
+        id: "background-task-call",
+        result: { content: [{ type: "text", text }], details, isError: false },
+      });
+    return {
+      registered: host.tools,
+      row,
+      emit: (name: string, ctx: ExtensionContext) => host.emit(name, ctx),
     };
-    const emit = (name: string, ctx: ExtensionContext) =>
-      Promise.resolve(handlers.get(name)?.({}, ctx));
-    return { registered, row, emit };
   });
 
 layer(nodeFilePlatformLayer)("background task history replay", (it) => {
-  for (const style of ["compact", "preview"] as const)
-    for (const mode of ["on", "off", "border"] as const)
-      it.effect(`history from before startup adopts the registered tool (${style}/${mode})`, () =>
-        Effect.gen(function* () {
-          const h = yield* host(
-            loads({
-              toolCallCollapsedStyle: style,
-              toolCallBackground: mode,
-              toolCallTiming: false,
-            }),
-          );
-          const row = h.row();
-          const cold = draw(row);
-          yield* Effect.promise(() => h.emit("session_start", context()));
-          expect([...h.registered.keys()]).toEqual(["background_task"]);
-          expect(draw(row)).not.toBe(cold);
-          // A row resolved after startup draws the registered tool's ordinary presentation.
-          expect(frames(row)).toEqual(frames(h.row()));
-          const expanded = draw(row, true);
-          for (const line of text.split("\n")) expect(expanded).toContain(line);
-          expect(expanded).toContain("task-1");
-          yield* Effect.promise(() => h.emit("session_shutdown", context()));
+  // Code Previews proves every appearance; this proves the task tool adopts one.
+  it.effect("history from before startup adopts the registered tool", () =>
+    Effect.gen(function* () {
+      const h = yield* host(
+        loads({
+          toolCallCollapsedStyle: "compact",
+          toolCallBackground: "border",
+          toolCallTiming: false,
         }),
       );
+      const row = h.row();
+      const cold = drawToolRow(row);
+      yield* Effect.promise(() => h.emit("session_start", context()));
+      expect([...h.registered.keys()]).toEqual(["background_task"]);
+      expect(drawToolRow(row)).not.toBe(cold);
+      // A row resolved after startup draws the registered tool's ordinary presentation.
+      expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row()));
+      const expanded = drawToolRow(row, true);
+      for (const line of text.split("\n")) expect(expanded).toContain(line);
+      expect(expanded).toContain("task-1");
+      yield* Effect.promise(() => h.emit("session_shutdown", context()));
+    }),
+  );
 
   for (const failure of ["aborted", "tree replacement"] as const)
     it.effect(`history stays raw after ${failure} closes the first startup`, () =>
@@ -187,7 +117,7 @@ layer(nodeFilePlatformLayer)("background task history replay", (it) => {
           return Promise.race([]);
         });
         const row = h.row();
-        const cold = frames(row);
+        const cold = toolRowFrames(row);
         if (failure === "aborted")
           yield* Effect.promise(() => h.emit("session_start", context(AbortSignal.abort())));
         else {
@@ -201,7 +131,7 @@ layer(nodeFilePlatformLayer)("background task history replay", (it) => {
         yield* Effect.promise(() => h.emit("session_tree", context()));
         yield* Effect.promise(() => h.emit("session_start", context()));
         expect(h.registered.has("background_task")).toBe(true);
-        expect(frames(row)).toEqual(cold);
+        expect(toolRowFrames(row)).toEqual(cold);
         yield* Effect.promise(() => h.emit("session_shutdown", context()));
       }),
     );

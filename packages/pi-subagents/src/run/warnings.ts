@@ -11,8 +11,6 @@ export interface RunWarningSlots {
   readonly system?: string | undefined;
 }
 
-export const emptyRunWarningSlots = (): RunWarningSlots => ({});
-
 /**
  * Records `warning` in its source slot and returns the projected warning fields plus a `notice`
  * appended to `sessionEvents`. Callers sanitize `warning` and hold the service lock.

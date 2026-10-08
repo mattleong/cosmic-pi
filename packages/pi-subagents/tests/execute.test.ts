@@ -5,27 +5,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as References from "effect/References";
-import type { ProfileRouteContinuation } from "../src/profiles/model.ts";
 import { runSessionOwned } from "../src/run/session-owned.ts";
+import { reviewerContinuation } from "./run/fixtures/service-harness.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool, view } from "./tools/fixtures/tool-harness.ts";
-
-const route: ProfileRouteContinuation = {
-  profile: "reviewer",
-  routeSource: "global",
-  candidates: [0, 1].map(() => ({
-    host: "local",
-    runtime: "pi",
-    model: "openai-codex/gpt-5.6-sol",
-    effort: "high",
-    context: "fresh",
-    writeIntent: "read-only",
-    openaiFastMode: false,
-    closeOnReport: true,
-  })),
-  selectedCandidateIndex: 0,
-  skippedCandidates: [],
-};
 
 describe("retry claim ownership", () => {
   beforeAll(() => initTheme("dark", false));
@@ -52,7 +35,7 @@ describe("retry claim ownership", () => {
                 claimed = true;
                 return {
                   source: view({ state: "failed", profile: "reviewer" }),
-                  continuation: route,
+                  continuation: reviewerContinuation(0),
                   claimToken: "claim",
                 };
               }),

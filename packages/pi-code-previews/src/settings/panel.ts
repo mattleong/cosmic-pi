@@ -12,7 +12,7 @@ import {
   type LoadSettingsOptions,
 } from "../config/store";
 import { initializeShiki } from "../syntax/shiki";
-import { createSettingsCategoryItems, isSettingsGroupItemId } from "./ui/index";
+import { createSettingsCategoryItems } from "./ui/index";
 
 interface SettingsListControllerOptions {
   theme?: Theme;
@@ -22,7 +22,7 @@ interface SettingsListControllerOptions {
   effects?: SettingsPanelSaveEffects;
 }
 
-export interface SettingsPanelSaveEffects {
+interface SettingsPanelSaveEffects {
   readonly queueSave: (
     settings: CodePreviewSettings,
     options: LoadSettingsOptions,
@@ -49,7 +49,7 @@ export function persistSettingsChange(
   });
 }
 
-export interface CodePreviewSettingsModel {
+interface CodePreviewSettingsModel {
   readonly items: SettingItem[];
   readonly bind: (list: SettingsList) => void;
   readonly onChange: (id: string, value: string, list: SettingsList) => void;
@@ -66,13 +66,12 @@ export function createCodePreviewSettingsModel({
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
   let revision = 0;
-  const sync = (list: SettingsList) => syncSettingsListValues(list, draftSettings);
+  const sync = (list: SettingsList) => {
+    for (const item of createSettingsCategoryItems(() => draftSettings, constVoid))
+      list.updateValue(item.id, item.currentValue);
+  };
+  // Group rows never arrive here: the settings surface filters their changes.
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
-    if (isSettingsGroupItemId(id)) {
-      sync(list);
-      return;
-    }
-
     // The reset row asks for a second press: its middle value only arms the reset.
     if (id === "resetToDefaults" && value !== "reset now") {
       if (value === "keep current") sync(list);
@@ -113,7 +112,7 @@ export function createCodePreviewSettingsModel({
     if (activeList) handleSettingChange(activeList, id, value);
   };
   return {
-    items: createSettingsCategoryItems(draftSettings, () => draftSettings, routeBoundChange, theme),
+    items: createSettingsCategoryItems(() => draftSettings, routeBoundChange, theme),
     bind: (list) => {
       activeList = list;
     },
@@ -127,9 +126,4 @@ export function createCodePreviewSettingsModel({
         .finally(done);
     },
   };
-}
-
-function syncSettingsListValues(list: SettingsList, settings: typeof codePreviewSettings): void {
-  for (const item of createSettingsCategoryItems(settings, () => settings, constVoid, undefined))
-    list.updateValue(item.id, item.currentValue);
 }

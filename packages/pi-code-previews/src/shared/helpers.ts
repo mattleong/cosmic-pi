@@ -1,7 +1,5 @@
 import * as Predicate from "effect/Predicate";
 
-/** Small shared helpers used across preview rendering paths. */
-
 export function getObjectValue<ValueInput>(value: ValueInput, key: string) {
   if (!Predicate.isObject(value) || !Object.hasOwn(value, key)) return undefined;
   return value[key];
@@ -11,10 +9,8 @@ export function isToolOutputNoticeLine(line: string): boolean {
   return line.startsWith("[") && line.endsWith("]");
 }
 
-export const PREVIEW_TAB_REPLACEMENT = "   ";
-
 export function expandPreviewTabs(text: string): string {
-  return text.replace(/\t/g, PREVIEW_TAB_REPLACEMENT);
+  return text.replace(/\t/g, "   ");
 }
 
 /** Stable non-cryptographic string hash for cache keys. */

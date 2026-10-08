@@ -5,10 +5,14 @@ import {
   inheritedInvalidInspection,
   makeProfileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
-import { settleTurn, workspaceHarness } from "./fixtures/profile-workspace.ts";
+import {
+  chooseFromPage,
+  settleTurn,
+  workspaceHarness,
+  workspaceInspection as makeInspection,
+} from "./fixtures/profile-workspace.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
-import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
-import { inheritSessionDraft } from "../src/settings/profile-route-editor.ts";
+import { loadProfileRouteDraft } from "../src/settings/profile-route-editor.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
 import type { JsonObject } from "pi-cosmic-core";
 import type { CandidateMenuAction } from "../src/settings/ui/profile-workspace-actions.ts";
@@ -17,19 +21,6 @@ import {
   type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
 } from "../src/settings/profile-workspace.ts";
-
-const makeInspection = (seed?: SessionProfileOverrideSeed) =>
-  makeProfileSettingsInspection(
-    {
-      globalDocument: {
-        version: 6,
-        defaultProfileSet: "default",
-        profileSets: { default: { profiles: {} } },
-      },
-      projectTrusted: true,
-    },
-    seed,
-  );
 
 const invalidBaselineInspection = () => {
   const initial = makeInspection();
@@ -69,12 +60,10 @@ const baseOptions = (
       context: {
         profile: "generalist",
         candidateIndex,
-        host: candidate.host,
         runtime: candidate.runtime,
       },
     }),
   supportedPiEfforts: () => undefined,
-  fastModeAvailable: () => false,
   ...overrides,
 });
 
@@ -82,14 +71,8 @@ const openFields = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("\u001b[C");
 };
 
-const chooseAction = (component: ProfileWorkspaceComponent, action: CandidateMenuAction): void => {
-  component.handleInput("a");
-  component.handleInput("/");
-  for (const key of action) component.handleInput(key);
-  component.handleInput("\r");
-};
 const chooseDelete = (component: ProfileWorkspaceComponent): void =>
-  chooseAction(component, "remove");
+  chooseFromPage(component, "a", "remove");
 
 const openUndo = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("l");
@@ -103,7 +86,7 @@ const modelEditor = (count = 3) => {
   );
   const editor = workspaceHarness({}, original);
   openFields(editor.component);
-  const act = (action: CandidateMenuAction): void => chooseAction(editor.component, action);
+  const act = (action: CandidateMenuAction): void => chooseFromPage(editor.component, "a", action);
   return { ...editor, original, act };
 };
 
@@ -200,16 +183,11 @@ describe("runtime switches", () => {
           })),
           current: candidate.model,
           defaultSelector: "live-default",
-          context: { profile, candidateIndex, host: candidate.host, runtime: candidate.runtime },
+          context: { profile, candidateIndex, runtime: candidate.runtime },
         }),
     );
     const editor = workspaceHarness({ loadModelPicker }, [profileCandidate("test/first")]);
-    const chooseRunWith = (value: string): void => {
-      editor.component.handleInput("r");
-      editor.component.handleInput("/");
-      for (const key of value) editor.component.handleInput(key);
-      editor.component.handleInput("\r");
-    };
+    const chooseRunWith = (value: string) => chooseFromPage(editor.component, "r", value);
     return { ...editor, loadModelPicker, chooseRunWith };
   };
 
@@ -299,7 +277,7 @@ describe("profile workspace navigation", () => {
 
   it("keeps an invalid clean Current Session baseline fail-closed", () => {
     const inspection = invalidBaselineInspection();
-    expect(inheritSessionDraft(inspection, "generalist")).toEqual({
+    expect(loadProfileRouteDraft(inspection, { kind: "session" }, "generalist")).toEqual({
       kind: "invalid",
       candidates: [],
     });
@@ -487,10 +465,9 @@ describe("profile workspace disposal", () => {
       });
       const requestRender = vi.fn();
       const close = vi.fn();
-      const onDispose = vi.fn();
       const saveDraft = vi.fn(() => save);
       const component = new ProfileWorkspaceComponent(
-        baseOptions({ requestRender, close, onDispose, saveDraft }),
+        baseOptions({ requestRender, close, saveDraft }),
       );
 
       chooseDelete(component);
@@ -510,7 +487,6 @@ describe("profile workspace disposal", () => {
         expect(persistenceSettled).toBe(true);
         expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
         expect(close).not.toHaveBeenCalled();
-        expect(onDispose).toHaveBeenCalledTimes(1);
       }
     },
   );
@@ -555,7 +531,7 @@ describe("profile workspace disposal", () => {
       pickerCell.resolve({
         choices: [],
         current: "parent",
-        context: { profile: "generalist", candidateIndex: 0, host: "local", runtime: "pi" },
+        context: { profile: "generalist", candidateIndex: 0, runtime: "pi" },
       });
       return settleTurn().then(() => {
         expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);

@@ -4,11 +4,7 @@ import type {
 } from "../boundary/host-notifier.ts";
 import type { CompletionGenerationRecord, RunRecord } from "./internal.ts";
 import { hasUnresolvedSteeringDelivery } from "./model.ts";
-import {
-  MAX_COMPLETION_DELIVERY_BATCH,
-  MAX_UNRESOLVED_REPORT_GENERATIONS,
-  MAX_UNRESOLVED_REPORTS_BEFORE_RETAINED_ASSIGNMENT,
-} from "./limits.ts";
+import { MAX_COMPLETION_DELIVERY_BATCH, MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 
 export const completionNotificationKey = (id: string, generation: number): string =>
   `${id}:${generation}`;
@@ -18,9 +14,6 @@ export const completionClaimOwner = (record: RunRecord, generation: number): str
 
 export const hasCompletionGenerationCapacity = (record: RunRecord): boolean =>
   record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS;
-
-export const hasRetainedAssignmentCapacity = (record: RunRecord): boolean =>
-  record.completionGenerations.size < MAX_UNRESOLVED_REPORTS_BEFORE_RETAINED_ASSIGNMENT;
 
 export const claimCompletion = (
   record: RunRecord,
@@ -43,7 +36,7 @@ export const releaseCompletionClaim = (
   return true;
 };
 
-export const isCompletionEligible = (record: RunRecord, generation: number): boolean =>
+const isCompletionEligible = (record: RunRecord, generation: number): boolean =>
   record.completionGenerations.has(generation) &&
   completionClaimOwner(record, generation) === undefined;
 
@@ -69,7 +62,6 @@ const completionNotification = (
     ...(completion.finalText && { finalText: completion.finalText }),
     ...(completion.error && { error: completion.error }),
     ...(completion.warning && { warning: completion.warning }),
-    ...(completion.retained && { retained: true }),
     ...(record.view.profile && { profile: record.view.profile }),
     ...(retryAvailable && { retryAvailable: true, remainingCandidateCount }),
   };

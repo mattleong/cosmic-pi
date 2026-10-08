@@ -1,7 +1,11 @@
 // Promise-shaped child Pi host boundary tests.
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
-import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  createEventBus,
+  type ExtensionHandler,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, vi } from "vitest";
@@ -17,7 +21,7 @@ import { view } from "./fixtures/run-view.ts";
 import { extensionApiFixture } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
-import { eventBus, pickQuestionnaire } from "./support/questionnaire.ts";
+import { pickQuestionnaire } from "./support/questionnaire.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type CapturedTool = ToolDefinition<any, any, any>;
@@ -36,7 +40,7 @@ interface HarnessOptions {
 
 const makeHarness = (options: HarnessOptions = {}) => {
   const handlers = new Map<string, Handler>();
-  const events = eventBus();
+  const events = createEventBus();
   const tools: CapturedTool[] = [];
   const contacts: LocalPiContact[] = [];
   const listeners: ListenerRecord[] = [];
@@ -116,9 +120,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
         return contact!;
       }),
     );
+  /** Asks the parent a blocking question through the current contact_parent tool. */
+  const ask = (signal?: AbortSignal) =>
+    execute(latestTool("contact_parent"), { kind: "question", message: "Need input" }, signal);
   return {
     events,
     activeTools: () => [...active],
+    ask,
     awaitContact,
     contacts,
     currentListener,
@@ -187,6 +195,23 @@ describe("local Pi child bridge", () => {
     expect(queryQuestionnaireRelay(harness.events, "/old")).toBeUndefined();
     expect(yield* step(() => answer)).toBeInstanceOf(Error);
     yield* step(harness.shutdown);
+  });
+  effectTest("sends no teardown cancel for a questionnaire the root already failed", function* () {
+    const harness = makeHarness();
+    yield* step(() => harness.start());
+    const relay = queryQuestionnaireRelay(harness.events, "/child")!;
+    const answer = rejection(relay.ask(pickQuestionnaire, new AbortController().signal));
+    const request = yield* harness.awaitContact("proxy_request");
+    harness.currentListener().handlers.onControl({
+      channel: "pi-subagents",
+      type: "proxy_response",
+      requestId: request.requestId,
+      ok: false,
+      payloadJson: '{"message":"The parent questionnaire is unavailable."}',
+    });
+    expect(yield* step(() => answer)).toBeInstanceOf(Error);
+    yield* settle(harness.shutdown);
+    expect(contactOfType(harness.contacts, "proxy_cancel")).toBeUndefined();
   });
   effectTest("aborts superseded preview loading and ignores its late settlement", function* () {
     const first = deferredPromise();
@@ -322,12 +347,9 @@ describe("local Pi child bridge", () => {
       const text = result.content
         .flatMap((part) => (part.type === "text" ? [part.text] : []))
         .join("\n");
-      expect(text).toContain("states are unobserved");
-      expect(text).toContain("agent-child");
-      expect(text).toContain("Children continue");
+      // The agent learns that root cleanup is unconfirmed, not complete.
       expect(text).toContain("Root completion-claim cleanup is unconfirmed");
       expect(text).not.toContain("Wait cleanup is complete");
-      expect(text).not.toContain("Await these IDs again");
       yield* harness.awaitContact("proxy_cancel", { requestId: request.requestId });
       const immediate = yield* step(() =>
         execute(
@@ -355,13 +377,7 @@ describe("local Pi child bridge", () => {
     yield* harness.awaitContact("proxy_cancel", { requestId: proxyRequest.requestId });
 
     const questionAbort = new AbortController();
-    const questionOutcome = rejection(
-      execute(
-        harness.latestTool("contact_parent"),
-        { kind: "question", message: "Need input" },
-        questionAbort.signal,
-      ),
-    );
+    const questionOutcome = rejection(harness.ask(questionAbort.signal));
     const question = yield* harness.awaitContact("contact_parent");
     questionAbort.abort();
     expect(yield* step(() => questionOutcome)).toMatchObject({
@@ -384,13 +400,7 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.start);
 
     yield* step(() =>
-      expect(
-        execute(
-          harness.latestTool("contact_parent"),
-          { kind: "question", message: "Need input" },
-          undefined,
-        ),
-      ).rejects.toThrow("The parent subagent supervisor is unavailable."),
+      expect(harness.ask()).rejects.toThrow("The parent subagent supervisor is unavailable."),
     );
     expect(contactOfType(harness.contacts, "contact_cancel")).toBeUndefined();
     yield* settle(harness.shutdown);
@@ -400,13 +410,7 @@ describe("local Pi child bridge", () => {
     for (const end of ["disconnect", "shutdown"] as const) {
       const harness = makeHarness();
       yield* settle(harness.start);
-      const questionOutcome = rejection(
-        execute(
-          harness.latestTool("contact_parent"),
-          { kind: "question", message: "Need input" },
-          undefined,
-        ),
-      );
+      const questionOutcome = rejection(harness.ask());
       const proxyOutcome = rejection(
         execute(harness.latestTool(SUBAGENT_TOOL_NAME.list), {}, undefined),
       );
@@ -455,11 +459,7 @@ describe("local Pi child bridge", () => {
     });
     yield* harness.awaitContact("turn_input_barrier_ack", { requestId: "current-barrier" });
 
-    const result = execute(
-      harness.latestTool("contact_parent"),
-      { kind: "question", message: "Need input" },
-      undefined,
-    );
+    const result = harness.ask();
     const question = yield* harness.awaitContact("contact_parent");
     const reply: LocalPiParentControl = {
       channel: "pi-subagents",

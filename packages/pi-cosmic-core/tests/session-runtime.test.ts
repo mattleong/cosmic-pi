@@ -6,13 +6,19 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { vi } from "vitest";
 import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   type PiManagedRuntime,
   type PiSessionRuntimeSlot,
 } from "../index.ts";
-import { extensionApiFixture, makeCapturedTracer, makeLifecycleProbe } from "../testing.ts";
+import {
+  extensionApiFixture,
+  macrotask,
+  makeCapturedTracer,
+  makeLifecycleProbe,
+} from "../testing.ts";
 
 /** A fake managed runtime whose unused `fork` fails loudly. */
 const fakeRuntime = (
@@ -37,7 +43,8 @@ const rejects = <A>(run: () => Promise<A>) =>
     ),
   );
 
-function makeAbortDisposalHarness() {
+/** Starts input 1, aborts it while startup stalls, and holds its runtime disposal until released. */
+function abortStalledStart() {
   const events: string[] = [];
   const startedGate = Deferred.makeUnsafe<void>();
   const disposalGate = Deferred.makeUnsafe<void>();
@@ -64,7 +71,14 @@ function makeAbortDisposalHarness() {
     startup: () => Effect.void,
   });
   const releaseDisposal = () => void Deferred.doneUnsafe(disposalGate, Effect.void);
-  return { disposal, events, releaseDisposal, slot, started };
+  const controller = new AbortController();
+  return Effect.gen(function* () {
+    const first = slot.start(1, controller.signal);
+    yield* Effect.promise(() => started);
+    controller.abort();
+    expect(yield* Effect.promise(() => first)).toBeUndefined();
+    return { events, releaseDisposal, slot };
+  });
 }
 
 function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSignal {
@@ -79,15 +93,17 @@ function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSign
   });
 }
 
-function makeSignalSetupHarness(signal: AbortSignal) {
+/** A counting slot whose startup or runtime `run` throws synchronously when `fail` names it. */
+function makeCountingSlot(fail: string) {
   let disposals = 0;
-  let failures = 0;
+  const failures: number[] = [];
   let runs = 0;
   const slot = makePiSessionRuntimeSlot<void, never, never, never>({
     makeRuntime: () =>
       fakeRuntime(
         () => {
           runs++;
+          if (fail === "run") throw new Error("hostile runtime.run");
           // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           return Promise.resolve(undefined as never);
         },
@@ -96,12 +112,13 @@ function makeSignalSetupHarness(signal: AbortSignal) {
           return Promise.resolve();
         },
       ),
-    startup: () => Effect.void,
-    onStartFailure: () => {
-      failures++;
+    startup: () => {
+      if (fail === "startup") throw new Error("hostile startup constructor");
+      return Effect.void;
     },
+    onStartFailure: (_input, token) => void failures.push(token),
   });
-  return { counts: () => ({ disposals, failures, runs }), signal, slot };
+  return { counts: () => ({ disposals, failures: [...failures], runs }), slot };
 }
 
 it.effect("replaces a stalled runtime and releases every acquired layer exactly once", () =>
@@ -238,40 +255,24 @@ it.effect("reports a synchronous runtime-construction throw without activating t
   }),
 );
 
-for (const operation of ["startup", "run"] as const) {
-  it.effect(`disposes the runtime when ${operation} throws synchronously`, () =>
+for (const [failure, runs] of [
+  ["startup", 0],
+  ["run", 1],
+  ["addEventListener", 0],
+  ["aborted", 0],
+] as const) {
+  it.effect(`disposes the runtime once when ${failure} throws during start`, () =>
     Effect.gen(function* () {
-      let disposals = 0;
-      let runs = 0;
-      const failures: number[] = [];
-      const runtime = fakeRuntime(
-        () => {
-          runs++;
-          if (operation === "run") throw new Error("hostile runtime.run");
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-          return Promise.resolve(undefined as never);
-        },
-        () => {
-          disposals++;
-          return Promise.resolve();
-        },
-      );
-      const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-        makeRuntime: () => runtime,
-        startup: () => {
-          if (operation === "startup") throw new Error("hostile startup constructor");
-          return Effect.void;
-        },
-        onStartFailure: (_input, token) => void failures.push(token),
-      });
-
-      expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
-      expect({ disposals, failures, runs }).toEqual({
-        disposals: 1,
-        failures: [1],
-        runs: operation === "run" ? 1 : 0,
-      });
+      const signal =
+        failure === "addEventListener" || failure === "aborted"
+          ? makeHostileSignal(failure)
+          : undefined;
+      const { counts, slot } = makeCountingSlot(failure);
+      expect(yield* Effect.promise(() => slot.start(undefined, signal))).toBeUndefined();
+      expect(counts()).toEqual({ disposals: 1, failures: [1], runs });
       expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
+      yield* Effect.promise(() => slot.shutdown());
+      expect(counts()).toEqual({ disposals: 1, failures: [1], runs });
     }),
   );
 }
@@ -291,30 +292,78 @@ it.effect("disposes an already-aborted start and leaves the slot unavailable", (
   }),
 );
 
-for (const operation of ["addEventListener", "aborted"] as const) {
-  it.effect(`disposes the runtime when AbortSignal.${operation} throws`, () =>
-    Effect.gen(function* () {
-      const harness = makeSignalSetupHarness(makeHostileSignal(operation));
-      expect(
-        yield* Effect.promise(() => harness.slot.start(undefined, harness.signal)),
-      ).toBeUndefined();
-      expect(harness.counts()).toEqual({ disposals: 1, failures: 1, runs: 0 });
-      expect(yield* rejects(() => harness.slot.run(Effect.void))).toBe(true);
-      yield* Effect.promise(() => harness.slot.shutdown());
-      expect(harness.counts()).toEqual({ disposals: 1, failures: 1, runs: 0 });
-    }),
-  );
-}
+/** A real host-runtime slot whose startup stalls until interrupted; counts interruptions and hooks. */
+const stalledSlot = Effect.gen(function* () {
+  const started = yield* Deferred.make<void>();
+  let interruptions = 0;
+  let settlements = 0;
+  const slot = makePiSessionRuntimeSlot<void, never, never, never>({
+    makeRuntime: () => hostRuntime(Layer.empty),
+    startup: () =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Effect.sync(() => void interruptions++)),
+      ),
+    onActivated: () => void settlements++,
+    onStartFailure: () => void settlements++,
+  });
+  return { slot, started, counts: () => ({ interruptions, settlements }) };
+});
+
+it.effect("host abort interrupts a stalled startup once, silently, and removes its listener", () =>
+  Effect.gen(function* () {
+    const { slot, started, counts } = yield* stalledSlot;
+    const controller = new AbortController();
+    const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
+    const startup = slot.start(undefined, controller.signal);
+    yield* Deferred.await(started);
+
+    controller.abort();
+    expect(yield* Effect.promise(() => startup)).toBeUndefined();
+    expect(counts()).toEqual({ interruptions: 1, settlements: 0 });
+    const listener = addEventListener.mock.calls[0]?.[1];
+    expect(listener).toBeTypeOf("function");
+    expect(removeEventListener).toHaveBeenCalledWith("abort", listener);
+  }),
+);
+
+it.effect("shutdown interrupts a stalled startup once without activation or failure hooks", () =>
+  Effect.gen(function* () {
+    const { slot, started, counts } = yield* stalledSlot;
+    const startup = slot.start(undefined);
+    yield* Deferred.await(started);
+
+    yield* Effect.promise(() => Promise.all([startup, slot.shutdown()]));
+    expect(counts()).toEqual({ interruptions: 1, settlements: 0 });
+    expect(slot.isActive()).toBe(false);
+  }),
+);
+
+it.effect("contains slot hooks that return rejected thenables", () =>
+  Effect.gen(function* () {
+    let unhandled = 0;
+    const record = () => void unhandled++;
+    process.on("unhandledRejection", record);
+    const rejected = () => Promise.reject(new Error("host hook rejected"));
+    const slot = makePiSessionRuntimeSlot<void, never, never, never>({
+      makeRuntime: () => hostRuntime(Layer.empty),
+      startup: () => Effect.void,
+      onActivated: rejected,
+      onDeactivated: rejected,
+    });
+    yield* Effect.promise(() => slot.start(undefined));
+    expect(slot.isActive()).toBe(true);
+    yield* Effect.promise(() => slot.shutdown());
+    yield* macrotask;
+    process.off("unhandledRejection", record);
+    expect(unhandled).toBe(0);
+  }),
+);
 
 it.effect("waits for aborted runtime disposal before starting a replacement", () =>
   Effect.gen(function* () {
-    const harness = makeAbortDisposalHarness();
-    const controller = new AbortController();
-    const first = harness.slot.start(1, controller.signal);
-    yield* Effect.promise(() => harness.started);
-    controller.abort();
-    expect(yield* Effect.promise(() => first)).toBeUndefined();
-
+    const harness = yield* abortStalledStart();
     let replacementSettled = false;
     const replacement = harness.slot.start(2).then((token) => {
       replacementSettled = true;
@@ -333,13 +382,7 @@ it.effect("waits for aborted runtime disposal before starting a replacement", ()
 
 it.effect("waits for aborted runtime disposal before shutdown resolves", () =>
   Effect.gen(function* () {
-    const harness = makeAbortDisposalHarness();
-    const controller = new AbortController();
-    const first = harness.slot.start(1, controller.signal);
-    yield* Effect.promise(() => harness.started);
-    controller.abort();
-    expect(yield* Effect.promise(() => first)).toBeUndefined();
-
+    const harness = yield* abortStalledStart();
     let shutdownSettled = false;
     const shutdown = harness.slot.shutdown().then(() => {
       shutdownSettled = true;

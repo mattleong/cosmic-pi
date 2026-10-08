@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import { makeSubscriptionRefresh } from "../index.ts";
+import { yieldUntil } from "../testing.ts";
 
 it.effect("discards a response when its key or revision becomes stale", () =>
   Effect.gen(function* () {
@@ -25,7 +26,7 @@ it.effect("discards a response when its key or revision becomes stale", () =>
     const request = yield* refresh.request({}).pipe(Effect.forkScoped);
     yield* Deferred.await(started);
     yield* Ref.set(key, "second");
-    yield* refresh.invalidate;
+    yield* refresh.invalidateWith(Effect.void);
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(request);
     expect(commits).toEqual([]);
@@ -47,7 +48,7 @@ it.effect("does not retain a wake pulse emitted before polling waits", () =>
       commit: () => Effect.void,
     });
 
-    yield* refresh.invalidate;
+    yield* refresh.invalidateWith(Effect.void);
     const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
     yield* Deferred.await(intervalRead);
     yield* Effect.yieldNow;
@@ -91,7 +92,7 @@ it.effect("releases the current polling wait and applies the next interval", () 
     yield* Deferred.await(firstWaitReady);
     yield* Effect.yieldNow;
     yield* Ref.set(interval, 1_000);
-    yield* refresh.invalidate;
+    yield* refresh.invalidateWith(Effect.void);
     yield* Deferred.await(firstFetch);
     yield* Deferred.await(secondWaitReady);
     yield* Effect.yieldNow;
@@ -128,11 +129,13 @@ it.effect("serializes final validation and commit with invalidation", () =>
 
     const request = yield* refresh.request({}).pipe(Effect.forkScoped);
     yield* Deferred.await(validationStarted);
-    const invalidation = yield* refresh.invalidate.pipe(
-      Effect.andThen(Effect.sync(() => events.push("invalidate"))),
-      Effect.andThen(Deferred.succeed(invalidationFinished, undefined)),
-      Effect.forkScoped,
-    );
+    const invalidation = yield* refresh
+      .invalidateWith(Effect.void)
+      .pipe(
+        Effect.andThen(Effect.sync(() => events.push("invalidate"))),
+        Effect.andThen(Deferred.succeed(invalidationFinished, undefined)),
+        Effect.forkScoped,
+      );
     yield* Effect.yieldNow;
     expect(yield* Deferred.isDone(invalidationFinished)).toBe(false);
 
@@ -141,35 +144,6 @@ it.effect("serializes final validation and commit with invalidation", () =>
     yield* Fiber.join(invalidation);
     expect(events).toEqual(["commit", "invalidate"]);
   }).pipe(Effect.scoped),
-);
-
-it.effect("gated consumer invalidation may omit a polling wake", () =>
-  Effect.gen(function* () {
-    const waiting = yield* Deferred.make<void>();
-    let calls = 0;
-    let state = 0;
-    const refresh = yield* makeSubscriptionRefresh({
-      currentKey: Effect.succeed("key"),
-      interval: Deferred.succeed(waiting, undefined).pipe(Effect.as(1_000)),
-      fetch: () => Effect.sync(() => ++calls),
-      commit: () => Effect.void,
-    });
-    const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
-    yield* Deferred.await(waiting);
-    yield* Effect.yieldNow;
-    yield* refresh.invalidateWith(
-      Effect.sync(() => {
-        state++;
-      }),
-      false,
-    );
-    expect(state).toBe(1);
-    yield* TestClock.adjust("999 millis");
-    expect(calls).toBe(0);
-    yield* TestClock.adjust("1 millis");
-    expect(calls).toBe(1);
-    yield* Fiber.interrupt(poller);
-  }),
 );
 
 it.effect("allows a commit to invalidate the refresh without deadlocking its gate", () =>
@@ -183,7 +157,7 @@ it.effect("allows a commit to invalidate the refresh without deadlocking its gat
       commit: () =>
         invalidate.pipe(Effect.andThen(Deferred.succeed(committed, undefined)), Effect.asVoid),
     });
-    invalidate = refresh.invalidate;
+    invalidate = refresh.invalidateWith(Effect.void);
 
     const request = yield* refresh.request({}).pipe(Effect.forkScoped);
     for (let turn = 0; turn < 10 && !(yield* Deferred.isDone(committed)); turn++)
@@ -191,5 +165,36 @@ it.effect("allows a commit to invalidate the refresh without deadlocking its gat
 
     expect(yield* Deferred.isDone(committed)).toBe(true);
     yield* Fiber.join(request);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps polling after the refresh it joined is interrupted", () =>
+  Effect.gen(function* () {
+    const ownerStarted = yield* Deferred.make<void>();
+    const polled = yield* Deferred.make<void>();
+    let intervalReads = 0;
+    let calls = 0;
+    const refresh = yield* makeSubscriptionRefresh({
+      currentKey: Effect.succeed("key"),
+      interval: Effect.sync(() => ++intervalReads).pipe(Effect.as(1_000)),
+      fetch: () =>
+        ++calls === 1
+          ? Deferred.succeed(ownerStarted, undefined).pipe(Effect.andThen(Effect.never))
+          : Deferred.succeed(polled, undefined),
+      commit: () => Effect.void,
+    });
+    const owner = yield* refresh.request({}).pipe(Effect.forkScoped);
+    yield* Deferred.await(ownerStarted);
+    const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
+    yield* yieldUntil(() => intervalReads === 1);
+    yield* TestClock.adjust("1 second");
+    for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+    // The poller has joined the owner's refresh, which replays this interruption to it.
+    yield* Fiber.interrupt(owner);
+    yield* yieldUntil(() => intervalReads === 2);
+    yield* TestClock.adjust("1 second");
+    yield* Deferred.await(polled);
+    expect(calls).toBe(2);
+    yield* Fiber.interrupt(poller);
   }).pipe(Effect.scoped),
 );

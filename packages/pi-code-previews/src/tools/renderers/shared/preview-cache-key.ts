@@ -1,20 +1,21 @@
-import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hashString } from "../../../shared/helpers";
 import { codePreviewSettings } from "../../../config/state";
 import { getShikiStatus } from "../../../syntax/render";
 
 let themeCacheIdCounter = 0;
-const themeCacheIds = new WeakMap<object, number>();
+const themeCacheIds = new WeakMap<Theme, number>();
 
+/** Every input a cached preview draws from: source, settings, theme and highlighter status. */
 export function previewCacheKey(
   kind: string,
   source: string,
   path: string,
   expanded: boolean,
   theme: Theme,
+  collapsedLines: number | "all",
 ): string {
+  const shikiStatus = getShikiStatus();
   return [
     kind,
     path,
@@ -26,57 +27,19 @@ export function previewCacheKey(
     themeCacheKey(theme),
     source.length,
     hashString(source),
-  ].join("\0");
-}
-
-export function diffPreviewCacheKey(
-  kind: string,
-  source: string,
-  path: string,
-  expanded: boolean,
-  theme: Theme,
-  collapsedLines: number | "all",
-): string {
-  return [
-    previewCacheKey(kind, source, path, expanded, theme),
-    String(collapsedLines),
-    shikiStatusCacheKey(),
-  ].join("\0");
-}
-
-export function writeCallPreviewCacheKey(
-  source: string,
-  path: string,
-  expanded: boolean,
-  theme: Theme,
-): string {
-  return [
-    previewCacheKey("write-call", source, path, expanded, theme),
-    String(codePreviewSettings.writeCollapsedLines),
-    codePreviewSettings.writeContentPreview ? "write-preview" : "no-write-preview",
-    codePreviewSettings.secretWarnings ? "secret-warnings" : "no-secret-warnings",
-    shikiStatusCacheKey(),
-  ].join("\0");
-}
-
-function shikiStatusCacheKey(): string {
-  const shikiStatus = getShikiStatus();
-  return [
+    collapsedLines,
     shikiStatus.initialized ? "shiki-ready" : "shiki-loading",
-    String(shikiStatus.loadedLanguages),
-    String(shikiStatus.pendingLanguages),
-    String(shikiStatus.statusVersion),
+    shikiStatus.loadedLanguages,
+    shikiStatus.pendingLanguages,
+    shikiStatus.statusVersion,
   ].join("\0");
 }
 
 function themeCacheKey(theme: Theme): string {
-  const namedTheme = theme.name ?? "";
-  if ((!hasObjectRuntimeType(theme) && !Predicate.isFunction(theme)) || theme === null)
-    return namedTheme;
   let id = themeCacheIds.get(theme);
   if (id === undefined) {
     id = ++themeCacheIdCounter;
     themeCacheIds.set(theme, id);
   }
-  return `${namedTheme}\0theme:${id}`;
+  return `${theme.name ?? ""}\0theme:${id}`;
 }

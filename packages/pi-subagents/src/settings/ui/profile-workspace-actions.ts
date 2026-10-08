@@ -1,7 +1,9 @@
 import { MAX_PROFILE_CANDIDATES, type ProfileId } from "../../profiles/model.ts";
 import {
+  CANDIDATE_LIMIT_ERROR,
   duplicateRouteCandidate,
   moveRouteCandidate,
+  profileRouteOptionLabel,
   removeRouteCandidate,
   type ProfileRouteDraft,
   type ProfileSettingsScope,
@@ -55,9 +57,7 @@ export const applyProfileWorkspaceDraftAction = (input: {
     const draft = duplicateRouteCandidate(input.draft, input.candidateIndex);
     return draft
       ? { draft, candidateIndex: Math.min(input.candidateIndex + 1, draft.candidates.length - 1) }
-      : {
-          error: `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`,
-        };
+      : { error: CANDIDATE_LIMIT_ERROR };
   }
   if (input.action === "move-up" || input.action === "move-down") {
     const direction = input.action === "move-up" ? "up" : "down";
@@ -82,7 +82,7 @@ export const profileWorkspaceConfirmation = (input: {
   readonly candidateCount: number;
   readonly scope: ProfileSettingsScope;
 }): ProfileWorkspaceConfirmation => ({
-  title: `Remove ${input.candidateIndex === 0 ? "Primary" : `Fallback ${input.candidateIndex}`} from ${input.profile}?`,
+  title: `Remove ${profileRouteOptionLabel(input.candidateIndex)} from ${input.profile}?`,
   detail:
     input.candidateCount === 1
       ? input.scope === "session"

@@ -62,47 +62,45 @@ const runDecoder: SharpProcessRunner = (bytes, onCleanup) =>
 
 export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAdapterContract => ({
   decode: (bytes) =>
-    Effect.suspend(() => {
-      if (bytes.byteLength > maximumInputBytes || bytes.byteLength === 0)
-        return Effect.fail(decodeError());
-      return Effect.gen(function* () {
-        if (MutableRef.get(disabled)) return yield* decodeError();
-        let cleanupConfirmed = false;
-        const result = yield* Effect.suspend(() =>
-          run(bytes, (confirmed) => {
-            cleanupConfirmed = confirmed;
-          }),
-        ).pipe(
-          Effect.tap((result) =>
-            Effect.sync(() => {
-              if (result.cleanupUnconfirmed) cleanupConfirmed = false;
+    bytes.byteLength > maximumInputBytes || bytes.byteLength === 0
+      ? Effect.fail(decodeError())
+      : Effect.gen(function* () {
+          if (MutableRef.get(disabled)) return yield* decodeError();
+          let cleanupConfirmed = false;
+          const result = yield* Effect.suspend(() =>
+            run(bytes, (confirmed) => {
+              cleanupConfirmed = confirmed;
             }),
-          ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              // This commit precedes permit release on success, error and cancellation.
-              if (!cleanupConfirmed) MutableRef.set(disabled, true);
-            }),
-          ),
-        );
-        if (
-          !cleanupConfirmed ||
-          result.code !== 0 ||
-          result.signal !== null ||
-          result.timedOut ||
-          result.overflowed ||
-          result.cleanupUnconfirmed ||
-          Buffer.byteLength(result.stdout) > maximumOutputBytes
-        )
-          return yield* decodeError();
-        return yield* decodeMetadata(result.stdout);
-      }).pipe(
-        // The runner's whole scoped cleanup is inside the permit, including cancellation.
-        admission.withPermitsIfAvailable(1),
-        Effect.flatMap((result) => Effect.fromOption(result)),
-        Effect.mapError(decodeError),
-      );
-    }),
+          ).pipe(
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                if (result.cleanupUnconfirmed) cleanupConfirmed = false;
+              }),
+            ),
+            Effect.ensuring(
+              Effect.sync(() => {
+                // This commit precedes permit release on success, error and cancellation.
+                if (!cleanupConfirmed) MutableRef.set(disabled, true);
+              }),
+            ),
+          );
+          if (
+            !cleanupConfirmed ||
+            result.code !== 0 ||
+            result.signal !== null ||
+            result.timedOut ||
+            result.overflowed ||
+            result.cleanupUnconfirmed ||
+            Buffer.byteLength(result.stdout) > maximumOutputBytes
+          )
+            return yield* decodeError();
+          return yield* decodeMetadata(result.stdout);
+        }).pipe(
+          // The runner's whole scoped cleanup is inside the permit, including cancellation.
+          admission.withPermitsIfAvailable(1),
+          Effect.flatMap((result) => Effect.fromOption(result)),
+          Effect.mapError(decodeError),
+        ),
 });
 
 export class SharpAdapter extends Context.Service<SharpAdapter, SharpAdapterContract>()(

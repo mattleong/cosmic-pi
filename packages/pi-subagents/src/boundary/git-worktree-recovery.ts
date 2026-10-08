@@ -4,6 +4,8 @@ import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
   git,
+  gitFields,
+  isSharedOrForeign,
   workspaceFailure,
   workspaceIO,
   workspaceIOIfPresent,
@@ -11,12 +13,9 @@ import {
 import { readWorkspaceRecord, validWorkspaceId, workspaceDirectory } from "./git-worktree-store.ts";
 
 const registrations = (repository: string) =>
-  git(repository, ["worktree", "list", "--porcelain", "-z"]).pipe(
-    Effect.map((output) =>
-      output
-        .split("\0")
-        .filter((field) => field.startsWith("worktree "))
-        .map((field) => field.slice(9)),
+  gitFields(repository, ["worktree", "list", "--porcelain", "-z"]).pipe(
+    Effect.map((fields) =>
+      fields.filter((field) => field.startsWith("worktree ")).map((field) => field.slice(9)),
     ),
   );
 
@@ -34,8 +33,13 @@ export const removeWorkspaceTrees = (
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
     const repository = path.join(directory, "repo.git");
     const names = yield* workspaceIO("discard", () => fs.readdir(directory));
-    const seed = path.join(directory, "seed");
-    let seedRepository: string | undefined;
+    // Creation removes a fork's seed before the workspace becomes owned, so one that remains
+    // belongs to a failed fork and needs manual recovery.
+    if (names.includes("seed"))
+      return yield* workspaceFailure(
+        "recovery",
+        "A fork seed remains; manual recovery is required.",
+      );
     if (record.predecessorWorkspaceId !== undefined) {
       if (
         !validWorkspaceId(record.predecessorWorkspaceId) ||
@@ -52,39 +56,18 @@ export const removeWorkspaceTrees = (
           "recovery",
           "Predecessor ownership or source identity does not match.",
         );
-      seedRepository = path.join(
+      const seedRepository = path.join(
         workspaceDirectory(registry, predecessor.handle.workspaceId),
         "repo.git",
       );
       yield* checkDirectory(seedRepository);
-      const registered = (yield* registrations(seedRepository)).filter((entry) => entry === seed);
-      if (names.includes("seed")) {
-        yield* checkDirectory(seed);
-        const common = (yield* git(seed, [
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-common-dir",
-        ])).trim();
-        if (common !== seedRepository || registered.length !== 1)
-          return yield* workspaceFailure(
-            "recovery",
-            "Seed does not match the expected repository registration.",
-          );
-      } else if (registered.length !== 0) {
-        // A missing directory with a live registration needs manual inspection. Never prune broadly.
+      // A missing directory with a live registration needs manual inspection. Never prune broadly.
+      if ((yield* registrations(seedRepository)).includes(path.join(directory, "seed")))
         return yield* workspaceFailure(
           "recovery",
           "Seed registration remains without its editable tree.",
         );
-      } else seedRepository = undefined;
-    } else if (names.includes("seed")) {
-      return yield* workspaceFailure(
-        "recovery",
-        "Seed predecessor provenance is missing; manual recovery is required.",
-      );
     }
-    // Validate seed provenance before deleting any of this proposal's editable trees.
-    if (seedRepository) yield* git(seedRepository, ["worktree", "remove", "--force", seed]);
     for (const name of names.filter(
       (name) => removedWorker(name) || /^prepare-[a-f0-9-]{36}$/u.test(name),
     )) {
@@ -93,19 +76,10 @@ export const removeWorkspaceTrees = (
       yield* git(repository, ["worktree", "remove", "--force", tree]);
     }
     const remaining = yield* workspaceIO("discard", () => fs.readdir(directory));
-    if (
-      remaining.some(
-        (name) => name === "seed" || removedWorker(name) || name.startsWith("prepare-"),
-      )
-    )
+    if (remaining.some((name) => removedWorker(name) || name.startsWith("prepare-")))
       return yield* workspaceFailure(
         "recovery",
         "Editable workspace trees remain; discard is incomplete.",
-      );
-    if (seedRepository && (yield* registrations(seedRepository)).includes(seed))
-      return yield* workspaceFailure(
-        "recovery",
-        "Seed registration remains; discard is incomplete.",
       );
   });
 
@@ -114,12 +88,7 @@ const inspectRegistry = (registry: string) =>
     yield* checkDirectory(registry, true);
     const stat = yield* workspaceIOIfPresent("registry", () => fs.lstat(registry));
     if (!stat) return undefined;
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      (stat.mode & 0o077) !== 0 ||
-      (process.getuid && stat.uid !== process.getuid())
-    )
+    if (!stat.isDirectory() || stat.isSymbolicLink() || isSharedOrForeign(stat))
       return yield* workspaceFailure(
         "registry",
         "Workspace registry path or permissions are invalid.",
@@ -136,7 +105,7 @@ export const listWorkspaceRecords = (registry: string) =>
     const names = yield* workspaceIO("registry", () => fs.readdir(registry));
     for (const workspaceId of names.filter(validWorkspaceId).sort()) {
       const record = yield* readWorkspaceRecord(registry, workspaceId).pipe(
-        Effect.catchTag("WorkspaceError", () => Effect.succeed(undefined)),
+        Effect.catchTag("WorkspaceError", () => Effect.void),
       );
       if (record) records.push(record);
       else

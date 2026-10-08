@@ -26,9 +26,15 @@ test("getBashWarnings flags option tokens and absolute system paths, not lookali
     "/bin/rm -Rf dir",
     "echo 127.0.0.1 > /etc/hosts",
     "printf x >> '/usr/local/etc/app.conf'",
+    "git clean --force",
+    "git clean -e '*.log' -fd",
   ])
     assert.equal(getBashWarnings(command).length, 1, command);
   for (const command of [
+    "git clean --dry-run -d",
+    "git clean -nd",
+    "git clean -fn",
+    "docker run --rm image pytest -rf tests",
     "rm notes-rf.md",
     "rm -r build",
     "rm build-r.log",

@@ -2,7 +2,7 @@ import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter, clipToWidth, spinnerFrameAt } from "pi-cosmic-ui/manager";
-import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
+import { configuredKeyLabels } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
   confirmedReservedShortcut,
@@ -52,9 +52,6 @@ export interface TaskManagerOptions {
 }
 
 const TASK_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
-
-const statePresentation = (task: BackgroundTaskView, frame: number) =>
-  taskStatePresentation(task.state, frame);
 
 const duration = (task: BackgroundTaskView, now: number): string =>
   formatElapsed((task.endedAt ?? now) - task.startedAt);
@@ -222,16 +219,10 @@ export class TaskManagerComponent implements Component {
     selected: BackgroundTaskView | undefined,
   ): string {
     const contentWidth = Math.max(0, width - 2);
-    const key = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
-      filterReservedKeyLabel(
-        this.options.keybindingLabel?.(id, fallback) || fallback,
-        TASK_MANAGER_SHORTCUTS,
-        fallback,
-      );
-    const configuredNavigation = this.options.keybindingLabel
-      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-      : undefined;
-    const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
+    const { key, navigation } = configuredKeyLabels(
+      this.options.keybindingLabel,
+      TASK_MANAGER_SHORTCUTS,
+    );
     const escape = key("tui.select.cancel", "Esc");
     const inspect = `${key("tui.select.confirm", "Enter")} Inspect`;
     const back =
@@ -285,7 +276,7 @@ export class TaskManagerComponent implements Component {
       ? this.options.theme.fg(this.shell.state.pane === "list" ? "accent" : "muted", ">")
       : " ";
     const frame = spinnerFrameAt(this.options.getNow());
-    const presentation = statePresentation(task, frame);
+    const presentation = taskStatePresentation(task.state, frame);
     const glyph = this.options.theme.fg(presentation.color, presentation.glyph);
     const identity = taskDisplayName(task);
     const text =
@@ -327,7 +318,7 @@ export class TaskManagerComponent implements Component {
 
   private detailLines(task: BackgroundTaskView | undefined): string[] {
     if (!task) return [this.options.theme.fg("dim", "No background tasks yet")];
-    const presentation = statePresentation(task, spinnerFrameAt(this.options.getNow()));
+    const presentation = taskStatePresentation(task.state, spinnerFrameAt(this.options.getNow()));
     const lines = [
       listDetailHeading(
         this.options.theme,

@@ -7,7 +7,7 @@ import {
 import { expandedSection, withCodePreviewShell } from "pi-code-previews";
 import { Container } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
-import { isTypedReceipt } from "./compact-heading.ts";
+import { isTypedReceipt, requestedRunIds, type SummaryArguments } from "./compact-heading.ts";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
@@ -34,11 +34,15 @@ import {
   type SubagentToolInput,
   type SubagentToolParameters,
 } from "./schema.ts";
-import { countLabel, toPiToolOutputSchema } from "pi-cosmic-core";
+import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 
 // Pi renders calls while arguments stream in, so any field may still be absent.
 const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
+
+/** A call's targets, counted as execution reads them. */
+const targetsLabel = (args: SummaryArguments) =>
+  countLabel(requestedRunIds(args)?.length ?? 0, "subagent");
 
 type SubagentToolSpec<N extends SubagentToolName> = Pick<
   ToolDefinition<SubagentToolParameters<N>>,
@@ -103,8 +107,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     label: "Subagent Status",
     description:
       "Inspect up to twelve specific subagent run IDs, including each run's capabilities. includeDeliveredReports reads back the latest retained report without another notification or completion claim; competing ownership still redacts it.",
-    renderCall: (args, theme) =>
-      renderSubagentCall(`Inspect ${countLabel(args.runIds?.length ?? 0, "subagent")}`, "", theme),
+    renderCall: (args, theme) => renderSubagentCall(`Inspect ${targetsLabel(args)}`, "", theme),
   },
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
@@ -120,22 +123,14 @@ const TOOL_SPECS: SubagentToolSpecs = {
         "",
         theme,
       ),
-    lease: (presentation, args) =>
-      presentation.beginAwait(
-        [...new Set(args.runIds.map((id) => id.trim()).filter(Boolean))],
-        args.until,
-      ),
+    lease: (presentation, args) => presentation.beginAwait(requestedRunIds(args) ?? [], args.until),
   },
   [SUBAGENT_TOOL_NAME.send]: {
     label: "Send Subagent Guidance",
     description:
       "Send the same guidance message to one or more running subagents. Mixed-target calls report each success and failure.",
     renderCall: (args, theme) =>
-      renderSubagentCall(
-        `Guide ${countLabel(args.runIds?.length ?? 0, "subagent")}`,
-        quoted(args.message),
-        theme,
-      ),
+      renderSubagentCall(`Guide ${targetsLabel(args)}`, quoted(args.message), theme),
   },
   [SUBAGENT_TOOL_NAME.reply]: {
     label: "Reply to Subagent",
@@ -157,11 +152,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       const verb = args.action ?? "manage";
       const action = `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)}`;
       const message = args.action === "resume" ? quoted(args.message) : "";
-      return renderSubagentCall(
-        `${action} ${countLabel(args.runIds?.length ?? 0, "subagent")}`,
-        message,
-        theme,
-      );
+      return renderSubagentCall(`${action} ${targetsLabel(args)}`, message, theme);
     },
   },
   [SUBAGENT_TOOL_NAME.rename]: {
@@ -215,13 +206,8 @@ export function registerSubagentTools(
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
-    const releaseSafely = () => {
-      try {
-        release();
-      } catch {
-        // Presentation teardown cannot replace the tool outcome.
-      }
-    };
+    // Presentation teardown cannot replace the tool outcome.
+    const releaseSafely = () => invokeHostCallback(release, undefined);
     let pending: Promise<A>;
     try {
       pending = operation();
@@ -246,19 +232,18 @@ export function registerSubagentTools(
     return owned;
   };
 
-  // Native codemode may batch the root orchestration tools; proxied child registrations stay
-  // model-only. Ultracode gates only subagent_workflow.
-  const scriptsEnabled = !runtime.proxyCall;
   const register = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
-    // Judgment tools remain model-issued; the structured contract stays for model calls too.
-    const rootContract = isSubagentContractTool(name) && !runtime.proxyCall;
+    // Native codemode may batch the root orchestration tools; proxied child registrations stay
+    // model-only. Ultracode gates only subagent_workflow. Judgment tools remain model-issued;
+    // the structured contract stays for model calls too.
+    const rootContract = !runtime.proxyCall && isSubagentContractTool(name);
     const scriptable =
-      scriptsEnabled &&
-      (rootContract ||
-        name === SUBAGENT_TOOL_NAME.models ||
-        name === SUBAGENT_TOOL_NAME.list ||
-        name === SUBAGENT_TOOL_NAME.rename);
+      rootContract ||
+      (!runtime.proxyCall &&
+        (name === SUBAGENT_TOOL_NAME.models ||
+          name === SUBAGENT_TOOL_NAME.list ||
+          name === SUBAGENT_TOOL_NAME.rename));
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
       ...(scriptable &&

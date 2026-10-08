@@ -1,7 +1,6 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Text, type SettingItem } from "@earendil-works/pi-tui";
-import * as Predicate from "effect/Predicate";
+import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Result from "effect/Result";
 import {
   failureMessage,
@@ -13,18 +12,13 @@ import {
   type ExtensionSubcommand,
 } from "pi-cosmic-core";
 import { settingsSubcommand } from "pi-cosmic-ui/boundary/host-settings-command";
-import {
-  createSettingsListSurface,
-  managerSettingsTheme,
-  settingsRowGenerations,
-} from "pi-cosmic-ui/manager/settings-surface";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import type { BackgroundTaskProjectionBridge } from "../boundary/host-ui.ts";
 import type { BackgroundTaskConfig } from "../config/schema.ts";
 import { BackgroundTaskConfigError, type BackgroundTaskSettingsLocation } from "../config/store.ts";
-import { BACKGROUND_TASK_SETTINGS, backgroundTaskSettingValue } from "../config/options.ts";
+import { BACKGROUND_TASK_SETTINGS } from "../config/options.ts";
 import { TaskManagerComponent } from "../ui/manager.ts";
 import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import { BackgroundTaskNotFoundError } from "../task/errors.ts";
@@ -53,12 +47,10 @@ export interface TaskSettingsActions {
 
 export type TaskCommandActions = TaskManagerActions & TaskSettingsActions;
 
-type TaskManagerActionFailure = Error | undefined;
-
 function notifyActionFailure(
   ctx: ExtensionCommandContext,
   action: "stop the task" | "clear finished tasks",
-  failure: TaskManagerActionFailure,
+  failure: Error | undefined,
 ): void {
   const reason =
     failure instanceof BackgroundTaskNotFoundError
@@ -83,9 +75,8 @@ function openTaskManager(
       );
     return Promise.resolve();
   }
-  return openOwnedSurfacePromise<undefined>(ctx, {
+  return openCommandSurface(ctx, {
     placement: "screen",
-    closedValue: undefined,
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
       const manager = new TaskManagerComponent({
         theme,
@@ -124,9 +115,6 @@ function openTaskManager(
         },
       };
     },
-  }).then((outcome) => {
-    // A failed opening rejects the command, as Pi's own custom Promise does.
-    if (outcome._tag === "Failed") throw outcome.cause;
   });
 }
 
@@ -159,6 +147,9 @@ type TaskSettingsScope = (typeof SCOPES)[number]["name"];
 
 /** A scope that sets no value of its own takes the global one, or the default. */
 const INHERIT = "inherit";
+/** A setting's value in this session; a configured value such as shellPath can carry controls. */
+const sessionValue = (config: BackgroundTaskConfig, id: keyof BackgroundTaskConfig) =>
+  sanitizeTerminalLine(String(config[id] ?? ""));
 const UNTRUSTED = "Trust this project before changing its background task settings";
 
 /** One scope's own values, or why its file couldn't be read. */
@@ -185,26 +176,14 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
   // Each scope's own value as last read or written, so an edited row shows what its file holds.
   const known = new Map<string, string>();
 
-  const openPicker = (
-    ctx: ExtensionCommandContext,
-    session: {
-      readonly apply: (
-        id: string,
-        value: string,
-        show?: (value: string) => boolean | void,
-        scope?: string,
-      ) => Promise<void>;
-    },
-    config: BackgroundTaskConfig,
-    files: ReadonlyArray<ScopeFile>,
-  ) => {
+  const pickerItems = (config: BackgroundTaskConfig, files: ReadonlyArray<ScopeFile>) => {
     const settingRows = (scope: TaskSettingsScope, own: Partial<BackgroundTaskConfig>) =>
       BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0).map((setting) => {
         const stored = own[setting.id];
         const currentValue = stored === undefined ? INHERIT : sanitizeTerminalLine(String(stored));
         known.set(rowKey(scope, setting.id), currentValue);
         const values = [...setting.values, INHERIT];
-        const effective = sanitizeTerminalLine(backgroundTaskSettingValue(config, setting.id));
+        const effective = sessionValue(config, setting.id);
         return {
           id: rowKey(scope, setting.id),
           label: `${scopeLabel(scope)} · ${setting.label}`,
@@ -213,44 +192,11 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
           values: values.includes(currentValue) ? values : [currentValue, ...values],
         };
       });
-    const items: SettingItem[] = files.flatMap((file) =>
+    return files.flatMap((file): SettingItem[] =>
       "problem" in file
         ? [unavailableScopeRow(file.scope, file.problem)]
         : settingRows(file.scope, file.own),
     );
-    const generations = settingsRowGenerations();
-    return openOwnedSurfacePromise<undefined>(ctx, {
-      placement: "inline",
-      closedValue: undefined,
-      create: ({ tui, theme, keybindings, finish }) =>
-        createSettingsListSurface({
-          header: new Text(theme.fg("accent", theme.bold("Background Tasks settings")), 1, 1),
-          items,
-          height: Math.min(12, items.length + 2),
-          listTheme: managerSettingsTheme(theme),
-          onChange: (rowId, value, list) => {
-            const [scope = "global", id = rowId] = rowId.split(":");
-            const generation = generations.begin(rowId);
-            void session.apply(
-              id,
-              value,
-              (shown) => {
-                if (!generations.isCurrent(rowId, generation)) return false;
-                list.updateValue(rowId, shown);
-                tui.requestRender();
-                return true;
-              },
-              scope,
-            );
-          },
-          onCancel: () => finish(undefined),
-          matchesKeybinding: Predicate.isFunction(keybindings?.matches)
-            ? (data, bindingId) => keybindings.matches(data, bindingId)
-            : undefined,
-          requestRender: () => tui.requestRender(),
-          dim: (text) => theme.fg("dim", text),
-        }).surface,
-    });
   };
 
   return settingsSubcommand<BackgroundTaskConfig>({
@@ -262,9 +208,7 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
       description: setting.description,
       ...(setting.values.length > 0 && { values: [...setting.values, INHERIT] }),
       openValues: setting.openValues,
-      // Help prints this; a configured value such as shellPath can carry terminal controls.
-      currentValue: (config: BackgroundTaskConfig) =>
-        sanitizeTerminalLine(backgroundTaskSettingValue(config, setting.id)),
+      currentValue: (config: BackgroundTaskConfig) => sessionValue(config, setting.id),
     })),
     examples: ["maxRunning 16", "project maxWaitSeconds 60", `project maxRunning ${INHERIT}`],
     notes: () => [
@@ -281,8 +225,7 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
       return [
         "Background Tasks settings (as this session started)",
         ...BACKGROUND_TASK_SETTINGS.map(
-          (setting) =>
-            `  ${setting.id} = ${sanitizeTerminalLine(backgroundTaskSettingValue(config, setting.id)) || "default"}`,
+          (setting) => `  ${setting.id} = ${sessionValue(config, setting.id) || "default"}`,
         ),
       ].join("\n");
     },
@@ -331,7 +274,7 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
           },
         );
       return Promise.all(scopes.map(readScope)).then(
-        (files) => openPicker(ctx, session, config, files),
+        (files) => session.picker(pickerItems(config, files)),
         () => ({ _tag: "Blocked" as const }),
       );
     },

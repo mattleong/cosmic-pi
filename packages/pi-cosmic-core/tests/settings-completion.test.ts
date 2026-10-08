@@ -9,6 +9,7 @@ import {
   InvalidSettingError,
   sectionSettingValue,
 } from "../src/settings-completion.ts";
+import { dispatchSettingsCommand } from "../src/settings-dispatch.ts";
 
 describe("sectionSettingValue", () => {
   it("creates a missing section without disturbing sibling keys", () => {
@@ -92,6 +93,16 @@ describe("completeSettingsArguments", () => {
         description: "Toggle usage.",
       },
     ]);
+  });
+
+  it("completes a value with the canonical id that dispatch accepts", () => {
+    const [choice] = completeSettingsArguments("USAGE.Enabled f", descriptors) ?? [];
+    expect(choice?.value).toBe("usage.enabled false");
+    expect(dispatchSettingsCommand(choice?.value ?? "", descriptors)).toEqual({
+      _tag: "Apply",
+      id: "usage.enabled",
+      value: "false",
+    });
   });
 
   it("returns null when nothing matches, never an empty array", () => {

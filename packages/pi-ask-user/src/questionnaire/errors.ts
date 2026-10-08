@@ -13,7 +13,7 @@ export class AskUserHostError extends Schema.TaggedError<AskUserHostError>()("As
 export class AskUserAsyncError extends Schema.TaggedError<AskUserAsyncError>()(
   "AskUserAsyncError",
   {
-    reason: Schema.Literals(["busy", "unavailable", "not-found", "invalid-control"]),
+    reason: Schema.Literals(["busy", "not-found", "invalid-control"]),
     message: Schema.String,
   },
 ) {}

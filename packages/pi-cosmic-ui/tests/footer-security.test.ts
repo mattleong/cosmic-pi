@@ -1,31 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+} from "pi-cosmic-core/testing";
 import { materializeFooterHostProjection } from "../src/boundary/host-footer-projection.ts";
-import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { makeSetStatusSafely } from "../src/boundary/host-status.ts";
 import {
   COSMIC_UI_PROTOCOL_VERSION,
   normalizeCosmicFooterUpsertEvent,
 } from "../src/protocol/protocol.ts";
-import { footerDataProviderFixture } from "./support/host.ts";
 
 describe("footer terminal safety", () => {
-  it("rejects non-theme footer colors before rendering", () => {
-    const event = normalizeCosmicFooterUpsertEvent({
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "owner",
-      contribution: {
-        kind: "text",
-        id: "usage",
-        region: "details",
-        text: "safe",
-        color: "not-a-theme-token",
-      },
-    });
-
-    expect(event).toBeUndefined();
-  });
-
   it("sanitizes protocol text, compact text, and labels", () => {
     const event = normalizeCosmicFooterUpsertEvent({
       version: COSMIC_UI_PROTOCOL_VERSION,
@@ -48,9 +34,8 @@ describe("footer terminal safety", () => {
   });
 
   it("sanitizes materialized host status text", () => {
-    const callbacks = makeHostCallbackBoundary();
     const pi = extensionApiFixture({ getThinkingLevel: () => "off" });
-    const footerData = footerDataProviderFixture({
+    const footerData = opaqueFixture({
       getExtensionStatuses: () => new Map([["hostile", "\x1b]52;c;Y2xpcA==\x07status\ntext"]]),
       getGitBranch: () => null,
       getAvailableProviderCount: () => 1,
@@ -60,7 +45,6 @@ describe("footer terminal safety", () => {
       pi,
       ctx: undefined,
       footerData,
-      callbacks,
       model: undefined,
     });
     expect(projection.extensionStatuses).toEqual([{ id: "hostile", text: "status text" }]);

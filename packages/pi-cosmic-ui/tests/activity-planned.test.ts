@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { plainTheme } from "pi-cosmic-core/testing";
 import { activityStatus } from "../src/activity/attention.ts";
-import { groupedDetail } from "../src/activity/grouped-detail.ts";
 import {
   groupedActivityTree,
   phaseRowId,
@@ -15,10 +13,16 @@ import {
   type ActivityRow,
 } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import { activityGlyph } from "../src/activity/row-line.ts";
+import { activityMark } from "../src/activity/row-line.ts";
 import { activityWidgetHeight, activityWidgetSections } from "../src/activity/widget-projection.ts";
 import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
-import { memberRow, mountActivity, withStatus, workflowRow } from "./support/activity.ts";
+import {
+  groupedDetailOf,
+  memberRow,
+  mountActivity,
+  withStatus,
+  workflowRow,
+} from "./support/activity.ts";
 
 /** A declared agent its workflow hasn't called; a finished workflow never will. */
 const planned = (
@@ -274,7 +278,7 @@ describe("planned workflow agents", () => {
     const plan = planned("planned", workflow, "Review");
     const queued = memberRow("queued", workflow, "Review", "pending");
     const unrun = planned("unrun", withStatus(workflow, "done"), "Review");
-    expect(activityGlyph(plan, 0)).toBe(activityGlyph(plan, SPINNER_FRAME_MS));
+    expect(activityMark(plan, 0)).toEqual(activityMark(plan, SPINNER_FRAME_MS));
     const statuses = [plan, queued, unrun].map(activityStatus);
     expect(new Set(statuses).size).toBe(3);
   });
@@ -344,18 +348,10 @@ describe("planned workflow agents", () => {
       phases: [{ title: "Map" }, { title: "Review", planned: 7 }],
     });
     const rows = [workflow, planned("review-1", workflow, "Review")];
-    const text = groupedDetail({
-      selected: groupedActivityTree(rows).find(
-        (entry) => entry.type === "phase" && entry.title === "Review",
-      ),
+    const text = groupedDetailOf(
       rows,
-      theme: plainTheme,
-      focused: true,
-      now: 0,
-      loaded: undefined,
-      actionPage: 0,
-      technical: false,
-    });
+      (entry) => entry.type === "phase" && entry.title === "Review",
+    );
     expect(text).toMatch(count(7));
   });
 });
@@ -400,16 +396,7 @@ describe("workflow narrator line", () => {
       for (const line of renderActivityWidget(rows, width, 8))
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     // Only the widget renders it as a line; the manager keeps it in the workflow detail.
-    const text = groupedDetail({
-      selected: groupedActivityTree(rows).find((entry) => entry.type === "workflow"),
-      rows,
-      theme: plainTheme,
-      focused: true,
-      now: 0,
-      loaded: undefined,
-      actionPage: 0,
-      technical: false,
-    });
+    const text = groupedDetailOf(rows, (entry) => entry.type === "workflow");
     expect(text).toContain("Reviewing every call site");
   });
 });

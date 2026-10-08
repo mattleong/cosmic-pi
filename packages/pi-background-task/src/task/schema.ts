@@ -2,9 +2,9 @@ import * as Schema from "effect/Schema";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "./bounds.ts";
 
 /*
- * Pure owner of the task contract. The shared member schemas are part of the frozen v1 Code Mode
- * output contract: their field and literal order drives guest output key order, the model-facing
- * catalog, and compact counter order. Domain-only fields are intersected locally in `model.ts`.
+ * Pure owner of the task contract. Persisted details and the native result contract share these
+ * member schemas: their field and literal order drives the declared output schema and compact
+ * counter order. Domain-only fields are intersected locally in `model.ts`.
  */
 
 export const BACKGROUND_TASK_ACTIONS = [
@@ -46,7 +46,7 @@ export const BackgroundTaskSnapshotSchema = Schema.Struct({
   logCursor: Schema.Natural,
   droppedLogBytes: Schema.Natural,
 });
-export const BackgroundTaskSnapshotsSchema = Schema.Array(BackgroundTaskSnapshotSchema).check(
+const BackgroundTaskSnapshotsSchema = Schema.Array(BackgroundTaskSnapshotSchema).check(
   Schema.isMaxLength(BOUNDS.maxSnapshots),
 );
 export const BackgroundLogMetadataSchema = Schema.Struct({
@@ -107,7 +107,7 @@ export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("wait"),
     wait: BackgroundTaskWaitResultSchema,
-    // Beside the frozen wait member, so the v1 Code Mode output never carries it.
+    // Beside the shared wait member, which the native contract reuses unchanged.
     appliedWaitSeconds: Schema.optionalKey(
       Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: BOUNDS.maxWaitSeconds })),
     ),

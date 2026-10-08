@@ -5,9 +5,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   initTheme,
-  ModelRuntime,
   SessionManager,
-  SettingsManager,
   ToolExecutionComponent,
   type AgentSession,
   type CreateAgentSessionRuntimeFactory,
@@ -21,9 +19,13 @@ import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { opaqueFixture } from "pi-cosmic-core/testing";
 import { registerCodePreviewReplay } from "../../index";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { drawToolRow } from "../../testing";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { step } from "../support/effect-test";
+import { QUIET_RESOURCES } from "pi-cosmic-core/testing/sdk";
+import { offlineModels } from "../support/sdk-session";
+import { quietSettings } from "pi-cosmic-core/testing/sdk";
+import { setPlainPreviewSettings } from "../support/renderer-host";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -57,17 +59,8 @@ const authority = (session: AgentSession) => ({
   tools: session.getAllTools(),
 });
 const setStyle = (style: "preview" | "compact") =>
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: style,
-    toolCallTiming: false,
-    syntaxHighlighting: false,
-  });
-const draw = (row: ToolExecutionComponent, expanded = false) => {
-  row.setExpanded(expanded);
-  row.invalidate();
-  return row.render(180).join("\n");
-};
+  setPlainPreviewSettings({ toolCallCollapsedStyle: style });
+const draw = (row: ToolExecutionComponent, expanded = false) => drawToolRow(row, expanded, 180);
 
 /** Reconstruct exclusively from SDK-restored messages, not the fixture inputs. */
 function historicalRows(session: AgentSession) {
@@ -155,19 +148,8 @@ it.live(
       const sessionFile = persisted.getSessionFile();
       assert.ok(sessionFile);
       assert.equal(yield* fs.exists(sessionFile), true);
-      const models = yield* step(() =>
-        ModelRuntime.create({
-          authPath: `${directory}/auth.json`,
-          modelsPath: null,
-          modelsStorePath: `${directory}/models.json`,
-          refreshOnCreate: false,
-          allowModelNetwork: false,
-        }),
-      );
-      const settings = SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: false },
-      });
+      const models = yield* offlineModels(directory);
+      const settings = quietSettings();
       let executions = 0;
       let observedArgs: unknown;
       let observedResult: unknown;
@@ -215,10 +197,7 @@ it.live(
                 modelRuntime: models,
                 settingsManager: settings,
                 resourceLoaderOptions: {
-                  noSkills: true,
-                  noPromptTemplates: true,
-                  noThemes: true,
-                  noContextFiles: true,
+                  ...QUIET_RESOURCES,
                   extensionFactories: [
                     {
                       name: "fixture-owner",

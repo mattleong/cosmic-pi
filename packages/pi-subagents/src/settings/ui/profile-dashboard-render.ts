@@ -1,8 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn } from "@earendil-works/pi-tui";
 import { managerTabs } from "pi-cosmic-ui/manager";
-import { framedFill, framedScreen } from "pi-cosmic-ui/manager/list-detail-shell";
-import { profileFrame } from "./profile-style.ts";
+import { framedFill, framedScreen, listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 
 /** Framed children share the dashboard's outer border; plain dialogs sit inside it. */
 export const profileDashboardChildHeight = (height: number, framed = true): number =>
@@ -22,7 +21,7 @@ export function renderProfileDashboard(
   const width = Math.max(0, Math.floor(options.width));
   const height = Math.max(0, Math.floor(options.height));
   const inner = Math.max(0, width - 2);
-  const frame = profileFrame(options.theme);
+  const frame = listDetailFrame(options.theme);
   const tab = (id: "session" | "saved", label: string) => {
     const active = state.tab === id;
     const text = `${active ? "[" : " "}${label}${active ? "]" : " "}`;

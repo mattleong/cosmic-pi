@@ -19,7 +19,7 @@ type ToolTimingRenderContext = ToolTimingUpdateContext & {
   lastComponent: Component | undefined;
 };
 
-export type TimingState = RendererState & {
+type TimingState = RendererState & {
   codePreviewTimingStartedAt?: number | undefined;
   codePreviewTimingEndedAt?: number | undefined;
   codePreviewTimingCancel?: (() => void) | undefined;
@@ -30,7 +30,7 @@ export type TimingState = RendererState & {
 /** Default timing threshold; native Code Mode explicitly opts into shorter measured durations. */
 export const TIMING_VISIBLE_MS = 1_000;
 
-type ToolCallTiming = {
+export type ToolCallTiming = {
   label: string;
   duration: string;
   elapsedMs: number;
@@ -59,7 +59,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
     showShortTiming?: boolean | undefined;
     animateWithoutTiming?: boolean;
     scheduleAnimation?: CompactAnimationScheduler | undefined;
-  } = {},
+  },
 ): ToolCallTiming | undefined {
   const state = timingState(context);
   if (!context.isPartial) clearToolCallTimingInterval(state);
@@ -82,12 +82,10 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
 
   const startedAt = state.codePreviewTimingStartedAt;
   if (startedAt === undefined) return undefined;
-  if (context.isPartial === true && options.animate !== false)
+  // A settled call's animation was already cleared above.
+  if (!context.isPartial) state.codePreviewTimingEndedAt ??= synchronousNow();
+  else if (options.animate !== false)
     ensureToolCallAnimation(state, context.invalidate, options.scheduleAnimation);
-  else if (context.isPartial === false) {
-    state.codePreviewTimingEndedAt ??= synchronousNow();
-    clearToolCallTimingInterval(state);
-  }
 
   if (options.formatLabel === false) return undefined;
   const running = context.isPartial === true;

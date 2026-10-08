@@ -4,11 +4,7 @@ import * as Predicate from "effect/Predicate";
 import { capturePreviewHostTools } from "../boundary/host-tool-renderers";
 import { withCodePreviewShell } from "../tools/cooperative-tools";
 import { isSameExtensionSource } from "../tools/preview-admission";
-import {
-  rendererFields,
-  retainedCodePreviewRenderers,
-  type RetainedRendererOwner,
-} from "./renderer-row";
+import { rendererFields, RetainedRendererGate, retainedCodePreviewRenderers } from "./renderer-row";
 
 export interface CodePreviewReplayOptions {
   /** Unique extension command registered by this same factory, used as the ownership anchor. */
@@ -40,31 +36,19 @@ export function registerCodePreviewReplay(
   const names = new Set(options.tools);
   const staged = new Map<string, ToolRenderers>();
   const selected = new Map<string, ToolRenderers>();
-  const refreshers = new Set<() => void>();
-  let live = Predicate.isFunction(pi.registerToolRenderer);
-  let ready = false;
-  const owner: RetainedRendererOwner = {
-    get live() {
-      return live;
-    },
-    get ready() {
-      return ready;
-    },
-    subscribe(refresh) {
-      if (live && !ready) refreshers.add(refresh);
-    },
-  };
-  if (live)
+  const gate = new RetainedRendererGate();
+  if (Predicate.isFunction(pi.registerToolRenderer))
     pi.registerToolRenderer((name, next) => {
       const downstream = rendererFields(next());
-      if (!live || ready || !names.has(name) || downstream) return downstream;
+      if (!gate.live || gate.ready || !names.has(name) || downstream) return downstream;
       // Before registration this preserves raw evidence only, not an unverified tool identity.
-      return retainedCodePreviewRenderers(name, undefined, owner, () => selected.get(name));
+      return retainedCodePreviewRenderers(name, undefined, gate, () => selected.get(name));
     });
+  else gate.retire();
 
   const shell: typeof withCodePreviewShell = (tool, shellOptions = {}) => {
     const wrapped = withCodePreviewShell(tool, shellOptions);
-    if (live && !ready && names.has(tool.name)) {
+    if (gate.live && !gate.ready && names.has(tool.name)) {
       const replay = withCodePreviewShell(tool, { ...shellOptions, selfShell: true });
       // SAFETY: The anchored tool name preserves the specialized args/details/state correlation.
       // Only public renderer fields survive; no execution definition is retained.
@@ -74,15 +58,14 @@ export function registerCodePreviewReplay(
     return wrapped;
   };
   const retire = () => {
-    live = false;
+    gate.retire();
     staged.clear();
     selected.clear();
-    refreshers.clear();
   };
   return {
     shell,
     publish: () => {
-      if (!live || ready) return;
+      if (!gate.live || gate.ready) return;
       const host = invokeHostCallback(
         () => capturePreviewHostTools(pi, options.command),
         undefined,
@@ -91,12 +74,10 @@ export function registerCodePreviewReplay(
         if (host && isSameExtensionSource(host.tools.get(name), host.previewSource))
           selected.set(name, renderers);
       staged.clear();
-      ready = true;
-      for (const refresh of refreshers) invokeHostCallback(refresh, undefined);
-      refreshers.clear();
+      gate.markReady();
     },
     finishStartup: () => {
-      if (!ready) retire();
+      if (!gate.ready) retire();
     },
     retire,
   };

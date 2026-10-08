@@ -22,11 +22,7 @@ function metricCacheGroup(
 ): string {
   const values = CACHE_IDS.flatMap((id) => {
     const entry = entries.find((candidate) => candidate.id === id);
-    if (!entry) return [];
-    const text = contributionText(entry, compact).replace(/^[RW](?=\S)/u, (label) =>
-      label.toLowerCase(),
-    );
-    return [theme.fg("syntaxType", text)];
+    return entry ? [theme.fg("syntaxType", contributionText(entry, compact))] : [];
   });
   return `${theme.fg("syntaxType", "⇄")} ${values.join(theme.fg("dim", " / "))}`;
 }

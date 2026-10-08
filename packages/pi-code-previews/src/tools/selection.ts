@@ -6,6 +6,7 @@ export function getEnabledCodePreviewTools(): Set<CodePreviewToolName> {
   return getEffectiveCodePreviewToolSet(codePreviewSettings.tools, codePreviewSettings);
 }
 
-export function formatEnabledCodePreviewTools(enabled = getEnabledCodePreviewTools()): string {
+export function formatEnabledCodePreviewTools(): string {
+  const enabled = getEnabledCodePreviewTools();
   return formatToolsSettingValue(ALL_CODE_PREVIEW_TOOLS.filter((tool) => enabled.has(tool)));
 }

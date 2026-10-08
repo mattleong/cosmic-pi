@@ -6,7 +6,11 @@ import type {
 import { invokeHostCallback } from "pi-cosmic-core";
 import { codePreviewSettings } from "../config/state";
 import { capturePreviewHostTools, type PreviewHostTools } from "../boundary/host-tool-renderers";
-import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../tools/names";
+import {
+  ALL_CODE_PREVIEW_TOOLS,
+  isCodePreviewToolName,
+  type CodePreviewToolName,
+} from "../tools/names";
 import {
   admitsPreviewSource,
   isBuiltinTool,
@@ -25,24 +29,13 @@ import {
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import type { CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewRendererSession } from "./renderer-contract";
-import {
-  rendererFields,
-  retainedCodePreviewRenderers,
-  type RetainedRendererOwner,
-} from "./renderer-row";
+import { rendererFields, RetainedRendererGate, retainedCodePreviewRenderers } from "./renderer-row";
 import { isThirdPartyPreviewName, thirdPartyAdapter } from "../third-party/registry";
 
 /** An origin token: readiness can change once, but ownership never follows the global slot. */
-export class CodePreviewPresentationOwner implements RetainedRendererOwner {
-  live = true;
-  ready = false;
+export class CodePreviewPresentationOwner extends RetainedRendererGate {
   session: CodePreviewRendererSession | undefined;
-  private readonly refreshers = new Set<() => void>();
   private readonly cancellations = new Set<() => void>();
-
-  subscribe(refresh: () => void): void {
-    if (this.live && !this.ready) this.refreshers.add(refresh);
-  }
 
   readonly scheduleAnimation: CompactAnimationScheduler = (interval, tick) => {
     const scheduler = this.scheduler;
@@ -76,17 +69,14 @@ export class CodePreviewPresentationOwner implements RetainedRendererOwner {
       collapsedStyle: codePreviewSettings.toolCallCollapsedStyle,
       enabledTools: Object.freeze([...enabled]),
     });
-    this.ready = true;
-    for (const refresh of this.refreshers) invokeHostCallback(refresh, undefined);
-    this.refreshers.clear();
+    this.markReady();
   }
 
-  retire(): void {
-    this.live = false;
+  override retire(): void {
+    super.retire();
     this.scheduler = undefined;
     // Revoke authority and cancel subscriptions synchronously, before Effect scope disposal.
     for (const cancel of this.cancellations) invokeHostCallback(cancel, undefined);
-    this.refreshers.clear();
   }
 }
 
@@ -108,11 +98,11 @@ function select(
   if (!admitsPreviewSource(name, host, ownedTools)) return undefined;
   if (isCorePreviewName(name)) return createBuiltinPreviewRenderers(name, presentation);
   if (name === "codemode")
-    return session.enabledTools?.includes("codemode")
+    return session.enabledTools.includes("codemode")
       ? createNativeCodemodeRenderers(session.cwd, presentation)
       : undefined;
   if (name === "tool_search")
-    return session.enabledTools?.includes("tool_search")
+    return session.enabledTools.includes("tool_search")
       ? createNativeToolSearchRenderers(presentation)
       : undefined;
   // Every remaining admitted name is a native MCP tool or resource.
@@ -129,21 +119,26 @@ export function createCodePreviewRendererResolver(
     const downstream = rendererFields(next());
     const owner = currentOwner();
     if (!owner.live || (!isPreviewName(name) && !isThirdPartyPreviewName(name))) return downstream;
-    const session = owner.session;
-    // Rows resolved after readiness are ordinary renderers in Pi's own shell, frozen now.
-    if (owner.ready && session)
-      return (
-        invokeHostCallback(
-          () => select(name, downstream, session, capturePreviewHostTools(pi), ownedTools, false),
-          undefined,
-        ) ?? downstream
+    const selected = (selfShell: boolean) =>
+      invokeHostCallback(
+        () =>
+          owner.session &&
+          select(
+            name,
+            downstream,
+            owner.session,
+            capturePreviewHostTools(pi),
+            ownedTools,
+            selfShell,
+          ),
+        undefined,
       );
+    // Rows resolved after readiness are ordinary renderers in Pi's own shell, frozen now.
+    if (owner.ready && owner.session) return selected(false) ?? downstream;
     const host = invokeHostCallback(() => capturePreviewHostTools(pi), undefined);
     // Prebind discovery may be empty or unavailable. A raw self facade claims no native identity;
     // semantic source admission is deferred until the originating session becomes ready.
-    const deferredAdmission =
-      (isCorePreviewName(name) || name === "codemode" || name === "tool_search") &&
-      !host?.tools.has(name);
+    const deferredAdmission = isCodePreviewToolName(name) && !host?.tools.has(name);
     if (
       !deferredAdmission &&
       (!host ||
@@ -153,14 +148,7 @@ export function createCodePreviewRendererResolver(
       return downstream;
     // Pi fixes a row's shell when it is built, so cold replay keeps a self shell and adopts the
     // first-ready appearance.
-    return retainedCodePreviewRenderers(name, downstream, owner, () =>
-      invokeHostCallback(
-        () =>
-          owner.session &&
-          select(name, downstream, owner.session, capturePreviewHostTools(pi), ownedTools, true),
-        undefined,
-      ),
-    );
+    return retainedCodePreviewRenderers(name, downstream, owner, () => selected(true));
   };
 }
 

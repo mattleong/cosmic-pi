@@ -1,32 +1,15 @@
-import { it } from "@effect/vitest";
 import { expect } from "vitest";
 import * as Effect from "effect/Effect";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import type { WorkspaceError, WorkspaceHandle } from "../../src/workspace/model.ts";
-import { commitRepository, exists, io, temporaryDirectory } from "./fixtures/repository.ts";
+import { exists, failureOf, io, workspaceTarget, workspaceTests } from "./fixtures/repository.ts";
 
-const fixture = <A, E>(test: (root: string) => Effect.Effect<A, E, WorkspaceService>) =>
-  Effect.gen(function* () {
-    const temporary = yield* temporaryDirectory("pi-worktree-unchanged-");
-    const root = path.join(temporary, "source");
-    const agent = path.join(temporary, "agent");
-    yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
-    yield* commitRepository(root, [
-      ["src/main.ts", "baseline\n"],
-      ["other.txt", "other\n"],
-      [".gitignore", "ignored.ts\n"],
-    ]);
-    return yield* test(root).pipe(
-      Effect.provide(WorkspaceService.layer({ agentDirectory: agent })),
-    );
-  });
-
-const target = (handle: WorkspaceHandle) => ({
-  workspaceId: handle.workspaceId,
-  ownerId: handle.ownerId,
-  processCleanupConfirmed: true as const,
-});
+const test = workspaceTests([
+  ["src/main.ts", "baseline\n"],
+  ["other.txt", "other\n"],
+  [".gitignore", "ignored.ts\n"],
+]);
 
 /** Runs the discard of a worker found unchanged, as the workspace's coordinator does. */
 const confirmed = (discard: Effect.Effect<void, WorkspaceError>) => discard.pipe(Effect.as(true));
@@ -47,43 +30,27 @@ const workerAfter = (root: string, change: WriterChange) =>
 const expectKept = (handle: WorkspaceHandle) =>
   Effect.gen(function* () {
     const service = yield* WorkspaceService;
-    expect((yield* service.inspect(target(handle))).status).toBe("active");
+    expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("active");
     expect(yield* exists(path.join(handle.cwd, "src/main.ts"))).toBe(true);
   });
 
-it.live(
-  "discards a worker that holds nothing beyond its baseline",
-  () =>
-    fixture((root) =>
-      Effect.gen(function* () {
-        const service = yield* WorkspaceService;
-        // An empty directory holds no work: no revision could carry it.
-        const handle = yield* workerAfter(root, (cwd) =>
-          fs.mkdir(path.join(cwd, "scratch")).then(() => undefined),
-        );
-        expect(yield* service.discardUnchanged(target(handle), confirmed)).toBe(true);
-        expect((yield* service.inspect(target(handle))).status).toBe("discarded");
-        expect(yield* exists(handle.cwd)).toBe(false);
-      }),
-    ),
-  60_000,
-);
+test("discards a worker that holds nothing beyond its baseline", function* (service, root) {
+  // An empty directory holds no work: no revision could carry it.
+  const handle = yield* workerAfter(root, (cwd) =>
+    fs.mkdir(path.join(cwd, "scratch")).then(() => undefined),
+  );
+  expect(yield* service.discardUnchanged(workspaceTarget(handle), confirmed)).toBe(true);
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("discarded");
+  expect(yield* exists(handle.cwd)).toBe(false);
+});
 
-it.live(
-  "keeps an unchanged worker whose discard its coordinator declines",
-  () =>
-    fixture((root) =>
-      Effect.gen(function* () {
-        const service = yield* WorkspaceService;
-        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-        expect(yield* service.discardUnchanged(target(handle), () => Effect.succeed(false))).toBe(
-          false,
-        );
-        yield* expectKept(handle);
-      }),
-    ),
-  60_000,
-);
+test("keeps an unchanged worker whose discard its coordinator declines", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  expect(
+    yield* service.discardUnchanged(workspaceTarget(handle), () => Effect.succeed(false)),
+  ).toBe(false);
+  yield* expectKept(handle);
+});
 
 const changes: ReadonlyArray<readonly [string, WriterChange]> = [
   ["a modified file", (cwd) => fs.writeFile(path.join(cwd, "src/main.ts"), "changed\n")],
@@ -101,48 +68,24 @@ const changes: ReadonlyArray<readonly [string, WriterChange]> = [
 ];
 
 for (const [name, change] of changes)
-  it.live(
-    `keeps a worker with ${name}`,
-    () =>
-      fixture((root) =>
-        Effect.gen(function* () {
-          const service = yield* WorkspaceService;
-          const handle = yield* workerAfter(root, change);
-          expect(yield* service.discardUnchanged(target(handle), confirmed)).toBe(false);
-          yield* expectKept(handle);
-        }),
-      ),
-    60_000,
+  test(`keeps a worker with ${name}`, function* (service, root) {
+    const handle = yield* workerAfter(root, change);
+    expect(yield* service.discardUnchanged(workspaceTarget(handle), confirmed)).toBe(false);
+    yield* expectKept(handle);
+  });
+
+test("keeps a worker whose check fails", function* (service, root) {
+  // Hardlinks are unsupported, so the snapshot of this worker fails.
+  const handle = yield* workerAfter(root, (cwd) =>
+    fs.link(path.join(cwd, "other.txt"), path.join(cwd, "src/alias.ts")),
   );
+  yield* failureOf(service.discardUnchanged(workspaceTarget(handle), confirmed));
+  yield* expectKept(handle);
+});
 
-it.live(
-  "keeps a worker whose check fails",
-  () =>
-    fixture((root) =>
-      Effect.gen(function* () {
-        const service = yield* WorkspaceService;
-        // Hardlinks are unsupported, so the snapshot of this worker fails.
-        const handle = yield* workerAfter(root, (cwd) =>
-          fs.link(path.join(cwd, "other.txt"), path.join(cwd, "src/alias.ts")),
-        );
-        yield* service.discardUnchanged(target(handle), confirmed).pipe(Effect.flip);
-        yield* expectKept(handle);
-      }),
-    ),
-  60_000,
-);
-
-it.live(
-  "never discards a worker that was frozen for review",
-  () =>
-    fixture((root) =>
-      Effect.gen(function* () {
-        const service = yield* WorkspaceService;
-        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-        yield* service.freeze(target(handle));
-        expect(yield* service.discardUnchanged(target(handle), confirmed)).toBe(false);
-        expect((yield* service.inspect(target(handle))).status).toBe("frozen");
-      }),
-    ),
-  60_000,
-);
+test("never discards a worker that was frozen for review", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* service.freeze(workspaceTarget(handle));
+  expect(yield* service.discardUnchanged(workspaceTarget(handle), confirmed)).toBe(false);
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("frozen");
+});

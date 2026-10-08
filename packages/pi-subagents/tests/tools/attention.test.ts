@@ -5,7 +5,7 @@ import { makeCompactToolDetails } from "../../src/tools/details.ts";
 import { attentionRecoveryText } from "../../src/tools/format.ts";
 import { containedWriter, view } from "../fixtures/run-view.ts";
 
-const question = { requestId: "q", message: "May I edit db/0007.sql?", createdAt: 1 };
+const question = { requestId: "q", message: "May I edit db/0007.sql?" };
 
 it("resolves one attention state per run by precedence", () => {
   for (const [run, kind] of [

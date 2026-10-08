@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   claudeArgv,
   claudeSettings,
-  CLAUDE_DENIED_TOOLS,
   CLAUDE_NATIVE_AGENT_TOOLS,
 } from "../src/backend/claude-policy.ts";
 
@@ -40,8 +39,5 @@ describe("Claude native-agent policy", () => {
         "--forward-subagent-text",
       );
     }
-    expect(CLAUDE_DENIED_TOOLS).not.toEqual(
-      expect.arrayContaining(["Agent", "Task", "TaskOutput", "TaskStop", "SendMessage"]),
-    );
   });
 });

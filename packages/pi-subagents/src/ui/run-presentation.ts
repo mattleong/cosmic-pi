@@ -5,6 +5,16 @@ const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
 export const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
 
+/** Names more than one run shares, so each of those runs also shows its short id. */
+export const duplicateRunNames = (
+  runs: Iterable<{ readonly name: string }>,
+): ReadonlySet<string> => {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const { name } of runs) (seen.has(name) ? duplicates : seen).add(name);
+  return duplicates;
+};
+
 /** A span within this session, or undefined when the clock readings are implausible. */
 const sessionSpan = (later: number, earlier: number | undefined): number | undefined => {
   if (earlier === undefined) return undefined;
@@ -24,7 +34,7 @@ export const formatSessionActivity = (now: number, earlier: number | undefined):
   return span === undefined ? "" : formatRelativeAge(span);
 };
 
-export interface RunRoutePresentationInput {
+interface RunRoutePresentationInput {
   readonly profile?: string | undefined;
   readonly host?: string | undefined;
   readonly runtime?: string | undefined;
@@ -33,16 +43,7 @@ export interface RunRoutePresentationInput {
   readonly openaiFastMode?: boolean | undefined;
 }
 
-export interface RunRoutePresentation {
-  readonly profile: string;
-  readonly hostRuntime: string;
-  readonly model: string;
-  readonly narrowModel: string;
-}
-
-export const projectRunRoutePresentation = (
-  run: RunRoutePresentationInput,
-): RunRoutePresentation => {
+export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const profile = sanitizeTerminalLine(run.profile ?? "generalist");
   const hostRuntime = `${sanitizeTerminalLine(run.host ?? "local")}/${sanitizeTerminalLine(run.runtime ?? "pi")}`;
   const providerModel = sanitizeTerminalLine(run.model);

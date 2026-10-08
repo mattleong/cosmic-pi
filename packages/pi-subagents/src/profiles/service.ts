@@ -1,11 +1,12 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentConfigStore } from "../config/store.ts";
-import { profileDefinition } from "./definitions.ts";
-import { normalizeProfileId, type ProfileDefinition } from "./model.ts";
+import { PROFILE_DEFINITIONS } from "./definitions.ts";
+import { isProfileId, type ProfileDefinition } from "./model.ts";
 import {
   resolveProfilePlan,
   type ProfileResolution,
@@ -69,14 +70,6 @@ export interface SubagentProfileLayerOptions {
   readonly publishSessionOverrides?: ((seed: SessionProfileOverrideSeed) => void) | undefined;
 }
 
-const publishSeed = (
-  publish: ((seed: SessionProfileOverrideSeed) => void) | undefined,
-  snapshot: SessionProfileSnapshot,
-): Effect.Effect<void> =>
-  publish
-    ? Effect.try(() => publish(sessionProfileSeed(snapshot))).pipe(Effect.ignore)
-    : Effect.void;
-
 export const makeSubagentProfileService = (
   config: ResolvedSubagentConfig,
   options: Pick<
@@ -85,48 +78,51 @@ export const makeSubagentProfileService = (
   > = {},
 ): Effect.Effect<SubagentProfileServiceContract> =>
   Effect.gen(function* () {
+    const publishSeed = (snapshot: SessionProfileSnapshot): Effect.Effect<void> => {
+      const publish = options.publishSessionOverrides;
+      return publish
+        ? Effect.try(() => publish(sessionProfileSeed(snapshot))).pipe(Effect.ignore)
+        : Effect.void;
+    };
     const initial = makeSessionProfileSnapshot(config, options.initialSessionOverrides);
-    const state = yield* SynchronizedRef.make(initial);
-    yield* publishSeed(options.publishSessionOverrides, initial);
+    // A plain Ref behind a lock, rather than a SynchronizedRef, lets the state assignment and
+    // the handoff publication commit together while lock waiting stays interruptible.
+    const state = yield* Ref.make(initial);
+    const lock = yield* Semaphore.make(1);
+    yield* publishSeed(initial);
     const commit = <E>(
       transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
     ): Effect.Effect<SessionProfileSnapshot, E> =>
-      SynchronizedRef.updateAndGetEffect(state, (current) =>
-        transition(current).pipe(
-          Effect.tap((next) => publishSeed(options.publishSessionOverrides, next)),
+      lock.withPermit(
+        Ref.get(state).pipe(
+          Effect.flatMap(transition),
+          Effect.tap((next) =>
+            Effect.uninterruptible(Ref.set(state, next).pipe(Effect.andThen(publishSeed(next)))),
+          ),
         ),
       );
-    const withSnapshotAtRevision = <A, E, R>(
-      expectedRevision: number,
-      operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E | SessionProfileConflictError, R> =>
-      SynchronizedRef.modifyEffect(
-        state,
-        (
-          current,
-        ): Effect.Effect<
-          readonly [A, SessionProfileSnapshot],
-          E | SessionProfileConflictError,
-          R
-        > => {
-          if (current.revision !== expectedRevision)
-            return conflict(
-              current,
-              expectedRevision,
-              "Current Session changed while the saved-set write was pending; review it and try again.",
-            );
-          return operation(current).pipe(Effect.map((result) => [result, current] as const));
-        },
-      );
     return SubagentProfileService.of({
-      capture: SynchronizedRef.get(state),
-      definition: (profile) => {
-        const normalized = normalizeProfileId(profile);
-        return normalized ? profileDefinition(normalized) : undefined;
-      },
+      capture: Ref.get(state),
+      definition: (profile) => (isProfileId(profile) ? PROFILE_DEFINITIONS[profile] : undefined),
       resolve: (snapshot, profile, environment) =>
         resolveProfilePlan(profile, snapshot.effectiveConfig, environment),
-      withSnapshotAtRevision,
+      withSnapshotAtRevision: <A, E, R>(
+        expectedRevision: number,
+        operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
+      ) =>
+        lock.withPermit(
+          Effect.flatMap(
+            Ref.get(state),
+            (current): Effect.Effect<A, E | SessionProfileConflictError, R> =>
+              current.revision === expectedRevision
+                ? operation(current)
+                : conflict(
+                    current,
+                    expectedRevision,
+                    "Current Session changed while the saved-set write was pending; review it and try again.",
+                  ),
+          ),
+        ),
       patchSessionProfile: (patch) =>
         commit((current) => patchSessionProfileSnapshot(current, patch)),
       replaceSessionProfiles: (patch) =>

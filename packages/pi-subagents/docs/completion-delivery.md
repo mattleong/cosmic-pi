@@ -121,8 +121,8 @@ Finished observations classify `reportStatus` before redacting text: `available`
   Content callbacks retain tasks, reports, hierarchy, usage, routes, and audits without adding a competing status banner.
   A live panel may hide partial hierarchy, but never owns the tool heading, omissions, questions, writer admission, or cleanup recovery.
 - `contact_parent` uses content-only callbacks and preview bodies (`tools/render-parent.ts`); arbitrary replies remain verbatim, and child transport returns them with the one `PARENT_REPLY_PREFIX`.
-  `tools/compact-parent-summary.ts` supplies pure bounded input summaries for child-only `contact_parent` and supervisor tools through the same token-checked scheduler.
-  Live child subjects use bounded sanitized message or report excerpts, and warning calls retain their full warning as the issue detail.
+  The same module supplies its pure bounded compact summary through the same token-checked scheduler.
+  Live child subjects use bounded sanitized message excerpts, and warning calls retain their full warning as the issue detail.
   Exact owned acknowledgements supply semantic summaries; settled questions, arbitrary replies, and errors use the generic compact row and retain their original rendering on expansion.
 - The four native supervisor tools are served over private MCP, not registered as Pi tool rows; that transport carries results only and has no Pi TUI renderer.
 - Workspace producers record optional UTF-16 display spans while composing output, so expansion can show list records and immutable diff pages without parsing text for deduplication.
@@ -134,7 +134,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
   Codes carry run, launch-slot, profile, or workspace identity.
 - Issue producers author their human-facing messages where each issue is built.
   Messages are one sentence that starts with a subagent, launch, or profile name, never a run or workspace ID.
-  `tools/compact-action-failures.ts` maps failed-target codes and rejected calls to such messages and keeps the service text as detail.
+  `tools/compact-action-failures.ts` maps failed-target codes and rejected calls to such messages, keeps the service text as detail, and owns each code's recovery guidance.
 - Headings (`tools/compact-heading.ts`) name runs by display name and use words, not raw operation tokens.
   Running await headers show only the observed finished/target counter; other running headers use current arguments, except start's observed started/total counter.
   Ordinary headers show one combined domain count without routine IDs, route, writer, or report-history metadata, and requested IDs resolve names only from exact matching cards.
@@ -175,6 +175,7 @@ Finished observations classify `reportStatus` before redacting text: `available`
 
 - `boundary/host-activity.ts` registers the root session's Cosmic UI Activity provider through Cosmic UI's `registerRevisionedActivityProvider`, prompts for action input and dispatches actions.
   Pure `ui/run-activity.ts` projects frozen fleet projections into items, details and the action policy: the complete authorized root tree, including terminal history and completed ancestors, and workflows from `ui/workflow-activity.ts` (see [Workflow internals](workflow-internals.md#activity-projection)).
+  Its actions build on the run-state predicates `ui/run-state.ts` shares with `/subagents`.
   A row's summary never repeats the state Activity draws beside it: it is why a member's call or a run failed, or what the run is doing.
 - Launch leases are published as provider count metadata and await leases as exact-target row metadata, without synthetic selectable rows or moving run ownership.
   Launch counts describe requested work in unsettled start calls, including the interval before run rows exist.

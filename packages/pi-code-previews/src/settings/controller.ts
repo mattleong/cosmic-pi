@@ -1,23 +1,21 @@
-import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
-import { constVoid } from "effect/Function";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import {
-  captureHostSignal,
   formatDisplayPath,
   isProjectTrusted,
   notifyAtHostBoundary,
   type ExtensionSubcommand,
 } from "pi-cosmic-core";
-import { settingsSubcommand } from "pi-cosmic-ui/boundary/host-settings-command";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { openSettingsList, settingsSubcommand } from "pi-cosmic-ui/boundary/host-settings-command";
 import {
-  managerSettingsTheme,
-  createSettingsListSurface,
-} from "pi-cosmic-ui/manager/settings-surface";
-import { hasCodePreviewSessionCapability } from "../application/capability";
-import type { CodePreviewEditableSettingId, CodePreviewSettings } from "../config/schema";
+  hasCodePreviewSessionCapability,
+  rejectInactiveCodePreviewSession,
+} from "../application/capability";
+import {
+  CODE_PREVIEW_SETTING_KEYS,
+  type CodePreviewEditableSettingId,
+  type CodePreviewSettings,
+} from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import {
   formatSettingsSaveError,
@@ -29,19 +27,11 @@ import { createCodePreviewSettingsModel, persistSettingsChange } from "./panel";
 import { SETTING_ITEM_DEFINITIONS, type SettingItemDefinition } from "./ui/registry";
 
 /** Settings a command can change directly; groups, tools, and the reset row are list-only. */
-const SCRIPTED_SETTINGS = Object.entries(SETTING_ITEM_DEFINITIONS).flatMap(
-  ([id, definition]: [string, SettingItemDefinition]) =>
-    id === "settingsFile" || id === "tools" || id === "resetToDefaults"
-      ? []
-      : [
-          {
-            // SAFETY: Every remaining ordinary registry key is an editable settings field.
-            id: id as CodePreviewEditableSettingId,
-            description: definition.description,
-            ...(definition.values && { values: [...definition.values] }),
-          },
-        ],
-);
+const SCRIPTED_SETTINGS = CODE_PREVIEW_SETTING_KEYS.flatMap((id) => {
+  if (id === "tools") return [];
+  const { description, values }: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
+  return [{ id, description, ...(values && { values: [...values] }) }];
+});
 
 /** Settings are known only once a session has loaded them; before that, edits would guess. */
 const config = (): CodePreviewSettings | undefined =>
@@ -82,6 +72,8 @@ export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
       ].join("\n");
     },
     apply: (ctx, id, value) => {
+      // An edit made before the session loads its settings would overwrite the file with guesses.
+      if (!config()) return rejectInactiveCodePreviewSession("settings");
       const previousTheme = codePreviewSettings.shikiTheme;
       const next = updateSetting(codePreviewSettings, id, value);
       // SAFETY: The shell only applies known scripted ids from the ordinary registry.
@@ -92,38 +84,23 @@ export function codePreviewSettingsSubcommand(): ExtensionSubcommand {
         (error) => Result.fail({ message: formatSettingsSaveError(error) }),
       );
     },
-    afterApply: constVoid,
-    open: (ctx) => {
-      const captured = captureHostSignal(ctx);
-      if (captured["_tag"] === "Unavailable") return Promise.resolve({ _tag: "Blocked" as const });
-      return openOwnedSurfacePromise<undefined>(ctx, {
-        placement: "inline",
-        closedValue: undefined,
-        create: ({ tui, theme, keybindings, finish }) => {
-          const model = createCodePreviewSettingsModel({
-            theme,
-            notify: (message, level) => notifyAtHostBoundary(ctx, message, level),
-            done: () => finish(undefined),
-            loadOptions: loadOptions(ctx),
-          });
-          const created = createSettingsListSurface({
-            header: new Text(theme.fg("accent", theme.bold("Code Previews settings")), 1, 1),
-            items: model.items,
-            height: Math.min(20, model.items.length + 2),
-            listTheme: managerSettingsTheme(theme),
-            onChange: model.onChange,
-            onCancel: model.onCancel,
-            matchesKeybinding: Predicate.isFunction(keybindings?.matches)
-              ? (data, id) => keybindings.matches(data, id)
-              : undefined,
-            requestRender: Predicate.isFunction(tui?.requestRender)
-              ? () => tui.requestRender()
-              : undefined,
-            dim: Predicate.isFunction(theme?.fg) ? (text) => theme.fg("dim", text) : (text) => text,
-          });
-          model.bind(created.list);
-          return created.surface;
-        },
+    open: (ctx, session) => {
+      if (!session.config()) return Promise.resolve({ _tag: "Blocked" as const });
+      return openSettingsList(ctx, ({ theme, finish }) => {
+        const model = createCodePreviewSettingsModel({
+          theme,
+          notify: (message, level) => notifyAtHostBoundary(ctx, message, level),
+          done: () => finish(undefined),
+          loadOptions: loadOptions(ctx),
+        });
+        return {
+          header: "Code Previews settings",
+          items: model.items,
+          height: Math.min(20, model.items.length + 2),
+          onChange: model.onChange,
+          onCancel: model.onCancel,
+          onList: model.bind,
+        };
       });
     },
   });

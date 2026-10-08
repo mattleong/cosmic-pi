@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import { collectBoundedText } from "./bounded-text.ts";
 import { JsonHttpError } from "./errors.ts";
 
 export interface JsonHttpRequest<S extends Schema.ConstraintDecoder<unknown, unknown>> {
@@ -17,29 +18,27 @@ export interface JsonHttpRequest<S extends Schema.ConstraintDecoder<unknown, unk
   readonly maxResponseBytes?: number;
 }
 
-export interface JsonHttpAcceptedResponse<A> {
+interface JsonHttpAcceptedResponse<A> {
   readonly _tag: "Accepted";
   readonly status: number;
   readonly body: A;
 }
 
-export interface JsonHttpRejectedResponse {
+interface JsonHttpRejectedResponse {
   readonly _tag: "Rejected";
   readonly status: number;
-  /** Preserved provider response text. It is never included in errors or telemetry. */
-  readonly errorBody: string;
 }
 
-export type JsonHttpResponse<A> = JsonHttpAcceptedResponse<A> | JsonHttpRejectedResponse;
+type JsonHttpResponse<A> = JsonHttpAcceptedResponse<A> | JsonHttpRejectedResponse;
 
-type IsAny<A> = 0 extends 1 & A ? true : false;
+export type IsAny<A> = 0 extends 1 & A ? true : false;
 
 /** A response decoder whose decoded type is concrete rather than `any` or `unknown`. */
 export type JsonHttpResponseSchema<A, R> =
   IsAny<A> extends true ? never : unknown extends A ? never : Schema.ConstraintDecoder<A, R>;
 
 /** A request whose decoded response type is concrete rather than `any` or `unknown`. */
-export type JsonHttpRequestInput<A, R> = JsonHttpRequest<JsonHttpResponseSchema<A, R>>;
+type JsonHttpRequestInput<A, R> = JsonHttpRequest<JsonHttpResponseSchema<A, R>>;
 
 export interface JsonHttpClientContract {
   readonly request: <A, R>(
@@ -54,25 +53,32 @@ export interface JsonHttpClientContract {
 
 const jsonHttpError = (operation: JsonHttpError["operation"], message: string) => () =>
   new JsonHttpError({ operation, message });
+const bodyEncodeError = jsonHttpError(
+  "encode",
+  "HTTP request body did not match the expected schema.",
+);
 const responseReadError = jsonHttpError("response", "Unable to read HTTP response.");
+export const responseDecodeError = jsonHttpError(
+  "decode",
+  "HTTP response did not match the expected schema.",
+);
 const responseTooLarge = jsonHttpError("response", "HTTP response exceeded its byte limit.");
 
-const readBoundedResponseText = <Error>(
-  stream: Stream.Stream<Uint8Array, Error>,
-  maximumBytes: number,
-): Effect.Effect<string, JsonHttpError> => {
-  let totalBytes = 0;
-  return stream.pipe(
-    Stream.mapEffect((bytes) => {
-      totalBytes += bytes.byteLength;
-      return totalBytes > maximumBytes ? Effect.fail(responseTooLarge()) : Effect.succeed(bytes);
-    }),
-    Stream.mapError((error) => (error instanceof JsonHttpError ? error : responseReadError())),
-    Stream.decodeText,
-    Stream.runCollect,
-    Effect.map((chunks) => chunks.join("")),
-  );
-};
+/** One client transport; `jsonBody` is the already schema-encoded JSON request body. */
+type JsonHttpExecute = <A, R>(
+  input: JsonHttpRequestInput<A, R>,
+  jsonBody?: Schema.Json,
+) => Effect.Effect<JsonHttpResponse<A>, JsonHttpError, R>;
+
+/** Builds the live and test clients over one transport, schema-encoding JSON bodies once. */
+export const makeJsonHttpClient = (execute: JsonHttpExecute): JsonHttpClientContract => ({
+  request: (input) => execute(input),
+  requestJson: (input, bodySchema, body) =>
+    Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
+      Effect.mapError(bodyEncodeError),
+      Effect.flatMap((jsonBody) => execute(input, jsonBody)),
+    ),
+});
 
 export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClientContract>()(
   "pi-cosmic-core/platform/json-http/JsonHttpClient",
@@ -88,14 +94,10 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
         let outgoing = HttpClientRequest.make(input.method ?? "GET")(input.url, {
           headers: input.headers,
         });
-        if (jsonBody !== undefined) {
+        if (jsonBody !== undefined)
           outgoing = yield* HttpClientRequest.bodyJson(outgoing, jsonBody).pipe(
-            Effect.mapError(
-              jsonHttpError("encode", "HTTP request body did not match the expected schema."),
-            ),
+            Effect.mapError(bodyEncodeError),
           );
-        }
-
         const response = yield* client.execute(outgoing).pipe(
           Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
           Effect.mapError(jsonHttpError("request", "HTTP request failed.")),
@@ -104,32 +106,23 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
           }),
         );
         const maximumBytes = input.maxResponseBytes;
-        const readText =
-          maximumBytes === undefined
-            ? response.text.pipe(Effect.mapError(responseReadError))
-            : Number.isSafeInteger(maximumBytes) && maximumBytes > 0
-              ? readBoundedResponseText(response.stream, maximumBytes)
-              : Effect.fail(responseTooLarge());
-        if (response.status < 200 || response.status >= 300) {
-          const errorBody = yield* readText;
-          return {
-            _tag: "Rejected",
-            status: response.status,
-            errorBody,
-          } satisfies JsonHttpRejectedResponse;
-        }
-        const rawBody =
-          maximumBytes === undefined
-            ? yield* response.json.pipe(Effect.mapError(responseReadError))
-            : yield* readText;
-        const body = yield* (
-          maximumBytes === undefined
-            ? Schema.decodeUnknownEffect(input.responseSchema)(rawBody)
-            : Schema.decodeUnknownEffect(Schema.fromJsonString(input.responseSchema))(rawBody)
+        // One text read and one JSON decode for every request, so a malformed body is a
+        // decode failure whether or not it is bounded.
+        const text = yield* maximumBytes === undefined
+          ? response.text.pipe(Effect.mapError(responseReadError))
+          : Number.isSafeInteger(maximumBytes) && maximumBytes > 0
+            ? collectBoundedText(
+                response.stream.pipe(Stream.mapError(responseReadError)),
+                maximumBytes,
+                responseTooLarge,
+              )
+            : Effect.fail(responseTooLarge());
+        if (response.status < 200 || response.status >= 300)
+          return { _tag: "Rejected", status: response.status } satisfies JsonHttpRejectedResponse;
+        const body = yield* Schema.decodeEffect(Schema.fromJsonString(input.responseSchema))(
+          text,
         ).pipe(
-          Effect.mapError(
-            jsonHttpError("decode", "HTTP response did not match the expected schema."),
-          ),
+          Effect.mapError(responseDecodeError),
           Effect.withSpan("pi-cosmic-core.http.json.decode", {
             attributes: { "http.response.status_code": response.status },
           }),
@@ -140,15 +133,7 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
           body,
         } satisfies JsonHttpAcceptedResponse<A>;
       });
-      const request: JsonHttpClientContract["request"] = (input) => execute(input);
-      const requestJson: JsonHttpClientContract["requestJson"] = (input, bodySchema, body) =>
-        Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
-          Effect.mapError(
-            jsonHttpError("encode", "HTTP request body did not match the expected schema."),
-          ),
-          Effect.flatMap((encodedJsonBody) => execute(input, encodedJsonBody)),
-        );
-      return JsonHttpClient.of({ request, requestJson });
+      return JsonHttpClient.of(makeJsonHttpClient(execute));
     }),
   );
 }

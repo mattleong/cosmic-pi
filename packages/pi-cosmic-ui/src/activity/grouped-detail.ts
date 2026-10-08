@@ -8,52 +8,36 @@ import {
 import { managerTone } from "../manager/style.ts";
 import { ACTIVITY_ACTION_PAGE_SIZE, activityActionPages } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
-import type { GroupedActivityRow, GroupSummary, PhaseCounts } from "./grouped-tree.ts";
+import type { GroupedActivityRow } from "./grouped-tree.ts";
 import {
   phaseCountLabels,
   plannedLabels,
   workflowMemberSpan,
   workStateLabels,
+  type GroupSummary,
 } from "./group-summary.ts";
 import type { ActivityRow } from "./model.ts";
 import { activityElapsed, activityType } from "./row-line.ts";
-import { activityOwnerLabel } from "./widget.ts";
+import { phaseLabels } from "./workflow-row.ts";
 
 /** Optional fields only appear with a value. */
 const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
   values.length ? [{ label, value: values.join(" · ") }] : [];
-/** Agents in each state, then the declarations and waits that are not work states. */
-const memberFields = (summary: GroupSummary): ListDetailField[] => [
-  {
-    label: "Agents",
-    value: [countLabel(summary.items, "agent"), ...workStateLabels(summary)].join(" · "),
-  },
+/** Work in each state, then the declarations and waits that are not work states. */
+const memberFields = (
+  summary: GroupSummary,
+  label = "Agents",
+  noun = "agent",
+): ListDetailField[] => [
+  { label, value: [countLabel(summary.items, noun), ...workStateLabels(summary)].join(" · ") },
   ...optionalField("Progress", [
     ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
     ...plannedLabels(summary),
   ]),
 ];
-/** Only a done phase is finished, matching the workflow's finished-phase count. */
-const PHASE_STATES = {
-  pending: "Not started",
-  running: "Running",
-  done: "Finished",
-  failed: "Failed",
-  stopped: "Stopped",
-  skipped: "Skipped",
-} as const;
-/**
- * Done phases out of all phases, then failed, stopped and skipped ones. Rows leave failed phases
- * to their agents' failure notices; here the "Phases" label keeps the two counts apart.
- */
-const phaseDetailLabels = (counts: PhaseCounts, total: number): string[] => {
-  const [finished = "", ...settled] = phaseCountLabels(counts, total, "finished");
-  return [finished, ...(counts.failed ? [`${counts.failed} failed`] : []), ...settled];
-};
 
 interface GroupedDetailOptions {
   readonly selected: GroupedActivityRow | undefined;
-  readonly rows: readonly ActivityRow[];
   readonly theme: Pick<Theme, "fg" | "bold">;
   readonly focused: boolean;
   readonly now: number | undefined;
@@ -77,9 +61,12 @@ export function groupedDetail(options: GroupedDetailOptions): string {
       selected.context,
       breadcrumb,
       [
+        // The "Phases" label keeps failed phases apart from their agents' failure counts.
         ...optionalField(
           "Phases",
-          phases.length ? phaseDetailLabels(selected.phaseCounts, phases.length) : [],
+          phases.length
+            ? phaseCountLabels(selected.phaseCounts, phases.length, "finished", true)
+            : [],
         ),
         ...(selected.row.phase ? [{ label: "Current phase", value: selected.row.phase }] : []),
         ...memberFields(selected.summary),
@@ -94,16 +81,7 @@ export function groupedDetail(options: GroupedDetailOptions): string {
     return [
       heading,
       breadcrumb,
-      ...detailFieldRows(theme, [
-        {
-          label: "Sources",
-          value: [countLabel(summary.items, "item"), ...workStateLabels(summary)].join(" · "),
-        },
-        ...optionalField("Progress", [
-          ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
-          ...plannedLabels(summary),
-        ]),
-      ]),
+      ...detailFieldRows(theme, memberFields(summary, "Sources", "item")),
       "Select a source to inspect its details and available actions.",
     ].join("\n");
   const span = workflowMemberSpan(selected.members, options.now);
@@ -113,7 +91,7 @@ export function groupedDetail(options: GroupedDetailOptions): string {
     heading,
     breadcrumb,
     ...detailFieldRows(theme, [
-      { label: "State", value: PHASE_STATES[selected.state] },
+      { label: "State", value: capitalized(phaseLabels[selected.state]) },
       ...memberFields(summary),
       ...optionalField("Elapsed", span === undefined ? [] : [formatElapsed(span)]),
     ]),
@@ -132,7 +110,7 @@ function sourceDetail(
   showSummary = true,
 ): string {
   const { theme } = options;
-  const sourcePath = activityOwnerLabel(options.rows, row);
+  const sourcePath = [...context, row].map((item) => item.title).join(" › ");
   return [
     listDetailHeading(theme, sourcePath, options.focused, managerTone.identity),
     breadcrumb,
@@ -167,6 +145,8 @@ function sourceDetail(
     ...actionLines(row, options.actionPage),
   ].join("\n");
 }
+
+const capitalized = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
 /** The current page of a row's actions under their number keys, then how to turn the page. */
 function actionLines(row: ActivityRow, page: number): string[] {

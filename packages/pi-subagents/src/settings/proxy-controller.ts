@@ -2,7 +2,7 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { synchronousNow, notifyAtHostBoundary } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { decodeCompactToolDetails, type SubagentRunCard } from "../tools/details-schema.ts";
 import { actionFailureDisposition, decodeSubagentOutcomeDetails } from "../tools/outcome.ts";
@@ -110,7 +110,6 @@ const cardView = (card: SubagentRunCard): SubagentRunView => ({
   question: card.question && {
     requestId: "proxy-question",
     message: card.question.message,
-    createdAt: card.lastActivityAt,
   },
   finalText: card.finalText,
   error: card.error,
@@ -155,9 +154,9 @@ export const registerSubagentProxyManagerCommand = (
       let revision = 0;
       let projection: SubagentProjection = { revision, runs: [] };
       let refreshInFlight: Promise<void> | undefined;
-      const refresh = (signal?: AbortSignal): Promise<void> => {
+      const refresh = (): Promise<void> => {
         if (refreshInFlight) return refreshInFlight;
-        const pending = call({ tool: SUBAGENT_TOOL_NAME.list, args: {} }, signal).then((result) => {
+        const pending = call({ tool: SUBAGENT_TOOL_NAME.list, args: {} }).then((result) => {
           projection = projectionFromResult(result, ++revision);
         });
         refreshInFlight = pending;
@@ -175,100 +174,94 @@ export const registerSubagentProxyManagerCommand = (
       };
       let stopRefresh: (() => void) | undefined;
       let closed = false;
-      return refresh()
-        .then(() =>
-          openOwnedSurfacePromise<undefined>(ctx, {
-            placement: "screen",
-            closedValue: undefined,
-            onClose: () => {
-              closed = true;
-              stopRefresh?.();
-            },
-            create: ({ tui, theme, keybindings, getHeight, finish }) => {
-              stopRefresh = startHostUiTicker(750, () => {
-                if (closed) return;
-                void refresh().then(
-                  () => tui.requestRender(),
-                  () => undefined,
+      return refresh().then(() =>
+        openCommandSurface(ctx, {
+          placement: "screen",
+          onClose: () => {
+            closed = true;
+            stopRefresh?.();
+          },
+          create: ({ tui, theme, keybindings, getHeight, finish }) => {
+            stopRefresh = startHostUiTicker(750, () => {
+              if (closed) return;
+              void refresh().then(
+                () => tui.requestRender(),
+                () => undefined,
+              );
+            });
+            // The action's own classified outcome wins: a later refresh failure never turns
+            // accepted work into a failure (inviting duplicate work), nor hides a real failure.
+            const afterRefresh = <A>(outcome: () => Promise<A>): Promise<A> =>
+              (closed ? Promise.resolve() : refreshAfterAction().catch(() => undefined))
+                .then(outcome)
+                .finally(() => tui.requestRender());
+            // Exactly one proxied call per user action; unconfirmed outcomes are never resent.
+            const action = (
+              expected: ProxyFleetAction,
+              targetId: string,
+              input: SubagentToolInput,
+            ): Promise<ProxyActionOutcome> =>
+              call(input)
+                .then((result) => classifyProxyActionResult(expected, targetId, result))
+                .then(
+                  (outcome) => afterRefresh(() => Promise.resolve(outcome)),
+                  (error) => afterRefresh(() => Promise.reject(error)),
                 );
-              });
-              // The action's own classified outcome wins: a later refresh failure never turns
-              // accepted work into a failure (inviting duplicate work), nor hides a real failure.
-              const afterRefresh = <A>(outcome: () => Promise<A>): Promise<A> =>
-                (closed ? Promise.resolve() : refreshAfterAction().catch(() => undefined))
-                  .then(outcome)
-                  .finally(() => tui.requestRender());
-              // Exactly one proxied call per user action; unconfirmed outcomes are never resent.
-              const action = (
-                expected: ProxyFleetAction,
-                targetId: string,
-                input: SubagentToolInput,
-              ): Promise<ProxyActionOutcome> =>
-                call(input)
-                  .then((result) => classifyProxyActionResult(expected, targetId, result))
-                  .then(
-                    (outcome) => afterRefresh(() => Promise.resolve(outcome)),
-                    (error) => afterRefresh(() => Promise.reject(error)),
-                  );
-              const accepted = (outcome: ProxyActionOutcome): void => {
-                if (outcome !== "accepted") throw new Error(UNCONFIRMED_ACTION);
-              };
-              const lifecycle = (
-                lifecycleAction: "stop" | "interrupt" | "resume",
-                id: string,
-                resumeMessage?: string,
-              ) => {
-                const args: SubagentLifecycleInput = resumeMessage
-                  ? { action: lifecycleAction, runIds: [id], message: resumeMessage }
-                  : { action: lifecycleAction, runIds: [id] };
-                return action(lifecycleAction, id, {
-                  tool: SUBAGENT_TOOL_NAME.lifecycle,
-                  args,
-                }).then(accepted);
-              };
-              const message = (
-                id: string,
-                mode: FleetMessageMode,
-                text: string,
-              ): Promise<FleetMessageDelivery> =>
-                (mode === "reply"
-                  ? action("reply", id, {
-                      tool: SUBAGENT_TOOL_NAME.reply,
-                      args: { runId: id, message: text },
-                    })
-                  : action("send", id, {
-                      tool: SUBAGENT_TOOL_NAME.send,
-                      args: { runIds: [id], message: text },
-                    })
-                ).then((outcome) => (outcome === "pending" ? "pending" : "delivered"));
-              return new SubagentFleetComponent({
-                theme,
-                visibilityRootId,
-                getProjection: () => projection,
-                getHeight,
-                getNow: synchronousNow,
-                ...fullScreenKeybindingOptions(keybindings),
-                requestRender: () => tui.requestRender(),
-                close: () => finish(undefined),
-                actions: {
-                  stop: (id) => lifecycle("stop", id),
-                  interrupt: (id) => lifecycle("interrupt", id),
-                  resume: (id, resumeMessage) => lifecycle("resume", id, resumeMessage),
-                  message,
-                  rename: (id, name) =>
-                    action("rename", id, {
-                      tool: SUBAGENT_TOOL_NAME.rename,
-                      args: { runId: id, name },
-                    }).then(accepted),
-                },
-              });
-            },
-          }),
-        )
-        .then((outcome) => {
-          // A failed opening rejects the command, as Pi's own custom Promise does.
-          if (outcome._tag === "Failed") throw outcome.cause;
-        });
+            const accepted = (outcome: ProxyActionOutcome): void => {
+              if (outcome !== "accepted") throw new Error(UNCONFIRMED_ACTION);
+            };
+            const lifecycle = (
+              lifecycleAction: "stop" | "interrupt" | "resume",
+              id: string,
+              resumeMessage?: string,
+            ) => {
+              const args: SubagentLifecycleInput = resumeMessage
+                ? { action: lifecycleAction, runIds: [id], message: resumeMessage }
+                : { action: lifecycleAction, runIds: [id] };
+              return action(lifecycleAction, id, {
+                tool: SUBAGENT_TOOL_NAME.lifecycle,
+                args,
+              }).then(accepted);
+            };
+            const message = (
+              id: string,
+              mode: FleetMessageMode,
+              text: string,
+            ): Promise<FleetMessageDelivery> =>
+              (mode === "reply"
+                ? action("reply", id, {
+                    tool: SUBAGENT_TOOL_NAME.reply,
+                    args: { runId: id, message: text },
+                  })
+                : action("send", id, {
+                    tool: SUBAGENT_TOOL_NAME.send,
+                    args: { runIds: [id], message: text },
+                  })
+              ).then((outcome) => (outcome === "pending" ? "pending" : "delivered"));
+            return new SubagentFleetComponent({
+              theme,
+              visibilityRootId,
+              getProjection: () => projection,
+              getHeight,
+              getNow: synchronousNow,
+              ...fullScreenKeybindingOptions(keybindings),
+              requestRender: () => tui.requestRender(),
+              close: () => finish(undefined),
+              actions: {
+                stop: (id) => lifecycle("stop", id),
+                interrupt: (id) => lifecycle("interrupt", id),
+                resume: (id, resumeMessage) => lifecycle("resume", id, resumeMessage),
+                message,
+                rename: (id, name) =>
+                  action("rename", id, {
+                    tool: SUBAGENT_TOOL_NAME.rename,
+                    args: { runId: id, name },
+                  }).then(accepted),
+              },
+            });
+          },
+        }),
+      );
     },
   });
 };

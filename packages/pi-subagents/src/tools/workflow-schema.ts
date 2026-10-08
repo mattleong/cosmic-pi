@@ -1,8 +1,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
+import { NonEmptyText } from "../workflow/model.ts";
 import { WORKFLOW_SCRIPT_MAX_CHARS } from "../workflow/script.ts";
 import type { WorkflowStartRequest } from "../workflow/service.ts";
 import type { WorkflowSourceRequest } from "../workflow/source.ts";
@@ -88,24 +88,21 @@ export const WorkflowToolParameters = Type.Object(
   { additionalProperties: false },
 );
 
-const Text = (maximum: number) =>
-  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
-
 const StartInputSchema = Schema.Struct({
   // Like Claude Code's Workflow tool, a start may leave the action out.
   action: Schema.optional(Schema.Literal("start")),
-  script: Schema.optional(Text(WORKFLOW_SCRIPT_MAX_CHARS)),
-  name: Schema.optional(Text(64)),
-  scriptPath: Schema.optional(Text(PATH_MAX_CHARS)),
+  script: Schema.optional(NonEmptyText(WORKFLOW_SCRIPT_MAX_CHARS)),
+  name: Schema.optional(NonEmptyText(64)),
+  scriptPath: Schema.optional(NonEmptyText(PATH_MAX_CHARS)),
   args: Schema.optional(Schema.Json),
-  resumeFromRunId: Schema.optional(Text(RUN_ID_MAX_CHARS)),
+  resumeFromRunId: Schema.optional(NonEmptyText(RUN_ID_MAX_CHARS)),
   budget: Schema.optional(
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(BUDGET_MAX)),
   ),
 });
 const RunInputSchema = Schema.Struct({
   action: Schema.Literals(["status", "stop"]),
-  runId: Text(RUN_ID_MAX_CHARS),
+  runId: NonEmptyText(RUN_ID_MAX_CHARS),
 });
 const ListInputSchema = Schema.Struct({ action: Schema.Literal("list") });
 const decodeStart = Schema.decodeUnknownOption(StartInputSchema, { onExcessProperty: "error" });
@@ -140,34 +137,29 @@ const startSource = (
 /** Checks the fields each action accepts; Pi has already applied the parameter schema. */
 export const decodeWorkflowToolRequest = <Input>(
   input: Input,
-): Effect.Effect<WorkflowToolRequest, WorkflowToolInputError> =>
-  Effect.suspend((): Effect.Effect<WorkflowToolRequest, WorkflowToolInputError> => {
-    const start = decodeStart(input);
-    if (Option.isSome(start)) {
-      const source = startSource(start.value);
-      return source instanceof WorkflowToolInputError
-        ? Effect.fail(source)
-        : Effect.succeed({
-            action: "start" as const,
-            start: {
-              source,
-              args: start.value.args ?? null,
-              ...(start.value.resumeFromRunId !== undefined && {
-                resumeFromRunId: start.value.resumeFromRunId,
-              }),
-              ...(start.value.budget !== undefined && { budget: start.value.budget }),
-            },
-          });
-    }
-    const run = decodeRun(input);
-    if (Option.isSome(run)) return Effect.succeed(run.value);
-    if (Option.isSome(decodeList(input))) return Effect.succeed({ action: "list" as const });
-    return Effect.fail(
-      inputError(
-        'Invalid subagent_workflow arguments: "start" (the default action) takes script, name, or scriptPath with optional args, resumeFromRunId and budget (a positive whole number of output tokens); "status" and "stop" take only runId; "list" takes nothing else.',
-      ),
-    );
-  });
+): WorkflowToolRequest | WorkflowToolInputError => {
+  const start = decodeStart(input);
+  if (Option.isSome(start)) {
+    const source = startSource(start.value);
+    if (source instanceof WorkflowToolInputError) return source;
+    const { args, resumeFromRunId, budget } = start.value;
+    return {
+      action: "start",
+      start: {
+        source,
+        args: args ?? null,
+        ...(resumeFromRunId !== undefined && { resumeFromRunId }),
+        ...(budget !== undefined && { budget }),
+      },
+    };
+  }
+  const run = decodeRun(input);
+  if (Option.isSome(run)) return run.value;
+  if (Option.isSome(decodeList(input))) return { action: "list" };
+  return inputError(
+    'Invalid subagent_workflow arguments: "start" (the default action) takes script, name, or scriptPath with optional args, resumeFromRunId and budget (a positive whole number of output tokens); "status" and "stop" take only runId; "list" takes nothing else.',
+  );
+};
 
 const Count = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),

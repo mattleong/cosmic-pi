@@ -5,7 +5,7 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { isToolOutputNoticeLine } from "../shared/helpers";
 import type { PathIconMode } from "../config/schema";
 
-export interface PathListRenderer {
+interface PathListRenderer {
   /** All lines in display order, with each folder's paths together when drawn as a tree. */
   readonly lines: string[];
   /** Renders consecutive display-order lines; folders already drawn are not repeated. */
@@ -16,34 +16,19 @@ export function createPathListRenderer(
   allLines: string[],
   cwd: string,
   theme: Theme,
-  options: { iconMode: PathIconMode },
+  iconMode: PathIconMode,
 ): PathListRenderer {
-  const { iconMode } = options;
+  const renderLine = (line: string) => renderPathListLine(line, cwd, theme, iconMode);
   const shouldTree = allLines.some((line) => isPathLine(line) && line.includes("/"));
-  if (!shouldTree)
-    return {
-      lines: allLines,
-      renderChunk: (lines) => lines.map((line) => renderPathListLine(line, cwd, theme, iconMode)),
-    };
+  if (!shouldTree) return { lines: allLines, renderChunk: (lines) => lines.map(renderLine) };
 
   const seenDirs = new Set<string>();
   return {
     lines: groupPathsByFolder(allLines),
-    renderChunk: (lines) => {
-      const rendered: string[] = [];
-      for (const line of lines) {
-        if (!line) {
-          rendered.push("");
-          continue;
-        }
-        if (isToolOutputNoticeLine(line)) {
-          rendered.push(theme.fg("warning", escapeControlChars(line)));
-          continue;
-        }
-        renderTreePath(line, theme, iconMode, seenDirs, rendered);
-      }
-      return rendered;
-    },
+    renderChunk: (lines) =>
+      lines.flatMap((line) =>
+        isPathLine(line) ? renderTreePath(line, theme, iconMode, seenDirs) : [renderLine(line)],
+      ),
   };
 }
 
@@ -95,42 +80,33 @@ function renderTreePath(
   theme: Theme,
   iconMode: PathIconMode,
   seenDirs: Set<string>,
-  rendered: string[],
-): void {
+): string[] {
   const { isDir, parts } = treePathParts(path);
-  let prefix = "";
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index];
-    if (part === undefined) continue;
-    const isLeaf = index === parts.length - 1;
-    const key = prefix ? `${prefix}/${part}` : part;
-    const indent = "  ".repeat(index);
-    if (!isLeaf || isDir) {
-      if (!seenDirs.has(key)) {
-        seenDirs.add(key);
-        rendered.push(renderTreeEntry(part, true, indent, theme, iconMode));
-      }
-    } else {
-      rendered.push(renderTreeEntry(part, false, indent, theme, iconMode));
-    }
-    prefix = key;
+  const rendered: string[] = [];
+  let key = "";
+  for (const [index, part] of parts.entries()) {
+    key = key ? `${key}/${part}` : part;
+    const isDirectory = isDir || index < parts.length - 1;
+    // A folder is drawn once, above the first of its paths.
+    if (isDirectory && seenDirs.has(key)) continue;
+    if (isDirectory) seenDirs.add(key);
+    const name = escapeControlChars(part);
+    const label = isDirectory ? theme.fg("accent", `${name}/`) : theme.fg("toolOutput", name);
+    rendered.push(entryPrefix(part, isDirectory, "  ".repeat(index), theme, iconMode) + label);
   }
+  return rendered;
 }
 
-function renderTreeEntry(
-  part: string,
+/** The dimmed indentation and, when icons are on, the entry's icon before its label. */
+function entryPrefix(
+  name: string,
   isDirectory: boolean,
   indent: string,
   theme: Theme,
   iconMode: PathIconMode,
 ): string {
-  const icon = pathIcon(part, isDirectory, iconMode);
-  const iconText = icon ? `${indent}${icon}` : indent;
-  const gap = icon ? " " : "";
-  const label = isDirectory
-    ? theme.fg("accent", `${escapeControlChars(part)}/`)
-    : theme.fg("toolOutput", escapeControlChars(part));
-  return `${theme.fg("dim", iconText)}${gap}${label}`;
+  const icon = pathIcon(name, isDirectory, iconMode);
+  return icon ? `${theme.fg("dim", indent + icon)} ` : theme.fg("dim", indent);
 }
 
 function renderPathListLine(
@@ -141,10 +117,8 @@ function renderPathListLine(
 ): string {
   if (!line) return "";
   if (isToolOutputNoticeLine(line)) return theme.fg("warning", escapeControlChars(line));
-  const prefix = line.match(/^\s*/)?.[0] ?? "";
-  const body = line.slice(prefix.length);
-  const icon = pathIcon(body, body.endsWith("/"), iconMode);
-  const iconText = icon ? prefix + icon : prefix;
-  const gap = icon ? " " : "";
-  return `${theme.fg("dim", iconText)}${gap}${renderDisplayPath(body, cwd, theme, body)}`;
+  const indent = line.match(/^\s*/)?.[0] ?? "";
+  const body = line.slice(indent.length);
+  const prefix = entryPrefix(body, body.endsWith("/"), indent, theme, iconMode);
+  return prefix + renderDisplayPath(body, cwd, theme, body);
 }

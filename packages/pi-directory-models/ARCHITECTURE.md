@@ -6,7 +6,7 @@
 
 `src/application.ts` owns Pi registration and the session runtime slot. `src/layer.ts` composes `Layer.effect` directly from the `Context.Service` `make` functions for `DirectoryModelPreferenceService` and `DirectoryModelStore`. The services do not export one-use Layer aliases. The preference service owns restore and remember policy, its one-permit semaphore, and its session-local directory identity cache. It caches only a successful identity lookup, so a later event retries after a failure.
 
-`src/config/store.ts` is the only persistence door. It canonicalizes the cwd and reads or atomically replaces one Schema-validated document per directory. Host argv, session, model registry, model selection, and thinking-level calls stay in `src/boundary/`. Fallback-only model capture uses core's no-throw host callback helper, while restoration keeps typed failures for reads and mutations. Schema and path-key modules remain pure.
+`src/config/store.ts` is the only persistence door. It canonicalizes the cwd and reads or atomically replaces one Schema-validated document per directory. Host argv, session, model registry, model selection, and thinking-level calls stay in `src/boundary/`. Fallback-only model capture uses core's no-throw host callback and tolerant decode helpers, while restoration keeps typed failures for reads and mutations. Schema and path-key modules remain pure.
 
 ## Lifecycle
 

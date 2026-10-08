@@ -3,13 +3,13 @@ import * as Effect from "effect/Effect";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
+import type { WorkflowAgentAccess, WorkflowAgentSpec, WorkflowHost } from "../workflow/agent.ts";
+import { WorkflowAgentCallError } from "../workflow/errors.ts";
 import {
-  WorkflowAgentCallError,
-  type WorkflowAgentAccess,
-  type WorkflowAgentSpec,
-  type WorkflowHost,
-} from "../workflow/agent.ts";
-import { AVAILABLE_PROFILES, workflowAgentProfile } from "../workflow/options.ts";
+  AVAILABLE_PROFILES,
+  workflowAgentProfile,
+  type WorkflowAgentOptions,
+} from "../workflow/options.ts";
 import { resolveProfileStart, type SubagentSessionEnvironment } from "./host-profile-resolution.ts";
 
 /**
@@ -27,51 +27,38 @@ export const makeWorkflowHost = (
     const registry = yield* SubagentBackendRegistry;
     const snapshot = yield* profiles.capture;
 
-    const checkAgent = (
-      spec: WorkflowAgentSpec,
-    ): Effect.Effect<WorkflowAgentAccess, WorkflowAgentCallError> =>
-      Effect.suspend(() => {
-        const requested = workflowAgentProfile(spec.profile);
-        const definition = profiles.definition(requested);
-        if (!definition)
-          return Effect.fail(
-            new WorkflowAgentCallError({
-              message: `Unknown agent() profile "${requested}". ${AVAILABLE_PROFILES}`,
-            }),
-          );
-        const claims = normalizeWriteClaims(spec.writes);
-        if (!claims.ok)
-          return Effect.fail(
-            new WorkflowAgentCallError({ message: `Invalid agent() writes: ${claims.message}` }),
-          );
-        const writerOption =
-          spec.writes !== undefined ? "writes" : spec.isolation ? "isolation" : undefined;
-        const writes = snapshot.effectiveConfig.profiles[definition.id].candidates.some(
-          (candidate) => candidate.writeIntent === "writer",
-        );
-        if (writerOption && !writes)
-          return Effect.fail(
-            new WorkflowAgentCallError({
-              message: `agent() option \`${writerOption}\` needs a writer profile such as worker; profile "${definition.id}" is read-only.`,
-            }),
-          );
-        const access: WorkflowAgentAccess = writes ? "writer" : "read-only";
-        return Effect.succeed(access);
-      });
+    const checkAgent = Effect.fn("WorkflowHost.checkAgent")(function* (
+      options: WorkflowAgentOptions,
+    ): Effect.fn.Return<WorkflowAgentAccess, WorkflowAgentCallError> {
+      const requested = workflowAgentProfile(options.profile);
+      const definition = profiles.definition(requested);
+      if (!definition)
+        return yield* new WorkflowAgentCallError({
+          message: `Unknown agent() profile "${requested}". ${AVAILABLE_PROFILES}`,
+        });
+      const claims = normalizeWriteClaims(options.writes);
+      if (!claims.ok)
+        return yield* new WorkflowAgentCallError({
+          message: `Invalid agent() writes: ${claims.message}`,
+        });
+      const writerOption =
+        options.writes !== undefined ? "writes" : options.isolation ? "isolation" : undefined;
+      const writes = snapshot.effectiveConfig.profiles[definition.id].candidates.some(
+        (candidate) => candidate.writeIntent === "writer",
+      );
+      if (writerOption && !writes)
+        return yield* new WorkflowAgentCallError({
+          message: `agent() option \`${writerOption}\` needs a writer profile such as worker; profile "${definition.id}" is read-only.`,
+        });
+      return writes ? "writer" : "read-only";
+    });
 
     const resolveAgent = (spec: WorkflowAgentSpec) =>
-      resolveProfileStart(
-        pi,
-        { task: spec.task, name: spec.name, profile: spec.profile, writes: spec.writes },
-        ctx,
-        environment,
-        snapshot,
-      ).pipe(
+      resolveProfileStart(pi, spec, ctx, environment, snapshot).pipe(
         // Without the captured policy, launch would fall back to default nesting limits.
         Effect.map((request) => ({
           ...request,
           nestingPolicy: snapshot.effectiveConfig.nesting,
-          nestingPolicyRevision: snapshot.revision,
         })),
         Effect.provideService(SubagentProfileService, profiles),
         Effect.provideService(SubagentBackendRegistry, registry),

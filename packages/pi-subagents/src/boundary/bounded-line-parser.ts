@@ -1,52 +1,5 @@
 // Node stream/StringDecoder ownership is intentionally isolated at this boundary.
 import { StringDecoder } from "node:string_decoder";
-import * as Queue from "effect/Queue";
-
-export interface ByteBoundedQueueRoom<A extends object> {
-  readonly offer: (value: A, bytes: number) => boolean;
-  readonly acknowledge: (value: A) => void;
-  readonly queuedBytes: () => number;
-}
-
-/**
- * Weight queue ownership by bytes until the downstream consumer explicitly acknowledges an item.
- * Count-bounded Effect queues remain the final item-count guard; this room prevents each retained
- * item from independently carrying a maximum-sized transport frame.
- */
-export function makeByteBoundedQueueRoom<A extends object, E>(
-  queue: Queue.Enqueue<A, E>,
-  maximumQueuedBytes: number,
-  onOverflow: () => void,
-): ByteBoundedQueueRoom<A> {
-  const weights = new WeakMap<A, number>();
-  let retainedBytes = 0;
-  let overflowed = false;
-
-  return {
-    offer: (value, bytes) => {
-      const weight = Math.max(0, Math.floor(bytes));
-      if (overflowed) return false;
-      if (retainedBytes + weight > maximumQueuedBytes) {
-        overflowed = true;
-        onOverflow();
-        return false;
-      }
-      if (!Queue.offerUnsafe(queue, value)) return false;
-      if (weight > 0) {
-        weights.set(value, weight);
-        retainedBytes += weight;
-      }
-      return true;
-    },
-    acknowledge: (value) => {
-      const weight = weights.get(value);
-      if (weight === undefined) return;
-      weights.delete(value);
-      retainedBytes = Math.max(0, retainedBytes - weight);
-    },
-    queuedBytes: () => retainedBytes,
-  };
-}
 
 /** Only the native event subscription contract is needed; this parser does not control flow. */
 export interface BoundedLineInput {
@@ -93,29 +46,26 @@ export function attachBoundedLineParser(
     options.onOverflow();
   };
 
+  const emitLine = (line: string) => {
+    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (text) options.onLine(text);
+  };
+
   const emitFrames = (final: boolean) => {
     while (!overflowed) {
       const index = buffered.indexOf("\n");
       if (index < 0) break;
-      let line = buffered.slice(0, index);
+      const line = buffered.slice(0, index);
       buffered = buffered.slice(index + 1);
-      if (Buffer.byteLength(line, "utf8") > options.maxLineBytes) {
-        overflow();
-        return;
-      }
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (line) options.onLine(line);
+      if (Buffer.byteLength(line, "utf8") > options.maxLineBytes) return overflow();
+      emitLine(line);
     }
     if (overflowed) return;
-    if (Buffer.byteLength(buffered, "utf8") > options.maxLineBytes) {
-      overflow();
-      return;
-    }
+    if (Buffer.byteLength(buffered, "utf8") > options.maxLineBytes) return overflow();
     if (!final || !buffered) return;
-    let line = buffered;
+    const line = buffered;
     buffered = "";
-    if (line.endsWith("\r")) line = line.slice(0, -1);
-    if (line) options.onLine(line);
+    emitLine(line);
   };
 
   const drain = () => {
@@ -138,10 +88,7 @@ export function attachBoundedLineParser(
     if (overflowed || finalized || detached) return;
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
     queuedBytes += chunk.length;
-    if (queuedBytes > options.maxQueuedBytes) {
-      overflow();
-      return;
-    }
+    if (queuedBytes > options.maxQueuedBytes) return overflow();
     chunks.push(chunk);
     drain();
   };

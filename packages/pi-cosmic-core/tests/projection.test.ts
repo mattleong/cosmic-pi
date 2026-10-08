@@ -6,17 +6,11 @@ import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/projection.ts";
 import { interruptingScheduler } from "../testing.ts";
+import { thrownInstance } from "./support/thrown.ts";
 
 /** The typed failure raised for a value that cannot be projected. */
-const projectionFailure = <Value>(value: Value): ProjectionError => {
-  try {
-    freezeSnapshot(value);
-  } catch (error) {
-    if (error instanceof ProjectionError) return error;
-    throw error;
-  }
-  throw new Error("expected projection failure");
-};
+const projectionFailure = <Value>(value: Value) =>
+  thrownInstance(ProjectionError, () => freezeSnapshot(value));
 
 it.effect("commits authoritative state when interrupted at publication", () =>
   Effect.gen(function* () {
@@ -45,7 +39,11 @@ it.effect("commits authoritative state when interrupted at publication", () =>
 
 it.effect("interrupts lock wait and update work without blocking later transitions", () =>
   Effect.gen(function* () {
-    const projection = yield* makeFrozenProjection(0, (n) => n);
+    const projection = yield* makeFrozenProjection(
+      0,
+      (n) => n,
+      () => undefined,
+    );
     const started = yield* Deferred.make<void>();
     const owner = yield* projection
       .transition(() => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)))
@@ -91,7 +89,11 @@ interface IndirectCycleFixture {
 it.effect("publishes cloned deeply frozen plain snapshots", () =>
   Effect.gen(function* () {
     const state = { count: 1, nested: { values: ["a"] } };
-    const projection = yield* makeFrozenProjection(state, (current) => current);
+    const projection = yield* makeFrozenProjection(
+      state,
+      (current) => current,
+      () => undefined,
+    );
     const snapshot = projection.getSnapshot();
 
     expect(snapshot).not.toBe(state);
@@ -146,9 +148,11 @@ it("preserves an own __proto__ property without changing the clone prototype", (
 
 it.effect("does not publish or commit a failed transition", () =>
   Effect.gen(function* () {
-    const projection = yield* makeFrozenProjection({ count: 1 }, (state) => ({
-      count: state.count,
-    }));
+    const projection = yield* makeFrozenProjection(
+      { count: 1 },
+      (state) => ({ count: state.count }),
+      () => undefined,
+    );
     const before = projection.getSnapshot();
     const result = yield* projection
       .transition(() => new TransitionFailure({ message: "expected" }))
@@ -187,7 +191,11 @@ it.effect("rejects invalid projection preparation without committing and release
 it.effect("serializes transitions and publishes each successful next state", () =>
   Effect.gen(function* () {
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const projection = yield* makeFrozenProjection({ values: [] as number[] }, (state) => state);
+    const projection = yield* makeFrozenProjection(
+      { values: [] as number[] },
+      (state) => state,
+      () => undefined,
+    );
     yield* projection.transition((state) =>
       Effect.succeed([undefined, { values: [...state.values, 1] }] as const),
     );

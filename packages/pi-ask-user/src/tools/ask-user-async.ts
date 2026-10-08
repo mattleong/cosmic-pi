@@ -47,9 +47,13 @@ export function registerAsyncAskUserTools(
   scheduleAnimation?: CompactAnimationScheduler,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
-  const expandedContent = {
-    renderCall: <Args>(args: Args, theme: Theme) => argumentsSection(theme, args),
-    renderResult: renderAsyncContent,
+  const presentation = {
+    compactSummary: asyncAskUserCompactSummary,
+    expandedContent: {
+      renderCall: <Args>(args: Args, theme: Theme) => argumentsSection(theme, args),
+      renderResult: renderAsyncContent,
+    },
+    scheduleAnimation,
   };
   pi.registerTool(
     shell(
@@ -78,11 +82,7 @@ export function registerAsyncAskUserTools(
           }));
         },
       }),
-      {
-        compactSummary: asyncAskUserCompactSummary,
-        expandedContent,
-        scheduleAnimation,
-      },
+      presentation,
     ),
   );
   pi.registerTool(
@@ -114,11 +114,7 @@ export function registerAsyncAskUserTools(
           }));
         },
       }),
-      {
-        compactSummary: asyncAskUserCompactSummary,
-        expandedContent,
-        scheduleAnimation,
-      },
+      presentation,
     ),
   );
 }

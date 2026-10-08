@@ -28,6 +28,7 @@ import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
 import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { ChildProcessHandle, ChildWireEvent } from "../src/boundary/child-process.ts";
+import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { BackendEvent, BackendHandle } from "../src/backend/model.ts";
 import type { SubagentError } from "../src/run/errors.ts";
 
@@ -69,6 +70,7 @@ const piChild = (
   events,
   awaitExit: Effect.never,
   send: () => Effect.void,
+  acknowledge: () => {},
   sendContactControl: () => Effect.void,
   terminate: () => Effect.void,
   ...overrides,
@@ -82,7 +84,7 @@ const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope>) =>
 it.effect("Pi reconciles cumulative charges before settlement without blocking RPC dispatch", () =>
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
-    const exited = yield* Deferred.make<Extract<ChildWireEvent, { type: "exit" }>>();
+    const exited = yield* Deferred.make<ProcessExit>();
     let tokens = 100;
     let closeOnStats = false;
     const backend = yield* spawnPi(
@@ -93,10 +95,7 @@ it.effect("Pi reconciles cumulative charges before settlement without blocking R
             closeOnStats && command.type === "get_session_stats"
               ? Effect.sync(() => {
                   Queue.endUnsafe(childEvents);
-                  Deferred.doneUnsafe(
-                    exited,
-                    Effect.succeed({ type: "exit", exitCode: 0, stderr: "" }),
-                  );
+                  Deferred.doneUnsafe(exited, Effect.succeed({ exitCode: 0, stderr: "" }));
                 })
               : Queue.offer(childEvents, rpcResponse(command, { tokens, cost: tokens / 100 })).pipe(
                   Effect.asVoid,
@@ -263,15 +262,15 @@ for (const failure of ["malformed", "rejected", "timeout"] as const)
   );
 
 const rawEvent = (id: number): LocalCliWireEvent => ({
-  type: "exit",
-  exitCode: 0,
-  stderr: `raw-${id}`,
+  type: "protocol_error",
+  message: `raw-${id}`,
 });
 const backendEvent = (epoch: number): BackendEvent => ({
   type: "activity",
   assignmentEpoch: epoch,
 });
-const rawId = (raw: LocalCliWireEvent): string => (raw.type === "exit" ? raw.stderr : "");
+const rawId = (raw: LocalCliWireEvent): string =>
+  raw.type === "protocol_error" ? raw.message : "";
 
 const turnStartedFrame = (turnId: string) => ({
   method: "turn/started",
@@ -423,8 +422,7 @@ describe("local Codex event driver raw safety", () => {
           supervisorEvents,
           {
             hasAcceptedReport: () => Effect.succeed(true),
-            acceptedReportForEpoch: () => Effect.sync(() => undefined),
-            close: Effect.sync(() => Queue.endUnsafe(supervisorEvents)),
+            acceptedReportForEpoch: () => Effect.undefined,
           },
         );
         const backend = yield* makeLocalCodexBackendDriver(
@@ -443,26 +441,26 @@ describe("local Codex event driver raw safety", () => {
   it.live("releases consumed raws exactly once and keeps owned raws until acknowledgement", () =>
     withCodexEventDriver(({ backend, acknowledged, offerRaw }) =>
       Effect.gen(function* () {
-        const rawExit: LocalCliWireEvent = { type: "exit", exitCode: 0, stderr: "raw-exit" };
+        const rawStale: LocalCliWireEvent = { type: "message", value: { id: "stale", result: {} } };
         const rawTurn1: LocalCliWireEvent = { type: "message", value: turnStartedFrame("turn-1") };
-        // Foreign terminal frames are released without owning a normalized event;
+        // Uncorrelated responses are released without owning a normalized event;
         // the first turn/started owns its raw behind the normalized run_started event.
-        offerRaw(rawExit);
+        offerRaw(rawStale);
         offerRaw(rawTurn1);
         const started = yield* takeBackendEvent(backend);
         expect(started).toMatchObject({ type: "run_started" });
-        expect([...acknowledged]).toEqual([rawExit]);
+        expect([...acknowledged]).toEqual([rawStale]);
         backend.acknowledge(started);
-        expect([...acknowledged]).toEqual([rawExit, rawTurn1]);
+        expect([...acknowledged]).toEqual([rawStale, rawTurn1]);
         // A second acknowledgement of the released event is inert.
         backend.acknowledge(started);
-        expect([...acknowledged]).toEqual([rawExit, rawTurn1]);
+        expect([...acknowledged]).toEqual([rawStale, rawTurn1]);
 
         // A duplicate turn/started for the already-tracked turn is released exactly once.
         offerRaw({ type: "message", value: turnStartedFrame("turn-1") });
         yield* settle;
         expect([...acknowledged]).toEqual([
-          rawExit,
+          rawStale,
           rawTurn1,
           { type: "message", value: turnStartedFrame("turn-1") },
         ]);

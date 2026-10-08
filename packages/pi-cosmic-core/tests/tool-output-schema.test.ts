@@ -3,7 +3,8 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import { describe, expect, it } from "vitest";
-import { toPiToolOutputSchema, ToolOutputSchemaError } from "../index.ts";
+import { toPiToolOutputSchema, ToolOutputSchemaError } from "../src/schema/tool-output.ts";
+import { thrownInstance } from "./support/thrown.ts";
 
 interface Task {
   readonly id: string;
@@ -36,16 +37,6 @@ const withReference = (reference: string) =>
     ),
   });
 
-const rejection = (schema: Schema.Constraint): ToolOutputSchemaError => {
-  try {
-    toPiToolOutputSchema(schema);
-  } catch (error) {
-    if (error instanceof ToolOutputSchemaError) return error;
-    throw error;
-  }
-  throw new Error("expected the output schema to be rejected");
-};
-
 describe("toPiToolOutputSchema", () => {
   it("returns a self-contained schema whose references resolve within it", () => {
     const json = toPiToolOutputSchema(Output);
@@ -70,7 +61,9 @@ describe("toPiToolOutputSchema", () => {
       "#",
       "#/$defs/Task/properties/id",
     ]) {
-      const error = rejection(withReference(reference));
+      const error = thrownInstance(ToolOutputSchemaError, () =>
+        toPiToolOutputSchema(withReference(reference)),
+      );
       expect(error.path.startsWith("/properties/note/")).toBe(true);
       expect(error.path.endsWith("/$ref")).toBe(true);
     }

@@ -43,6 +43,7 @@ import {
   type SubagentStartContract,
   type SubagentStatusContract,
 } from "./contract-schema.ts";
+import { nonNegativeInteger } from "./details.ts";
 import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
 import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome } from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
@@ -53,9 +54,6 @@ const envelope = <Tool extends SubagentContractTool>(tool: Tool) =>
 
 const batchOutcome = <Success extends string>(succeeded: number, total: number, success: Success) =>
   succeeded === 0 ? ("failed" as const) : succeeded === total ? success : ("partial" as const);
-
-const count = (value: number): number =>
-  Number.isFinite(value) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(value))) : 0;
 
 /** Redacted, single-line, bounded metadata; blank or control-only text is absent. */
 const metadata = (value: string | undefined, maximum: number): string | undefined => {
@@ -73,7 +71,7 @@ const hasId = (id: string | undefined): id is string => id !== undefined && id.l
 const projectRecovery = (recovery: FailedStartRecovery): ContractRecovery => ({
   cleanup: recovery.cleanupDisposition,
   disposition: recovery.retryDisposition,
-  remainingCandidateCount: count(recovery.remainingCandidateCount),
+  remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
 });
 
 const projectFailure = (
@@ -98,41 +96,35 @@ const projectAttention = (run: SubagentRunView): ContractAttention | undefined =
 };
 
 const projectWarnings = (run: SubagentRunView): ContractRunTarget["warnings"] => {
+  const warnings: Array<ContractRunTarget["warnings"][number]> = [];
   const warning = metadata(run.warning, MAX_CONTRACT_MESSAGE_CHARS);
   const system = metadata(run.systemWarning, MAX_CONTRACT_MESSAGE_CHARS);
+  if (warning !== undefined)
+    warnings.push({ ...(run.warningSource && { source: run.warningSource }), message: warning });
   // Source identity, not prose, decides whether the system slot repeats the current warning.
   const repeatsCurrent = run.warningSource === "system" && run.systemWarning === run.warning;
-  return [
-    ...(warning === undefined
-      ? []
-      : [
-          {
-            ...(run.warningSource !== undefined && { source: run.warningSource }),
-            message: warning,
-          },
-        ]),
-    ...(system === undefined || repeatsCurrent
-      ? []
-      : [{ source: "system" as const, message: system }]),
-  ];
+  if (system !== undefined && !repeatsCurrent) warnings.push({ source: "system", message: system });
+  return warnings;
 };
 
+const WITHHELD_REPORT_STATUS = {
+  available: "deferred",
+  claimed: "claimed",
+  delivered: "already_delivered",
+  missing: "missing",
+} as const satisfies Record<
+  NonNullable<SubagentRunView["reportStatus"]>,
+  ContractWithheldReport["status"]
+>;
+
 /** Every report fact that carries no text; used wherever this call does not deliver one. */
-const withheldReport = (run: SubagentRunView): ContractWithheldReport => {
-  if (!isAssignmentFinishedRunState(run.state)) return { status: "not_finished" };
-  switch (run.reportStatus) {
-    case "available":
-      return { status: "deferred" };
-    case "claimed":
-      return { status: "claimed" };
-    case "delivered":
-      return { status: "already_delivered" };
-    case "missing":
-      return { status: "missing" };
-    case undefined:
-      return { status: "unknown" };
-  }
-};
+const withheldReport = (run: SubagentRunView): ContractWithheldReport => ({
+  status: !isAssignmentFinishedRunState(run.state)
+    ? "not_finished"
+    : run.reportStatus === undefined
+      ? "unknown"
+      : WITHHELD_REPORT_STATUS[run.reportStatus],
+});
 
 const reportText = (value: string | undefined): string | undefined => {
   const cleaned = value === undefined ? "" : stripTerminalControls(value);
@@ -172,7 +164,7 @@ const targetFields = (
     ...(profile !== undefined && { profile }),
     state: run.state,
     finished: isAssignmentFinishedRunState(run.state),
-    reportGeneration: count(run.reportGeneration),
+    reportGeneration: nonNegativeInteger(run.reportGeneration),
     writeIntent: run.writeIntent,
     capabilities: [...new Set(run.capabilities)],
     ...(hasId(run.predecessorRunId) && { predecessorRunId: run.predecessorRunId }),

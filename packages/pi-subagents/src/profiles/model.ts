@@ -30,9 +30,6 @@ export const mapProfileIds = <A>(f: (id: ProfileId) => A): Record<ProfileId, A> 
 export const isProfileId = (value: string): value is ProfileId =>
   PROFILE_IDS.some((profileId) => profileId === value);
 
-export const normalizeProfileId = (value: string): ProfileId | undefined =>
-  isProfileId(value) ? value : undefined;
-
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
 export const PROFILE_CANDIDATE_HOSTS = ["local"] as const;
@@ -48,19 +45,27 @@ const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[[1-9][0-9
 export const isSafeNativeModelSelector = (selector: string): boolean =>
   selector.length <= MAX_PROFILE_MODEL_SELECTOR_CHARS && SAFE_NATIVE_MODEL_SELECTOR.test(selector);
 
+const splitPiModelSelector = (
+  selector: string,
+): { readonly provider: string; readonly model: string } | undefined => {
+  const slash = selector.indexOf("/");
+  if (slash <= 0 || slash >= selector.length - 1) return undefined;
+  return { provider: selector.slice(0, slash), model: selector.slice(slash + 1) };
+};
+
 /** Runtime-specific native selector grammar; catalog canonicalization remains a runtime rule. */
 export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
   if (!isSafeNativeModelSelector(selector)) return false;
   if (selector === "parent") return runtime === "pi";
   if (runtime !== "pi") return true;
-  const slash = selector.indexOf("/");
-  if (slash <= 0 || slash >= selector.length - 1) return false;
-  const provider = selector.slice(0, slash);
-  const model = selector.slice(slash + 1);
+  const split = splitPiModelSelector(selector);
   return (
-    /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/.test(provider) &&
-    /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(model) &&
-    model.split("/").every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
+    split !== undefined &&
+    /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/.test(split.provider) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(split.model) &&
+    split.model
+      .split("/")
+      .every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
   );
 };
 
@@ -118,14 +123,6 @@ export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): Prof
 export const isLocalPiProfileCandidate = (
   candidate: Pick<ProfileCandidate, "host" | "runtime">,
 ): boolean => candidate.host === "local" && candidate.runtime === "pi";
-
-const splitPiModelSelector = (
-  selector: string,
-): { readonly provider: string; readonly model: string } | undefined => {
-  const slash = selector.indexOf("/");
-  if (slash <= 0 || slash >= selector.length - 1) return undefined;
-  return { provider: selector.slice(0, slash), model: selector.slice(slash + 1) };
-};
 
 /**
  * Static persisted-route policy. `parent` is deferred to the live parent-model check, explicit Pi
@@ -197,9 +194,8 @@ export const sameProfileCandidate = Equivalence.make<ProfileCandidate>(
     PROFILE_CANDIDATE_BASE_KEYS.every((key) => left[key] === right[key]) &&
     (left.openaiFastMode ?? false) === (right.openaiFastMode ?? false),
 );
-export const sameProfileCandidates = Equivalence.Array(sameProfileCandidate);
 export const sameProfileRoute = Equivalence.mapInput(
-  sameProfileCandidates,
+  Equivalence.Array(sameProfileCandidate),
   (route: ProfileRoute) => route.candidates,
 );
 export const PROFILE_ROUTE_SOURCES = [
@@ -247,9 +243,6 @@ export interface SubagentSelectionProvenance {
   readonly source: SubagentSelectionSource;
   /** Configuration layer that supplied the selected ordered route. */
   readonly routeSource?: ProfileRouteSource | undefined;
-  readonly host?: SubagentHost | undefined;
-  readonly runtime?: SubagentRuntime | undefined;
-  readonly closeOnReport?: boolean | undefined;
   /** Zero-based configured candidate index. */
   readonly candidateIndex?: number | undefined;
   readonly reason: string;

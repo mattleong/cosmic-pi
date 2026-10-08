@@ -1,13 +1,15 @@
 import * as Effect from "effect/Effect";
-import { MAX_WRITE_CLAIMS, normalizeWriteClaims } from "../domain/write-claims.ts";
+import type { CanonicalWriterCwd } from "../boundary/writer-lease.ts";
+import {
+  MAX_WRITE_CLAIMS,
+  normalizeWriteClaims,
+  writeClaimContains,
+} from "../domain/write-claims.ts";
 import { writerConflictError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import { snapshotView } from "./state.ts";
-
-const includesClaim = (claims: ReadonlyArray<string>, path: string): boolean =>
-  claims.some((claim) => claim.toLocaleLowerCase("en-US") === path.toLocaleLowerCase("en-US"));
 
 const isBlockingClaimQuestionTool = (toolName: string): boolean => {
   const normalized = toolName.trim().toLocaleLowerCase("en-US");
@@ -29,10 +31,12 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
       : Effect.fail(invalid(normalized.code, normalized.message));
   };
 
-  const claimChangeRecord = (id: string) =>
+  /** Under the lock: the writer, with its cwd, once its claims may change. */
+  const claimChangeTarget = (id: string) =>
     Effect.gen(function* () {
       const record = yield* requireRecord(id);
-      if (record.view.writeIntent !== "writer" || !record.canonicalWriterCwd || !record.writerPool)
+      const { canonicalWriterCwd: cwd, writerPool: pool } = record;
+      if (record.view.writeIntent !== "writer" || !cwd || !pool)
         return yield* invalid(
           "write_claims_unavailable",
           `Subagent ${id} is not an active writer with shared-cwd ownership.`,
@@ -46,14 +50,12 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
         (toolName) => !isBlockingClaimQuestionTool(toolName),
       );
       const waitingForParentClaimDecision =
-        record.view.state === "waiting_for_parent" &&
-        !record.writerPool.admissionPaused &&
-        !hasOtherActiveTool;
+        record.view.state === "waiting_for_parent" && !pool.admissionPaused && !hasOtherActiveTool;
       const confirmedPausedViolationOffender =
         record.view.state === "paused" &&
-        record.writerPool.state === "held" &&
-        record.writerPool.admissionPaused &&
-        record.writerPool.violationRunIds.has(id) &&
+        pool.state === "held" &&
+        pool.admissionPaused &&
+        pool.violationRunIds.has(id) &&
         record.activeTools.size === 0 &&
         !record.pauseRequested &&
         record.pauseOutcome === undefined &&
@@ -63,7 +65,7 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
           "write_claim_change_not_waiting",
           `Subagent ${id} must be blocked on a parent claim question or be the confirmed paused claim-violation offender, with no other active tool, before its claims can change.`,
         );
-      return record;
+      return { record, cwd };
     });
 
   /** Normalizes `paths`, commits the claims `next` returns under the lock, then notifies peers. */
@@ -74,15 +76,15 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
       current: ReadonlyArray<string>,
       requested: ReadonlyArray<string>,
       record: RunRecord,
+      cwd: CanonicalWriterCwd,
     ) => Effect.Effect<ReadonlyArray<string>, SubagentError>,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const requested = yield* normalizePaths(paths);
       const view = yield* withLock(
         Effect.gen(function* () {
-          const record = yield* claimChangeRecord(id);
-          const claims = yield* next(record.view.writeClaims ?? [], requested, record);
-          record.writerPool?.members.set(record.view.id, claims);
+          const { record, cwd } = yield* claimChangeTarget(id);
+          const claims = yield* next(record.view.writeClaims ?? [], requested, record, cwd);
           record.view = { ...record.view, writeClaims: claims };
           yield* publish;
           return snapshotView(record.view);
@@ -93,31 +95,23 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
     });
 
   const grant = (id: string, paths: ReadonlyArray<string>) =>
-    changeClaims(id, paths, (current, additions, record) =>
+    changeClaims(id, paths, (current, additions, record, cwd) =>
       Effect.gen(function* () {
-        const canonicalCwd = record.canonicalWriterCwd;
-        if (!canonicalCwd)
-          return yield* invalid(
-            "writer_cwd_canonicalization_missing",
-            `Subagent ${id} has no canonical writer cwd ownership evidence.`,
-          );
-        const combined = [...current, ...additions.filter((path) => !includesClaim(current, path))];
+        const combined = [
+          ...current,
+          ...additions.filter((path) => !writeClaimContains(current, path)),
+        ];
         if (combined.length > MAX_WRITE_CLAIMS)
           return yield* invalid(
             "too_many_write_claims",
             `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
           );
-        const conflictPools =
+        // The pause a confirmed offender caused on its own pool doesn't block its repair.
+        const pools =
           record.view.state === "paused" && record.writerPool?.violationRunIds.has(id)
-            ? new Map([...writerPools].filter(([digest]) => digest !== canonicalCwd.digest))
+            ? new Map()
             : writerPools;
-        const conflict = writerConflictError(
-          records,
-          conflictPools,
-          canonicalCwd,
-          combined,
-          record,
-        );
+        const conflict = writerConflictError(records, pools, cwd, combined, record);
         if (conflict) return yield* conflict;
         return combined;
       }),
@@ -126,13 +120,13 @@ export function makeRunWriteClaimControl(dependencies: RunContext) {
   const revoke = (id: string, paths: ReadonlyArray<string>) =>
     changeClaims(id, paths, (current, removals) =>
       Effect.gen(function* () {
-        const missing = removals.find((path) => !includesClaim(current, path));
+        const missing = removals.find((path) => !writeClaimContains(current, path));
         if (missing)
           return yield* invalid(
             "write_claim_not_owned",
             `Subagent ${id} does not claim ${missing}.`,
           );
-        const remaining = current.filter((existing) => !includesClaim(removals, existing));
+        const remaining = current.filter((existing) => !writeClaimContains(removals, existing));
         if (remaining.length === 0)
           return yield* invalid(
             "write_claims_cannot_be_empty",

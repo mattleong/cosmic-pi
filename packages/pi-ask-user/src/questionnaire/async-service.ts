@@ -1,6 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -10,6 +11,7 @@ import {
   MAX_WORK_DESCRIPTION_LENGTH,
   type AskUserAsyncControl,
   type AskUserAsyncRequest,
+  type AskUserRequest,
 } from "./schema.ts";
 import type { QuestionnaireQueue, QuestionnaireTicket } from "./queue.ts";
 import type { AskUserHost, QuestionnaireActivity } from "./service.ts";
@@ -47,7 +49,7 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
   queue: QuestionnaireQueue,
   delivery: AsyncDelivery | undefined,
   idPrefix: string,
-  activity?: QuestionnaireActivity,
+  activity: QuestionnaireActivity,
 ) {
   const parentScope = yield* Effect.scope;
   const scope = yield* Scope.fork(parentScope, "sequential");
@@ -68,7 +70,17 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
     Ref.update(state, (entries) =>
       entries.map((entry) => (entry.snapshot.requestId === id ? f(entry) : entry)),
     );
+  /** Merges a change into one request's snapshot; undefined leaves the entry unchanged. */
+  const patch = (
+    id: string,
+    change: (entry: Entry) => Partial<AsyncQuestionnaireSnapshot> | undefined,
+  ) =>
+    update(id, (entry) => {
+      const next = change(entry);
+      return next ? { ...entry, snapshot: { ...entry.snapshot, ...next } } : entry;
+    });
 
+  // Retries re-pend only below three attempts, so a claim never sees an exhausted request.
   const deliver = (id: string): Effect.Effect<void> =>
     Effect.gen(function* () {
       if (yield* Ref.get(closed)) return;
@@ -81,37 +93,24 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
           entry.snapshot.delivery !== "pending"
         )
           return [undefined, entries] as const;
-        if (entry.deliveryAttempts >= 3) {
-          return [
-            undefined,
-            entries.map((item) =>
-              item === entry
-                ? { ...entry, snapshot: { ...entry.snapshot, delivery: "failed" as const } }
-                : item,
-            ),
-          ] as const;
-        }
-        const snapshot = { ...entry.snapshot, delivery: "sending" as const };
-        const deliveryAttempts = entry.deliveryAttempts + 1;
-        return [
-          { snapshot, deliveryAttempts },
-          entries.map((item) => (item === entry ? { ...entry, snapshot, deliveryAttempts } : item)),
-        ] as const;
+        const next: Entry = {
+          ...entry,
+          snapshot: { ...entry.snapshot, delivery: "sending" },
+          deliveryAttempts: entry.deliveryAttempts + 1,
+        };
+        return [next, entries.map((item) => (item === entry ? next : item))] as const;
       });
       if (!claimed || !delivery) return;
       const result = yield* Effect.exit(delivery(claimed.snapshot));
-      yield* update(id, (entry) => ({
-        ...entry,
-        snapshot: { ...entry.snapshot, delivery: Exit.isSuccess(result) ? "sent" : "failed" },
-      }));
+      yield* patch(id, () => ({ delivery: Exit.isSuccess(result) ? "sent" : "failed" }));
       if (Exit.isFailure(result) && claimed.deliveryAttempts < 3 && !(yield* Ref.get(closed))) {
         yield* Effect.forkIn(
           Effect.sleep("1 second").pipe(
             Effect.andThen(
-              update(id, (entry) =>
+              patch(id, (entry) =>
                 entry.snapshot.delivery === "failed" && !entry.waiter
-                  ? { ...entry, snapshot: { ...entry.snapshot, delivery: "pending" } }
-                  : entry,
+                  ? { delivery: "pending" }
+                  : undefined,
               ),
             ),
             Effect.andThen(deliver(id)),
@@ -123,29 +122,27 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
 
   const present = (
     entry: Entry,
-    request: AskUserAsyncRequest,
+    request: AskUserRequest,
     ticket: QuestionnaireTicket,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
+      const id = entry.snapshot.requestId;
       const show = Effect.gen(function* () {
-        yield* update(entry.snapshot.requestId, (current) => ({
-          ...current,
-          snapshot: { ...current.snapshot, presentation: "opening" },
-        }));
-        if (activity) yield* activity.presenting(entry.snapshot.requestId);
+        yield* patch(id, () => ({ presentation: "opening" }));
+        yield* activity.presenting(id);
+        // Mounting, hiding and resuming move a pending request between open and hidden.
+        const visibility = yield* Queue.unbounded<"open" | "hidden">();
         yield* Effect.forkChild(
-          Deferred.await(entry.opened).pipe(
-            Effect.andThen(
-              update(entry.snapshot.requestId, (current) =>
-                current.snapshot.status === "pending"
-                  ? { ...current, snapshot: { ...current.snapshot, presentation: "open" } }
-                  : current,
+          Queue.take(visibility).pipe(
+            Effect.flatMap((presentation) =>
+              patch(id, (current) =>
+                current.snapshot.status === "pending" ? { presentation } : undefined,
               ),
             ),
-            Effect.ignore,
+            Effect.forever,
           ),
         );
-        return yield* host(request, entry.opened, !ticket.immediate);
+        return yield* host(request, { opened: entry.opened, visibility }, !ticket.immediate);
       });
       const result = yield* Effect.exit(
         Effect.raceFirst(
@@ -156,19 +153,12 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
         ).pipe(Effect.ensuring(ticket.close)),
       );
       const outcome = Exit.isSuccess(result) ? result.value : undefined;
-      yield* update(entry.snapshot.requestId, (current) => ({
-        ...current,
-        snapshot: outcome
-          ? {
-              ...current.snapshot,
-              status: outcome.outcome,
-              presentation: "settled",
-              delivery: "pending",
-              outcome,
-            }
-          : { ...current.snapshot, status: "failed", presentation: "settled", delivery: "none" },
-      }));
-      if (activity) yield* activity.settled(entry.snapshot.requestId, outcome?.outcome ?? "failed");
+      yield* patch(id, () =>
+        outcome
+          ? { status: outcome.outcome, presentation: "settled", delivery: "pending", outcome }
+          : { status: "failed", presentation: "settled", delivery: "none" },
+      );
+      yield* activity.settled(id, outcome?.outcome ?? "failed");
       yield* Deferred.fail(
         entry.opened,
         new AskUserHostError({
@@ -177,15 +167,10 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
         }),
       );
       yield* Deferred.succeed(entry.completed, undefined);
-      yield* deliver(entry.snapshot.requestId);
+      yield* deliver(id);
     });
 
   const start = Effect.fn("AskUserService.startAsync")(function* (request: AskUserAsyncRequest) {
-    if (!delivery)
-      return yield* new AskUserAsyncError({
-        reason: "unavailable",
-        message: "Async questionnaires require TUI mode.",
-      });
     const normalized = normalizeAskUserRequest(request);
     const validationError = validateAskUserRequest(normalized);
     if (validationError) return yield* validationError;
@@ -243,15 +228,13 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
             yield* ticket.close;
             return yield* asyncBusy();
           }
-          if (activity) {
-            if (admitted.evicted) yield* activity.removed(admitted.evicted);
-            yield* activity.admitted(
-              requestId,
-              normalized,
-              Deferred.succeed(entry.cancel, undefined).pipe(Effect.asVoid),
-            );
-          }
-          yield* Effect.forkIn(present(entry, { ...request, ...normalized }, ticket), scope, {
+          if (admitted.evicted) yield* activity.removed(admitted.evicted);
+          yield* activity.admitted(
+            requestId,
+            normalized,
+            Effect.asVoid(Deferred.succeed(entry.cancel, undefined)),
+          );
+          yield* Effect.forkIn(present(entry, normalized, ticket), scope, {
             startImmediately: true,
           });
           return { reserved, snapshot, entry };
@@ -268,7 +251,6 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
   const wait = (id: string, cancel: boolean) =>
     Effect.suspend(() => {
       const owner = Symbol();
-      let acknowledge = false;
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const claimed = yield* Ref.modify(
@@ -291,33 +273,25 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
             return { requests: [(yield* get(id)).snapshot] };
           }
           if (claimed === "missing") return yield* notFound();
-          const entry = claimed;
-          if (cancel) yield* Deferred.succeed(entry.cancel, undefined);
-          return yield* restore(Deferred.await(entry.completed)).pipe(
-            Effect.andThen(
-              Effect.gen(function* () {
-                const { snapshot } = yield* get(id);
-                acknowledge = ["pending", "failed", "none"].includes(snapshot.delivery);
-                return {
-                  requests: [
-                    {
-                      ...snapshot,
-                      delivery: acknowledge ? ("waiter" as const) : snapshot.delivery,
-                    },
-                  ],
-                };
-              }),
-            ),
-          );
+          if (cancel) yield* Deferred.succeed(claimed.cancel, undefined);
+          yield* restore(Deferred.await(claimed.completed));
+          const { snapshot } = yield* get(id);
+          const acknowledge = ["pending", "failed", "none"].includes(snapshot.delivery);
+          return {
+            requests: [
+              { ...snapshot, delivery: acknowledge ? ("waiter" as const) : snapshot.delivery },
+            ],
+          };
         }),
       ).pipe(
         Effect.onExit((exit) =>
           Effect.gen(function* () {
-            const release = (commit: boolean) =>
+            // A success reporting `waiter` publishes it; an unowned busy claim releases nothing.
+            const release = (acknowledge: boolean) =>
               update(id, (current) => {
                 if (current.waiter !== owner) return current;
                 const { waiter: _waiter, ...rest } = current;
-                return acknowledge && commit
+                return acknowledge
                   ? { ...rest, snapshot: { ...rest.snapshot, delivery: "waiter" } }
                   : rest;
               });
@@ -327,7 +301,9 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
             // publish a stale Success captured before masked cleanup yielded.
             const completion = Exit.isFailure(exit)
               ? exit
-              : yield* Effect.exit(Effect.interruptible(release(true)));
+              : yield* Effect.exit(
+                  Effect.interruptible(release(exit.value.requests[0]?.delivery === "waiter")),
+                );
             // If interruption won, only release our still-owned claim. If the
             // commit won, ownership is gone and later cancellation cannot undo it.
             if (Exit.isFailure(completion)) yield* release(false);
@@ -342,7 +318,7 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       return {
         requests: input.requestId
           ? [(yield* get(input.requestId)).snapshot]
-          : (yield* Ref.get(state)).map((entry) => {
+          : (yield* Ref.get(state)).map((entry): AsyncQuestionnaireSnapshot => {
               const { outcome: _outcome, ...summary } = entry.snapshot;
               return summary;
             }),
@@ -355,8 +331,5 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
       });
     return yield* wait(input.requestId, input.action === "cancel");
   });
-  return {
-    start,
-    control,
-  };
+  return { start, control };
 });

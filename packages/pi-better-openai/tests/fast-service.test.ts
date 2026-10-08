@@ -1,3 +1,4 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -16,7 +17,7 @@ import {
 import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";
-import { initialProjection } from "../src/usage/projection.ts";
+import { initialProjection, type OpenAIProjection } from "../src/usage/projection.ts";
 import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
 function makeContext(initialModel: string) {
@@ -33,36 +34,52 @@ const fakeUsageLayer = Layer.succeed(OpenAIUsageService, {
   refresh: () => Effect.void,
   contextChanged: () => Effect.void,
   updateSetting: () => Effect.void,
-  persistFast: (_active, _desiredActive, afterCommit = Effect.void) =>
-    Effect.uninterruptible(afterCommit),
-  readConfigDocument: () => Effect.succeed({}),
+  persistFast: (_active, _desiredActive, afterCommit) => Effect.uninterruptible(afterCommit),
+  readConfigDocument: Effect.succeed({}),
 });
+
+const PROJECT_CONFIG = "/project/.pi/extensions/pi-better-openai.json";
+const GLOBAL_CONFIG = "/agent/extensions/pi-better-openai.json";
+
+/** Fast mode over the real usage service and config store for a trusted `/project`. */
+const persistedFastLayer = (
+  documents: ReturnType<typeof makeInMemoryDocuments>,
+  ctx: ExtensionContext,
+  projections: {
+    readonly fast: MutableRef.MutableRef<FastSnapshot>;
+    readonly usage?: MutableRef.MutableRef<OpenAIProjection>;
+  },
+  http: Parameters<typeof jsonHttpTestLayer>[0] = () => Effect.die("unexpected HTTP request"),
+) =>
+  FastModeService.layer({ projection: projections.fast }).pipe(
+    Layer.provideMerge(
+      OpenAIUsageService.layer({
+        context: MutableRef.make(ctx),
+        cwd: "/project",
+        projection: projections.usage ?? MutableRef.make(initialProjection()),
+        onChange: () => undefined,
+        startPolling: false,
+        projectTrusted: true,
+      }),
+    ),
+    Layer.provide(
+      Layer.mergeAll(
+        documents.layer,
+        Path.layer,
+        AgentDirectory.layer("/agent"),
+        jsonHttpTestLayer(http),
+      ),
+    ),
+  );
 
 describe("FastModeService", () => {
   it.effect("publishes persisted fast state only from the atomic afterCommit region", () => {
-    const documents = makeInMemoryDocuments();
-    const usageProjection = MutableRef.make(initialProjection());
+    const documents = makeInMemoryDocuments({
+      [GLOBAL_CONFIG]: { unknownField: "keep me", usage: { unknownUsageField: 123 } },
+    });
     const fastProjection = MutableRef.make<FastSnapshot>(initialFastSnapshot());
     const current = makeContext("gpt-5.5");
-    const usageLayer = OpenAIUsageService.layer({
-      context: MutableRef.make(current.ctx),
-      cwd: "/project",
-      projection: usageProjection,
-      onChange: () => undefined,
-      startPolling: false,
-      projectTrusted: true,
-    });
-    const fastLayer = FastModeService.layer({ projection: fastProjection }).pipe(
-      Layer.provide(usageLayer),
-      Layer.provide(
-        Layer.mergeAll(
-          documents.layer,
-          Path.layer,
-          AgentDirectory.layer("/agent"),
-          jsonHttpTestLayer(() => Effect.die("unexpected HTTP request")),
-        ),
-      ),
-    );
+    const fastLayer = persistedFastLayer(documents, current.ctx, { fast: fastProjection });
 
     return Effect.gen(function* () {
       const fast = yield* FastModeService;
@@ -92,14 +109,97 @@ describe("FastModeService", () => {
       });
       yield* fast.modelChanged(current.ctx);
       expect(MutableRef.get(fastProjection)).toMatchObject({ active: false, desiredActive: false });
-      expect([...documents.documents.values()][0]).toMatchObject({
+      // Fast persistence rewrites only its own keys and preserves unknown fields.
+      expect([...documents.documents.values()][0]).toEqual({
         active: false,
         desiredActive: false,
+        unknownField: "keep me",
+        usage: { unknownUsageField: 123 },
       });
       yield* fast.setDesired(current.ctx, true);
       expect(MutableRef.get(fastProjection).desiredActive).toBe(true);
     }).pipe(provideBuiltLayer(fastLayer));
   });
+
+  it.effect("startup and model switches write config only when --fast changes the intent", () => {
+    const projectDocument = { image: { enabled: false } };
+    const documents = makeInMemoryDocuments({
+      [PROJECT_CONFIG]: projectDocument,
+      [GLOBAL_CONFIG]: { desiredActive: true },
+    });
+    const fastProjection = MutableRef.make<FastSnapshot>(initialFastSnapshot());
+    const current = makeContext("gpt-5.5");
+    return Effect.gen(function* () {
+      const fast = yield* FastModeService;
+      // The resolved intent came from the global document; the project file must stay untouched.
+      yield* fast.initialize(current.ctx, makeResolvedConfig({ desiredActive: true }), false);
+      current.setModel("future-model", "other-provider");
+      yield* fast.modelChanged(current.ctx);
+      expect(MutableRef.get(fastProjection)).toMatchObject({ desiredActive: true, active: false });
+      expect(documents.documents.get(PROJECT_CONFIG)).toEqual(projectDocument);
+
+      yield* fast.initialize(current.ctx, makeResolvedConfig(), true);
+      expect(documents.documents.get(PROJECT_CONFIG)).toEqual({
+        ...projectDocument,
+        active: false,
+        desiredActive: true,
+      });
+    }).pipe(
+      provideBuiltLayer(persistedFastLayer(documents, current.ctx, { fast: fastProjection })),
+    );
+  });
+
+  it.effect("a fast-only commit keeps an in-flight usage result", () => {
+    const usageProjection = MutableRef.make(initialProjection());
+    const requested = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const ctx = testContext({ token: JSON.stringify({ access: "token", accountId: "acct" }) });
+    const layer = persistedFastLayer(
+      makeInMemoryDocuments(),
+      ctx,
+      { fast: MutableRef.make(initialFastSnapshot()), usage: usageProjection },
+      () =>
+        Deferred.succeed(requested, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({
+            status: 200,
+            body: { rate_limit: { primary_window: { used_percent: 25 } } },
+          }),
+        ),
+    );
+    return Effect.gen(function* () {
+      const usage = yield* OpenAIUsageService;
+      const refresh = yield* usage.refresh({ force: true }).pipe(Effect.forkScoped);
+      yield* Deferred.await(requested);
+      yield* (yield* FastModeService).setDesired(ctx, true);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(refresh);
+      expect(MutableRef.get(usageProjection).snapshot?.sevenDayLeftPercent).toBe(75);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "a fast-only commit recomputes eligibility from usage settings changed elsewhere",
+    () => {
+      const usageProjection = MutableRef.make(initialProjection());
+      const documents = makeInMemoryDocuments();
+      const ctx = testContext({ oauth: false });
+      const layer = persistedFastLayer(documents, ctx, {
+        fast: MutableRef.make(initialFastSnapshot()),
+        usage: usageProjection,
+      });
+      return Effect.gen(function* () {
+        // An API-key model is eligible only once another session stops requiring subscriptions.
+        expect(MutableRef.get(usageProjection).eligible).toBe(false);
+        documents.documents.set(GLOBAL_CONFIG, { usage: { showOnlyOnSubscriptionModels: false } });
+        yield* (yield* FastModeService).setDesired(ctx, true);
+        expect(MutableRef.get(usageProjection)).toMatchObject({
+          eligible: true,
+          config: { usage: { showOnlyOnSubscriptionModels: false } },
+        });
+      }).pipe(provideBuiltLayer(layer));
+    },
+  );
 
   it.effect(
     "in-memory publication and private state commit together at an interruption checkpoint",

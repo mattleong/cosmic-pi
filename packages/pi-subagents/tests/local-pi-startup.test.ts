@@ -9,36 +9,43 @@ import * as Exit from "effect/Exit";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
+import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { SubagentError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+
+/** A local Pi child that records its first RPC request and exits only through `awaitExit`. */
+const fakePiChild = Effect.gen(function* () {
+  const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+  const receipt = yield* Deferred.make<ProcessExit>();
+  const state = { requested: false, readingExit: false };
+  const driver = makeLocalPiBackendDriver({
+    reclaimRunState: () => Effect.void,
+    spawn: () =>
+      Effect.succeed({
+        pid: 4242,
+        events,
+        awaitExit: Effect.sync(() => {
+          state.readingExit = true;
+        }).pipe(Effect.andThen(Deferred.await(receipt))),
+        send: () =>
+          Effect.sync(() => {
+            state.requested = true;
+          }),
+        acknowledge: () => {},
+        sendContactControl: () => Effect.void,
+        terminate: () => Effect.void,
+      }),
+  });
+  return { events, receipt, state, driver };
+});
 
 describe("local Pi startup transport closure", () => {
   for (const ending of ["exit", "shutdown"] as const) {
     it.effect(`keeps diagnostic receipt waiting interruptible on ${ending}`, () =>
       Effect.gen(function* () {
         const scope = yield* Scope.make();
-        const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
-        const receipt = yield* Deferred.make<Extract<ChildWireEvent, { type: "exit" }>>();
-        let requested = false;
-        let readingExit = false;
+        const { events, receipt, state, driver } = yield* fakePiChild;
         let failure: SubagentError | undefined;
-        const driver = makeLocalPiBackendDriver({
-          reclaimRunState: () => Effect.void,
-          spawn: () =>
-            Effect.succeed({
-              pid: 4242,
-              events,
-              awaitExit: Effect.sync(() => {
-                readingExit = true;
-              }).pipe(Effect.andThen(Deferred.await(receipt))),
-              send: () =>
-                Effect.sync(() => {
-                  requested = true;
-                }),
-              sendContactControl: () => Effect.void,
-              terminate: () => Effect.void,
-            }),
-        });
         const backend = yield* driver
           .spawn(backendLaunch())
           .pipe(Effect.provideService(Scope.Scope, scope));
@@ -52,15 +59,14 @@ describe("local Pi startup transport closure", () => {
           ),
           Effect.forkScoped,
         );
-        yield* yieldUntil(() => requested);
+        yield* yieldUntil(() => state.requested);
         // Force queue completion ahead of the receipt. The old generic finalizer rejected
         // startup here, permanently losing stderr that arrived through awaitExit afterward.
         Queue.endUnsafe(events);
-        yield* yieldUntil(() => readingExit || failure !== undefined);
+        yield* yieldUntil(() => state.readingExit || failure !== undefined);
         expect(failure).toBeUndefined();
         if (ending === "exit") {
           yield* Deferred.succeed(receipt, {
-            type: "exit",
             exitCode: 1,
             stderr: "Failed to load extension: missing entrypoint",
           });
@@ -78,29 +84,11 @@ describe("local Pi startup transport closure", () => {
 
   it.effect("keeps the fatal end of stderr that overflows the diagnostic budget", () =>
     Effect.gen(function* () {
-      const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
-      const receipt = yield* Deferred.make<Extract<ChildWireEvent, { type: "exit" }>>();
-      let requested = false;
-      const driver = makeLocalPiBackendDriver({
-        reclaimRunState: () => Effect.void,
-        spawn: () =>
-          Effect.succeed({
-            pid: 4242,
-            events,
-            awaitExit: Deferred.await(receipt),
-            send: () =>
-              Effect.sync(() => {
-                requested = true;
-              }),
-            sendContactControl: () => Effect.void,
-            terminate: () => Effect.void,
-          }),
-      });
+      const { events, receipt, state, driver } = yield* fakePiChild;
       const backend = yield* driver.spawn(backendLaunch());
       const initializing = yield* backend.controls.initialize.pipe(Effect.flip, Effect.forkScoped);
-      yield* yieldUntil(() => requested);
+      yield* yieldUntil(() => state.requested);
       yield* Deferred.succeed(receipt, {
-        type: "exit",
         exitCode: 1,
         stderr: `${"Warning: deprecated extension option\n".repeat(400)}Fatal: missing entrypoint`,
       });

@@ -28,6 +28,10 @@ const PROFILE_RESERVE_WIDTH = 12;
 export interface ActivityRowVisual {
   readonly kind: string;
   readonly title: string;
+  /**
+   * Whether another sibling follows each ancestor level; the widget drops the first, section
+   * level, since it shows no section rows.
+   */
   readonly continuations: readonly boolean[];
   readonly children: number;
   readonly expanded: boolean;
@@ -95,11 +99,12 @@ const fitStatus = (
 export function renderActivityRow(
   row: ActivityRowVisual,
   width: number,
-  theme?: Pick<Theme, "fg">,
-  presentation: "manager" | "widget" = "manager",
+  theme: Pick<Theme, "fg"> | undefined,
+  presentation: "manager" | "widget",
   focusedStyle?: (text: string) => string,
 ): string {
   const interactive = presentation === "manager";
+  const continuations = interactive ? row.continuations : row.continuations.slice(1);
   const paint = (tone: Tone, text: string) => theme?.fg(tone, text) ?? text;
   const awaited = row.awaited ? "◎ " : interactive ? "  " : "";
   const fold = interactive ? (row.children ? (row.expanded ? "▾ " : "▸ ") : "  ") : "";
@@ -108,7 +113,7 @@ export function renderActivityRow(
   const identityWidth = visibleWidth(row.kind) + (profileName ? visibleWidth(profileName) + 1 : 0);
   const omitted = interactive && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
   const minimumLeft =
-    visibleWidth(treeGuide(row.continuations, Math.min(12, row.continuations.length))) +
+    visibleWidth(treeGuide(continuations, Math.min(12, continuations.length))) +
     visibleWidth(fold) +
     markerWidth +
     2 +
@@ -127,7 +132,7 @@ export function renderActivityRow(
   const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - visibleWidth(fold) - 2) / 3)));
   const guide = paint(
     "dim",
-    clipToWidth(`${treeGuide(row.continuations, levels)}${fold}`, guideBudget, ""),
+    clipToWidth(`${treeGuide(continuations, levels)}${fold}`, guideBudget, ""),
   );
   const glyph = paint(row.color, row.glyph);
   const profile = profileName ? `${profileName} · ` : "";

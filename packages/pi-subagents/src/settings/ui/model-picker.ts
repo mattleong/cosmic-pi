@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   boundedMiddle,
-  makeModelPickerPage,
+  ModelPickerPage,
   type ModelPickerModel,
 } from "pi-cosmic-ui/manager/model-picker";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
@@ -13,9 +13,11 @@ import {
   supportsSubagentFastMode,
   type ProfileId,
 } from "../../profiles/model.ts";
-import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
+import type { SubagentEffort, SubagentRuntime } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
-import { profileRouteOptionLabel, runWithLabel } from "./profile-workspace-model.ts";
+import { profileRouteOptionLabel } from "../profile-route-editor.ts";
+import { runWithLabel } from "./profile-workspace-model.ts";
+import { selectHost } from "./profile-workspace-selectors.ts";
 
 /** A shared picker row plus the capabilities its selection applies to the candidate. */
 export interface ProfileModelOption extends ModelPickerModel {
@@ -32,7 +34,6 @@ export function createPiModelOptions(input: {
   readonly models: ReadonlyArray<ProjectedPiModel>;
   readonly parentModel?: ProjectedPiModel | undefined;
   readonly currentSelector: string;
-  readonly allowParent: boolean;
 }): ProfileModelOption[] {
   const models = input.models.flatMap((model) => {
     const selector = `${model.provider}/${model.id}`;
@@ -40,7 +41,6 @@ export function createPiModelOptions(input: {
       ? [{ ...model, selector, fastModeAvailable: supportsSubagentFastMode("pi", selector) }]
       : [];
   });
-  if (!input.allowParent) return models;
   const parent = input.parentModel;
   const canonical = parent ? `${parent.provider}/${parent.id}` : undefined;
   return [
@@ -111,7 +111,6 @@ export const retainUnavailableCurrent = (
 export interface ProfileModelPickerContext {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
-  readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
 }
 
@@ -121,7 +120,7 @@ export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptio
   readonly scopedChoices?: ReadonlyArray<ProfileModelOption> | undefined;
   readonly initialSelection?: string | undefined;
   readonly context: ProfileModelPickerContext;
-  readonly targetLabel?: string | undefined;
+  readonly targetLabel: string;
   readonly notice?: string | undefined;
   readonly select: (option: ProfileModelOption) => void;
   readonly cancel: () => void;
@@ -131,11 +130,11 @@ export interface ProfileModelPickerPageOptions extends SearchableSelectHostOptio
 export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOptions) => {
   const { context, initialSelection, scopedChoices, targetLabel } = options;
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
-  return makeModelPickerPage({
-    theme: options.theme,
-    breadcrumb: `${targetLabel ?? "/subagents profiles"} · ${context.profile} · ${optionLabel} · Model`,
+  return new ModelPickerPage({
+    ...selectHost(options),
+    breadcrumb: `${targetLabel} · ${context.profile} · ${optionLabel} · Model`,
     title: `Choose model · ${context.profile} · ${optionLabel}`,
-    subtitle: `${targetLabel ? `${targetLabel} · ` : ""}${runWithLabel(context)}`,
+    subtitle: `${targetLabel} · ${runWithLabel(context)}`,
     scopedModels: scopedChoices ?? [],
     allModels: options.choices,
     // Pi rows mark "(current)" from this; the Pi loader sets no defaultSelector, so it is the model.
@@ -145,10 +144,6 @@ export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOption
       ? "scoped"
       : "all",
     notice: options.notice,
-    getHeight: options.getHeight,
-    requestRender: options.requestRender,
-    matchesKeybinding: options.matchesKeybinding,
-    keybindingLabel: options.keybindingLabel,
     select: options.select,
     cancel: options.cancel,
   });

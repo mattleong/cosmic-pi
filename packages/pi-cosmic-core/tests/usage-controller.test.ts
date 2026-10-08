@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Scheduler from "effect/Scheduler";
 import { pausedScheduler } from "../testing.ts";
 import * as subscriptionRefresh from "../src/coordination/subscription-refresh.ts";
@@ -19,6 +20,7 @@ import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { yieldUntil } from "../src/testing/polling.ts";
 import {
   makeUsageRefreshController,
+  timedDiagnosticResult,
   type UsageControllerConfig,
   type UsageRefreshControllerOptions,
 } from "../src/usage-controller.ts";
@@ -76,7 +78,7 @@ const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "d
       startPolling: false,
       initialProjection: () => initialUsageProjection(),
       hiddenStatusText: "ineligible",
-      missingCredentialsMessage: () => "missing",
+      missingCredentialsMessage: "missing",
       clearAuthPatch: {},
       store: {
         resolveConfig: (_cwd, _agentDir, projectTrusted) => {
@@ -96,6 +98,40 @@ const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "d
     });
     return { controller, projection, notifications, observedTrust: () => observedTrust };
   });
+
+const nextConfig: UsageControllerConfig = {
+  ...config,
+  usage: { ...config.usage, refreshIntervalMs: 30_000 },
+};
+
+/** A settings store whose uninterruptible commit installs `nextConfig`, then runs `beforeHook`. */
+const committingSettings = (beforeHook: Effect.Effect<void> = Effect.void) => {
+  let durable = config;
+  let mutations = 0;
+  const overrides: Pick<Options<never>, "decodeSettingUpdate" | "store"> = {
+    decodeSettingUpdate: () => Effect.succeed((raw) => raw),
+    store: {
+      resolveConfig: () => Effect.succeed(durable),
+      readRawConfig: () => Effect.succeed({}),
+      resolveCommittedConfig: () => nextConfig,
+      modifyConfig: (_path, modify) =>
+        Effect.suspend(() => {
+          const modification = modify({});
+          return Effect.uninterruptible(
+            Effect.sync(() => {
+              mutations++;
+              durable = nextConfig;
+            }).pipe(
+              Effect.andThen(beforeHook),
+              Effect.andThen(modification.afterCommit ?? Effect.void),
+              Effect.as(modification.value),
+            ),
+          );
+        }),
+    },
+  };
+  return { overrides, durable: () => durable, mutations: () => mutations };
+};
 
 const fetching = (fetch: Effect.Effect<number>) => ({
   fetchOutcome: () =>
@@ -213,9 +249,9 @@ for (const invalidation of ["context", "settings"] as const) {
       const observedRefresh: typeof makeRefresh = (options) =>
         makeRefresh({
           ...options,
-          commit: (value, request) => {
+          commit: (value) => {
             validated = true;
-            return options.commit(value, request);
+            return options.commit(value);
           },
         });
       const boundary = vi
@@ -229,34 +265,11 @@ for (const invalidation of ["context", "settings"] as const) {
           return true;
         },
       };
-      let durableConfig = config;
-      const nextConfig = {
-        ...config,
-        usage: { ...config.usage, refreshIntervalMs: 30_000 },
-      };
-      let mutations = 0;
+      const settings = committingSettings();
       let requests = 0;
       const h = yield* fixture({
         ...fetching(Effect.sync(() => ++requests)),
-        decodeSettingUpdate: () => Effect.succeed((raw) => raw),
-        store: {
-          resolveConfig: () => Effect.succeed(durableConfig),
-          readRawConfig: () => Effect.succeed({}),
-          resolveCommittedConfig: () => nextConfig,
-          modifyConfig: (_path, modify) =>
-            Effect.suspend(() => {
-              const modification = modify({});
-              return Effect.uninterruptible(
-                Effect.sync(() => {
-                  mutations++;
-                  durableConfig = nextConfig;
-                }).pipe(
-                  Effect.andThen(modification.afterCommit ?? Effect.void),
-                  Effect.as(modification.value),
-                ),
-              );
-            }),
-        },
+        ...settings.overrides,
       });
       yield* h.controller.updateState((current) => ({ ...current, snapshot: 7 }));
       const refresh = yield* h.controller
@@ -277,7 +290,7 @@ for (const invalidation of ["context", "settings"] as const) {
           Effect.forkScoped,
         );
         for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
-        if (invalidation === "settings") expect(mutations).toBe(1);
+        if (invalidation === "settings") expect(settings.mutations()).toBe(1);
         expect(yield* Deferred.isDone(invalidated)).toBe(false);
         // The engine gate is still held: consumer state must not clear ahead of it.
         expect(MutableRef.get(h.projection).snapshot).toBe(7);
@@ -309,40 +322,19 @@ it.effect(
   () =>
     Effect.gen(function* () {
       let live = true;
-      let durable = config;
-      const nextConfig = {
-        ...config,
-        usage: { ...config.usage, refreshIntervalMs: 30_000 },
-      };
       let changes = 0;
       const committed = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      const settings = committingSettings(
+        Deferred.succeed(committed, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      );
       const h = yield* fixture({
         ...fetching(Effect.succeed(42)),
         canPublish: () => live,
         onChange: () => {
           changes++;
         },
-        decodeSettingUpdate: () => Effect.succeed((raw) => raw),
-        store: {
-          resolveConfig: () => Effect.succeed(durable),
-          readRawConfig: () => Effect.succeed({}),
-          resolveCommittedConfig: () => nextConfig,
-          modifyConfig: (_path, modify) =>
-            Effect.suspend(() => {
-              const modification = modify({});
-              return Effect.uninterruptible(
-                Effect.sync(() => {
-                  durable = nextConfig;
-                }).pipe(
-                  Effect.andThen(Deferred.succeed(committed, undefined)),
-                  Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(modification.afterCommit ?? Effect.void),
-                  Effect.as(modification.value),
-                ),
-              );
-            }),
-        },
+        ...settings.overrides,
       });
       const pending = yield* h.controller
         .updateSetting("usage.refreshIntervalMs", "30000")
@@ -353,7 +345,7 @@ it.effect(
       MutableRef.set(h.projection, reset);
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(pending);
-      expect(durable.usage.refreshIntervalMs).toBe(30_000);
+      expect(settings.durable().usage.refreshIntervalMs).toBe(30_000);
       expect((yield* h.controller.getState).config?.usage.refreshIntervalMs).toBe(30_000);
       yield* h.controller.refresh({ notify: true, force: true });
       expect(MutableRef.get(h.projection)).toBe(reset);
@@ -427,4 +419,14 @@ it.effect("polling makes no requests while hidden and resumes after visibility c
     yield* TestClock.adjust("2 minutes");
     expect(requests).toBe(1);
   }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("reports the caller's message when a provider diagnostic times out", () =>
+  Effect.gen(function* () {
+    const diagnostic = yield* timedDiagnosticResult(Effect.never, "Provider timed out.").pipe(
+      Effect.forkChild,
+    );
+    yield* TestClock.adjust("10 seconds");
+    expect(yield* Fiber.join(diagnostic)).toEqual(Result.fail("Provider timed out."));
+  }),
 );

@@ -13,19 +13,29 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
-import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  plainTheme,
+  temporaryDirectory,
+} from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
-import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
+import {
+  extensionApiFixture,
+  mountingCustomUi,
+  sessionContextFixture as sessionContext,
+} from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 
 type Handler = ExtensionHandler<any, any>;
+type Command = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 
 type CapturedApplicationTool = {
   readonly name: string;
@@ -48,11 +58,14 @@ const applicationFixture = <Overrides extends object>(
   },
 ) => {
   const handlers = new Map<string, Handler>();
+  const commands = new Map<string, Command>();
   const pi = extensionApiFixture({
     on: vi.fn((name: string, handler: Handler) => {
       handlers.set(name, handler);
     }),
-    registerCommand: vi.fn(),
+    registerCommand: vi.fn((name: string, definition: { readonly handler: Command }) => {
+      commands.set(name, definition.handler);
+    }),
     registerTool: vi.fn(),
     getActiveTools: vi.fn(() => ["read"]),
     setActiveTools: vi.fn(),
@@ -60,24 +73,11 @@ const applicationFixture = <Overrides extends object>(
     ...overrides,
   });
   registerSubagentApplication(pi, options);
-  return { handlers, pi };
+  /** Runs `/subagents` with `args`. */
+  const subagents = (args: string, ctx: ExtensionCommandContext) =>
+    commands.get("subagents")!(args, ctx);
+  return { handlers, pi, subagents };
 };
-
-const rpcContext = (
-  overrides: {
-    readonly cwd?: string;
-    readonly signal?: AbortSignal | undefined;
-    readonly isProjectTrusted?: () => boolean;
-  } = {},
-) =>
-  extensionContextFixture({
-    cwd: process.cwd(),
-    signal: undefined,
-    isProjectTrusted: () => true,
-    hasUI: false,
-    mode: "rpc" as const,
-    ...overrides,
-  });
 
 /**
  * Host active-tool state that registration extends, unless a tool declares `defaultActive:
@@ -116,8 +116,8 @@ describeActivationLifecycle("root application", (loadSettings = () => Promise.re
     loadSettings,
   });
   return {
-    start: () => Promise.resolve(handlers.get("session_start")?.({}, rpcContext())),
-    shutdown: () => Promise.resolve(handlers.get("session_shutdown")?.({}, rpcContext())),
+    start: () => Promise.resolve(handlers.get("session_start")?.({}, sessionContext())),
+    shutdown: () => Promise.resolve(handlers.get("session_shutdown")?.({}, sessionContext())),
     registeredToolCount: () => tools.registered.length,
     activeTools: tools.active,
   };
@@ -142,25 +142,19 @@ describe("subagent Pi registration", () => {
           if (query?.sessionId === "view-session")
             query.respond({ version: 1, sessionId: "view-session", hostToken: {}, open });
         });
-      let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
       const custom = vi.fn(() => Promise.resolve(undefined));
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
-        hasUI: true,
-        mode: "tui",
-        isProjectTrusted: () => false,
-        ui: { notify: vi.fn(), custom, setWidget: vi.fn() },
-        sessionManager: { getSessionId: () => "view-session", getSessionFile: () => undefined },
-      });
-      const { handlers } = applicationFixture({
-        events,
-        registerCommand: (name: string, definition: { handler: typeof command }) => {
-          if (name === "subagents") command = definition.handler;
+      const ctx = sessionContext(
+        {
+          hasUI: true,
+          mode: "tui",
+          isProjectTrusted: () => false,
+          ui: { notify: vi.fn(), custom, setWidget: vi.fn() },
         },
-      });
+        "view-session",
+      );
+      const { handlers, subagents } = applicationFixture({ events });
       yield* settle(() => handlers.get("session_start")?.({}, ctx));
-      const opened = command!("", ctx);
+      const opened = subagents("", ctx);
       if (outcome === "replaced") {
         yield* step(() => vi.waitFor(() => expect(open).toHaveBeenCalled()));
         yield* settle(() => handlers.get("session_tree")?.({}, ctx));
@@ -179,25 +173,12 @@ describe("subagent Pi registration", () => {
 
   for (const cancellation of ["editor", "shutdown", "replacement"] as const) {
     effectTest(`owns pending settings refresh through ${cancellation} cancellation`, function* () {
-      let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
-      const { handlers } = applicationFixture({
-        registerCommand: vi.fn(
-          (
-            name: string,
-            definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
-          ) => {
-            if (name === "subagents") command = definition.handler;
-          },
-        ),
-        getActiveTools: () => [],
-      });
+      const { handlers, subagents } = applicationFixture({ getActiveTools: () => [] });
       const closed = deferredPromise<boolean>();
       const pending = deferredPromise<{ aborted: boolean }>();
       let refreshSignal: AbortSignal | undefined;
       const notify = vi.fn();
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
+      const ctx = sessionContext({
         hasUI: true,
         mode: "tui",
         isProjectTrusted: () => false,
@@ -212,7 +193,7 @@ describe("subagent Pi registration", () => {
         },
       });
       yield* settle(() => handlers.get("session_start")?.({}, ctx));
-      const editing = command?.("profiles", ctx) ?? Promise.resolve();
+      const editing = subagents("profiles", ctx);
       yield* step(() => vi.waitFor(() => expect(refreshSignal).toBeDefined()));
       if (cancellation === "editor") closed.resolve(false);
       else
@@ -318,7 +299,7 @@ describe("subagent Pi registration", () => {
         hasUI: false,
         mode: "rpc",
       });
-      const secondContext = rpcContext({
+      const secondContext = sessionContext({
         cwd: `${process.cwd()}/second`,
         isProjectTrusted: () => false,
       });
@@ -361,7 +342,7 @@ describe("subagent Pi registration", () => {
         if (callInActivation === throwAt) throw new Error("partial registration");
       });
       const { handlers } = applicationFixture(tools.overrides);
-      const ctx = rpcContext();
+      const ctx = sessionContext();
       const start = handlers.get("session_start");
 
       yield* settle(() => start?.({}, ctx));
@@ -396,7 +377,7 @@ describe("subagent Pi registration", () => {
           return settingsLoads === 2 ? replacementSettings.promise : Promise.resolve();
         },
       });
-      const context = (signal?: AbortSignal) => rpcContext({ signal });
+      const context = (signal?: AbortSignal) => sessionContext({ signal });
 
       yield* settle(() => handlers.get("session_start")?.({}, context()));
       expect(tools.registered.length).toBeGreaterThan(1);
@@ -462,85 +443,57 @@ describe("subagent Pi registration", () => {
       }
       // SAFETY: This test installs and owns the exact process-global reload slot.
       const processState = globalThis as typeof globalThis & TestReloadGlobalState;
-      Reflect.defineProperty(processState, reloadSlot, {
-        configurable: true,
-        writable: true,
-        value: envelope,
-      });
+      processState[reloadSlot] = envelope;
       const tools = activeToolTracker();
       let { handlers } = applicationFixture(tools.overrides);
       const notify = vi.fn();
-      let ctx: ExtensionContext = extensionContextFixture({
-        cwd: process.cwd(),
-        hasUI: true,
-        mode: "tui",
-        isProjectTrusted: () => false,
-        ui: { notify },
-        sessionManager: {
-          getSessionId: () => "application-incompatible-session",
-          getSessionFile: () => undefined,
-        },
-      });
-      try {
-        for (const event of ["session_start", "session_tree", "session_start"] as const) {
-          yield* settle(() => handlers.get(event)?.({ reason: "reload" }, ctx));
-          expect(tools.active()).toEqual(["read"]);
-          expect(processState[reloadSlot]).toBe(envelope);
-        }
-        expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
-
-        yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
-        handlers = applicationFixture(tools.overrides).handlers;
-        yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
-        yield* settle(() => handlers.get("session_tree")?.({}, ctx));
+      const contextFor = (sessionId: string) =>
+        sessionContext(
+          { hasUI: true, mode: "tui", isProjectTrusted: () => false, ui: { notify } },
+          sessionId,
+        );
+      let ctx = contextFor("application-incompatible-session");
+      yield* Effect.addFinalizer(() =>
+        settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx)).pipe(
+          Effect.ensuring(Effect.sync(() => Reflect.deleteProperty(processState, reloadSlot))),
+        ),
+      );
+      for (const event of ["session_start", "session_tree", "session_start"] as const) {
+        yield* settle(() => handlers.get(event)?.({ reason: "reload" }, ctx));
         expect(tools.active()).toEqual(["read"]);
         expect(processState[reloadSlot]).toBe(envelope);
-
-        ctx = extensionContextFixture({
-          ...ctx,
-          sessionManager: {
-            getSessionId: () => "application-compatible-new-session",
-            getSessionFile: () => undefined,
-          },
-        });
-        yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, ctx));
-        expect(tools.active()).toContain("subagent_start");
-        expect(Object.hasOwn(processState, reloadSlot)).toBe(false);
-      } finally {
-        yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
-        Reflect.deleteProperty(processState, reloadSlot);
       }
+      expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
+
+      yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+      handlers = applicationFixture(tools.overrides).handlers;
+      yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
+      yield* settle(() => handlers.get("session_tree")?.({}, ctx));
+      expect(tools.active()).toEqual(["read"]);
+      expect(processState[reloadSlot]).toBe(envelope);
+
+      ctx = contextFor("application-compatible-new-session");
+      yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, ctx));
+      expect(tools.active()).toContain("subagent_start");
+      expect(Object.hasOwn(processState, reloadSlot)).toBe(false);
     },
   );
 
   effectTest(
     "preserves session overrides across tree and reload but clears them for a new session",
     function* () {
-      let handlers = new Map<string, Handler>();
       let tools = new Map<string, CapturedApplicationTool>();
-      let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
       const activeTools = activeToolTracker((tool: CapturedApplicationTool) => {
         tools.set(tool.name, tool);
       });
-      const registerFreshApplication = (): void => {
+      const registerFreshApplication = () => {
         tools = new Map<string, CapturedApplicationTool>();
-        const { handlers: nextHandlers } = applicationFixture({
+        return applicationFixture({
           ...activeTools.overrides,
-          registerCommand: vi.fn(
-            (
-              name: string,
-              definition: {
-                handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
-              },
-            ) => {
-              if (name === "subagents") command = definition.handler;
-            },
-          ),
           getThinkingLevel: vi.fn(() => "high"),
         });
-        handlers = nextHandlers;
       };
-      registerFreshApplication();
+      let { handlers, subagents } = registerFreshApplication();
 
       let component: Component | undefined;
       const ui = {
@@ -552,20 +505,18 @@ describe("subagent Pi registration", () => {
           }).custom,
         ),
       };
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
-        isProjectTrusted: () => true,
-        hasUI: true,
-        mode: "tui",
-        ui,
-        model: undefined,
-        modelRegistry: { getAvailable: () => [] },
-        sessionManager: {
-          getSessionId: () => "application-reload-session",
-          getSessionFile: () => undefined,
-        },
-      });
+      const contextFor = (sessionId: string) =>
+        sessionContext(
+          {
+            hasUI: true,
+            mode: "tui",
+            ui,
+            model: undefined,
+            modelRegistry: { getAvailable: () => [] },
+          },
+          sessionId,
+        );
+      const ctx = contextFor("application-reload-session");
       const hasSessionOverride = (context: ExtensionContext): Effect.Effect<boolean> => {
         const tool = tools.get("subagent_models");
         if (!tool) return Effect.succeed(false);
@@ -588,7 +539,7 @@ describe("subagent Pi registration", () => {
 
       yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
       let editorClosed = false;
-      const editing = (command?.("profiles", ctx) ?? Promise.resolve()).then(() => {
+      const editing = subagents("profiles", ctx).then(() => {
         editorClosed = true;
       });
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
@@ -614,7 +565,7 @@ describe("subagent Pi registration", () => {
 
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       const startupHandlers = handlers;
-      registerFreshApplication();
+      ({ handlers, subagents } = registerFreshApplication());
       expect(handlers).not.toBe(startupHandlers);
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
       expect(yield* hasSessionOverride(ctx)).toBe(true);
@@ -629,22 +580,14 @@ describe("subagent Pi registration", () => {
           throw new Error("tree capture failed");
         },
       });
-      yield* settle(() =>
-        handlers.get("session_tree")?.({}, extensionContextFixture(failedTreeContext)),
-      );
+      yield* settle(() => handlers.get("session_tree")?.({}, failedTreeContext));
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
       yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
       expect(yield* hasSessionOverride(ctx)).toBe(true);
 
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
       // A new host session has a distinct session identity even when it uses the same project.
-      const newSessionContext = extensionContextFixture({
-        ...ctx,
-        sessionManager: {
-          getSessionId: () => "application-new-session",
-          getSessionFile: () => undefined,
-        },
-      });
+      const newSessionContext = contextFor("application-new-session");
       yield* settle(() => handlers.get("session_start")?.({ reason: "new" }, newSessionContext));
       expect(yield* hasSessionOverride(newSessionContext)).toBe(false);
       yield* settle(() =>
@@ -654,13 +597,9 @@ describe("subagent Pi registration", () => {
   );
 
   effectTest("applies a saved ultracode switch after reload, not on tree navigation", function* () {
-    const agentDirectory = yield* step(() =>
-      nodeFsPromises.mkdtemp(nodePath.join(tmpdir(), "pi-subagents-features-")),
-    );
+    const agentDirectory = yield* temporaryDirectory("pi-subagents-features-");
     const configPath = nodePath.join(agentDirectory, "pi-subagents.json");
     const readConfig = () => nodeFsPromises.readFile(configPath, "utf8").then(JSON.parse);
-    let handlers = new Map<string, Handler>();
-    let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
     type RegisteredTool = {
       readonly name: string;
       readonly exposure?: string;
@@ -672,36 +611,16 @@ describe("subagent Pi registration", () => {
     });
     const registerFreshApplication = () => {
       registered = new Map();
-      handlers = applicationFixture(
-        {
-          ...activeTools.overrides,
-          registerCommand: vi.fn(
-            (
-              name: string,
-              definition: {
-                handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
-              },
-            ) => {
-              if (name === "subagents") command = definition.handler;
-            },
-          ),
-        },
-        { getAgentDirectory: () => agentDirectory, loadSettings: () => Promise.resolve() },
-      ).handlers;
+      return applicationFixture(activeTools.overrides, {
+        getAgentDirectory: () => agentDirectory,
+        loadSettings: () => Promise.resolve(),
+      });
     };
     const notify = vi.fn();
-    const ctx = extensionContextFixture({
-      cwd: process.cwd(),
-      signal: undefined,
-      hasUI: true,
-      mode: "tui",
-      isProjectTrusted: () => false,
-      ui: { notify },
-      sessionManager: {
-        getSessionId: () => "application-feature-switch-session",
-        getSessionFile: () => undefined,
-      },
-    });
+    const ctx = sessionContext(
+      { hasUI: true, mode: "tui", isProjectTrusted: () => false, ui: { notify } },
+      "application-feature-switch-session",
+    );
     // Ultracode keeps the always-registered dynamic workflow runner active. Native codemode can
     // script the root contract tools either way.
     const scriptable = () => registered.get("subagent_start")?.exposure === "direct";
@@ -710,48 +629,43 @@ describe("subagent Pi registration", () => {
       scriptable() &&
       registered.get("subagent_workflow")?.exposure === "model-only" &&
       !activeTools.active().includes("subagent_workflow");
+    let app = registerFreshApplication();
     const reload = function* () {
-      yield* settle(() => handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
-      registerFreshApplication();
-      yield* settle(() => handlers.get("session_start")?.({ reason: "reload" }, ctx));
+      yield* settle(() => app.handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+      app = registerFreshApplication();
+      yield* settle(() => app.handlers.get("session_start")?.({ reason: "reload" }, ctx));
     };
-    try {
-      registerFreshApplication();
-      yield* settle(() => handlers.get("session_start")?.({ reason: "startup" }, ctx));
-      expect(ultracodeOff()).toBe(true);
+    yield* Effect.addFinalizer(() =>
+      settle(() => app.handlers.get("session_shutdown")?.({ reason: "quit" }, ctx)),
+    );
+    yield* settle(() => app.handlers.get("session_start")?.({ reason: "startup" }, ctx));
+    expect(ultracodeOff()).toBe(true);
 
-      const settings = (args: string) => command?.(`settings ${args}`, ctx) ?? Promise.resolve();
-      yield* step(() => settings("global ultracode true"));
-      expect(yield* step(readConfig)).toEqual({ version: 6, ultracode: true });
-      expect(notify).not.toHaveBeenCalledWith(expect.any(String), "error");
-      yield* settle(() => handlers.get("session_tree")?.({}, ctx));
-      expect(ultracodeOff()).toBe(true);
+    const settings = (args: string) => app.subagents(`settings ${args}`, ctx);
+    yield* step(() => settings("global ultracode true"));
+    expect(yield* step(readConfig)).toEqual({ version: 6, ultracode: true });
+    expect(notify).not.toHaveBeenCalledWith(expect.any(String), "error");
+    yield* settle(() => app.handlers.get("session_tree")?.({}, ctx));
+    expect(ultracodeOff()).toBe(true);
 
-      yield* reload();
-      expect(ultracodeOn()).toBe(true);
+    yield* reload();
+    expect(ultracodeOn()).toBe(true);
 
-      yield* step(() => settings("global ultracode inherit"));
-      expect(yield* step(readConfig)).toEqual({ version: 6 });
-      yield* reload();
-      // The reload kept the runner active; it leaves the loadout when the next agent run starts.
-      yield* settle(() => handlers.get("agent_start")?.({}, ctx));
-      expect(ultracodeOff()).toBe(true);
-    } finally {
-      yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
-      yield* step(() => nodeFsPromises.rm(agentDirectory, { recursive: true, force: true }));
-    }
+    yield* step(() => settings("global ultracode inherit"));
+    expect(yield* step(readConfig)).toEqual({ version: 6 });
+    yield* reload();
+    // The reload kept the runner active; it leaves the loadout when the next agent run starts.
+    yield* settle(() => app.handlers.get("agent_start")?.({}, ctx));
+    expect(ultracodeOff()).toBe(true);
   });
 
   effectTest("owns the activity widget across activation, turns, and shutdown", function* () {
     const setWidget = vi.fn();
     const setStatus = vi.fn();
     const { handlers } = applicationFixture(activeToolTracker().overrides);
-    const ctx = extensionContextFixture({
-      cwd: process.cwd(),
-      signal: undefined,
+    const ctx = sessionContext({
       hasUI: true,
-      mode: "tui" as const,
-      isProjectTrusted: () => true,
+      mode: "tui",
       ui: { setWidget, setStatus, notify: vi.fn() },
     });
 
@@ -779,19 +693,10 @@ describe("subagent Pi registration", () => {
       getActiveTools: vi.fn(() => ["read", "subagent_start", "subagent_await"]),
     });
 
-    const sessionStart = handlers.get("session_start");
-    expect(sessionStart).toBeTypeOf("function");
     yield* settle(() =>
-      sessionStart?.(
+      handlers.get("session_start")?.(
         {},
-        extensionContextFixture({
-          cwd: process.cwd(),
-          signal: undefined,
-          hasUI: true,
-          mode: "tui",
-          isProjectTrusted: () => true,
-          ui: { notify },
-        }),
+        sessionContext({ hasUI: true, mode: "tui", ui: { notify } }),
       ),
     );
 

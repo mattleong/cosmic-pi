@@ -65,16 +65,6 @@ export interface UltracodeController {
 
 const isIdle = (ctx: ExtensionContext): boolean => invokeHostCallback(() => ctx.isIdle(), true);
 
-/** Runs `operation` now and reports its outcome as a promise. */
-const settleNow = (operation: () => void): Promise<void> => {
-  try {
-    operation();
-    return Promise.resolve();
-  } catch (error) {
-    return Promise.reject(error);
-  }
-};
-
 /** Registers the Pi events that move the window and returns the controller. */
 export function registerUltracodeController(
   pi: Pick<ExtensionAPI, "on" | "events" | "getActiveTools" | "setActiveTools" | "sendUserMessage">,
@@ -118,6 +108,12 @@ export function registerUltracodeController(
     footer.shutdown();
   };
 
+  const setEnabled = (value: boolean) => {
+    enabled = value;
+    showStatus();
+    reconcile();
+  };
+
   const move = (next: UltracodeWindow) => {
     state = next;
     reconcile();
@@ -152,10 +148,8 @@ export function registerUltracodeController(
   return {
     activate: (ctx, value) => {
       context = ctx;
-      enabled = value;
       restoring = true;
-      showStatus();
-      reconcile();
+      setEnabled(value);
     },
     suspend: () => {
       setStatus(context, undefined);
@@ -166,11 +160,7 @@ export function registerUltracodeController(
       epoch += 1;
       state = ultracodeWindowReset(state);
     },
-    setEnabled: (value) => {
-      enabled = value;
-      showStatus();
-      reconcile();
-    },
+    setEnabled,
     window: () => state,
     observer: () => {
       const owner = epoch;
@@ -201,8 +191,15 @@ export function registerUltracodeController(
         }
       };
       // Not idle without an agent run under way means Pi is compacting or summarizing a branch.
-      if (state.agentRunning || isIdle(ctx)) return settleNow(deliver);
-      return invokeHostCallback(() => ctx.waitForIdle(), Promise.resolve()).then(deliver);
+      if (!state.agentRunning && !isIdle(ctx))
+        return invokeHostCallback(() => ctx.waitForIdle(), Promise.resolve()).then(deliver);
+      // Delivers now, reporting the outcome as a promise.
+      try {
+        deliver();
+        return Promise.resolve();
+      } catch (error) {
+        return Promise.reject(error);
+      }
     },
   };
 }

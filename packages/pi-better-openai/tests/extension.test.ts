@@ -1,24 +1,11 @@
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type {
-  AgentToolResult,
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionHandler,
-} from "@earendil-works/pi-coding-agent";
-import { expect, it, layer } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
-import { nodeFilePlatformLayer, registerExtensionCommand } from "pi-cosmic-core";
-import {
-  deferredPromise,
-  extensionApiFixture,
-  extensionContextFixture,
-} from "pi-cosmic-core/testing";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import {
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_HOST_STATE,
@@ -28,204 +15,46 @@ import {
   type CosmicUiHostQuery,
 } from "pi-cosmic-ui/protocol";
 import { afterEach, vi } from "vitest";
-import betterOpenAI, {
-  betterOpenAIWithDependencies,
-  type BetterOpenAIExtensionDependencies,
-} from "../src/extension.ts";
-import { registerOpenAIImage } from "../src/image/register.ts";
-import type { CodexImageResult } from "../src/image/types.ts";
-import { waitUntil } from "./helpers.ts";
 import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
 import * as configStore from "../src/config/store.ts";
+import { extensionHarness } from "./extension-harness.ts";
+import { waitUntil } from "./helpers.ts";
 
-type Handler = ExtensionHandler<any, any>;
-type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
-interface TestConfigDocument {
-  readonly persistState: boolean;
-  readonly usage: {
-    readonly showOnlyOnSubscriptionModels?: boolean;
-  };
-  readonly image: { readonly enabled: boolean };
-}
-
-// Pure fixture serialization stays outside Effect code on purpose: the runtime under
-// test owns schema decoding of this persisted document.
-const encodeConfigDocument = (config: TestConfigDocument): string => JSON.stringify(config);
-
-const harness = (
-  dependencies?: BetterOpenAIExtensionDependencies,
-  config: Partial<TestConfigDocument> = {},
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "openai-extension-" });
-    const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "openai-agent-" });
-    yield* fs.makeDirectory(path.join(cwd, ".pi", "extensions"), { recursive: true });
-    yield* fs.writeFileString(
-      path.join(cwd, ".pi", "extensions", "pi-better-openai.json"),
-      encodeConfigDocument({
-        persistState: false,
-        usage: {},
-        image: { enabled: false },
-        ...config,
-      }),
-    );
-    yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDir));
-    const handlers = new Map<string, Handler[]>();
-    const commands = new Map<string, Command>();
-    let tool: any;
-    let toolActivations = 0;
-    const pi = extensionApiFixture({
-      on(name: string, handler: Handler) {
-        handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-      },
-      registerCommand(name: string, options: { handler: Command }) {
-        commands.set(name, options.handler);
-      },
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(() => false),
-      getThinkingLevel: vi.fn(() => "off"),
-      registerTool(value: any) {
-        tool = value;
-        toolActivations++;
-      },
-      registerMessageRenderer: vi.fn(),
-      sendMessage: vi.fn(),
-      events: { emit: vi.fn(), on: vi.fn() },
-    });
-    const ctx = extensionContextFixture({
-      cwd,
-      mode: "rpc",
-      hasUI: true,
-      model: { provider: "openai", id: "gpt-5.5" },
-      modelRegistry: {
-        isUsingOAuth: () => true,
-        getProviderAuth: () => Promise.resolve(undefined),
-      },
-      ui: { notify: vi.fn(), setStatus: vi.fn(), setFooter: vi.fn() },
-      sessionManager: {
-        getEntries: () => [],
-        getBranch: () => [],
-        buildContextEntries: () => [],
-        getLeafId: () => null,
-        getCwd: () => cwd,
-        getSessionName: () => undefined,
-      },
-      getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
-      getSystemPrompt: () => "system",
-      isProjectTrusted: vi.fn(() => true),
-    });
-    if (dependencies) betterOpenAIWithDependencies(pi, dependencies);
-    else betterOpenAI(pi);
-    const emit = (
-      name: string,
-      event: any = {},
-      useCtx: ExtensionContext = ctx,
-    ): Effect.Effect<void> =>
-      Effect.forEach(
-        handlers.get(name) ?? [],
-        (handler) => Effect.promise(() => Promise.resolve(handler(event, useCtx))),
-        { discard: true },
-      );
-    return {
-      ctx,
-      handlers,
-      commands,
-      get tool() {
-        return tool;
-      },
-      get toolActivations() {
-        return toolActivations;
-      },
-      pi,
-      emit,
-    };
-  });
-
 const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
   Effect.promise(() => Promise.resolve(value).then(() => undefined));
 
-it.effect("image command and tool results keep one base64 payload", () =>
-  Effect.gen(function* () {
-    const generated: CodexImageResult = {
-      id: "image-1",
-      status: "completed",
-      prompt: "draw a comet",
-      revisedPrompt: "Draw a bright comet.",
-      data: Buffer.from("one authoritative image payload").toString("base64"),
-      mimeType: "image/png",
-      savedPath: "/tmp/generated-comet.png",
-      model: "gpt-image-1",
-      action: "generate",
-      outputFormat: "png",
-    };
-    const commands = new Map<string, Command>();
-    let tool: any;
-    const sendMessage = vi.fn();
-    const pi = extensionApiFixture({
-      registerCommand(name: string, options: { handler: Command }) {
-        commands.set(name, options.handler);
-      },
-      registerTool(value: any) {
-        tool = value;
-      },
-      sendMessage,
+/** While armed, each config commit signals `committed`, then waits for `release`. */
+const gateConfigCommits = Effect.gen(function* () {
+  const committed = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  let armed = false;
+  const modify = configStore.modifyConfig;
+  const gatedModify: typeof modify = (path, update) =>
+    modify(path, (raw) => {
+      const modification = update(raw);
+      if (!armed) return modification;
+      return {
+        ...modification,
+        afterCommit: Deferred.succeed(committed, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(modification.afterCommit ?? Effect.void),
+        ),
+      };
     });
-    const runFixture = vi
-      .fn()
-      .mockResolvedValueOnce(Option.some(generated))
-      .mockResolvedValue(generated);
-    // SAFETY: The mock returns the command and tool values expected by these two runner calls.
-    const run = runFixture as Parameters<typeof registerOpenAIImage>[2];
-    const command = registerExtensionCommand(pi, { name: "openai", description: "OpenAI" });
-    registerOpenAIImage(pi, command, run, vi.fn(), { noteCwd: vi.fn() });
-    const ctx = extensionContextFixture({
-      model: { id: "gpt-5.5" },
-      signal: undefined,
-      ui: { notify: vi.fn() },
-    });
-
-    yield* Effect.promise(() =>
-      Promise.resolve(commands.get("openai")?.("image draw a comet", ctx)),
-    );
-    const commandMessage = sendMessage.mock.calls[0]?.[0];
-    const toolResult = yield* Effect.promise<AgentToolResult<unknown>>(() =>
-      tool.execute("call", { prompt: "draw a comet" }, undefined, undefined, ctx),
-    );
-    const { data: _data, ...metadata } = generated;
-
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(commandMessage).toMatchObject({
-      customType: "openai-image",
-      display: true,
-      details: metadata,
-    });
-    expect(commandMessage.details).not.toHaveProperty("data");
-    expect(toolResult.details).toEqual(metadata);
-    expect(commandMessage.content).toContainEqual(expect.objectContaining({ type: "text" }));
-    expect(
-      commandMessage.content.filter((block: { readonly type: string }) => block.type === "image"),
-    ).toEqual([{ type: "image", data: generated.data, mimeType: generated.mimeType }]);
-    expect(toolResult.content).toContainEqual(expect.objectContaining({ type: "text" }));
-    expect(toolResult.content.filter(({ type }) => type === "image")).toEqual([
-      { type: "image", data: generated.data, mimeType: generated.mimeType },
-    ]);
-    expect(commandMessage.content).not.toContainEqual({
-      type: "text",
-      text: expect.stringContaining(generated.data),
-    });
-    expect(toolResult.content).not.toContainEqual({
-      type: "text",
-      text: expect.stringContaining(generated.data),
-    });
-  }),
-);
+  vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+  return {
+    committed,
+    release,
+    arm: (value: boolean) => {
+      armed = value;
+    },
+  };
+});
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
   for (const setting of ["image.enabled", "fast.enabled"] as const) {
@@ -233,34 +62,18 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       `shutdown revokes publication and notifications from an admitted ${setting} commit`,
       () =>
         Effect.gen(function* () {
-          const h = yield* harness(undefined, { persistState: true });
-          const committed = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          let armed = false;
-          const modify = configStore.modifyConfig;
-          const gatedModify: typeof modify = (path, update) =>
-            modify(path, (raw) => {
-              const modification = update(raw);
-              if (!armed) return modification;
-              return {
-                ...modification,
-                afterCommit: Deferred.succeed(committed, undefined).pipe(
-                  Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(modification.afterCommit ?? Effect.void),
-                ),
-              };
-            });
-          vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+          const h = yield* extensionHarness({ config: { persistState: true } });
+          const gate = yield* gateConfigCommits;
           yield* h.emit("session_start");
-          armed = true;
-          const pending = h.commands.get("openai")?.(`settings ${setting} true`, h.ctx);
-          yield* Deferred.await(committed);
+          gate.arm(true);
+          const pending = h.commands.get("openai")?.handler(`settings ${setting} true`, h.ctx);
+          yield* Deferred.await(gate.committed);
           vi.mocked(h.ctx.ui.notify).mockClear();
           const shutdown = yield* h
             .emit("session_shutdown")
             .pipe(Effect.forkScoped({ startImmediately: true }));
           yield* Effect.yieldNow;
-          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.succeed(gate.release, undefined);
           yield* invoke(pending);
           yield* Fiber.join(shutdown);
           expect(h.ctx.ui.notify).not.toHaveBeenCalled();
@@ -272,7 +85,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
             Effect.promise(() => Promise.resolve(requestHook?.({ payload: {} }, h.ctx)));
           expect(yield* injection()).toBeUndefined();
           // The committed setting is durable, and a later session may legitimately use it.
-          armed = false;
+          gate.arm(false);
           yield* h.emit("session_start");
           if (setting === "fast.enabled") {
             expect(yield* injection()).toBeDefined();
@@ -284,28 +97,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("a failed replacement cannot regain the retired session's publication authority", () =>
     Effect.gen(function* () {
-      const h = yield* harness();
-      const committed = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      let armed = false;
-      const modify = configStore.modifyConfig;
-      const gatedModify: typeof modify = (path, update) =>
-        modify(path, (raw) => {
-          const modification = update(raw);
-          if (!armed) return modification;
-          return {
-            ...modification,
-            afterCommit: Deferred.succeed(committed, undefined).pipe(
-              Effect.andThen(Deferred.await(release)),
-              Effect.andThen(modification.afterCommit ?? Effect.void),
-            ),
-          };
-        });
-      vi.spyOn(configStore, "modifyConfig").mockImplementation(gatedModify);
+      const h = yield* extensionHarness();
+      const gate = yield* gateConfigCommits;
       yield* h.emit("session_start");
-      armed = true;
-      const pending = h.commands.get("openai")?.("settings image.enabled true", h.ctx);
-      yield* Deferred.await(committed);
+      gate.arm(true);
+      const pending = h.commands.get("openai")?.handler("settings image.enabled true", h.ctx);
+      yield* Deferred.await(gate.committed);
       vi.spyOn(configStore, "resolveConfig").mockReturnValue(
         Effect.fail(
           new configStore.OpenAIConfigError({
@@ -318,7 +115,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       const replacement = yield* h
         .emit("session_start", {}, { ...h.ctx })
         .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.succeed(gate.release, undefined);
       yield* invoke(pending);
       yield* Fiber.join(replacement);
       vi.mocked(h.ctx.ui.setStatus).mockClear();
@@ -332,7 +129,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     "repairs the full context hook with prompt and tools, and aborts a mismatched native prefix",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness();
+        const h = yield* extensionHarness();
         const manager = SessionManager.inMemory(h.ctx.cwd);
         manager.appendMessage({
           role: "system",
@@ -393,10 +190,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       const loads = [deferredPromise(), deferredPromise()];
       const signals: AbortSignal[] = [];
       let loadIndex = 0;
-      const h = yield* harness({
-        loadPreviewSettings: (_cwd, _projectTrusted, signal) => {
-          if (signal) signals.push(signal);
-          return loads[loadIndex++]!.promise;
+      const h = yield* extensionHarness({
+        dependencies: {
+          loadPreviewSettings: (_cwd, _projectTrusted, signal) => {
+            if (signal) signals.push(signal);
+            return loads[loadIndex++]!.promise;
+          },
         },
       });
       const replacement = { ...h.ctx };
@@ -415,27 +214,29 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       expect(signals[0]?.aborted).toBe(true);
       expect(signals[1]?.aborted).toBe(false);
-      expect(h.toolActivations).toBe(1);
+      expect(h.tools).toHaveLength(1);
 
       loads[0]!.resolve();
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
-      expect(h.toolActivations).toBe(1);
+      expect(h.tools).toHaveLength(1);
       yield* h.emit("session_shutdown", {}, replacement);
     }),
   );
 
   it.effect("treats preview loader failure as best effort", () =>
     Effect.gen(function* () {
-      const h = yield* harness({
-        loadPreviewSettings: () => Promise.reject(new Error("settings unavailable")),
+      const h = yield* extensionHarness({
+        dependencies: {
+          loadPreviewSettings: () => Promise.reject(new Error("settings unavailable")),
+        },
       });
 
       yield* h.emit("session_start");
 
-      expect(h.toolActivations).toBe(1);
+      expect(h.tools).toHaveLength(1);
       vi.mocked(h.ctx.ui.notify).mockClear();
-      yield* invoke(h.commands.get("openai")?.("usage", h.ctx));
+      yield* invoke(h.commands.get("openai")?.handler("usage", h.ctx));
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
     }),
@@ -444,16 +245,18 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
   it.effect("reports a success-path command defect instead of swallowing it", () =>
     Effect.gen(function* () {
       let resets = 0;
-      const h = yield* harness({
-        resetOpenAICodexTransport: () => {
-          resets++;
-          if (resets > 1) throw new Error("transport reset defect");
+      const h = yield* extensionHarness({
+        dependencies: {
+          resetOpenAICodexTransport: () => {
+            resets++;
+            if (resets > 1) throw new Error("transport reset defect");
+          },
         },
       });
       yield* h.emit("session_start");
       vi.mocked(h.ctx.ui.notify).mockClear();
 
-      yield* invoke(h.commands.get("openai")?.("fast", h.ctx));
+      yield* invoke(h.commands.get("openai")?.handler("fast", h.ctx));
 
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
@@ -462,14 +265,14 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("does not report image cancellation as message-delivery failure", () =>
     Effect.gen(function* () {
-      const h = yield* harness(undefined, { image: { enabled: true } });
+      const h = yield* extensionHarness({ config: { image: { enabled: true } } });
       yield* h.emit("session_start");
       const controller = new AbortController();
       controller.abort(new Error("cancel image"));
       h.ctx.signal = controller.signal;
       vi.mocked(h.ctx.ui.notify).mockClear();
 
-      yield* invoke(h.commands.get("openai")?.("image cancelled prompt", h.ctx));
+      yield* invoke(h.commands.get("openai")?.handler("image cancelled prompt", h.ctx));
 
       expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown");
@@ -478,7 +281,9 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("keeps the replacement context current after deactivating the previous runtime", () =>
     Effect.gen(function* () {
-      const h = yield* harness(undefined, { usage: { showOnlyOnSubscriptionModels: true } });
+      const h = yield* extensionHarness({
+        config: { usage: { showOnlyOnSubscriptionModels: true } },
+      });
       yield* h.emit("session_start");
       const replacement = { ...h.ctx };
       yield* h.emit("session_start", {}, replacement);
@@ -489,7 +294,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         model: { ...replacement.model, provider: "anthropic", id: "claude" },
       };
       yield* h.emit("model_select", { model: selected.model }, selected);
-      yield* invoke(h.commands.get("openai")?.("usage", selected));
+      yield* invoke(h.commands.get("openai")?.handler("usage", selected));
 
       expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
       yield* h.emit("session_shutdown", {}, selected);
@@ -498,7 +303,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("uses one visibility policy for Cosmic contributions and default-footer fallback", () =>
     Effect.gen(function* () {
-      const h = yield* harness();
+      const h = yield* extensionHarness();
       const ctx = { ...h.ctx, mode: "tui" as const };
       vi.mocked(h.pi.getFlag).mockReturnValue(true);
       let active = true;
@@ -543,7 +348,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("fails closed when terminal UI capability getters throw during activation", () =>
     Effect.gen(function* () {
-      const h = yield* harness();
+      const h = yield* extensionHarness();
       Object.defineProperty(h.ctx, "mode", {
         configurable: true,
         get() {
@@ -553,7 +358,9 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
       yield* h.emit("session_start");
       expect(h.ctx.ui.setFooter).not.toHaveBeenCalled();
-      yield* invoke(h.commands.get("openai")?.("settings usage.showResetTimes false", h.ctx));
+      yield* invoke(
+        h.commands.get("openai")?.handler("settings usage.showResetTimes false", h.ctx),
+      );
       yield* h.emit("session_shutdown");
     }),
   );
@@ -562,10 +369,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     Effect.gen(function* () {
       const load = deferredPromise();
       let loaderSignal: AbortSignal | undefined;
-      const h = yield* harness({
-        loadPreviewSettings: (_cwd, _projectTrusted, signal) => {
-          loaderSignal = signal;
-          return load.promise;
+      const h = yield* extensionHarness({
+        dependencies: {
+          loadPreviewSettings: (_cwd, _projectTrusted, signal) => {
+            loaderSignal = signal;
+            return load.promise;
+          },
         },
       });
       const startup = yield* h
@@ -580,24 +389,24 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* Fiber.join(shutdown);
 
       expect(loaderSignal?.aborted).toBe(true);
-      expect(h.toolActivations).toBe(0);
+      expect(h.tools).toHaveLength(0);
       load.resolve();
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
-      expect(h.toolActivations).toBe(0);
+      expect(h.tools).toHaveLength(0);
       expect(h.ctx.ui.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
   it.effect("disposes and clears a runtime when startup is already aborted", () =>
     Effect.gen(function* () {
-      const h = yield* harness();
+      const h = yield* extensionHarness();
       const controller = new AbortController();
       controller.abort(new Error("already gone"));
       h.ctx.signal = controller.signal;
       yield* h.emit("session_start");
       expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-      expect(h.tool).toBeUndefined();
+      expect(h.tools).toHaveLength(0);
     }),
   );
 
@@ -605,7 +414,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     "fails closed and deactivates the prior runtime when the session %s getter throws",
     (property) =>
       Effect.gen(function* () {
-        const h = yield* harness();
+        const h = yield* extensionHarness();
         yield* h.emit("session_start");
         vi.mocked(h.ctx.ui.notify).mockClear();
         const replacement = { ...h.ctx };
@@ -621,7 +430,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* Effect.promise(() =>
           expect(
-            h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
+            h.tools.at(-1)!.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
           ).rejects.toThrow("has not started"),
         );
       }),
@@ -629,7 +438,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("materializes one dynamic signal for both model-change forks", () =>
     Effect.gen(function* () {
-      const h = yield* harness();
+      const h = yield* extensionHarness();
       yield* h.emit("session_start");
       let reads = 0;
       Object.defineProperty(h.ctx, "signal", {

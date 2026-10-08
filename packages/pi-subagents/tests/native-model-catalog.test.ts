@@ -2,22 +2,19 @@
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Config from "effect/Config";
-import { afterEach, describe, expect } from "vitest";
+import { temporaryDirectory } from "pi-cosmic-core/testing";
+import { describe, expect } from "vitest";
 import {
   makeNativeModelCatalog,
   type NativeModelCatalogContract,
 } from "../src/boundary/native-model-catalog.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
-import {
-  makeTemporaryDirectory,
-  removeTemporaryDirectories,
-} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
 const fixture = fileURLToPath(new URL("./fixtures/model-catalog-fixture.mjs", import.meta.url));
-const setupEffect = Effect.gen(function* () {
-  const directory = yield* step(() => makeTemporaryDirectory("pi-subagents-catalog-"));
+const setup = Effect.gen(function* () {
+  const directory = yield* temporaryDirectory("pi-subagents-catalog-");
   const home = yield* step(() => fs.realpath(directory));
   const executable = join(home, "catalog.mjs");
   yield* step(() => fs.copyFile(fixture, executable));
@@ -44,20 +41,17 @@ const setupEffect = Effect.gen(function* () {
     },
   };
 });
-const setup = () => Effect.runPromise(setupEffect);
 const selectorAt = (catalog: NativeModelCatalogContract, cwd: string, index: number) =>
   catalog.list("claude", cwd).pipe(
     Effect.orDie,
     Effect.map((models) => models[index]?.selector),
   );
 
-afterEach(removeTemporaryDirectories);
-
 describe("Claude catalog preference", () => {
   effectTest(
     "preserves both selectors and refreshes after user preference edits without reload",
     function* () {
-      const test = yield* step(setup);
+      const test = yield* setup;
       yield* step(() =>
         fs.writeFile(
           test.settings,
@@ -100,7 +94,7 @@ describe("Claude catalog preference", () => {
   effectTest(
     "falls back for absent, malformed, oversized, and non-regular user settings",
     function* () {
-      const test = yield* step(setup);
+      const test = yield* setup;
       const catalog = yield* makeNativeModelCatalog(test.options);
       expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
       for (const settings of [
@@ -131,7 +125,7 @@ describe("Claude catalog preference", () => {
   effectTest(
     "follows the exact user settings symlink and rereads its regular target",
     function* () {
-      const test = yield* step(setup);
+      const test = yield* setup;
       const target = join(test.home, "dotfile-settings.json");
       yield* step(() => fs.writeFile(target, '{"model":"dotfile-alias[1m]"}'));
       yield* step(() => fs.symlink(target, test.settings));
@@ -145,7 +139,7 @@ describe("Claude catalog preference", () => {
   );
 
   effectTest("lists each alias target as its own explicit model", function* () {
-    const test = yield* step(setup);
+    const test = yield* setup;
     const catalog = yield* makeNativeModelCatalog(test.options);
     const defaultsOnly = yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
     // A target reached only through `default` is named by its model ID.
@@ -172,7 +166,7 @@ describe("Claude catalog preference", () => {
   });
 
   effectTest("redacts rejected preference probes and permits recovery", function* () {
-    const test = yield* step(setup);
+    const test = yield* setup;
     yield* step(() => fs.writeFile(test.settings, '{"model":"reject"}'));
     const catalog = yield* makeNativeModelCatalog(test.options);
     const result = yield* catalog.list("claude", test.cwd).pipe(Effect.result);

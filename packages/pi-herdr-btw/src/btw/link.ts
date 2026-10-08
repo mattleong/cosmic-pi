@@ -2,12 +2,15 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
-import { HerdrBtwSessionIdSchema } from "./marker.ts";
+import { BoundedId, BoundedPath, HerdrBtwSessionIdSchema } from "./marker.ts";
 
 export const HERDR_BTW_LINK_ENTRY_TYPE = "pi-herdr-btw/reusable-link";
 
-const BoundedId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
-const BoundedPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4_096));
+const HerdrBtwLinkOwnerSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  parentSessionId: HerdrBtwSessionIdSchema,
+  parentSessionPath: BoundedPath,
+});
 
 /**
  * Version 1 of the reusable-link record persisted in the parent session.
@@ -15,9 +18,7 @@ const BoundedPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLengt
  * identity needed to revalidate and focus an already-running BTW agent.
  */
 export const HerdrBtwLinkSchema = Schema.Struct({
-  version: Schema.Literal(1),
-  parentSessionId: HerdrBtwSessionIdSchema,
-  parentSessionPath: BoundedPath,
+  ...HerdrBtwLinkOwnerSchema.fields,
   childSessionId: HerdrBtwSessionIdSchema,
   childSessionPath: BoundedPath,
   agentName: BoundedId,
@@ -30,12 +31,6 @@ export interface HerdrBtwLinkOwner {
   readonly sessionId: string;
   readonly sessionPath: string;
 }
-
-const HerdrBtwLinkOwnerSchema = Schema.Struct({
-  version: Schema.Literal(1),
-  parentSessionId: HerdrBtwSessionIdSchema,
-  parentSessionPath: BoundedPath,
-});
 
 const CustomEntrySchema = Schema.Struct({
   type: Schema.Literal("custom"),
@@ -60,6 +55,8 @@ export const restoreHerdrBtwLink = (
 ): HerdrBtwLinkRestoration => {
   let restoration: HerdrBtwLinkRestoration = { _tag: "none" };
   for (const entry of entries) {
+    // Unlike the tolerant link decodes below, a throwing host entry propagates so the store
+    // reports the whole restoration as malformed.
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(CustomEntrySchema)(entry));
     if (decoded?.customType !== HERDR_BTW_LINK_ENTRY_TYPE) continue;
     const linkOwner = decodeUnknownOrUndefined(HerdrBtwLinkOwnerSchema, decoded.data);

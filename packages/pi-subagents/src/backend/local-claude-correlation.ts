@@ -1,59 +1,12 @@
 /**
- * Pure usage arithmetic and UUID/result correlation bookkeeping for the local
- * Claude adapter. The driver owns interrupt lifecycles, control responses,
- * assignment epochs, and initialization; separate delivery and usage owners
- * handle report buffering and cumulative accounting. This module tracks sent
- * inputs and the native result each owns.
+ * Pure UUID/result correlation bookkeeping for the local Claude adapter. The
+ * driver owns interrupt lifecycles, control responses, assignment epochs, and
+ * initialization; separate delivery and usage owners handle report buffering
+ * and cumulative accounting. This module tracks sent inputs and the native
+ * result each owns.
  */
-import type { SubagentUsage } from "../run/model.ts";
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
-
-/** Cumulative native usage components tracked for monotone delta accounting. */
-export type UsageComponents = Omit<SubagentUsage, "totalTokens" | "cost">;
-
-export const zeroUsageComponents: UsageComponents = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-const componentwise =
-  (combine: (left: number, right: number) => number) =>
-  (left: UsageComponents, right: UsageComponents): UsageComponents => ({
-    input: combine(left.input, right.input),
-    output: combine(left.output, right.output),
-    cacheRead: combine(left.cacheRead, right.cacheRead),
-    cacheWrite: combine(left.cacheWrite, right.cacheWrite),
-  });
-
-export const componentwiseMax = componentwise(Math.max);
-export const addUsageComponents = componentwise((left, right) => left + right);
-const nonnegativeDelta = componentwise((previous, next) => Math.max(0, next - previous));
-
-export interface CumulativeUsageDelta {
-  readonly delta: UsageComponents;
-  readonly inconsistent: boolean;
-}
-
-/**
- * Nonnegative componentwise delta between cumulative native usage snapshots.
- * A regressing native total is reported as inconsistent and never subtracted.
- */
-export const cumulativeUsageDelta = (
-  previous: UsageComponents,
-  next: UsageComponents,
-): CumulativeUsageDelta => ({
-  delta: nonnegativeDelta(previous, next),
-  inconsistent:
-    next.input < previous.input ||
-    next.output < previous.output ||
-    next.cacheRead < previous.cacheRead ||
-    next.cacheWrite < previous.cacheWrite,
-});
-
-export const usageComponentsTotal = (components: UsageComponents): number =>
-  components.input + components.output + components.cacheRead + components.cacheWrite;
+import type { UsageComponents } from "./local-claude-usage.ts";
 
 /** Bound shared by the confirmed-UUID window and the result-expectation FIFO. */
 export const SENT_UUID_LIMIT = 64;
@@ -76,7 +29,7 @@ export const rememberBounded = <Key, Value>(
 export type ClaudeSentUserKind = "probe" | "assignment" | "steer";
 export type ClaudeSentContentMatch = ClaudeSentUserKind | "multiple" | "other";
 
-export interface ClaudeSentUserIdentity {
+interface ClaudeSentUserIdentity {
   readonly contentDigest: string;
   readonly kind: ClaudeSentUserKind;
 }
@@ -110,7 +63,7 @@ const hasTaskNotificationEnvelope = (text: string): boolean => {
  * origin only for its own queued task-notification commands, so adapter input
  * can never carry it. `unlabelled`: Claude 2.1.259 omitted the origin.
  */
-export type ClaudeTaskNotificationReplay = "labelled" | "unlabelled";
+type ClaudeTaskNotificationReplay = "labelled" | "unlabelled";
 
 /**
  * Claude replays a non-meta task notification that it drains from its command
@@ -168,7 +121,7 @@ export const isSameClaudeSession = (
   nativeSessionId === undefined ||
   eventSessionId === nativeSessionId;
 
-export type ClaudeSessionDiagnostic = "absent" | "uninitialized" | "match" | "mismatch";
+type ClaudeSessionDiagnostic = "absent" | "uninitialized" | "match" | "mismatch";
 
 export const claudeSessionDiagnostic = (
   eventSessionId: string | undefined,
@@ -194,7 +147,7 @@ const DIAGNOSTIC_LEADING_TAGS = [
   "local-command-caveat",
 ] as const;
 
-export type ClaudeTextLengthDiagnostic = "empty" | "1-64" | "65-1024" | "1025-16384" | "over-16384";
+type ClaudeTextLengthDiagnostic = "empty" | "1-64" | "65-1024" | "1025-16384" | "over-16384";
 
 export const claudeTextLengthDiagnostic = (length: number): ClaudeTextLengthDiagnostic =>
   length === 0
@@ -219,7 +172,7 @@ export const claudeLeadingTagDiagnostic = (text: string): ClaudeLeadingTagDiagno
     : (DIAGNOSTIC_LEADING_TAGS.find((known) => known === tag) ?? "other");
 };
 
-export type ClaudeOutboundAgeDiagnostic = "none" | "under-1s" | "1-10s" | "11-60s" | "over-60s";
+type ClaudeOutboundAgeDiagnostic = "none" | "under-1s" | "1-10s" | "11-60s" | "over-60s";
 
 export const claudeOutboundAgeDiagnostic = (
   nowMillis: number,
@@ -277,40 +230,7 @@ export interface ResultExpectation {
   readonly usageBaseline: UsageComponents;
 }
 
-export interface ClaudeResultCorrelation {
-  /** Records a confirmed outbound UUID and optional content identity, evicting the oldest beyond the bound. */
-  readonly rememberSentUuid: (uuid: string, identity?: ClaudeSentUserIdentity) => void;
-  /** True while a UUID remains inside the bounded confirmed-identity window. */
-  readonly hasSentUuid: (uuid: string) => boolean;
-  /** Records a Claude-owned internal replay UUID without treating it as adapter-sent. */
-  readonly rememberInternalReplayUuid: (uuid: string) => void;
-  /** True while a UUID remains in the bounded Claude-owned internal window. */
-  readonly hasInternalReplayUuid: (uuid: string) => boolean;
-  /** Classifies an inbound digest against the bounded confirmed-input window. */
-  readonly matchSentContent: (contentDigest: string) => ClaudeSentContentMatch;
-  /** Registers one owned result expectation with a snapshot usage baseline. */
-  readonly register: (
-    expectation: Omit<ResultExpectation, "usageBaseline">,
-    usageBaseline: UsageComponents,
-  ) => void;
-  /**
-   * Takes the expectation for a native result: the exact `user_message_uuid`
-   * when reported; otherwise the oldest synthetic expectation for a
-   * Claude-owned internal replay origin, or the issue-order FIFO head for a
-   * pinned protocol frame that legitimately omits the UUID.
-   */
-  readonly take: (
-    userMessageUuid: string | undefined,
-    originKind: string | undefined,
-    originSubkind: string | undefined,
-  ) => ResultExpectation | undefined;
-  /** True while an assignment result remains owned for the exact epoch. */
-  readonly hasOutstandingAssignment: (epoch: number) => boolean;
-  /** Drops every confirmed UUID and owned expectation (transport shutdown). */
-  readonly clear: () => void;
-}
-
-export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
+export const makeClaudeResultCorrelation = () => {
   const sentUserUuids = new Map<string, ClaudeSentUserIdentity | undefined>();
   const internalReplayUuids = new Map<string, true>();
   const resultExpectations = new Map<string, ResultExpectation>();
@@ -342,6 +262,12 @@ export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
     }
   };
 
+  /**
+   * Takes the expectation for a native result: the exact `user_message_uuid`
+   * when reported; otherwise the oldest synthetic expectation for a
+   * Claude-owned internal replay origin, or the issue-order FIFO head for a
+   * pinned protocol frame that legitimately omits the UUID.
+   */
   const take = (
     userMessageUuid: string | undefined,
     originKind: string | undefined,
@@ -372,16 +298,18 @@ export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
   };
 
   return {
-    rememberSentUuid: (uuid, identity) =>
+    /** Records a confirmed outbound UUID, evicting the oldest beyond the bound. */
+    rememberSentUuid: (uuid: string, identity?: ClaudeSentUserIdentity) =>
       rememberBounded(sentUserUuids, uuid, identity, SENT_UUID_LIMIT),
-    hasSentUuid: (uuid) => sentUserUuids.has(uuid),
-    rememberInternalReplayUuid: (uuid) =>
+    hasSentUuid: (uuid: string) => sentUserUuids.has(uuid),
+    /** Records a Claude-owned internal replay UUID without treating it as adapter-sent. */
+    rememberInternalReplayUuid: (uuid: string) =>
       rememberBounded(internalReplayUuids, uuid, true, SENT_UUID_LIMIT),
-    hasInternalReplayUuid: (uuid) => internalReplayUuids.has(uuid),
+    hasInternalReplayUuid: (uuid: string) => internalReplayUuids.has(uuid),
     matchSentContent,
     register,
     take,
-    hasOutstandingAssignment: (epoch) =>
+    hasOutstandingAssignment: (epoch: number) =>
       resultOrder.some(
         (expectation) => expectation.kind === "assignment" && expectation.epoch === epoch,
       ),

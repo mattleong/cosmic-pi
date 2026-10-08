@@ -51,12 +51,12 @@ const asyncSnapshotFields = {
 
 // Historical expanded replay accepts any string ID. Compact identity needs a bounded, nonempty ID.
 const compactIdentity = Schema.String.check(Schema.isBetweenLength(1, 256));
-export const compactAsyncSnapshot = Schema.Struct({
+const compactAsyncSnapshot = Schema.Struct({
   ...asyncSnapshotFields,
   requestId: compactIdentity,
   deliveryId: compactIdentity,
 });
-export const expandedAsyncSnapshot = Schema.Struct({
+const expandedAsyncSnapshot = Schema.Struct({
   ...asyncSnapshotFields,
   independentWork: Schema.optional(Schema.String),
   blockedWork: Schema.optional(Schema.String),
@@ -147,16 +147,10 @@ export function fallbackText<Content>(content: Content, allowString = false): st
 /** Where one async questionnaire stands, in the words people read. */
 export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
 
-/** The snapshot fields that decide a questionnaire's state. */
-export interface SnapshotState {
-  readonly status: ReplayedSnapshot["status"];
-  readonly delivery: ReplayedSnapshot["delivery"];
-  readonly presentation?: ReplayedSnapshot["presentation"];
-  readonly outcome?: ReplayedOutcome | undefined;
-}
-
 /** Undefined for inconsistent snapshots, which keep their raw evidence instead. */
-export function questionnaireState(row: SnapshotState): QuestionnaireState | undefined {
+export function questionnaireState(
+  row: Pick<ReplayedSnapshot, "status" | "delivery" | "presentation" | "outcome">,
+): QuestionnaireState | undefined {
   switch (row.status) {
     case "pending":
       if (row.outcome || row.delivery !== "pending" || row.presentation === "settled")

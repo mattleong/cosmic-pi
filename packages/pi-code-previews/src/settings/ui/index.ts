@@ -28,8 +28,6 @@ type SettingsGroupDefinition = {
   groups?: readonly SettingsGroupDefinition[];
 };
 
-const SETTINGS_GROUP_ID_PREFIX = "group:";
-
 const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
   {
     name: "readPreviews",
@@ -78,7 +76,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
   },
 ];
 
-const SETTINGS_CATEGORY_GROUPS = [
+const SETTINGS_CATEGORY_GROUPS: readonly SettingsGroupDefinition[] = [
   {
     name: "appearance",
     label: "Appearance",
@@ -119,34 +117,33 @@ const SETTINGS_CATEGORY_GROUPS = [
     summarize: () => "file & defaults",
     ids: ["settingsFile", "resetToDefaults"],
   },
-] as const satisfies readonly SettingsGroupDefinition[];
+];
 
 export function createSettingsCategoryItems(
-  current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
   theme?: Theme,
 ): SettingItem[] {
   const groupItem = (definition: SettingsGroupDefinition) =>
-    createSettingsGroupItemFromDefinition(definition, current, getCurrent, onSettingChange, theme);
+    createSettingsGroupItemFromDefinition(definition, getCurrent, onSettingChange, theme);
+  const { tools } = getCurrent();
   return [
-    groupItem(SETTINGS_CATEGORY_GROUPS[0]),
-    groupItem(SETTINGS_CATEGORY_GROUPS[1]),
+    ...SETTINGS_CATEGORY_GROUPS.slice(0, 2).map(groupItem),
     {
       id: "tools",
       label: "Enabled tools",
       description:
         "Toggle tool previews individually. Changes take effect after /reload. Tools already owned by another extension are skipped automatically.",
       currentValue:
-        current.tools.length === 0
+        tools.length === 0
           ? "none"
-          : current.tools.length === ALL_CODE_PREVIEW_TOOLS.length
+          : tools.length === ALL_CODE_PREVIEW_TOOLS.length
             ? "all tools"
-            : `${current.tools.length}/${ALL_CODE_PREVIEW_TOOLS.length} tools`,
+            : `${tools.length}/${ALL_CODE_PREVIEW_TOOLS.length} tools`,
       submenu: (_currentValue, done) => {
         const settings = getCurrent();
         return new ToolPreviewSettingsSubmenu(
-          formatSettingValue(settings, "tools"),
+          settings.tools,
           done,
           theme,
           // Tools whose preview setting is off still render, to hide that preview.
@@ -154,37 +151,29 @@ export function createSettingsCategoryItems(
         );
       },
     },
-    groupItem(SETTINGS_CATEGORY_GROUPS[2]),
-    groupItem(SETTINGS_CATEGORY_GROUPS[3]),
+    ...SETTINGS_CATEGORY_GROUPS.slice(2).map(groupItem),
   ];
 }
 
 function createSettingsGroupItemFromDefinition(
   definition: SettingsGroupDefinition,
-  current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
   theme?: Theme,
 ): SettingsSurfaceItem {
   return {
     kind: "group",
-    id: `${SETTINGS_GROUP_ID_PREFIX}${definition.name}`,
+    id: `group:${definition.name}`,
     label: definition.label,
     description: definition.description,
-    currentValue: definition.summarize(current),
+    currentValue: definition.summarize(getCurrent()),
     submenu: (_currentValue, done) =>
       createSettingsGroupSubmenu({
         title: definition.label,
         description: definition.description,
         items: () =>
           definition.groups?.map((group) =>
-            createSettingsGroupItemFromDefinition(
-              group,
-              getCurrent(),
-              getCurrent,
-              onSettingChange,
-              theme,
-            ),
+            createSettingsGroupItemFromDefinition(group, getCurrent, onSettingChange, theme),
           ) ?? (definition.ids ?? []).map((id) => createSettingItem(getCurrent(), id, theme)),
         onChange: onSettingChange,
         done,
@@ -194,17 +183,12 @@ function createSettingsGroupItemFromDefinition(
   };
 }
 
-export function isSettingsGroupItemId(id: string): boolean {
-  return id.startsWith(SETTINGS_GROUP_ID_PREFIX);
-}
-
 function createSettingItem(
   current: CodePreviewSettings,
   id: SettingsUiItemId,
   theme?: Theme,
 ): SettingItem {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const definition = SETTING_ITEM_DEFINITIONS[id] as SettingItemDefinition;
+  const definition: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
   const item: SettingItem = {
     id,
     label: definition.label,

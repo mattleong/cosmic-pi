@@ -88,27 +88,22 @@ interface Ownership {
   phase: OwnershipPhase;
 }
 
-const digest = (value: string): string => sha256Text(value);
-
 const validFilesystemIdentity = (cwd: CanonicalWriterCwd): boolean =>
   cwd.filesystemIdentity.length <= MAX_FILESYSTEM_IDENTITY_CHARS &&
   FILESYSTEM_IDENTITY_PATTERN.test(cwd.filesystemIdentity) &&
   DIGEST_PATTERN.test(cwd.digest) &&
-  digest(cwd.filesystemIdentity) === cwd.digest;
+  sha256Text(cwd.filesystemIdentity) === cwd.digest;
 
 const canonicalize: WriterLeaseContract["canonicalize"] = (cwd) =>
   Effect.tryPromise({
     try: () =>
       fs.realpath(cwd).then((path) =>
         fs.stat(path, { bigint: true }).then((stat) => {
-          if (!stat.isDirectory()) throw new Error("not-directory");
           const filesystemIdentity = `dev:${stat.dev.toString(16)};ino:${stat.ino.toString(16)}`;
-          if (
-            filesystemIdentity.length > MAX_FILESYSTEM_IDENTITY_CHARS ||
-            !FILESYSTEM_IDENTITY_PATTERN.test(filesystemIdentity)
-          )
+          const canonical = { path, filesystemIdentity, digest: sha256Text(filesystemIdentity) };
+          if (!stat.isDirectory() || !validFilesystemIdentity(canonical))
             throw new Error("identity");
-          return { path, filesystemIdentity, digest: digest(filesystemIdentity) };
+          return canonical;
         }),
       ),
     catch: () =>

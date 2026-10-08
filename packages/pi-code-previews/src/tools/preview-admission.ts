@@ -1,7 +1,6 @@
-import type { SourceInfo } from "@earendil-works/pi-coding-agent";
-import type { PreviewToolInfo } from "../application/renderer-contract";
+import type { SourceInfo, ToolInfo } from "@earendil-works/pi-coding-agent";
 import type { PreviewHostTools } from "../boundary/host-tool-renderers";
-import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "./names";
+import { CORE_CODE_PREVIEW_TOOLS, isCodePreviewToolName, type CodePreviewToolName } from "./names";
 import { isNativeMcpName } from "./native-mcp-identity";
 
 export const isCorePreviewName = (name: string): name is (typeof CORE_CODE_PREVIEW_TOOLS)[number] =>
@@ -9,11 +8,11 @@ export const isCorePreviewName = (name: string): name is (typeof CORE_CODE_PREVI
 
 /** Names presentation may claim at all; every other name falls through untouched. */
 export const isPreviewName = (name: string): boolean =>
-  isCorePreviewName(name) || name === "codemode" || name === "tool_search" || isNativeMcpName(name);
+  isCodePreviewToolName(name) || isNativeMcpName(name);
 
 /** Exact public builtin source `builtin:<path>`; the path defaults to the tool's own name. */
 export function isBuiltinTool(
-  tool: PreviewToolInfo | undefined,
+  tool: ToolInfo | undefined,
   path: string | undefined = tool?.name,
 ): boolean {
   return tool?.sourceInfo.source === "builtin" && tool.sourceInfo.path === `builtin:${path}`;
@@ -21,7 +20,7 @@ export function isBuiltinTool(
 
 /** Exact extension ownership, anchored by a unique public command from the same factory. */
 export function isSameExtensionSource(
-  tool: PreviewToolInfo | undefined,
+  tool: ToolInfo | undefined,
   source: SourceInfo | undefined,
 ): boolean {
   const owner = tool?.sourceInfo;

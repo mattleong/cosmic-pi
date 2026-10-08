@@ -17,21 +17,15 @@ export interface OpenAIProjection extends UsageProjectionBase<ResolvedConfig, Us
   readonly accountId: string | undefined;
 }
 
-type OpenAIProjectionExtras = Pick<OpenAIProjection, "accountId">;
-
-const initialExtras = (): OpenAIProjectionExtras => ({ accountId: undefined });
-
 export const initialProjection = (): OpenAIProjection => ({
   ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
-  ...initialExtras(),
+  accountId: undefined,
 });
 
-export const makeProjection = (): MutableRef.MutableRef<OpenAIProjection> =>
-  makeFrozenUsageProjection<ResolvedConfig, UsageSnapshot, OpenAIProjectionExtras>(initialExtras());
+export const makeProjection = () => makeFrozenUsageProjection(initialProjection);
 
-export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjection>): void => {
-  resetFrozenUsageProjection(projection, initialExtras);
-};
+export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjection>): void =>
+  resetFrozenUsageProjection(projection, initialProjection);
 
 export function usageConfigChanged(left: ResolvedConfig, right: ResolvedConfig): boolean {
   return (

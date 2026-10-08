@@ -18,15 +18,11 @@ The footer clears when no tasks remain active. Failed and timed-out tasks stay a
 
 Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Set `toolCallCollapsedStyle` to `compact` in `pi-code-previews` settings and reload to hide ordinary output until expansion. Compact summaries and their issues are described in [ARCHITECTURE.md](../ARCHITECTURE.md#source-map).
 
-## Local-extension protocol
-
-The reusable `pi-background-task/code-mode` protocol remains available to local extensions. It shares the top-level tool's task registry and does not expose the service or execute a registered tool definition; its admission checks are described under [Ownership](../ARCHITECTURE.md#ownership).
-
-The custom `pi-code-mode` extension and its `tools.session.backgroundTask` adapter are retired. Native Pi `codemode` can call the registered `background_task` tool through Pi's native tool pipeline; no custom adapter is installed automatically. Started tasks may outlive a foreground call, but not the Pi session.
-
 ## Native Code Mode results
 
-`background_task` declares a native Pi `outputSchema`, so native `codemode` scripts receive its `structuredContent` instead of the text. The model-facing text, its 50 KB / 2,000-line bound, and the persisted details are unchanged; the `pi-background-task/code-mode` v1 protocol is separate and also unchanged.
+Native Pi `codemode` calls the registered `background_task` tool through Pi's native tool pipeline. Started tasks may outlive a foreground call, but not the Pi session.
+
+`background_task` declares a native Pi `outputSchema`, so native `codemode` scripts receive its `structuredContent` instead of the text. The model-facing text, its 50 KB / 2,000-line bound, and the persisted details are unchanged.
 
 Every successful result carries `contract: "pi-background-task/task"`, `version: 1`, `tool: "background_task"`, and the `action`:
 

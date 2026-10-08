@@ -17,31 +17,27 @@ import {
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
 
-const NONBLANK_PATTERN = ".*\\S.*";
 const strictObjectOptions = { additionalProperties: false } as const;
-const runIdOptions = {
-  minLength: 1,
-  maxLength: MAX_PROTOCOL_ID_CHARS,
-  pattern: NONBLANK_PATTERN,
-} as const;
-const RunIdParameter = Type.String(runIdOptions);
+const nonblank = (maxLength: number) => ({ minLength: 1, maxLength, pattern: ".*\\S.*" }) as const;
+const nonblankString = (maxLength: number, description?: string) =>
+  Type.String({ ...(description !== undefined && { description }), ...nonblank(maxLength) });
+const RunIdParameter = Type.String(nonblank(MAX_PROTOCOL_ID_CHARS));
+const writePaths = (itemDescription?: string, description?: string) =>
+  Type.Array(nonblankString(MAX_WRITE_CLAIM_CHARS, itemDescription), {
+    ...(description !== undefined && { description }),
+    minItems: 1,
+    maxItems: MAX_WRITE_CLAIMS,
+    uniqueItems: true,
+  });
+
+export const AWAIT_UNTIL = ["all_finished", "any_finished"] as const;
 
 const StartSpecFields = {
-  task: Type.String({
-    description:
-      "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
-    minLength: 1,
-    maxLength: MAX_TASK_CHARS,
-    pattern: NONBLANK_PATTERN,
-  }),
-  name: Type.Optional(
-    Type.String({
-      description: "Optional nonblank display name.",
-      minLength: 1,
-      maxLength: MAX_NAME_CHARS,
-      pattern: NONBLANK_PATTERN,
-    }),
+  task: nonblankString(
+    MAX_TASK_CHARS,
+    "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
   ),
+  name: Type.Optional(nonblankString(MAX_NAME_CHARS, "Optional nonblank display name.")),
   profile: Type.Optional(
     StringEnum(PROFILE_IDS, {
       description:
@@ -49,20 +45,9 @@ const StartSpecFields = {
     }),
   ),
   writes: Type.Optional(
-    Type.Array(
-      Type.String({
-        description: "Exact workspace-relative POSIX file path assigned to this writer.",
-        minLength: 1,
-        maxLength: MAX_WRITE_CLAIM_CHARS,
-        pattern: NONBLANK_PATTERN,
-      }),
-      {
-        description:
-          "Cooperative exact-file claims for writer profiles. Omit for exclusive whole-workspace writer ownership.",
-        minItems: 1,
-        maxItems: MAX_WRITE_CLAIMS,
-        uniqueItems: true,
-      },
+    writePaths(
+      "Exact workspace-relative POSIX file path assigned to this writer.",
+      "Cooperative exact-file claims for writer profiles. Omit for exclusive whole-workspace writer ownership.",
     ),
   ),
 } as const;
@@ -75,12 +60,10 @@ const RunIdsParameters = Type.Array(RunIdParameter, {
   maxItems: MAX_TARGET_RUNS,
 });
 
-const MessageParameters = Type.String({
-  description: "Nonblank message to send to the selected subagent or subagents.",
-  minLength: 1,
-  maxLength: MAX_PARENT_MESSAGE_CHARS,
-  pattern: NONBLANK_PATTERN,
-});
+const MessageParameters = nonblankString(
+  MAX_PARENT_MESSAGE_CHARS,
+  "Nonblank message to send to the selected subagent or subagents.",
+);
 
 const ModelsParameters = Type.Object(
   {
@@ -123,7 +106,7 @@ const StatusParameters = Type.Object(
 const AwaitParameters = Type.Object(
   {
     runIds: RunIdsParameters,
-    until: StringEnum(["all_finished", "any_finished"] as const, {
+    until: StringEnum(AWAIT_UNTIL, {
       description:
         "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
     }),
@@ -142,7 +125,7 @@ const SendParameters = Type.Object(
 const ReplyParameters = Type.Object(
   {
     runId: Type.String({
-      ...runIdOptions,
+      ...nonblank(MAX_PROTOCOL_ID_CHARS),
       description: "Run ID waiting for a parent reply.",
     }),
     message: MessageParameters,
@@ -164,23 +147,10 @@ const LifecycleParameters = Type.Object(
 
 const RenameParameters = Type.Object(
   {
-    runId: Type.String({
-      ...runIdOptions,
-      description: "Run ID to rename.",
-    }),
-    name: Type.String({
-      description: "New nonblank display name.",
-      minLength: 1,
-      maxLength: MAX_NAME_CHARS,
-      pattern: NONBLANK_PATTERN,
-    }),
+    runId: Type.String({ ...nonblank(MAX_PROTOCOL_ID_CHARS), description: "Run ID to rename." }),
+    name: nonblankString(MAX_NAME_CHARS, "New nonblank display name."),
   },
   strictObjectOptions,
-);
-
-const WritePathsParameters = Type.Array(
-  Type.String({ minLength: 1, maxLength: MAX_WRITE_CLAIM_CHARS, pattern: NONBLANK_PATTERN }),
-  { minItems: 1, maxItems: MAX_WRITE_CLAIMS, uniqueItems: true },
 );
 
 const ClaimsParameters = Type.Object(
@@ -191,39 +161,39 @@ const ClaimsParameters = Type.Object(
     }),
     runIds: Type.Optional(RunIdsParameters),
     runId: Type.Optional(RunIdParameter),
-    paths: Type.Optional(WritePathsParameters),
+    paths: Type.Optional(writePaths()),
   },
   strictObjectOptions,
 );
 
+type ClaimsField = Exclude<keyof SubagentClaimsInput, "action">;
+/** The fields each action requires, in reporting order; every other field is rejected. */
+const CLAIMS_ACTION_FIELDS = {
+  list: ["runIds"],
+  grant: ["runId", "paths"],
+  revoke: ["runId", "paths"],
+  resume_admission: ["runId"],
+} as const satisfies Record<SubagentClaimsInput["action"], ReadonlyArray<ClaimsField>>;
+const CLAIMS_FIELDS = ["runIds", "runId", "paths"] as const satisfies ReadonlyArray<ClaimsField>;
+
 /**
- * Per-action field requirements the flattened claims schema cannot express as one object:
- * which fields each action requires and which cross-field combinations it rejects. Returns the
- * error message, or undefined when the operation is well-formed for its action.
+ * Per-action field requirements the flattened claims schema cannot express as one object.
+ * Returns the error message, or undefined when the operation is well-formed for its action.
  */
 export const claimsOperationError = (operation: SubagentClaimsInput): string | undefined => {
-  switch (operation.action) {
-    case "list":
-      if (operation.runIds === undefined) return 'subagent_claims action="list" requires runIds.';
-      if (operation.runId !== undefined || operation.paths !== undefined)
-        return 'subagent_claims action="list" takes runIds only.';
-      return undefined;
-    case "grant":
-    case "revoke":
-      if (operation.runId === undefined)
-        return `subagent_claims action="${operation.action}" requires runId.`;
-      if (operation.paths === undefined || operation.paths.length === 0)
-        return `subagent_claims action="${operation.action}" requires a non-empty paths array.`;
-      if (operation.runIds !== undefined)
-        return `subagent_claims action="${operation.action}" takes runId and paths only.`;
-      return undefined;
-    case "resume_admission":
-      if (operation.runId === undefined)
-        return 'subagent_claims action="resume_admission" requires runId.';
-      if (operation.runIds !== undefined || operation.paths !== undefined)
-        return 'subagent_claims action="resume_admission" takes runId only.';
-      return undefined;
-  }
+  // Pi `tool_call` handlers may mutate validated input, so an unknown action can still arrive.
+  if (!Object.hasOwn(CLAIMS_ACTION_FIELDS, operation.action))
+    return "subagent_claims requires a supported action.";
+  const required: ReadonlyArray<ClaimsField> = CLAIMS_ACTION_FIELDS[operation.action];
+  const subject = `subagent_claims action="${operation.action}"`;
+  const missing = required.find((field) =>
+    field === "paths" ? !operation.paths?.length : operation[field] === undefined,
+  );
+  if (missing === "paths") return `${subject} requires a non-empty paths array.`;
+  if (missing !== undefined) return `${subject} requires ${missing}.`;
+  return CLAIMS_FIELDS.some((field) => !required.includes(field) && operation[field] !== undefined)
+    ? `${subject} takes ${required.join(" and ")} only.`
+    : undefined;
 };
 
 export const WorkspaceParameters = Type.Object(
@@ -369,7 +339,7 @@ export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): Subag
   const record = args as Readonly<JsonObject>;
   const agents = record.agents;
   if (!Array.isArray(agents)) {
-    if (Object.prototype.hasOwnProperty.call(record, "task"))
+    if (Object.hasOwn(record, "task"))
       throw new Error(
         '[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
       );

@@ -7,7 +7,7 @@ import {
   type AskUserRequest,
 } from "pi-ask-user/protocol";
 import { Check } from "typebox/value";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentToolName } from "../run/tool-policy.ts";
 import { SubagentContractSchema, encodeSubagentContract } from "./contract-schema.ts";
@@ -85,8 +85,7 @@ export const decodeSubagentProxyResult = (source: string): AgentToolResult<unkno
   };
 };
 
-const invalid = (message: string) =>
-  new InvalidSubagentRequestError({ code: "proxy_request_invalid", message });
+const invalid = (message: string) => invalidRequest("proxy_request_invalid", message);
 
 /** The catalog by tool name, so a generic name keeps its schema and validator correlated. */
 type ToolSchemas = {

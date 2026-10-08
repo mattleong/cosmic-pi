@@ -1,15 +1,11 @@
-import type { AddedDiffLine, RemovedDiffLine } from "../parse";
-import { changedLineAt, type IndexedChangedLine } from "./changed-line";
 import {
-  changedLineSimilarityDocuments,
-  fallbackLineSimilarity,
+  bagLineSimilarity,
   hasUniqueSharedSimilarityFeature,
-  similarityTokenListWeight,
-  similarityTokenWeight,
+  type ChangedLineSimilarity,
 } from "./line-similarity";
 import {
   competingCandidateValues,
-  competingChangedLineScoreAt,
+  competingChangedLineScores,
   isAmbiguousChangedLinePairScore,
   isReciprocalBestChangedLinePair,
   linePairConfidence,
@@ -18,77 +14,57 @@ import {
   type ChangedLineScoreAt,
   type ChangedLinePositionMatch,
 } from "./line-pair-scoring";
-import {
-  compareSparseCandidates,
-  hasStrongSparseEvidence,
-  sparseChangedLinePairCandidates,
-  type SparseChangedLinePairCandidate,
-} from "./sparse-candidates";
 
-type ScoredSparseChangedLinePairCandidate = SparseChangedLinePairCandidate & {
-  score: number;
+type SparseChangedLinePairCandidate = {
+  removedPosition: number;
+  addedPosition: number;
+  evidence: number;
+  sharedFeatureCount: number;
+  hasUniqueFeature: boolean;
+  competingEvidence: number;
 };
 
 const MAX_POSITIONAL_FALLBACK_AMBIGUITY_CELLS = 10_000;
+const MAX_SPARSE_FEATURE_DOCUMENTS = 6;
+const MAX_SPARSE_FEATURE_DOCUMENTS_PER_SIDE = 3;
+const MAX_SPARSE_CANDIDATES_PER_LINE = 8;
+const MIN_SPARSE_RARE_FEATURE_COUNT = 2;
+const MIN_SPARSE_EVIDENCE_MARGIN = 1;
+const MIN_SPARSE_EVIDENCE_RATIO = 0.9;
+
+/**
+ * Matches blocks too large for a full score matrix: rare shared features propose candidate
+ * pairs, reciprocal-best anchors are accepted, and unanchored lines fall back to their diagonal.
+ */
 export function matchChangedLinesSparse(
-  removed: Array<IndexedChangedLine<RemovedDiffLine>>,
-  added: Array<IndexedChangedLine<AddedDiffLine>>,
+  similarity: ChangedLineSimilarity,
 ): ChangedLinePositionMatch[] {
-  const similarityDocuments = changedLineSimilarityDocuments(removed, added);
-  const tokenWeight = similarityTokenWeight(similarityDocuments);
-  const removedWeights: Array<number | undefined> = [];
-  const addedWeights: Array<number | undefined> = [];
-  const canCheckAmbiguity =
-    removed.length * added.length <= MAX_POSITIONAL_FALLBACK_AMBIGUITY_CELLS;
+  const removedLength = similarity.removed.length;
+  const addedLength = similarity.added.length;
+  const canCheckAmbiguity = removedLength * addedLength <= MAX_POSITIONAL_FALLBACK_AMBIGUITY_CELLS;
   const scoreCache = canCheckAmbiguity ? new Map<number, number>() : undefined;
-  const scoreAt = (removedPosition: number, addedPosition: number): number => {
-    const key = removedPosition * added.length + addedPosition;
+  const scoreAt: ChangedLineScoreAt = (removedPosition, addedPosition) => {
+    const key = removedPosition * addedLength + addedPosition;
     const cached = scoreCache?.get(key);
     if (cached !== undefined) return cached;
-    const removedFeatures = similarityDocuments.removedFeatures[removedPosition];
-    const addedFeatures = similarityDocuments.addedFeatures[addedPosition];
-    if (removedFeatures === undefined || addedFeatures === undefined)
-      throw new RangeError(`Missing similarity features ${removedPosition}:${addedPosition}`);
-    const removedWeight = (removedWeights[removedPosition] ??= similarityTokenListWeight(
-      removedFeatures,
-      tokenWeight,
-    ));
-    const addedWeight = (addedWeights[addedPosition] ??= similarityTokenListWeight(
-      addedFeatures,
-      tokenWeight,
-    ));
-    const score = fallbackLineSimilarity(
-      changedLineAt(removed, removedPosition),
-      changedLineAt(added, addedPosition),
-      tokenWeight,
-      removedWeight,
-      addedWeight,
-    );
+    const score = bagLineSimilarity(similarity, removedPosition, addedPosition);
     scoreCache?.set(key, score);
     return score;
   };
+  const competingScoreAt = competingChangedLineScores(removedLength, addedLength, scoreAt);
 
-  const sparseCandidates = sparseChangedLinePairCandidates(similarityDocuments, tokenWeight);
-  const pairs = sparseChangedLineAnchors(removed, added, sparseCandidates, scoreAt);
+  const pairs = sparseChangedLineAnchors(similarity, scoreAt);
   const usedRemoved = new Set(pairs.map((pair) => pair.removedPosition));
   const usedAdded = new Set(pairs.map((pair) => pair.addedPosition));
 
-  for (let index = 0; index < Math.min(removed.length, added.length); index++) {
+  for (let index = 0; index < Math.min(removedLength, addedLength); index++) {
     if (usedRemoved.has(index) || usedAdded.has(index)) continue;
     const score = scoreAt(index, index);
     if (score < MIN_POSITIONAL_FALLBACK_PAIR_SCORE) continue;
-    const removedLine = changedLineAt(removed, index);
-    const addedLine = changedLineAt(added, index);
     let competingScore = 0;
-    if (!hasUniqueSharedSimilarityFeature(removedLine, addedLine, similarityDocuments)) {
+    if (!hasUniqueSharedSimilarityFeature(similarity, index, index)) {
       if (!canCheckAmbiguity) continue;
-      competingScore = competingChangedLineScoreAt(
-        removed.length,
-        added.length,
-        index,
-        index,
-        scoreAt,
-      );
+      competingScore = competingScoreAt(index, index);
       if (isAmbiguousChangedLinePairScore(score, competingScore)) continue;
     }
     pairs.push({
@@ -101,16 +77,15 @@ export function matchChangedLinesSparse(
 }
 
 function sparseChangedLineAnchors(
-  removed: Array<IndexedChangedLine<RemovedDiffLine>>,
-  added: Array<IndexedChangedLine<AddedDiffLine>>,
-  sparseCandidates: SparseChangedLinePairCandidate[],
+  similarity: ChangedLineSimilarity,
   scoreAt: ChangedLineScoreAt,
 ): ChangedLinePositionMatch[] {
-  const scoredCandidates: ScoredSparseChangedLinePairCandidate[] = sparseCandidates
-    .map((candidate) => ({
-      ...candidate,
-      score: scoreAt(candidate.removedPosition, candidate.addedPosition),
-    }))
+  const scoredCandidates = sparseChangedLinePairCandidates(similarity)
+    .map((candidate) =>
+      Object.assign(candidate, {
+        score: scoreAt(candidate.removedPosition, candidate.addedPosition),
+      }),
+    )
     .toSorted((a, b) => b.score - a.score || compareSparseCandidates(a, b));
   const candidateCompetingScore = competingCandidateValues(
     scoredCandidates,
@@ -127,7 +102,7 @@ function sparseChangedLineAnchors(
     if (!hasStrongSparseEvidence(candidate)) continue;
     const competingScore = Math.max(
       candidateCompetingScore(candidate),
-      sparsePositionalCompetingScore(candidate, removed.length, added.length, scoreAt),
+      sparsePositionalCompetingScore(candidate, similarity, scoreAt),
     );
     if (!isReciprocalBestChangedLinePair(candidate.score, competingScore)) continue;
     usedRemoved.add(candidate.removedPosition);
@@ -141,25 +116,128 @@ function sparseChangedLineAnchors(
   return pairs;
 }
 
+/** An off-diagonal anchor competes with the diagonal partners of both of its lines. */
 function sparsePositionalCompetingScore(
-  candidate: SparseChangedLinePairCandidate,
-  removedLength: number,
-  addedLength: number,
+  { removedPosition, addedPosition }: SparseChangedLinePairCandidate,
+  similarity: ChangedLineSimilarity,
   scoreAt: ChangedLineScoreAt,
 ): number {
-  let competingScore = 0;
-  if (
-    candidate.removedPosition < addedLength &&
-    candidate.addedPosition !== candidate.removedPosition
-  )
-    competingScore = scoreAt(candidate.removedPosition, candidate.removedPosition);
-  if (
-    candidate.addedPosition < removedLength &&
-    candidate.removedPosition !== candidate.addedPosition
-  )
-    competingScore = Math.max(
-      competingScore,
-      scoreAt(candidate.addedPosition, candidate.addedPosition),
-    );
-  return competingScore;
+  if (removedPosition === addedPosition) return 0;
+  return Math.max(
+    removedPosition < similarity.added.length ? scoreAt(removedPosition, removedPosition) : 0,
+    addedPosition < similarity.removed.length ? scoreAt(addedPosition, addedPosition) : 0,
+  );
+}
+
+function sparseChangedLinePairCandidates(
+  similarity: ChangedLineSimilarity,
+): SparseChangedLinePairCandidate[] {
+  const removedPositions = similarityFeaturePositions(similarity.removed);
+  const addedPositions = similarityFeaturePositions(similarity.added);
+  const candidates = new Map<number, SparseChangedLinePairCandidate>();
+  const addedLength = similarity.added.length;
+
+  for (const [feature, featureRemovedPositions] of removedPositions) {
+    const featureAddedPositions = addedPositions.get(feature);
+    if (!featureAddedPositions) continue;
+    const documentCount = similarity.documentCounts.get(feature) ?? Number.POSITIVE_INFINITY;
+    if (
+      documentCount > MAX_SPARSE_FEATURE_DOCUMENTS ||
+      featureRemovedPositions.length > MAX_SPARSE_FEATURE_DOCUMENTS_PER_SIDE ||
+      featureAddedPositions.length > MAX_SPARSE_FEATURE_DOCUMENTS_PER_SIDE
+    )
+      continue;
+    const weight = similarity.tokenWeight(feature);
+    if (weight < 1) continue;
+    const uniqueFeature =
+      documentCount === 2 &&
+      featureRemovedPositions.length === 1 &&
+      featureAddedPositions.length === 1;
+
+    for (const removedPosition of featureRemovedPositions) {
+      for (const addedPosition of featureAddedPositions) {
+        const key = removedPosition * addedLength + addedPosition;
+        const candidate = candidates.get(key);
+        if (candidate) {
+          candidate.evidence += weight;
+          candidate.sharedFeatureCount++;
+          candidate.hasUniqueFeature ||= uniqueFeature;
+        } else {
+          candidates.set(key, {
+            removedPosition,
+            addedPosition,
+            evidence: weight,
+            sharedFeatureCount: 1,
+            hasUniqueFeature: uniqueFeature,
+            competingEvidence: 0,
+          });
+        }
+      }
+    }
+  }
+
+  const candidateList = [...candidates.values()];
+  const competingEvidence = competingCandidateValues(
+    candidateList,
+    (candidate) => candidate.evidence,
+  );
+  for (const candidate of candidateList) candidate.competingEvidence = competingEvidence(candidate);
+  const selectedByRemoved = topSparseCandidates(candidateList, (c) => c.removedPosition);
+  const selectedByAdded = topSparseCandidates(candidateList, (c) => c.addedPosition);
+  return candidateList.filter(
+    (candidate) => selectedByRemoved.has(candidate) && selectedByAdded.has(candidate),
+  );
+}
+
+function similarityFeaturePositions(
+  lines: ChangedLineSimilarity["removed"],
+): Map<string, number[]> {
+  const positions = new Map<string, number[]>();
+  lines.forEach(({ features }, position) => {
+    for (const feature of new Set(features)) appendAt(positions, feature, position);
+  });
+  return positions;
+}
+
+/** The strongest candidates of each line on one side, keyed by that side's position. */
+function topSparseCandidates(
+  candidates: SparseChangedLinePairCandidate[],
+  position: (candidate: SparseChangedLinePairCandidate) => number,
+): Set<SparseChangedLinePairCandidate> {
+  const byPosition = new Map<number, SparseChangedLinePairCandidate[]>();
+  for (const candidate of candidates) appendAt(byPosition, position(candidate), candidate);
+  return new Set(
+    [...byPosition.values()].flatMap((atPosition) =>
+      atPosition.toSorted(compareSparseCandidates).slice(0, MAX_SPARSE_CANDIDATES_PER_LINE),
+    ),
+  );
+}
+
+function appendAt<K, V>(groups: Map<K, V[]>, key: K, value: V): void {
+  const group = groups.get(key);
+  if (group) group.push(value);
+  else groups.set(key, [value]);
+}
+
+function compareSparseCandidates(
+  a: SparseChangedLinePairCandidate,
+  b: SparseChangedLinePairCandidate,
+): number {
+  return (
+    Number(b.hasUniqueFeature) - Number(a.hasUniqueFeature) ||
+    b.evidence - a.evidence ||
+    b.sharedFeatureCount - a.sharedFeatureCount ||
+    Math.abs(a.removedPosition - a.addedPosition) - Math.abs(b.removedPosition - b.addedPosition) ||
+    a.removedPosition - b.removedPosition ||
+    a.addedPosition - b.addedPosition
+  );
+}
+
+function hasStrongSparseEvidence(candidate: SparseChangedLinePairCandidate): boolean {
+  if (!candidate.hasUniqueFeature && candidate.sharedFeatureCount < MIN_SPARSE_RARE_FEATURE_COUNT)
+    return false;
+  return (
+    candidate.evidence - candidate.competingEvidence > MIN_SPARSE_EVIDENCE_MARGIN &&
+    candidate.competingEvidence < candidate.evidence * MIN_SPARSE_EVIDENCE_RATIO
+  );
 }

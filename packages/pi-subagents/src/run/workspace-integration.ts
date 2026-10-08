@@ -88,7 +88,7 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
               const owned: WriterLease[] = [];
               let applying = false;
               let releaseFailed = false;
-              const committed = yield* Effect.gen(function* () {
+              const { record: _record, ...committed } = yield* Effect.gen(function* () {
                 for (const cwd of sources)
                   owned.push(
                     // acquire keeps only its pre-ownership checks interruptible. Keep the
@@ -146,12 +146,7 @@ export function makeWorkspaceIntegrate(context: WorkspaceControlContext) {
                 yield* Effect.logWarning(
                   "Integration lease release is unconfirmed. Further writer admission is blocked pending manual recovery.",
                 ).pipe(Effect.annotateLogs("workspaceId", workspaceId));
-              return {
-                workerRoot: committed.workerRoot,
-                uncapturedPaths: committed.uncapturedPaths,
-                treeRemovalFailed: committed.treeRemovalFailed,
-                leaseReleaseUnconfirmed: releaseFailed,
-              };
+              return { ...committed, leaseReleaseUnconfirmed: releaseFailed };
             }),
           );
         }),

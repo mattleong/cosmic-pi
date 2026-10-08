@@ -121,71 +121,55 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
     return { complete: false, scalar: value };
   }
 
-  function object(depth: number): Value | undefined {
+  /** An object or array; only objects have keys, and only root object fields are retained. */
+  function container(depth: number, close: "}" | "]"): Value | undefined {
     cursor++;
     const keys = new Set<string>();
     skipWhitespace();
-    if (source[cursor] === "}") {
+    if (source[cursor] === close) {
       cursor++;
       return { complete: true };
     }
     while (cursor < source.length) {
-      if (source[cursor] !== '"') return undefined;
-      const key = string(true);
-      if (!key) return undefined;
-      if (!key.complete) return unfinished();
-      if (!Predicate.isString(key.scalar) || keys.has(key.scalar)) return undefined;
-      keys.add(key.scalar);
-      skipWhitespace();
-      if (cursor === source.length) return unfinished();
-      if (source[cursor++] !== ":") return undefined;
-      skipWhitespace();
+      let key: string | undefined;
+      if (close === "}") {
+        if (source[cursor] !== '"') return undefined;
+        const parsed = string(true);
+        if (!parsed) return undefined;
+        if (!parsed.complete) return unfinished();
+        if (!Predicate.isString(parsed.scalar) || keys.has(parsed.scalar)) return undefined;
+        key = parsed.scalar;
+        keys.add(key);
+        skipWhitespace();
+        if (cursor === source.length) return unfinished();
+        if (source[cursor++] !== ":") return undefined;
+        skipWhitespace();
+      }
       const start = cursor;
       const item = parseValue(depth + 1);
       if (!item) return undefined;
-      if (isSensitiveDiagnosticKey(key.scalar)) redactions.push({ start, end: cursor });
-      if (depth === 0 && item.scalar !== undefined) {
+      if (key !== undefined && isSensitiveDiagnosticKey(key))
+        redactions.push({ start, end: cursor });
+      if (key !== undefined && depth === 0 && item.scalar !== undefined) {
         fields.set(
-          key.scalar,
-          isSensitiveDiagnosticKey(key.scalar)
+          key,
+          isSensitiveDiagnosticKey(key)
             ? "[REDACTED]"
             : Predicate.isString(item.scalar)
               ? safeNativeArgumentText(item.scalar, !item.complete)
               : item.scalar,
         );
-        if (!item.complete) partialFields.add(key.scalar);
+        if (!item.complete) partialFields.add(key);
       }
       if (!item.complete) return unfinished();
       skipWhitespace();
       if (cursor === source.length) return unfinished();
       const delimiter = source[cursor++];
-      if (delimiter === "}") return { complete: true };
+      if (delimiter === close) return { complete: true };
       if (delimiter !== ",") return undefined;
       skipWhitespace();
-      // A trailing comma is not a valid JSON prefix if its closing brace is present.
-      if (source[cursor] === "}") return undefined;
-    }
-    return unfinished();
-  }
-
-  function array(depth: number): Value | undefined {
-    cursor++;
-    skipWhitespace();
-    if (source[cursor] === "]") {
-      cursor++;
-      return { complete: true };
-    }
-    while (cursor < source.length) {
-      const item = parseValue(depth + 1);
-      if (!item) return undefined;
-      if (!item.complete) return unfinished();
-      skipWhitespace();
-      if (cursor === source.length) return unfinished();
-      const delimiter = source[cursor++];
-      if (delimiter === "]") return { complete: true };
-      if (delimiter !== ",") return undefined;
-      skipWhitespace();
-      if (source[cursor] === "]") return undefined;
+      // A trailing comma is not a valid JSON prefix if its closing bracket is present.
+      if (source[cursor] === close) return undefined;
     }
     return unfinished();
   }
@@ -196,8 +180,8 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
     if (cursor === source.length) return unfinished();
     const character = source[cursor];
     if (character === '"') return string();
-    if (character === "{") return object(depth);
-    if (character === "[") return array(depth);
+    if (character === "{" || character === "[")
+      return container(depth, character === "{" ? "}" : "]");
     const start = cursor;
     while (
       cursor < source.length &&
@@ -218,7 +202,7 @@ export function nativeArgumentPreview(raw: string): NativeArgumentPreview | unde
 
   skipWhitespace();
   if (source[cursor] !== "{") return undefined;
-  const root = object(0);
+  const root = container(0, "}");
   skipWhitespace();
   if (!root || cursor !== source.length || root.complete === truncated) return undefined;
 

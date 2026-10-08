@@ -28,4 +28,3 @@ export const ACTIVITY_LIMITS = Object.freeze({
   /** Active launch requests a provider reports. */
   starting: 16384,
 } as const);
-export type ActivityLimits = typeof ACTIVITY_LIMITS;

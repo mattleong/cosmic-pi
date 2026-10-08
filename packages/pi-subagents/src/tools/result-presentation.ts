@@ -11,17 +11,15 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
-  expandedSection,
   getTextContent,
   type CodePreviewShellOptions,
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
-import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import { safeTextPrefix, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import { canonicalResultJson } from "../domain/result-contract.ts";
-import { safeTextPrefix } from "../run/state.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
+import { errorSection, previewCall, type PreviewRenderContext } from "./render-preview.ts";
 
 export const RESULT_TOOL_LABEL = "Subagent Result";
 /** The child result tool's receipt for a value the parent accepted. */
@@ -42,12 +40,8 @@ const submittedValue = <Args>(args: Args, theme: Theme): Component =>
     0,
   );
 
-const errorSection = <Details>(result: AgentToolResult<Details>, theme: Theme): Component =>
-  expandedSection(
-    theme,
-    "Error",
-    new Text(theme.fg("toolOutput", stripTerminalControls(getTextContent(result.content))), 0, 0),
-  );
+const rejection = <Details>(result: AgentToolResult<Details>, theme: Theme): Component =>
+  errorSection(theme, stripTerminalControls(getTextContent(result.content)));
 
 /**
  * The submitted value heads the row, an exact acceptance receipt is a success, and a rejection
@@ -83,38 +77,27 @@ export const resultCompactSummary: CompactSummaryProvider<unknown, unknown, unkn
 export const resultExpandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> = {
   renderCall: (args, theme) => submittedValue(args, theme),
   renderResult: (result, _options, theme, context) =>
-    context.isError ? errorSection(result, theme) : new Container(),
+    context.isError ? rejection(result, theme) : new Container(),
 };
-
-/** The parts of Pi's render context these bodies read. */
-interface ResultRenderContext {
-  readonly expanded: boolean;
-  readonly executionStarted: boolean;
-  readonly isPartial: boolean;
-  readonly isError: boolean;
-}
 
 /** Preview-style call and result bodies. */
 export const resultToolRenderers = {
-  renderCall<Args>(args: Args, theme: Theme, context: ResultRenderContext): Component {
-    const json = submittedJson(args);
-    const container = new Container();
-    container.addChild(
-      new Text(renderToolHeader({ title: RESULT_TOOL_LABEL, subtitle: json ?? "" }, theme), 0, 0),
-    );
+  renderCall<Args>(args: Args, theme: Theme, context: PreviewRenderContext): Component {
     // The heading shows one bounded line; the expanded view shows the whole value.
-    if (context.expanded) container.addChild(submittedValue(args, theme));
-    if (context.executionStarted && context.isPartial)
-      container.addChild(new Text(toolRunningLine(theme), 0, 0));
-    return container;
+    return previewCall(
+      theme,
+      context,
+      { title: RESULT_TOOL_LABEL, subtitle: submittedJson(args) ?? "" },
+      context.expanded ? submittedValue(args, theme) : undefined,
+    );
   },
   renderResult<Details>(
     result: AgentToolResult<Details>,
     options: ToolRenderResultOptions,
     theme: Theme,
-    context: ResultRenderContext,
+    context: PreviewRenderContext,
   ): Component {
-    if (context.isError) return options.expanded ? errorSection(result, theme) : new Container();
+    if (context.isError) return options.expanded ? rejection(result, theme) : new Container();
     const text = getTextContent(result.content);
     // The receipt tells the agent to stop; collapsed rows leave that to Pi's success background.
     if (!options.expanded && text === RESULT_ACCEPTED_TEXT) return new Container();

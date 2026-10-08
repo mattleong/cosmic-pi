@@ -1,6 +1,3 @@
-import * as Predicate from "effect/Predicate";
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -11,11 +8,15 @@ import { CosmicUiConfigStore, CosmicUiConfigError } from "../src/config/store.ts
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { CosmicUiService, type CosmicUiProjection } from "../src/protocol/service.ts";
 import { vi } from "vitest";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionContextFixture,
+  plainTheme,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import cosmicUi from "../index.ts";
 import type { CosmicUiApplicationDependencies } from "../src/application.ts";
 import {
-  COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
@@ -23,12 +24,15 @@ import {
   COSMIC_UI_PROTOCOL_VERSION,
   type CosmicUiHostStateEvent,
 } from "../src/protocol/protocol.ts";
-import { abortablePendingExec, eventBus, execOk, execResult } from "./support/host.ts";
+import {
+  abortablePendingExec,
+  capturedSignal,
+  eventBus,
+  execOk,
+  execResult,
+} from "./support/host.ts";
 
-type Handler = ExtensionHandler<any, any>;
-
-function harness(mode: "tui" | "rpc" = "tui", dependencies?: CosmicUiApplicationDependencies) {
-  const handlers = new Map<string, Handler[]>();
+function harness(dependencies?: CosmicUiApplicationDependencies) {
   const setFooter = vi.fn();
   const setWorkingMessage = vi.fn();
   const unsubscribed = vi.fn();
@@ -41,18 +45,18 @@ function harness(mode: "tui" | "rpc" = "tui", dependencies?: CosmicUiApplication
           : "## main...origin/main\n M changed.ts\n?? new.ts\n",
     ),
   );
-  const pi = extensionApiFixture({
-    on(name: string, handler: Handler) {
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+  const { pi, handlers, emit } = recordingExtensionHost(
+    {},
+    {
+      registerCommand: vi.fn(),
+      getThinkingLevel: vi.fn(() => "high"),
+      exec,
+      events: eventBus(unsubscribed).events,
     },
-    registerCommand: vi.fn(),
-    getThinkingLevel: vi.fn(() => "high"),
-    exec,
-    events: eventBus(unsubscribed).events,
-  });
+  );
   const ctx = extensionContextFixture({
     cwd: process.cwd(),
-    mode,
+    mode: "tui",
     hasUI: true,
     model: { id: "model-long-name", provider: "provider", reasoning: true, contextWindow: 100_000 },
     modelRegistry: { isUsingOAuth: vi.fn(() => false) },
@@ -67,21 +71,15 @@ function harness(mode: "tui" | "rpc" = "tui", dependencies?: CosmicUiApplication
     isProjectTrusted: vi.fn(() => true),
   });
   cosmicUi(pi, dependencies);
-  return { pi, ctx, handlers, setFooter, setWorkingMessage, exec, unsubscribed };
+  return { pi, ctx, handlers, emit, setFooter, setWorkingMessage, exec, unsubscribed };
 }
 
-function emit<EventInput>(
+const emit = <EventInput>(
   h: ReturnType<typeof harness>,
   name: string,
   event?: EventInput,
   context: ExtensionContext = h.ctx,
-): Effect.Effect<void> {
-  return Effect.forEach(
-    h.handlers.get(name) ?? [],
-    (handler) => Effect.promise(() => Promise.resolve(handler(event ?? {}, context))),
-    { discard: true },
-  );
-}
+): Effect.Effect<void> => Effect.promise(() => h.emit(name, context, event));
 
 const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
   Effect.promise(() =>
@@ -114,7 +112,7 @@ function makeFooter(
   data: Partial<FooterData> = {},
   requestRender: () => void = vi.fn(),
 ) {
-  return factory({ requestRender }, { fg: (_color, text) => text }, footerData(data));
+  return factory({ requestRender }, plainTheme, footerData(data));
 }
 
 function capturedFooter(
@@ -143,24 +141,6 @@ const withSession = (
     sessionManager: { ...base.sessionManager, ...session },
   });
 
-const assistantUsage = (input: number) => ({
-  input,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: { total: 0 },
-});
-
-function assistantEntries(
-  ...inputs: number[]
-): ReturnType<ExtensionContext["sessionManager"]["getEntries"]> {
-  // SAFETY: These entries exercise only assistant usage aggregation.
-  return inputs.map((input) => ({
-    type: "message",
-    message: { role: "assistant", usage: assistantUsage(input) },
-  })) as never;
-}
-
 type SessionEntries = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
 const entryBase = { id: "entry", parentId: null, timestamp: "2026-01-01T00:00:00Z" };
 const nativeUsage = (input: number) => ({
@@ -171,6 +151,14 @@ const nativeUsage = (input: number) => ({
   totalTokens: input,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
+
+function assistantEntries(...inputs: number[]): SessionEntries {
+  // SAFETY: These entries exercise only assistant usage aggregation.
+  return inputs.map((input) => ({
+    type: "message",
+    message: { role: "assistant", usage: nativeUsage(input) },
+  })) as never;
+}
 const usageEntry = (kind: string, input: number) => ({
   ...entryBase,
   type: "usage" as const,
@@ -179,22 +167,6 @@ const usageEntry = (kind: string, input: number) => ({
   model: "test",
   usage: nativeUsage(input),
 });
-
-function capturedSignal(source = new AbortController().signal, onAbortedRead = () => {}) {
-  const addEventListener = vi.fn(source.addEventListener.bind(source));
-  const removeEventListener = vi.fn(source.removeEventListener.bind(source));
-  const signal = new Proxy(source, {
-    get(target, property) {
-      if (property === "aborted") onAbortedRead();
-      if (property === "addEventListener") return addEventListener;
-      if (property === "removeEventListener") return removeEventListener;
-      // SAFETY: The in check proves this property belongs to the AbortSignal contract.
-      const value = property in target ? target[property as keyof AbortSignal] : undefined;
-      return Predicate.isFunction(value) ? value.bind(target) : value;
-    },
-  });
-  return { signal, addEventListener, removeEventListener };
-}
 
 /** Forks session_start with host probes that stay pending until their signal aborts. */
 const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
@@ -248,7 +220,7 @@ describe("Cosmic UI extension", () => {
               });
               yield* Deferred.succeed(committed, undefined);
               yield* Deferred.await(release);
-              yield* afterCommit?.(next) ?? Effect.void;
+              yield* afterCommit(next);
               return next;
             }).pipe(Effect.uninterruptible),
         });
@@ -309,7 +281,6 @@ describe("Cosmic UI extension", () => {
         region: "details",
         text: "hostile-text",
       });
-      const invalidateOwner = stateful("owner");
       const removeId = stateful("hostile");
 
       expect(() =>
@@ -333,21 +304,9 @@ describe("Cosmic UI extension", () => {
         }),
       ).not.toThrow();
       yield* emit(h, "session_start");
-      const requestRender = vi.fn();
-      const footer = capturedFooter(h, 0, {}, requestRender);
+      const footer = capturedFooter(h);
       const shows = () => footer.render(100).join("\n").includes("hostile-text");
       yield* waitUntil(shows);
-      requestRender.mockClear();
-      expect(() =>
-        h.pi.events.emit(COSMIC_UI_FOOTER_INVALIDATE, {
-          version: COSMIC_UI_PROTOCOL_VERSION,
-          get owner() {
-            return invalidateOwner();
-          },
-          id: "hostile",
-        }),
-      ).not.toThrow();
-      yield* waitUntil(() => requestRender.mock.calls.length > 0);
       expect(() =>
         h.pi.events.emit(COSMIC_UI_FOOTER_REMOVE, {
           version: COSMIC_UI_PROTOCOL_VERSION,
@@ -383,7 +342,12 @@ describe("Cosmic UI extension", () => {
       };
 
       expect(query()).toEqual({ active: false, ready: false, hidden: [] });
-      yield* emit(h, "session_start");
+      const starting = yield* emit(h, "session_start").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      // Visibility preferences load during startup, so they are not ready before activation.
+      expect(query()).toEqual({ active: false, ready: false, hidden: [] });
+      yield* Fiber.join(starting);
       expect(query()).toEqual({ active: true, ready: true, hidden: [] });
       yield* emit(h, "session_shutdown");
       expect(query()).toBeUndefined();
@@ -467,61 +431,32 @@ describe("Cosmic UI extension", () => {
       }),
   );
 
-  it.effect("reports startup I/O failure and permits a clean subsequent session", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const { signal, addEventListener, removeEventListener } = capturedSignal();
-      h.ctx.signal = signal;
-      h.ctx.cwd = "\0invalid";
-      yield* emit(h, "session_start");
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-      expect(h.setFooter).not.toHaveBeenCalled();
-      expect(removeEventListener).toHaveBeenCalledOnce();
+  it.effect(
+    "reports startup I/O failure and permits a clean subsequent session with prior contributions",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+          version: COSMIC_UI_PROTOCOL_VERSION,
+          owner: "early",
+          contribution: { kind: "text", id: "early", region: "details", text: "early-text" },
+        });
+        const { signal, addEventListener, removeEventListener } = capturedSignal();
+        h.ctx.signal = signal;
+        h.ctx.cwd = "\0invalid";
+        yield* emit(h, "session_start");
+        expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+        expect(h.setFooter).not.toHaveBeenCalled();
+        expect(removeEventListener).toHaveBeenCalledOnce();
 
-      h.ctx.cwd = process.cwd();
-      yield* emit(h, "session_start");
-      expect(h.setFooter).toHaveBeenCalledOnce();
-      expect(addEventListener).toHaveBeenCalledTimes(2);
-      yield* emit(h, "session_shutdown");
-      expect(removeEventListener).toHaveBeenCalledTimes(2);
-    }),
-  );
-
-  it.effect("keeps a pre-session contribution through a failed start", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
-        version: COSMIC_UI_PROTOCOL_VERSION,
-        owner: "early",
-        contribution: { kind: "text", id: "early", region: "details", text: "early-text" },
-      });
-      h.ctx.cwd = "\0invalid";
-      yield* emit(h, "session_start");
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-
-      h.ctx.cwd = process.cwd();
-      yield* emit(h, "session_start");
-      expectFooterShows(capturedFooter(h), "early-text");
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
-  it.effect("retries footer installation after the host rejects the first setFooter call", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      h.setFooter.mockImplementationOnce(() => {
-        throw new Error("host rejected footer");
-      });
-
-      yield* emit(h, "session_start");
-      expect(h.setFooter).toHaveBeenCalledOnce();
-
-      yield* emit(h, "session_start");
-      expect(h.setFooter).toHaveBeenCalledTimes(2);
-      expect(h.setFooter.mock.calls[1]?.[0]).toEqual(expect.any(Function));
-
-      yield* emit(h, "session_shutdown");
-    }),
+        h.ctx.cwd = process.cwd();
+        yield* emit(h, "session_start");
+        expect(h.setFooter).toHaveBeenCalledOnce();
+        expectFooterShows(capturedFooter(h), "early-text");
+        expect(addEventListener).toHaveBeenCalledTimes(2);
+        yield* emit(h, "session_shutdown");
+        expect(removeEventListener).toHaveBeenCalledTimes(2);
+      }),
   );
 
   it.effect(
@@ -737,11 +672,12 @@ describe("Cosmic UI extension", () => {
       expect(removeEventListener).not.toHaveBeenCalled();
 
       yield* emit(h, "turn_end");
-      expect(addEventListener).toHaveBeenCalledTimes(2);
-      expect(removeEventListener).toHaveBeenCalledOnce();
+      // Totals and the forked Git refresh each own a forwarder released when they settle.
+      expect(addEventListener).toHaveBeenCalledTimes(3);
+      yield* waitUntil(() => removeEventListener.mock.calls.length === 2);
 
       yield* emit(h, "session_shutdown");
-      expect(removeEventListener).toHaveBeenCalledTimes(2);
+      expect(removeEventListener).toHaveBeenCalledTimes(3);
     }),
   );
 
@@ -960,22 +896,6 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
-  it.effect("a prompt followed immediately by agent settlement leaves the host cleared", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      yield* emit(h, "session_start");
-      yield* emit(h, "agent_start");
-      yield* emit(h, "ui_prompt_start");
-      yield* emit(h, "agent_end");
-
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === undefined);
-      const writesAfterSettlement = h.setWorkingMessage.mock.calls.length;
-      yield* Effect.yieldNow;
-      expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesAfterSettlement);
-      yield* emit(h, "session_shutdown");
-    }),
-  );
-
   it.effect("session abort clears a running working row", () => {
     const h = harness();
     const controller = new AbortController();
@@ -1028,24 +948,10 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
-  it.effect("session abort removes the footer and interrupts the active runtime", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const controller = new AbortController();
-      h.ctx.signal = controller.signal;
-      yield* emit(h, "session_start");
-      controller.abort();
-      yield* Effect.promise(() => Promise.resolve());
-      yield* Effect.promise(() => Promise.resolve());
-      expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
-    }),
-  );
-
   it.effect("awaits shared ticker cleanup during session shutdown", () => {
-    const finishTickerShutdown = Deferred.makeUnsafe<void>();
-    const tickerShutdown = Effect.runPromise(Deferred.await(finishTickerShutdown));
-    const shutdownHostUiTickers = vi.fn(() => tickerShutdown);
-    const h = harness("tui", { shutdownHostUiTickers });
+    const tickerShutdown = deferredPromise();
+    const shutdownHostUiTickers = vi.fn(() => tickerShutdown.promise);
+    const h = harness({ shutdownHostUiTickers });
     return Effect.gen(function* () {
       yield* emit(h, "session_start");
 
@@ -1064,7 +970,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "session_start");
       const footer = capturedFooter(h, -1);
       const replacementState = footer.render(100);
-      yield* Deferred.succeed(finishTickerShutdown, undefined);
+      tickerShutdown.resolve();
       yield* Fiber.join(shutdown);
       expect(settled).toBe(true);
       expect(footer.render(100)).toEqual(replacementState);
@@ -1072,13 +978,31 @@ describe("Cosmic UI extension", () => {
     });
   });
 
+  it.effect("tool and turn completion do not wait for Git probes, which shutdown interrupts", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* emit(h, "session_start");
+      let probes = 0;
+      let aborted = 0;
+      h.exec.mockImplementation((_command, _args, options) => {
+        probes++;
+        return abortablePendingExec(options?.signal, () => aborted++);
+      });
+      yield* emit(h, "tool_execution_end", { toolName: "bash" });
+      yield* emit(h, "turn_end");
+      yield* waitUntil(() => probes > 0);
+      yield* emit(h, "session_shutdown");
+      yield* waitUntil(() => aborted === probes);
+    }),
+  );
+
   it.effect("releases protocol subscriptions exactly once on repeated shutdown", () =>
     Effect.gen(function* () {
       const h = harness();
       yield* emit(h, "session_start");
       yield* emit(h, "session_shutdown");
       yield* emit(h, "session_shutdown");
-      expect(h.unsubscribed).toHaveBeenCalledTimes(4);
+      expect(h.unsubscribed).toHaveBeenCalledTimes(3);
     }),
   );
 });

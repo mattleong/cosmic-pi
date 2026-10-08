@@ -1,17 +1,14 @@
 /**
- * Pure composition of the shared `ctx.ui.custom` settings surface: caller header chrome +
- * `SettingsList` + modeless Vim adapter + focus/render bridge. Host-boundary safety stays
- * caller-owned: every callback threaded through here (change/cancel/render/bridge guard)
- * must already be guarded by the calling package's own host-ui boundary.
+ * Pure composition of the shared `ctx.ui.custom` settings surface: header chrome +
+ * `SettingsList` + modeless Vim adapter + focus/render bridge. `boundary/host-settings-command.ts`
+ * opens it and guards every host callback threaded through here.
  */
-import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 import {
   Container,
   SettingsList,
   Spacer,
   Text,
   type Component,
-  type Focusable,
   type SettingItem,
 } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -25,7 +22,7 @@ import {
   type SettingsSurfaceBridgeOptions,
 } from "./settings-adapter.ts";
 
-export type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
+type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
 
 /** Public SettingsList callbacks only; focus and navigation remain owned by Pi. */
 export const managerSettingsTheme = (theme: Theme): SettingsListTheme => ({
@@ -62,35 +59,15 @@ export const settingsItemsFromDescriptors = <Config>(
   >,
   config: Config,
 ): SettingsSurfaceItem[] =>
-  descriptors.map((descriptor) => {
-    const item: SettingsSurfaceItem = {
-      id: descriptor.id,
-      label: descriptor.label,
-      currentValue: descriptor.currentValue(config),
-      description: descriptor.description,
-    };
-    return descriptor.values ? { ...item, values: [...descriptor.values] } : item;
-  });
+  descriptors.map((descriptor) => ({
+    id: descriptor.id,
+    label: descriptor.label,
+    currentValue: descriptor.currentValue(config),
+    description: descriptor.description,
+    ...(descriptor.values && { values: [...descriptor.values] }),
+  }));
 
-export interface SettingsRowGenerations {
-  readonly begin: (id: string) => number;
-  readonly isCurrent: (id: string, generation: number) => boolean;
-}
-
-/** Pure per-row generation latch for optimistic asynchronous settings updates. */
-export const settingsRowGenerations = (): SettingsRowGenerations => {
-  const generations = new Map<string, number>();
-  return {
-    begin: (id) => {
-      const generation = (generations.get(id) ?? 0) + 1;
-      generations.set(id, generation);
-      return generation;
-    },
-    isCurrent: (id, generation) => generations.get(id) === generation,
-  };
-};
-
-export interface SettingsGroupSubmenuOptions {
+interface SettingsGroupSubmenuOptions {
   readonly title: string;
   readonly description?: string | undefined;
   readonly items: () => SettingsSurfaceItem[];
@@ -144,8 +121,8 @@ class SettingsGroupSubmenu extends Container {
 export const createSettingsGroupSubmenu = (options: SettingsGroupSubmenuOptions): Component =>
   new SettingsGroupSubmenu(options);
 
-export interface SettingsListSurfaceOptions {
-  /** Caller-owned header component rendered above the list (title, config path, …). */
+interface SettingsListSurfaceOptions {
+  /** Rendered above the list (title, config path, …). */
   readonly header: Component;
   readonly items: SettingsSurfaceItem[];
   readonly height: number;
@@ -153,27 +130,14 @@ export interface SettingsListSurfaceOptions {
   /** Value-change callback for setting rows; group rows are filtered out by the surface. */
   readonly onChange: (id: string, value: string, list: SettingsList) => void;
   readonly onCancel: () => void;
-  readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
-  /** Configured key labels for the hint line; Pi's defaults are shown without it. */
-  readonly keybindingLabel?:
-    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
-    | undefined;
-  /** Caller-owned (host-guarded) render request used by the Vim adapter. */
-  readonly requestRender?: (() => void) | undefined;
-  /** Caller-owned dim styling for the shared modeless hint line. */
+  readonly matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"];
+  readonly requestRender: () => void;
+  /** Dim styling for the shared modeless hint line. */
   readonly dim: (text: string) => string;
-  /** Caller-owned host-boundary guard options for the composed bridge. */
-  readonly bridge?: SettingsSurfaceBridgeOptions | undefined;
+  readonly bridge: SettingsSurfaceBridgeOptions;
 }
 
-export interface SettingsListSurface {
-  readonly list: SettingsList;
-  readonly surface: Component & Focusable;
-}
-
-export const createSettingsListSurface = (
-  options: SettingsListSurfaceOptions,
-): SettingsListSurface => {
+export const createSettingsListSurface = (options: SettingsListSurfaceOptions) => {
   const container = new Container();
   container.addChild(options.header);
   const list: SettingsList = new SettingsList(
@@ -188,10 +152,8 @@ export const createSettingsListSurface = (
     matchesKeybinding: options.matchesKeybinding,
     requestRender: options.requestRender,
     renderHint: (mode, helpExpanded) =>
-      options.dim(
-        ` ${fullScreenSettingsHint({ searching: mode === "search", helpExpanded, keybindingLabel: options.keybindingLabel })} `,
-      ),
+      options.dim(` ${fullScreenSettingsHint(mode === "search", helpExpanded)} `),
   });
   container.addChild(adapter);
-  return { list, surface: settingsSurfaceBridge(adapter, container, options.bridge ?? {}) };
+  return { list, surface: settingsSurfaceBridge(adapter, container, options.bridge) };
 };

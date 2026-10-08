@@ -31,20 +31,20 @@ import {
   type WorkflowScript,
 } from "./script.ts";
 
-export const WORKFLOW_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-export const WORKFLOW_LIST_LIMIT = 64;
-export const WORKFLOW_LIST_DIAGNOSTIC_LIMIT = 32;
+const WORKFLOW_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const WORKFLOW_LIST_LIMIT = 64;
+const WORKFLOW_LIST_DIAGNOSTIC_LIMIT = 32;
 /** UTF-8 bound matching the script character bound for ASCII scripts. */
 const SCRIPT_MAX_BYTES = WORKFLOW_SCRIPT_MAX_CHARS * 4;
 
-export type WorkflowScope = "project" | "user";
+type WorkflowScope = "project" | "user";
 
 /**
  * Why a workflow source couldn't be loaded: a script file that can't be read, isn't UTF-8 or
  * isn't a valid script (`script` says why), an unknown saved workflow, an invalid name, a path
  * that isn't a `.js` file, or a `workflow()` reference that is neither.
  */
-export const WORKFLOW_SOURCE_PROBLEMS = [
+const WORKFLOW_SOURCE_PROBLEMS = [
   "unreadable",
   "not-utf8",
   "script",
@@ -68,7 +68,7 @@ export class WorkflowSourceError extends Schema.TaggedError<WorkflowSourceError>
   },
 ) {}
 
-export interface LoadedWorkflow {
+interface LoadedWorkflow {
   readonly name: string;
   readonly scope?: WorkflowScope;
   readonly path: string;
@@ -189,7 +189,7 @@ export interface WorkflowStoreContract {
   ) => Effect.Effect<ReadonlyArray<string>, WorkflowRunFileError>;
 }
 
-export interface WorkflowStoreOptions {
+interface WorkflowStoreOptions {
   readonly cwd: string;
   readonly agentDirectory: string;
   /** Read live: trust can change during a session. */
@@ -210,6 +210,10 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
         const fs = yield* FileSystem.FileSystem;
         const paths = yield* Path.Path;
         const safeFile = yield* SafeFile;
+        // Only the platform services, never the whole context the layer was built in.
+        const platform = Effect.provideContext(
+          Context.make(FileSystem.FileSystem, fs).pipe(Context.add(Path.Path, paths)),
+        );
 
         const currentLocations = (): WorkflowLocations => ({
           project: paths.join(options.cwd, ".pi", "workflows"),
@@ -217,12 +221,7 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           user: paths.join(options.agentDirectory, "workflows"),
         });
 
-        const roots = (
-          locations: WorkflowLocations,
-        ): ReadonlyArray<{
-          readonly scope: WorkflowScope;
-          readonly directory: string;
-        }> => [
+        const roots = (locations: WorkflowLocations) => [
           ...(locations.projectTrusted
             ? [{ scope: "project" as const, directory: locations.project }]
             : []),
@@ -325,7 +324,7 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
             return { name: script.meta.name, path: resolved, script } satisfies LoadedWorkflow;
           });
 
-        const listRoot = (scope: WorkflowScope, directory: string) =>
+        const listRoot = ({ scope, directory }: { scope: WorkflowScope; directory: string }) =>
           fs.readDirectory(directory).pipe(
             Effect.orElseSucceed((): ReadonlyArray<string> => []),
             Effect.map((entries) =>
@@ -341,40 +340,28 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
 
         const list = Effect.gen(function* () {
           const locations = currentLocations();
-          const found = (yield* Effect.forEach(roots(locations), ({ scope, directory }) =>
-            listRoot(scope, directory),
-          )).flat();
+          const found = (yield* Effect.forEach(roots(locations), (root) => listRoot(root))).flat();
           const seen = new Set<string>();
           const unique = found.filter((entry) => !seen.has(entry.name) && seen.add(entry.name));
-          const workflows: SavedWorkflowSummary[] = [];
-          const diagnostics: Array<{ path: string; message: string }> = [];
-          for (const entry of unique.slice(0, WORKFLOW_LIST_LIMIT)) {
-            const path = paths.join(entry.directory, `${entry.name}.js`);
-            const loaded = yield* Effect.result(read(path, entry.directory));
-            if (loaded._tag === "Success")
-              workflows.push({
-                name: entry.name,
-                scope: entry.scope,
-                path,
-                meta: loaded.success.meta,
-              });
-            else if (diagnostics.length < WORKFLOW_LIST_DIAGNOSTIC_LIMIT)
-              diagnostics.push({ path, message: loaded.failure.message });
-          }
+          const [workflows, diagnostics] = yield* Effect.partition(
+            unique.slice(0, WORKFLOW_LIST_LIMIT),
+            ({ scope, directory, name }) => {
+              const path = paths.join(directory, `${name}.js`);
+              return read(path, directory).pipe(
+                Effect.map(({ meta }): SavedWorkflowSummary => ({ name, scope, path, meta })),
+                Effect.mapError(({ message }) => ({ path, message })),
+              );
+            },
+          );
           return {
             workflows,
-            diagnostics,
+            diagnostics: diagnostics.slice(0, WORKFLOW_LIST_DIAGNOSTIC_LIMIT),
             truncated: unique.length > WORKFLOW_LIST_LIMIT,
             locations,
           };
         });
 
         const runsRoot = workflowRunsDirectory(paths, options.agentDirectory);
-        const platform = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
-          effect.pipe(
-            Effect.provideService(FileSystem.FileSystem, fs),
-            Effect.provideService(Path.Path, paths),
-          );
 
         const createRunFiles = (runId: string, source: string, live: ReadonlySet<string>) =>
           platform(
@@ -383,12 +370,6 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
               Effect.andThen(createWorkflowRunFiles(runsRoot, runId, source)),
             ),
           );
-
-        const appendRunJournal = (files: WorkflowRunFiles, line: string) =>
-          platform(appendWorkflowRunJournal(files, line));
-
-        const touchRunFiles = (files: WorkflowRunFiles) =>
-          platform(touchWorkflowRunDirectory(files));
 
         /** A private file in a run's directory as text; files are untrusted, so reads are bounded. */
         const readRunText = (path: string, files: WorkflowRunFiles, maximumBytes: number) =>
@@ -427,7 +408,7 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           const path = workflowRunResultPath(paths, files, name);
           // UTF-8 never takes fewer bytes than UTF-16 code units, so the byte bound holds the text.
           return path === undefined
-            ? Effect.succeed(undefined)
+            ? Effect.undefined
             : readRunText(path, files, maximumChars).pipe(Effect.orElseSucceed(() => undefined));
         };
 
@@ -437,8 +418,8 @@ export class WorkflowStore extends Context.Service<WorkflowStore, WorkflowStoreC
           list,
           locations: Effect.sync(currentLocations),
           createRunFiles,
-          appendRunJournal,
-          touchRunFiles,
+          appendRunJournal: (files, line) => platform(appendWorkflowRunJournal(files, line)),
+          touchRunFiles: (files) => platform(touchWorkflowRunDirectory(files)),
           writeRunRecord: (files, text) => platform(writeWorkflowRunRecord(files, text)),
           readRunRecord,
           hasRunFiles,

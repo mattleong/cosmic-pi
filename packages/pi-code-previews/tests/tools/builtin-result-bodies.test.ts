@@ -1,33 +1,31 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { createToolPresentationHarness, type ToolPresentationHarness } from "../../testing";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
-import { createBuiltinPreviewRenderers } from "../../src/tools/renderers/registration";
-import { ALL_CODE_PREVIEW_TOOLS } from "../../src/tools/names";
-import { stripAnsi } from "../support/render";
+import {
+  applyPresentationSettings,
+  createToolPresentationHarness,
+  type ToolPresentationHarness,
+} from "../../testing";
+import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
+import { builtinRenderers, stripAnsi } from "../support/render";
 
 type Style = "compact" | "preview";
 
-function harness(name: string, style: Style) {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    tools: [...ALL_CODE_PREVIEW_TOOLS],
-    toolCallCollapsedStyle: style,
+beforeEach(() =>
+  applyPresentationSettings({
     toolCallTiming: false,
     grepCollapsedLines: 8,
     pathListCollapsedLines: 8,
-  });
-  const renderers = createBuiltinPreviewRenderers(name, {
-    cwd: "/project",
-    selfShell: true,
-    scheduleAnimation: () => () => undefined,
-  });
+  }),
+);
+
+function harness(name: BuiltinCompactTool, style: Style) {
+  applyPresentationSettings({ toolCallCollapsedStyle: style });
+  const renderers = builtinRenderers(name, true);
   return createToolPresentationHarness(renderers!);
 }
 
 function render(
-  name: string,
+  name: BuiltinCompactTool,
   style: Style,
   args: Parameters<ToolPresentationHarness["call"]>[0],
   value: AgentToolResult<unknown>,
@@ -42,8 +40,6 @@ function render(
 const count = (text: string, phrase: string) => text.split(phrase).length - 1;
 const contentLines = (format: (index: number) => string) =>
   Array.from({ length: 20 }, (_, index) => format(index + 1)).join("\n");
-
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
 // Each output has 20 content lines; the blank separator and notice would make 22.
 const notices = [

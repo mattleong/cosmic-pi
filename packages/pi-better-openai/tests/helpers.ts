@@ -1,4 +1,5 @@
 import type { Api, AssistantMessage, AuthResult, Model } from "@earendil-works/pi-ai";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { expect, vi } from "vitest";
@@ -100,6 +101,13 @@ export const assistantMessage = (
   timestamp: 1,
   ...overrides,
 });
+
+export const appendAssistant = (
+  manager: SessionManager,
+  stopReason: AssistantMessage["stopReason"],
+  text: string,
+  timestamp = 10,
+) => manager.appendMessage(assistantMessage([{ type: "text", text }], { stopReason, timestamp }));
 
 // Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
 // runtime values (tagged failures, redacted credentials) for secret fragments.

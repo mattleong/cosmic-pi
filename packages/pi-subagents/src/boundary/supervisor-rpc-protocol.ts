@@ -8,7 +8,6 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as RpcMessage from "effect/rpc/RpcMessage";
@@ -16,7 +15,9 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Socket from "effect/socket/Socket";
 import * as SocketServer from "effect/socket/SocketServer";
+import { SupervisorOpenSessionRpc } from "../supervisor/protocol.ts";
 
+const MAX_CONNECTIONS = 4;
 const MAX_ACTIVE_REQUESTS = 32;
 const MAX_PENDING_WRITES = 32;
 const MAX_REQUEST_ID_CHARS = 128;
@@ -34,16 +35,9 @@ export class SupervisorRpcConnection extends Context.Service<
   SupervisorRpcConnectionContract
 >()("pi-subagents/boundary/supervisor-rpc-protocol/SupervisorRpcConnection") {}
 
-class SupervisorRpcTransportError extends Schema.TaggedError<SupervisorRpcTransportError>()(
-  "SupervisorRpcTransportError",
-  { reason: Schema.String },
-) {}
-
 export interface SupervisorRpcServerProtocolOptions {
   readonly server: SocketServer.SocketServer["Service"];
   readonly authTimeoutMillis: number;
-  readonly maxConnections: number;
-  readonly openSessionTag: string;
   readonly onDisconnect: (clientId: number) => void;
 }
 
@@ -74,9 +68,9 @@ export const makeSupervisorRpcServerProtocol = (
 > =>
   Effect.gen(function* () {
     const serialization = yield* RpcSerialization.RpcSerialization;
-    const disconnects = yield* Queue.bounded<number>(options.maxConnections);
+    // Unbounded like Effect's own protocols: connection finalizers must never wait on a consumer.
+    const disconnects = yield* Queue.unbounded<number>();
     const clients = new Map<number, ClientTransport>();
-    const clientIds = new Set<number>();
     let nextClientId = 0;
     let writeRequest: (
       clientId: number,
@@ -87,38 +81,28 @@ export const makeSupervisorRpcServerProtocol = (
       writeRequest = write;
       return Effect.succeed({
         disconnects,
+        // An unencodable response or a full output queue closes that peer.
         send: (clientId, response) =>
-          Effect.suspend(() => {
+          Effect.sync(() => {
             const client = clients.get(clientId);
-            if (!client) return Effect.void;
-            return Effect.try({
-              try: () => client.encode(response),
-              catch: () => new SupervisorRpcTransportError({ reason: "encode_failed" }),
-            }).pipe(
-              Effect.flatMap((encoded) => {
-                if (encoded === undefined) return Effect.void;
-                if (!Queue.offerUnsafe(client.output, encoded)) {
-                  client.close();
-                  return Effect.void;
-                }
-                if (RpcMessage.isTerminalResponse(response)) {
-                  const requestId = responseRequestId(response);
-                  if (requestId !== undefined) client.activeRequests.delete(requestId);
-                }
-                return Effect.void;
-              }),
-              Effect.catch(() =>
-                Effect.sync(() => {
-                  client.close();
-                }),
-              ),
-            );
+            if (!client) return;
+            try {
+              const encoded = client.encode(response);
+              if (encoded === undefined) return;
+              if (!Queue.offerUnsafe(client.output, encoded)) return client.close();
+              if (RpcMessage.isTerminalResponse(response)) {
+                const requestId = responseRequestId(response);
+                if (requestId !== undefined) client.activeRequests.delete(requestId);
+              }
+            } catch {
+              client.close();
+            }
           }),
         end: (clientId) =>
           Effect.sync(() => {
             clients.get(clientId)?.close();
           }),
-        clientIds: Effect.sync(() => clientIds),
+        clientIds: Effect.sync(() => new Set(clients.keys())),
         initialMessage: Effect.succeedNone,
         supportsAck: true,
         supportsTransferables: false,
@@ -135,7 +119,7 @@ export const makeSupervisorRpcServerProtocol = (
           if (Option.isNone(netSocketOption)) return yield* Effect.never;
           const netSocket = netSocketOption.value;
           if (
-            clients.size >= options.maxConnections ||
+            clients.size >= MAX_CONNECTIONS ||
             (netSocket.remoteAddress !== "127.0.0.1" &&
               netSocket.remoteAddress !== "::ffff:127.0.0.1")
           ) {
@@ -166,46 +150,36 @@ export const makeSupervisorRpcServerProtocol = (
             close: guard.close,
           };
           clients.set(clientId, client);
-          clientIds.add(clientId);
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
               guard.closed = true;
               clients.delete(clientId);
-              clientIds.delete(clientId);
               Queue.endUnsafe(output);
               options.onDisconnect(clientId);
-            }).pipe(Effect.andThen(Queue.offer(disconnects, clientId)), Effect.asVoid),
+              Queue.offerUnsafe(disconnects, clientId);
+            }),
           );
 
           const writeRaw = yield* socket.writer;
           yield* Stream.fromQueue(output).pipe(
             Stream.runForEach(writeRaw.write),
-            Effect.catchCause(() =>
-              Effect.sync(() => {
-                guard.close();
-              }),
-            ),
+            Effect.catchCause(() => Effect.sync(guard.close)),
             Effect.forkScoped,
           );
           yield* Deferred.await(guard.authenticated).pipe(
-            Effect.timeoutOption(options.authTimeoutMillis),
-            Effect.flatMap((outcome) =>
-              Option.isSome(outcome)
-                ? Effect.never
-                : Effect.sync(() => {
-                    guard.close();
-                  }),
-            ),
+            Effect.timeoutOrElse({
+              duration: options.authTimeoutMillis,
+              orElse: () => Effect.sync(guard.close),
+            }),
             Effect.forkScoped,
           );
 
           yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
             Stream.runForEach((data) => {
-              const decoded = Result.try({
+              const decoded = Result.try(
                 // SAFETY: The Effect RPC serialization service owns decoding into its declared client envelope.
-                try: () => parser.decode(data) as ReadonlyArray<RpcMessage.FromClientEncoded>,
-                catch: () => new SupervisorRpcTransportError({ reason: "decode_failed" }),
-              });
+                () => parser.decode(data) as ReadonlyArray<RpcMessage.FromClientEncoded>,
+              );
               if (Result.isFailure(decoded)) {
                 guard.close();
                 return Effect.void;
@@ -219,7 +193,7 @@ export const makeSupervisorRpcServerProtocol = (
                       !validRequestId(message.id) ||
                       activeRequests.has(message.id) ||
                       activeRequests.size >= MAX_ACTIVE_REQUESTS ||
-                      (!guard.accepted && message.tag !== options.openSessionTag)
+                      (!guard.accepted && message.tag !== SupervisorOpenSessionRpc._tag)
                     ) {
                       guard.close();
                       return Effect.void;

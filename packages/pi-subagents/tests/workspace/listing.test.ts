@@ -40,6 +40,12 @@ const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effec
     yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
     return yield* test(root, registry);
   }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
+/** Replaces single-record reads for the rest of the test. */
+const mockRecordReads = (read: typeof store.readWorkspaceRecord) =>
+  Effect.acquireRelease(
+    Effect.sync(() => vi.spyOn(store, "readWorkspaceRecord").mockImplementation(read)),
+    (spy) => Effect.sync(() => spy.mockRestore()),
+  );
 
 it.live(
   "keeps healthy records beside unavailable artifacts without leaking partial metadata or changing files",
@@ -105,7 +111,7 @@ it.live(
           ).toMatchObject({ _tag: "WorkspaceError" });
         }
       }),
-    ).pipe(Effect.scoped),
+    ),
 );
 
 for (const unsafe of [
@@ -132,7 +138,7 @@ for (const unsafe of [
           _tag: "WorkspaceError",
         });
       }),
-    ).pipe(Effect.scoped),
+    ),
   );
 }
 
@@ -141,32 +147,25 @@ for (const change of ["permissions", "replacement", "missing", "symlink"] as con
     fixture((_root, registry) =>
       Effect.gen(function* () {
         yield* io(() => fs.mkdir(path.join(registry, id(1))));
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi.spyOn(store, "readWorkspaceRecord").mockImplementation(() =>
-              Effect.gen(function* () {
-                if (change === "permissions") yield* io(() => fs.chmod(registry, 0o777));
-                else {
-                  yield* io(() => fs.rename(registry, `${registry}-saved`));
-                  if (change === "replacement")
-                    yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
-                  if (change === "symlink")
-                    yield* io(() => fs.symlink(`${registry}-saved`, registry));
-                }
-                return yield* new WorkspaceError({
-                  operation: "registry",
-                  message: "Reader discovered a registry failure.",
-                });
-              }),
-            ),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
+        yield* mockRecordReads(() =>
+          Effect.gen(function* () {
+            if (change === "permissions") yield* io(() => fs.chmod(registry, 0o777));
+            else {
+              yield* io(() => fs.rename(registry, `${registry}-saved`));
+              if (change === "replacement") yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
+              if (change === "symlink") yield* io(() => fs.symlink(`${registry}-saved`, registry));
+            }
+            return yield* new WorkspaceError({
+              operation: "registry",
+              message: "Reader discovered a registry failure.",
+            });
+          }),
         );
         expect(yield* listWorkspaceRecords(registry).pipe(Effect.flip)).toMatchObject({
           _tag: "WorkspaceError",
         });
       }),
-    ).pipe(Effect.scoped),
+    ),
   );
 }
 
@@ -175,15 +174,8 @@ for (const failure of ["interruption", "defect"] as const) {
     fixture((_root, registry) =>
       Effect.gen(function* () {
         yield* io(() => fs.mkdir(path.join(registry, id(1))));
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi
-              .spyOn(store, "readWorkspaceRecord")
-              .mockImplementation(() =>
-                failure === "interruption" ? Effect.interrupt : Effect.die("reader defect"),
-              ),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
+        yield* mockRecordReads(() =>
+          failure === "interruption" ? Effect.interrupt : Effect.die("reader defect"),
         );
         const fiber = yield* listWorkspaceRecords(registry).pipe(Effect.forkChild);
         const exit = yield* Fiber.await(fiber);
@@ -195,11 +187,11 @@ for (const failure of ["interruption", "defect"] as const) {
               : Cause.hasDies(exit.cause),
           ).toBe(true);
       }),
-    ).pipe(Effect.scoped),
+    ),
   );
 }
 
-it.live("leaves healthy workspaces operable but denies recovery of an incomplete artifact", () =>
+it.live("leaves healthy workspaces operable but never discards an incomplete artifact", () =>
   fixture((root, registry) =>
     Effect.gen(function* () {
       const source = path.join(root, "source");
@@ -211,7 +203,7 @@ it.live("leaves healthy workspaces operable but denies recovery of an incomplete
         const artifact = path.join(registry, incomplete);
         yield* io(() => fs.mkdir(artifact, { mode: 0o700 }));
         yield* io(() => fs.writeFile(path.join(artifact, "preserve-me"), "recovery evidence"));
-        expect((yield* service.listAll()).unavailable).toHaveLength(1);
+        expect((yield* service.listAll).unavailable).toHaveLength(1);
         expect(yield* service.list({ ownerId: "parent" })).toHaveLength(1);
         yield* io(() => fs.writeFile(path.join(handle.cwd, "main.ts"), "proposal\n"));
         const target = { ...handle, processCleanupConfirmed: true as const };
@@ -221,17 +213,12 @@ it.live("leaves healthy workspaces operable but denies recovery of an incomplete
         expect((yield* service.inspect(target)).status).toBe("discarded");
         expect(
           yield* service
-            .recoverDiscard({
-              workspaceId: incomplete,
-              ownerId: "parent",
-              processCleanupConfirmed: true,
-              recoveryRiskAccepted: true,
-            })
+            .discard({ workspaceId: incomplete, ownerId: "parent", processCleanupConfirmed: true })
             .pipe(Effect.flip),
         ).toMatchObject({ _tag: "WorkspaceError" });
         expect(yield* io(() => fs.readdir(artifact))).toEqual(["preserve-me"]);
         expect(yield* readText(source, "main.ts")).toBe("baseline\n");
       }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: root })));
     }),
-  ).pipe(Effect.scoped),
+  ),
 );

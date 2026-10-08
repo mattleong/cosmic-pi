@@ -42,15 +42,9 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   ...overrides,
 });
 
-/** A revision-1 projection of `runs` under the root session, which parents the unparented runs. */
+/** A revision-1 projection of `runs`. */
 export const projectionOf = (runs: ReadonlyArray<SubagentRunView>): SubagentProjection => ({
   revision: 1,
-  root: {
-    id: "root",
-    depth: 0,
-    directChildCount: runs.filter((run) => !run.parentRunId || run.parentRunId === "root").length,
-    descendantCount: runs.length,
-  },
   runs,
 });
 
@@ -77,7 +71,6 @@ export const workflowRunView = (patch: Partial<WorkflowRunView> = {}): WorkflowR
   name: "review",
   description: "Review the diff",
   source: { kind: "inline" },
-  sha256: "digest",
   phases: [],
   state: "running",
   startedAt: 1,

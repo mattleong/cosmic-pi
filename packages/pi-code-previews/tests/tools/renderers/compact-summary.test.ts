@@ -20,14 +20,9 @@ import { createBuiltinCompactSummary } from "../../../src/tools/builtin-compact-
 import type { BuiltinCompactTool } from "../../../src/tools/builtin-subject";
 import type { CompactPhase, CompactSummary } from "../../../src/tools/compact-summary";
 import type { ToolRenderContext } from "../../../src/tools/renderers/shared/types";
-import { createReadPreviewTool } from "../../../src/tools/renderers/read";
-import { createBashPreviewTool } from "../../../src/tools/renderers/bash";
-import { createGrepPreviewTool } from "../../../src/tools/renderers/grep";
-import { createFindPreviewTool } from "../../../src/tools/renderers/find";
-import { createLsPreviewTool } from "../../../src/tools/renderers/ls";
-import { createWritePreviewRenderers as createWritePreviewTool } from "../../../src/tools/renderers/write";
-import { createEditPreviewTool } from "../../../src/tools/renderers/edit";
+import { readPreviewRenderers } from "../../../src/tools/renderers/read";
 import {
+  builtinRenderers,
   plainTheme as theme,
   previewBodiesDisabled,
   renderComponent,
@@ -42,9 +37,6 @@ type Args = Partial<
   old_text?: string;
   new_text?: string;
 };
-type FactoryState = Parameters<
-  NonNullable<ReturnType<typeof createBashPreviewTool>["renderCall"]>
->[2]["state"];
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -105,6 +97,38 @@ test("builtin subjects use render cwd and never overflow requested read ranges",
   expect(overflow?.subject).toBe(`src/a.ts:${Number.MAX_SAFE_INTEGER}`);
   expect(summary("find", { path: "/project/src", pattern: "*.ts" })?.subject).toContain("src");
 });
+
+test.each([
+  { offset: 2, limit: 3 },
+  { offset: 5, limit: 0 },
+  { offset: 5, limit: -3 },
+  { limit: 2.5 },
+  { offset: Number.MAX_SAFE_INTEGER, limit: 2 },
+])("read preview headings request the subject's lines: %j", (range) => {
+  const args = { path: "/project/src/a.ts", ...range };
+  const subject = summary("read", args)?.subject ?? "";
+  const call = readPreviewRenderers("/project").renderCall(args, theme, renderContextFixture());
+  const heading = renderComponent(call);
+  expect(heading).toContain(subject);
+  // No further range follows the subject's own.
+  for (const next of [":", "-"]) expect(heading).not.toContain(subject + next);
+});
+
+test.each([{ offset: "5" }, { offset: null }])(
+  "read headings and subjects show no range for a non-numeric offset: %j",
+  (range) => {
+    const args = { path: "/project/src/a.ts", ...range };
+    const call = readPreviewRenderers("/project").renderCall(args, theme, renderContextFixture());
+    const heading = renderComponent(call);
+    expect(heading).toContain("a.ts");
+    expect(heading).not.toContain("a.ts:");
+    // Pi coerces the offset before reading, so `:1` would name the wrong line. Replayed
+    // arguments may carry an offset outside the declared input type.
+    const replayed: Args = { path: args.path };
+    Object.assign(replayed, range);
+    expect(summary("read", replayed)?.subject).toBe("src/a.ts");
+  },
+);
 
 test("write replay needs actual submitted content before describing changes", () => {
   const details = { codePreviewBeforeWrite: { kind: "content", content: "keep\n" } };
@@ -492,14 +516,6 @@ describe("write and edit diff limitations", () => {
     expect(failed?.outcome).toBe("error");
     expect(failed?.metadata ?? []).toEqual([]);
   });
-
-  test("edit reports unavailable diffs without claiming failure", () => {
-    const value = summary("edit", { path: "file" }, result("applied"));
-    expect(value?.outcome).toBe("success");
-    expect(value?.issues).toEqual([
-      expect.objectContaining({ severity: "info", code: "edit-diff-unavailable" }),
-    ]);
-  });
 });
 
 /** Renders both slots from one context so toggles share the retained shell state. */
@@ -519,6 +535,8 @@ function renderText(
   return [call, body].flatMap((part) => part?.render(width) ?? []).join("\n");
 }
 
+const builtin = (name: BuiltinCompactTool) => builtinRenderers(name)!;
+
 describe("builtin factory compact integration", () => {
   const args = {
     path: "file.ts",
@@ -527,21 +545,11 @@ describe("builtin factory compact integration", () => {
     content: "proposedContent",
     edits: [{ oldText: "before", newText: "proposedContent" }],
   };
-  const factories = {
-    read: createReadPreviewTool,
-    bash: createBashPreviewTool,
-    write: createWritePreviewTool,
-    edit: createEditPreviewTool,
-    grep: createGrepPreviewTool,
-    find: createFindPreviewTool,
-    ls: createLsPreviewTool,
-  };
   const context = (
-    overrides: Partial<ToolRenderContext<FactoryState, typeof args>> = {},
-  ): ToolRenderContext<FactoryState, typeof args> =>
+    overrides: Partial<ToolRenderContext<object, typeof args>> = {},
+  ): ToolRenderContext<object, typeof args> =>
     renderContextFixture({
       args,
-      state: { startedAt: undefined, endedAt: undefined, interval: undefined },
       toolCallId: "builtin-render-test",
       isPartial: false,
       ...overrides,
@@ -550,7 +558,7 @@ describe("builtin factory compact integration", () => {
   test.each(["grep", "find", "ls"] as const)(
     "%s keeps complete limit instructions in unchanged expanded results",
     (name) => {
-      const tool = factories[name]("/project");
+      const tool = builtin(name);
       const ctx = context();
       const output = result("selectedContent\n\n[Limit reached. Use limit=20 to continue.]", {
         matchLimitReached: 10,
@@ -579,7 +587,7 @@ describe("builtin factory compact integration", () => {
       { codePreviewBeforeWrite: { kind: "content", byteLength: 12 } },
       { codePreviewBeforeWrite: { kind: "unrecognized" } },
     ]) {
-      const tool = createWritePreviewTool("/project");
+      const tool = builtin("write");
       const ctx = context();
       const output = result<undefined>("applied");
       Object.assign(output, { details });
@@ -594,7 +602,7 @@ describe("builtin factory compact integration", () => {
   });
 
   test("quiet write size guards preserve the original expanded skip reason and result", () => {
-    const tool = createWritePreviewTool("/project");
+    const tool = builtin("write");
     const ctx = context();
     const output = result<undefined>("applied");
     Object.assign(output, {
@@ -621,7 +629,7 @@ describe("builtin factory compact integration", () => {
     (byteCap) => {
       for (const mode of ["on", "off", "border"] as const) {
         setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
-        const tool = createReadPreviewTool("/project");
+        const tool = builtin("read");
         const readArgs = { ...args, limit: 5 };
         const ctx = context({ args: readArgs });
         const output = byteCap
@@ -664,7 +672,7 @@ describe("builtin factory compact integration", () => {
     "recognized edit failure and nonroutine read recovery render their issue once in %s mode",
     (mode) => {
       setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
-      const edit = createEditPreviewTool("/project");
+      const edit = builtin("edit");
       const editOutput = result<undefined>(
         "No changes made to /project/file.ts. The replacements produced identical content.",
       );
@@ -681,7 +689,7 @@ describe("builtin factory compact integration", () => {
         // Unique call source survives a failed edit.
         expect(text.includes("proposedContent")).toBe(expanded);
       }
-      const read = createReadPreviewTool("/project");
+      const read = builtin("read");
       const truncation = {
         content: "slice",
         truncated: true,
@@ -728,7 +736,7 @@ describe("builtin factory compact integration", () => {
     (name) => {
       for (const mode of ["on", "off", "border"] as const) {
         setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
-        const tool = factories[name]("/project");
+        const tool = builtin(name);
         const ctx = context({ isError: true });
         const output = {
           content: [
@@ -753,7 +761,7 @@ describe("builtin factory compact integration", () => {
   );
 
   test.each(["write", "edit"] as const)("%s hides pending content until expanded", (name) => {
-    const tool = factories[name]("/project");
+    const tool = builtin(name);
     const ctx = context();
     const collapsed = tool.renderCall?.(args, theme, ctx);
     expect(collapsed && renderComponent(collapsed)).not.toContain("proposedContent");

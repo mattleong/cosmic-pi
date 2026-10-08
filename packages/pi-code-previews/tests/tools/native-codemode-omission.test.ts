@@ -1,28 +1,28 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, test } from "vitest";
-import { createToolPresentationHarness, renderContextFixture } from "../../testing";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
-import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
+import { beforeEach, test } from "vitest";
+import {
+  applyPresentationSettings,
+  createToolPresentationHarness,
+  renderContextFixture,
+} from "../../testing";
+import { codemodeRenderers } from "../support/native-codemode";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import { compactStatus } from "../../src/tools/compact-summary";
 import { stripAnsi } from "../support/render";
 
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+beforeEach(() =>
+  applyPresentationSettings({
+    syntaxHighlighting: false,
+    toolCallTiming: false,
+    toolCallBackground: "off",
+  }),
+);
 
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} exposes omitted failures while preserving active selection and expansion`, () => {
-    setCodePreviewSettings({
-      ...defaultCodePreviewSettings,
-      syntaxHighlighting: false,
-      toolCallTiming: false,
-      toolCallBackground: "off",
-      toolCallCollapsedStyle: style,
-    });
-    const h = createToolPresentationHarness(
-      createNativeCodemodeRenderers("/project", { scheduleAnimation: () => undefined }),
-    );
+    applyPresentationSettings({ toolCallCollapsedStyle: style });
+    const h = createToolPresentationHarness(codemodeRenderers());
     const args = { code: "// PROGRAM_RETAINED" };
     const result = {
       content: [{ type: "text" as const, text: "OUTPUT_RETAINED" }],

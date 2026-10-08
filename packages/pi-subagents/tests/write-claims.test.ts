@@ -27,6 +27,7 @@ describe("write claims", () => {
     "a//file.ts",
     "a\\file.ts",
     "a.ts\nInjected prompt",
+    "a.ts\u0085",
   ])("rejects unsafe or non-POSIX claim %s", (path) => {
     expect(normalizeWriteClaims([path])).toMatchObject({ ok: false });
   });

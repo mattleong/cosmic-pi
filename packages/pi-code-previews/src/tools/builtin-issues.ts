@@ -2,11 +2,11 @@ import * as Predicate from "effect/Predicate";
 import { getObjectValue } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
+import { getSecretWarnings } from "../warnings/secrets";
 import { getWriteDiffGuard, getWriteDiffSkipReason, hasWriteDiffSizeEvidence } from "../write/diff";
 import type { BuiltinCompactPolicy } from "./builtin-projection";
 import type { CompactIssue } from "./compact-issues";
 import { isTruncated, splitReadContinuationNotice } from "./data/results";
-import { getPreviewSecretWarnings } from "./renderers/shared/secret-preview";
 
 const VOWEL_SOUND = new Set(["AWS secret key", "API key"]);
 const withArticle = (label: string) => `${VOWEL_SOUND.has(label) ? "an" : "a"} ${label}`;
@@ -17,7 +17,7 @@ export function secretIssues(
   limit: number,
 ): CompactIssue[] {
   const warnings = new Set(
-    sources.flatMap((source) => getPreviewSecretWarnings(source, enabled, limit)),
+    enabled ? sources.flatMap((source) => getSecretWarnings(source, limit)) : [],
   );
   return warnings.size > 0
     ? [
@@ -47,6 +47,12 @@ export function bashCommandIssues(command: string, enabled: boolean): CompactIss
     message: label,
   }));
 }
+
+const READ_TRUNCATED: CompactIssue = {
+  severity: "warning",
+  code: "read-truncated",
+  message: "Only part of the file was returned",
+};
 
 export function readIssues<Details>(
   details: Details,
@@ -99,26 +105,17 @@ export function readIssues<Details>(
         },
       ];
     }
-    return [
-      {
-        severity: "warning",
-        code: "read-truncated",
-        message: "Only part of the file was returned",
-        detail: escapeControlChars(notice),
-      },
-    ];
+    return [{ ...READ_TRUNCATED, detail: escapeControlChars(notice) }];
   }
   // An unrecognized continuation stays in the expanded output; the truncation itself is a warning.
-  return truncated
-    ? [
-        {
-          severity: "warning",
-          code: "read-truncated",
-          message: "Only part of the file was returned",
-        },
-      ]
-    : [];
+  return truncated ? [READ_TRUNCATED] : [];
 }
+
+const LIMIT_FIELDS = {
+  grep: "matchLimitReached",
+  find: "resultLimitReached",
+  ls: "entryLimitReached",
+} as const;
 
 export function outputLimitProjection<Details>(
   tool: "bash" | "grep" | "find" | "ls",
@@ -143,12 +140,7 @@ export function outputLimitProjection<Details>(
       });
     return { issues, counters };
   }
-  const field =
-    tool === "grep"
-      ? "matchLimitReached"
-      : tool === "find"
-        ? "resultLimitReached"
-        : "entryLimitReached";
+  const field = LIMIT_FIELDS[tool];
   const limit = getObjectValue(details, field);
   // A reached cap says nothing about the total or how many survived byte truncation.
   if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)
@@ -168,7 +160,6 @@ export function writeDiffProjection<Before>(
   content: string,
   policy: Omit<BuiltinCompactPolicy, "bashWarnings">,
 ) {
-  const metadata: string[] = [];
   // Validate the owned skipped-snapshot shape before using its size evidence.
   // Do not classify prose reasons or let large new content mask missing history.
   const skipReason = getWriteDiffSkipReason(before, "", policy.maxWriteDiffBytes);
@@ -179,22 +170,22 @@ export function writeDiffProjection<Before>(
         metadata: ["diff skipped: size"],
       };
     // Diff availability concerns the preview, not the write, so it is informational.
-    const skipped: CompactIssue = {
+    const skipped = {
       severity: "info",
       code: "write-diff-skipped",
       message: "Diff unavailable",
       detail: `Diff skipped: ${escapeControlChars(skipReason)}`,
-    };
-    return { issues: [skipped], metadata };
+    } satisfies CompactIssue;
+    return { issues: [skipped], metadata: [] };
   }
   const beforeContent = getObjectValue(before, "content");
   if (getObjectValue(before, "kind") !== "content" || !Predicate.isString(beforeContent)) {
-    const unavailable: CompactIssue = {
+    const unavailable = {
       severity: "info",
       code: "write-history-unavailable",
       message: "Diff unavailable: previous contents unknown",
-    };
-    return { issues: [unavailable], metadata };
+    } satisfies CompactIssue;
+    return { issues: [unavailable], metadata: [] };
   }
   const guard = getWriteDiffGuard(
     beforeContent,
@@ -202,7 +193,5 @@ export function writeDiffProjection<Before>(
     policy.maxWriteDiffBytes,
     policy.maxWriteDiffChangedLineCells,
   );
-  if (guard) metadata.push(`diff skipped: ${guard}`);
-  const none: CompactIssue[] = [];
-  return { issues: none, metadata };
+  return { issues: [], metadata: guard ? [`diff skipped: ${guard}`] : [] };
 }

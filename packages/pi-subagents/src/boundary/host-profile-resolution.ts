@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { freezeSnapshot } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { piRootActiveToolSnapshot } from "../run/tool-policy.ts";
 import {
@@ -73,15 +74,25 @@ const transferableRuntimeApiKey = (value: string | undefined): value is string =
   !value.includes("\r") &&
   !value.includes("\n");
 
+interface ResolvedModel {
+  readonly model: string;
+  readonly runtimeApiKey?: RuntimeApiKey | undefined;
+}
+
+/** A candidate's route as one label, such as `local/pi/openai/gpt:high`. */
+const routeLabel = (route: {
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
+  readonly model: string;
+  readonly effort: SubagentEffort;
+}): string => `${route.host}/${route.runtime}/${route.model}:${route.effort}`;
+
 const resolvePiModel = (
   selector: string,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
   ctx: ExtensionContext,
-): Effect.Effect<
-  { readonly model: string; readonly runtimeApiKey?: RuntimeApiKey | undefined },
-  InvalidSubagentRequestError
-> =>
+): Effect.Effect<ResolvedModel, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
     // The root registry already reflects the current project-trust decision. Local Pi mirrors
     // that decision, so every authenticated canonical model is eligible for resolution.
@@ -106,8 +117,7 @@ const resolvePiModel = (
         code: "pi_model_unauthenticated",
         message: `Model is unavailable or unauthenticated: ${modelId}`,
       });
-    // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-    const supportedEfforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
+    const supportedEfforts = getSupportedThinkingLevels(model);
     if (effortWasExplicit && !supportedEfforts.includes(effort))
       return yield* new InvalidSubagentRequestError({
         code: "pi_effort_unsupported",
@@ -134,22 +144,10 @@ const resolvePiModel = (
     };
   });
 
-interface ResolvedConcreteModel {
-  readonly host: SubagentHost;
-  readonly runtime: SubagentRuntime;
-  readonly closeOnReport: boolean;
-  readonly openaiFastMode: boolean;
-  readonly model: string;
-  readonly effort: SubagentEffort;
-  readonly effortWasExplicit: boolean;
-  readonly runtimeApiKey?: RuntimeApiKey | undefined;
-}
-
 /** Unknown host values clamp to the existing conservative inheritance default. */
 const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
   decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
 
-// SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -157,10 +155,7 @@ export const hostProfileEnvironment = (
   availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
     provider: model.provider,
     id: model.id,
-    supportedEfforts: getSupportedThinkingLevels(model).flatMap((effort) => {
-      const decoded = decodeSubagentEffort(effort);
-      return decoded === undefined ? [] : [decoded];
-    }),
+    supportedEfforts: getSupportedThinkingLevels(model),
   })),
   ...(ctx.model && {
     parentModel: {
@@ -175,7 +170,7 @@ const resolveConcreteModel = (
   attempt: ProfileCandidateAttempt,
   ctx: ExtensionContext,
   cwd: string,
-): Effect.Effect<ResolvedConcreteModel, InvalidSubagentRequestError, SubagentBackendRegistry> =>
+): Effect.Effect<ResolvedModel, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
     const registry = yield* SubagentBackendRegistry;
     const resolved =
@@ -202,29 +197,15 @@ const resolveConcreteModel = (
         cwd,
       },
     );
-    return {
-      host: attempt.host,
-      runtime: attempt.runtime,
-      closeOnReport: attempt.closeOnReport,
-      openaiFastMode: attempt.openaiFastMode,
-      ...resolved,
-      effort: attempt.effort,
-      effortWasExplicit: attempt.effortWasExplicit,
-    };
+    return resolved;
   });
-
-interface CandidateReadinessFailure {
-  readonly message: string;
-  readonly _tag: string;
-  readonly code?: string | undefined;
-}
 
 const dynamicCandidateSkip = (
   attempt: ProfileCandidateAttempt,
-  error: CandidateReadinessFailure,
+  error: InvalidSubagentRequestError,
 ): SkippedProfileCandidate => ({
   candidateIndex: attempt.candidateIndex,
-  candidate: `${attempt.host}/${attempt.runtime}/${attempt.model}:${attempt.effort}`,
+  candidate: routeLabel(attempt),
   code: error.code || error._tag,
   reason: error.message,
 });
@@ -243,6 +224,67 @@ interface PlannedStartInput {
       }
     | undefined;
 }
+
+const exhaustedRoute = (
+  input: PlannedStartInput,
+  exhausted: ReadonlyArray<SkippedProfileCandidate>,
+): InvalidSubagentRequestError => {
+  const allUnsupported =
+    exhausted.length > 0 &&
+    exhausted.every((candidate) => candidate.code === "backend_not_implemented");
+  const skipCodes = exhausted
+    .map(
+      (candidate) =>
+        `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`}[${candidate.code}]`,
+    )
+    .join(", ");
+  return new InvalidSubagentRequestError({
+    code: input.retry
+      ? "retry_route_exhausted"
+      : allUnsupported
+        ? "backend_not_implemented"
+        : "profile_no_eligible_model",
+    message: `Profile ${input.definition.id} has no eligible ${input.retry ? "remaining candidate" : "implemented backend"} after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+  });
+};
+
+/**
+ * Readiness-only fallback: the first candidate that resolves and passes preflight, with every
+ * candidate skipped before it. Uncertain cleanup or outcomes stop the walk.
+ */
+const selectCandidate = (
+  input: PlannedStartInput,
+  writesClaimed: boolean,
+  ctx: ExtensionContext,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    let skipped = input.priorSkippedCandidates;
+    for (const attempt of input.plan.attempts) {
+      skipped = [...skipped, ...(attempt.skippedBefore ?? [])];
+      if (writesClaimed && attempt.writeIntent !== "writer") {
+        const configuredCandidate = input.routeCandidates[attempt.candidateIndex];
+        skipped = [
+          ...skipped,
+          {
+            candidateIndex: attempt.candidateIndex,
+            candidate: configuredCandidate
+              ? profileCandidateLabel(configuredCandidate)
+              : routeLabel(attempt),
+            code: "write_claims_read_only",
+            reason: "writes may be supplied only for a writer profile candidate.",
+          },
+        ];
+        continue;
+      }
+      const outcome = yield* Effect.result(resolveConcreteModel(attempt, ctx, cwd));
+      if (Result.isSuccess(outcome)) return { attempt, resolved: outcome.success, skipped };
+      if (isCleanupUnconfirmed(outcome.failure) || isOutcomeUncertain(outcome.failure))
+        return yield* outcome.failure;
+      skipped = [...skipped, dynamicCandidateSkip(attempt, outcome.failure)];
+    }
+    return yield* exhaustedRoute(input, [...skipped, ...input.plan.trailingSkippedCandidates]);
+  });
 
 const resolvePlannedStart = (
   pi: ExtensionAPI,
@@ -272,135 +314,63 @@ const resolvePlannedStart = (
         message: normalizedClaims.message,
       });
 
-    const tryAttempt = (
-      index: number,
-      skippedCandidates: ReadonlyArray<SkippedProfileCandidate>,
-    ): Effect.Effect<
-      {
-        readonly attempt: ProfileCandidateAttempt;
-        readonly concrete: ResolvedConcreteModel;
-        readonly selection: SubagentSelectionProvenance;
-      },
-      InvalidSubagentRequestError,
-      SubagentBackendRegistry
-    > => {
-      const attempt = input.plan.attempts[index];
-      if (!attempt) {
-        const exhausted = [...skippedCandidates, ...input.plan.trailingSkippedCandidates];
-        const allUnsupported =
-          exhausted.length > 0 &&
-          exhausted.every((candidate) => candidate.code === "backend_not_implemented");
-        const skipCodes = exhausted
-          .map(
-            (candidate) =>
-              `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`}[${candidate.code}]`,
-          )
-          .join(", ");
-        return Effect.fail(
-          new InvalidSubagentRequestError({
-            code: input.retry
-              ? "retry_route_exhausted"
-              : allUnsupported
-                ? "backend_not_implemented"
-                : "profile_no_eligible_model",
-            message: `Profile ${input.definition.id} has no eligible ${input.retry ? "remaining candidate" : "implemented backend"} after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
-          }),
-        );
-      }
-      const precedingSkips = [...skippedCandidates, ...(attempt.skippedBefore ?? [])];
-      if (normalizedClaims && attempt.writeIntent !== "writer") {
-        const configuredCandidate = input.routeCandidates[attempt.candidateIndex];
-        return tryAttempt(index + 1, [
-          ...precedingSkips,
-          {
-            candidateIndex: attempt.candidateIndex,
-            candidate: configuredCandidate
-              ? profileCandidateLabel(configuredCandidate)
-              : `${attempt.host}/${attempt.runtime}/${attempt.model}:${attempt.effort}`,
-            code: "write_claims_read_only",
-            reason: "writes may be supplied only for a writer profile candidate.",
-          },
-        ]);
-      }
-      const selectedResult = (
-        selectedAttempt: ProfileCandidateAttempt,
-        concrete: ResolvedConcreteModel,
-        selectedSkips: ReadonlyArray<SkippedProfileCandidate>,
-      ) => {
-        const selectionBase = {
-          source: selectedAttempt.source,
-          routeSource: selectedAttempt.routeSource,
-          host: concrete.host,
-          runtime: concrete.runtime,
-          closeOnReport: concrete.closeOnReport,
-          candidateIndex: selectedAttempt.candidateIndex,
-          reason: input.retry
-            ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${selectedAttempt.candidateIndex + 1} (${selectedAttempt.host}/${selectedAttempt.runtime}).`
-            : selectedAttempt.reason,
-          skippedCandidates: selectedSkips,
-        };
-        return {
-          attempt: selectedAttempt,
-          concrete,
-          selection: selectionBase,
-        };
-      };
-      return resolveConcreteModel(attempt, ctx, environment.cwd).pipe(
-        Effect.matchEffect({
-          onFailure: (error) => {
-            if (isCleanupUnconfirmed(error) || isOutcomeUncertain(error)) return Effect.fail(error);
-            return tryAttempt(index + 1, [...precedingSkips, dynamicCandidateSkip(attempt, error)]);
-          },
-          onSuccess: (concrete) =>
-            Effect.succeed(selectedResult(attempt, concrete, precedingSkips)),
-        }),
-      );
+    const { attempt, resolved, skipped } = yield* selectCandidate(
+      input,
+      normalizedClaims !== undefined,
+      ctx,
+      environment.cwd,
+    );
+    const selection: SubagentSelectionProvenance = {
+      source: attempt.source,
+      routeSource: attempt.routeSource,
+      candidateIndex: attempt.candidateIndex,
+      reason: input.retry
+        ? `Profile ${input.definition.id} continued failed run ${input.retry.sourceRunId} with frozen route candidate ${attempt.candidateIndex + 1} (${attempt.host}/${attempt.runtime}).`
+        : attempt.reason,
+      skippedCandidates: skipped,
     };
-
-    const selected = yield* tryAttempt(0, input.priorSkippedCandidates);
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
-    if (selected.attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
+    if (attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
       return yield* new InvalidSubagentRequestError({
         code: "fork_context_unavailable",
         message: "Forked context requires a persisted parent session with a stable leaf.",
       });
-    const concrete = selected.concrete;
     const routeContinuation = freezeSnapshot({
       profile: input.definition.id,
       routeSource: input.routeSource,
       candidates: input.routeCandidates,
-      selectedCandidateIndex: selected.attempt.candidateIndex,
-      skippedCandidates: selected.selection.skippedCandidates,
+      selectedCandidateIndex: attempt.candidateIndex,
+      skippedCandidates: skipped,
     });
     const activeTools =
-      concrete.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];
+      attempt.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];
     const name = input.rawInput.name?.trim();
     const request: StartSubagentRequest = {
       ...(name && { name }),
       ...(normalizedClaims && { writes: normalizedClaims.claims }),
-      host: concrete.host,
-      runtime: concrete.runtime,
-      closeOnReport: concrete.closeOnReport,
-      openaiFastMode: concrete.openaiFastMode,
+      host: attempt.host,
+      runtime: attempt.runtime,
+      closeOnReport: attempt.closeOnReport,
+      openaiFastMode: attempt.openaiFastMode,
       task,
       profile: input.definition.id,
       profileGuidance: input.definition.guidance,
-      selection: selected.selection,
+      selection,
       routeContinuation,
       cwd: environment.cwd,
-      context: selected.attempt.effectiveContext,
-      writeIntent: selected.attempt.writeIntent,
-      model: concrete.model,
+      context: attempt.effectiveContext,
+      writeIntent: attempt.writeIntent,
+      model: resolved.model,
       ...(input.retry && {
         supersedes: {
           runId: input.retry.sourceRunId,
           claimToken: input.retry.claimToken,
         },
       }),
-      ...(concrete.runtimeApiKey && { runtimeApiKey: concrete.runtimeApiKey }),
-      effort: concrete.effort,
-      effortWasExplicit: concrete.effortWasExplicit,
+      ...(resolved.runtimeApiKey && { runtimeApiKey: resolved.runtimeApiKey }),
+      effort: attempt.effort,
+      effortWasExplicit: attempt.effortWasExplicit,
       activeTools,
       projectTrusted: environment.projectTrusted,
       parentSessionId: ctx.sessionManager.getSessionId(),
@@ -476,7 +446,7 @@ export const resolveProfileRetry = (
       candidateIndex: claim.continuation.selectedCandidateIndex,
       candidate: failedCandidate
         ? profileCandidateLabel(failedCandidate)
-        : `${claim.source.host}/${claim.source.runtime}/${claim.source.model}:${claim.source.effort}`,
+        : routeLabel(claim.source),
       code: "previous_run_failed",
       reason: `Candidate ${claim.continuation.selectedCandidateIndex + 1} failed in ${claim.source.id}: ${claim.source.error ?? "Run failed without a diagnostic."}`,
     };
@@ -505,10 +475,6 @@ export const resolveProfileRetry = (
       ctx,
       environment,
     );
-    if (!request.supersedes)
-      return yield* new InvalidSubagentRequestError({
-        code: "retry_claim_stale",
-        message: `Subagent ${claim.source.id} retry resolution lost its predecessor claim.`,
-      });
-    return { ...request, supersedes: request.supersedes };
+    // The retry above always yields this exact predecessor claim.
+    return { ...request, supersedes: { runId: claim.source.id, claimToken: claim.claimToken } };
   });

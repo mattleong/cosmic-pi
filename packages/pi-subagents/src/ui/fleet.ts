@@ -1,11 +1,7 @@
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  managerNoticeGlyph,
-  renderResponsiveManagerFooter,
-  clipToWidth,
-  spinnerFrameAt,
-} from "pi-cosmic-ui/manager";
+import { renderResponsiveManagerFooter, clipToWidth, spinnerFrameAt } from "pi-cosmic-ui/manager";
+import { toolStatusLine } from "pi-cosmic-ui/tool";
 import {
   Input,
   Key,
@@ -15,7 +11,7 @@ import {
   type Focusable,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, formatRelativeAge, countLabel } from "pi-cosmic-core";
-import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
+import { configuredKeyLabels } from "pi-cosmic-ui/manager/key-labels";
 import {
   decodeFullScreenPrintable,
   type FullScreenAction,
@@ -44,7 +40,6 @@ import {
   type ListDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import {
-  hasSubagentCapability,
   hasUnresolvedSteeringDelivery,
   isActiveRunState,
   type SubagentProjection,
@@ -52,10 +47,19 @@ import {
 } from "../run/model.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
 import { renderSubagentSessionOutput } from "./session-output.ts";
-import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
-import { shortRunId } from "./run-presentation.ts";
+import {
+  canInterruptRun,
+  canRenameRun,
+  canResumeRun,
+  runMessageMode,
+  runStateColor,
+  runStateGlyph,
+  runStateLabel,
+  type RunMessageMode,
+} from "./run-state.ts";
+import { duplicateRunNames, shortRunId } from "./run-presentation.ts";
 
-export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
+export type FleetMessageMode = RunMessageMode;
 
 /**
  * `delivered` means the owning coordinator accepted the message. `pending` means native delivery
@@ -75,15 +79,17 @@ export interface FleetActions {
   readonly rename: (id: string, name: string) => Promise<void>;
 }
 
-export type FleetKeybindingId = FullScreenSelectionKeybindingId;
-
-export interface FleetOptions {
+interface FleetOptions {
   readonly theme: Theme;
   readonly getProjection: () => SubagentProjection;
   readonly getHeight: () => number;
   readonly getNow: () => number;
-  readonly matchesKeybinding?: ((data: string, id: FleetKeybindingId) => boolean) | undefined;
-  readonly keybindingLabel?: ((id: FleetKeybindingId, fallback: string) => string) | undefined;
+  readonly matchesKeybinding?:
+    | ((data: string, id: FullScreenSelectionKeybindingId) => boolean)
+    | undefined;
+  readonly keybindingLabel?:
+    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
+    | undefined;
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly actions: FleetActions;
@@ -93,69 +99,32 @@ export interface FleetOptions {
   readonly onDispose?: (() => void) | undefined;
 }
 
-/**
- * The one message a run can currently accept. Pending or unresolved native guidance rejects new
- * input and queue-cancelling interruption; parent-question replies and stop stay available.
- */
-const messageMode = (run: SubagentRunView | undefined): FleetMessageMode | undefined => {
-  if (!run) return undefined;
-  if (run.state === "waiting_for_parent")
-    return hasSubagentCapability(run, "parent-contact") ? "reply" : undefined;
-  if (hasUnresolvedSteeringDelivery(run)) return undefined;
-  if (run.state === "reported" && run.closeOnReport === false) return "next-assignment";
-  if (run.state === "running" && hasSubagentCapability(run, "steer")) return "guidance";
-  return undefined;
-};
-const canInterrupt = (run: SubagentRunView | undefined): boolean =>
-  Boolean(
-    run &&
-    hasSubagentCapability(run, "interrupt") &&
-    !hasUnresolvedSteeringDelivery(run) &&
-    (run.state === "running" || run.state === "waiting_for_parent"),
-  );
-const canResume = (run: SubagentRunView | undefined): boolean =>
-  Boolean(
-    run &&
-    hasSubagentCapability(run, "resume") &&
-    (run.state === "paused" || run.state === "completed"),
-  );
-const canRename = (run: SubagentRunView | undefined): boolean =>
-  Boolean(
-    run &&
-    hasSubagentCapability(run, "rename-display") &&
-    run.state !== "starting" &&
-    run.state !== "stopping" &&
-    run.state !== "stopped" &&
-    run.state !== "failed",
-  );
-const canStop = (run: SubagentRunView | undefined): boolean =>
-  Boolean(run && isActiveRunState(run.state) && run.state !== "stopping");
+/** Unlike Activity's stop, the fleet's isn't offered again while the run is already stopping. */
+const canStop = (run: SubagentRunView): boolean =>
+  isActiveRunState(run.state) && run.state !== "stopping";
 
-type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
+type FleetPromptKind = FleetMessageMode | "resume" | "rename";
 
 const FLEET_SHORTCUTS = new Set(["e", "i", "m", "t", "u", "x"]);
 
 /** Actions that change a run's lifecycle wait for their own key again, or Enter. */
 type PendingConfirmation = { readonly action: "stop" | "interrupt"; readonly id: string };
 const CONFIRMATION_KEYS = { stop: "x", interrupt: "i" } as const;
-const canConfirm = (pending: PendingConfirmation, run: SubagentRunView | undefined) =>
-  pending.action === "stop" ? canStop(run) : canInterrupt(run);
+const canConfirm = (pending: PendingConfirmation, run: SubagentRunView) =>
+  pending.action === "stop" ? canStop(run) : canInterruptRun(run);
 
-const UNRESOLVED_GUIDANCE_REASON =
-  "Guidance delivery to this run is still unresolved; wait for it to settle or stop the run.";
+/** Why a run shortcut doesn't apply; stop's reason is the fallback. */
+const UNAVAILABLE_REASONS = new Map([
+  ["m", "This run cannot receive guidance, a reply, or a new assignment in its current state."],
+  ["i", "This run cannot be interrupted in its current state or backend."],
+  ["u", "This run cannot be resumed in its current state or backend."],
+  ["e", "This run cannot be renamed in its current state or backend."],
+]);
 
 const shortcutUnavailableReason = (key: string, run: SubagentRunView): string =>
   (key === "m" || key === "i") && hasUnresolvedSteeringDelivery(run)
-    ? UNRESOLVED_GUIDANCE_REASON
-    : key === "m"
-      ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
-      : key === "i"
-        ? "This run cannot be interrupted in its current state or backend."
-        : key === "u"
-          ? "This run cannot be resumed in its current state or backend."
-          : key === "e"
-            ? "This run cannot be renamed in its current state or backend."
-            : "This run is not currently stoppable.";
+    ? "Guidance delivery to this run is still unresolved; wait for it to settle or stop the run."
+    : (UNAVAILABLE_REASONS.get(key) ?? "This run is not currently stoppable.");
 
 /** Fixed list-pane tree keys resolve before the configurable navigation keymap. */
 const fixedTreeDirection = (data: string, pane: ListDetailPane): "back" | "forward" | undefined => {
@@ -166,70 +135,55 @@ const fixedTreeDirection = (data: string, pane: ListDetailPane): "back" | "forwa
   return undefined;
 };
 
-interface FleetActionLabel {
-  readonly full: string;
-  readonly compact: string;
-}
-
-const FLEET_ACTION_LABELS = [
-  [canInterrupt, "i Interrupt", "i Int"],
-  [canResume, "u Resume", "u Resume"],
-  [canRename, "e Rename", "e Name"],
-  [canStop, "x Stop subtree", "x Stop tree"],
-] as const;
-
-const fleetActionLabels = (selected: SubagentRunView): ReadonlyArray<FleetActionLabel> => {
-  const labels: FleetActionLabel[] = [];
-  const mode = messageMode(selected);
-  if (mode) {
-    const messageLabel =
-      mode === "reply" ? "m Reply" : mode === "next-assignment" ? "m New task" : "m Guide";
-    labels.push({ full: messageLabel, compact: messageLabel });
-  }
-  for (const [can, full, compact] of FLEET_ACTION_LABELS)
-    if (can(selected)) labels.push({ full, compact });
-  return labels;
+/** Each message's words: in notices, as its shortcut, and while it is sent. */
+const MESSAGES = {
+  reply: { label: "Reply", shortcut: "m Reply", progress: "Sending reply" },
+  guidance: { label: "Guidance", shortcut: "m Guide", progress: "Sending guidance" },
 };
 
-const PROMPT_TITLE_PREFIX = {
-  reply: "Reply to",
-  "next-assignment": "Next assignment for",
-  guidance: "Guide",
-  resume: "Resume",
-  rename: "Rename",
-} as const satisfies Record<FleetPromptKind, string>;
+const FLEET_ACTION_LABELS = [
+  { can: canInterruptRun, full: "i Interrupt", compact: "i Int" },
+  { can: canResumeRun, full: "u Resume", compact: "u Resume" },
+  { can: canRenameRun, full: "e Rename", compact: "e Name" },
+  { can: canStop, full: "x Stop subtree", compact: "x Stop tree" },
+];
 
-const PROMPT_INSTRUCTIONS = {
-  reply: "Answer the pending question",
-  "next-assignment": "Describe the next assignment",
-  guidance: "Enter guidance for the active assignment",
-  resume: "Optional continuation message; submit blank to resume",
-  rename: "Enter a new display name",
-} as const satisfies Record<FleetPromptKind, string>;
+/** The selected run's shortcuts in full and compact words; neither when it offers none. */
+const fleetActionLabels = (selected: SubagentRunView) => {
+  const mode = runMessageMode(selected);
+  const labels = [
+    ...(mode ? [{ full: MESSAGES[mode].shortcut, compact: MESSAGES[mode].shortcut }] : []),
+    ...FLEET_ACTION_LABELS.filter(({ can }) => can(selected)),
+  ];
+  return labels.length === 0
+    ? {}
+    : {
+        actions: labels.map((label) => label.full).join(" · "),
+        compactActions: labels.map((label) => label.compact).join(" · "),
+      };
+};
 
-const promptTitle = (prompt: FleetPrompt): string =>
-  `${PROMPT_TITLE_PREFIX[prompt.kind]} ${prompt.runName}`;
-
-const promptInstruction = (kind: FleetPromptKind): string => PROMPT_INSTRUCTIONS[kind];
+/** Each prompt's title, before the run's name, and its instruction. */
+const PROMPTS = {
+  reply: { title: "Reply to", instruction: "Answer the pending question" },
+  guidance: { title: "Guide", instruction: "Enter guidance for the active assignment" },
+  resume: { title: "Resume", instruction: "Optional continuation message; submit blank to resume" },
+  rename: { title: "Rename", instruction: "Enter a new display name" },
+};
 
 /** Submission rechecks the live run, so a prompt opened earlier can never act on a stale state. */
 const promptAvailable = (kind: FleetPromptKind, run: SubagentRunView | undefined): boolean =>
-  kind === "resume"
-    ? canResume(run)
+  run !== undefined &&
+  (kind === "resume"
+    ? canResumeRun(run)
     : kind === "rename"
-      ? canRename(run)
-      : messageMode(run) === kind;
+      ? canRenameRun(run)
+      : runMessageMode(run) === kind);
 
 const promptUnavailableFeedback = (kind: FleetPromptKind, run: SubagentRunView | undefined) =>
-  run && (kind === "guidance" || kind === "next-assignment") && hasUnresolvedSteeringDelivery(run)
+  run && kind === "guidance" && hasUnresolvedSteeringDelivery(run)
     ? "Nothing was sent: earlier guidance delivery is still unresolved."
     : "Nothing was sent: this run no longer accepts this input in its current state.";
-
-const MESSAGE_LABELS = {
-  reply: "Reply",
-  "next-assignment": "Next assignment",
-  guidance: "Guidance",
-} as const satisfies Record<FleetMessageMode, string>;
 
 export type FleetNoticeKind = "info" | "success" | "warning" | "error";
 type FleetNotice = { readonly kind: FleetNoticeKind; readonly text: string };
@@ -295,15 +249,6 @@ export class SubagentFleetComponent implements Component, Focusable {
       matchesKeybinding: this.options.matchesKeybinding,
       ...(reservedKeys && { reservedKeys }),
     });
-  }
-
-  private select(index: number, rows: ReadonlyArray<FleetTreeRow>): void {
-    this.applySelection(
-      this.shell.select(
-        index,
-        rows.map((row) => row.run.id),
-      ),
-    );
   }
 
   private reconcile(rows: ReadonlyArray<FleetTreeRow>): void {
@@ -395,33 +340,14 @@ export class SubagentFleetComponent implements Component, Focusable {
       return;
     }
     const mode: FleetMessageMode = prompt.kind;
-    const verb =
-      mode === "reply"
-        ? "Sending reply"
-        : mode === "next-assignment"
-          ? "Starting next assignment"
-          : "Sending guidance";
-    const success =
-      mode === "reply"
-        ? `Reply sent to ${name}.`
-        : mode === "next-assignment"
-          ? `Next assignment sent to ${name}.`
-          : `Guidance sent to ${name}.`;
+    const { label, progress } = MESSAGES[mode];
     this.performOutcome(
-      `${verb}…`,
+      `${progress}…`,
       () => this.options.actions.message(prompt.runId, mode, message),
       (delivery): FleetNotice =>
         delivery === "delivered"
-          ? { kind: "success", text: success }
-          : delivery === "pending"
-            ? {
-                kind: "warning",
-                text: `${MESSAGE_LABELS[mode]} for ${name} is waiting for delivery confirmation`,
-              }
-            : {
-                kind: "error",
-                text: `${MESSAGE_LABELS[mode]} for ${name} wasn't confirmed and may have arrived; check the run before sending again`,
-              },
+          ? { kind: "success", text: `${label} sent to ${name}.` }
+          : { kind: "warning", text: `${label} for ${name} is waiting for delivery confirmation` },
     );
   }
 
@@ -433,7 +359,8 @@ export class SubagentFleetComponent implements Component, Focusable {
     const selected = selectedRow?.run;
 
     if (this.prompt) return this.handlePromptInput(data, this.prompt);
-    if (this.pending) return this.handlePendingInput(data, this.pending, selected);
+    // Reconciling kept a confirmation only while its run stays selected and can still take it.
+    if (this.pending && selected) return this.handlePendingInput(data, this.pending, selected);
     if (this.busyAction) return this.handleBusyInput(data);
 
     // Every notice, including errors, dismisses on the next navigation key.
@@ -463,16 +390,14 @@ export class SubagentFleetComponent implements Component, Focusable {
   private handlePendingInput(
     data: string,
     pending: PendingConfirmation,
-    selected: SubagentRunView | undefined,
+    run: SubagentRunView,
   ): void {
     const key = CONFIRMATION_KEYS[pending.action];
     const resolution = this.resolveInput(data, "confirmation", new Set([key]));
-    const run = selected && pending.id === selected.id ? selected : undefined;
-    const confirmed =
-      resolution?._tag === "Action" && resolution.action === "confirm"
-        ? true
-        : confirmedReservedShortcut(resolution, data, key);
-    if (confirmed && run && canConfirm(pending, run)) {
+    if (
+      (resolution?._tag === "Action" && resolution.action === "confirm") ||
+      confirmedReservedShortcut(resolution, data, key)
+    ) {
       this.pending = undefined;
       const name = sanitizeTerminalLine(run.name);
       if (pending.action === "stop")
@@ -487,7 +412,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         );
       return;
     }
-    if (!run || (resolution?._tag === "Action" && resolution.action === "cancel")) {
+    if (resolution?._tag === "Action" && resolution.action === "cancel") {
       this.pending = undefined;
       this.notice = {
         kind: "info",
@@ -515,18 +440,13 @@ export class SubagentFleetComponent implements Component, Focusable {
     selectedRow: FleetTreeRow | undefined,
   ): boolean {
     const direction = fixedTreeDirection(data, this.shell.state.pane);
-    if (!direction) return false;
-    if (selectedRow?.hasChildren) {
-      const collapsed = this.collapsedRunIds.has(selectedRow.run.id);
-      if (direction === "back") this.collapsedRunIds.add(selectedRow.run.id);
-      else if (collapsed) this.collapsedRunIds.delete(selectedRow.run.id);
-      else return false;
-      this.shell.resetDetailScroll();
-      this.reconcile(this.tree(projection).rows);
-      this.options.requestRender();
-      return true;
-    }
-    return false;
+    if (!direction || !selectedRow?.hasChildren) return false;
+    if (direction === "back") this.collapsedRunIds.add(selectedRow.run.id);
+    else if (!this.collapsedRunIds.delete(selectedRow.run.id)) return false;
+    this.shell.resetDetailScroll();
+    this.reconcile(this.tree(projection).rows);
+    this.options.requestRender();
+    return true;
   }
 
   private handleShortcut(key: string, selected: SubagentRunView | undefined): void {
@@ -541,13 +461,13 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   /** Applies one run shortcut; returns false when it does not apply to the run's state or backend. */
   private applyRunShortcut(key: string, selected: SubagentRunView): boolean {
-    const mode = messageMode(selected);
+    const mode = runMessageMode(selected);
     if (key === "x" && canStop(selected)) this.pending = { action: "stop", id: selected.id };
-    else if (key === "i" && canInterrupt(selected))
+    else if (key === "i" && canInterruptRun(selected))
       this.pending = { action: "interrupt", id: selected.id };
-    else if (key === "u" && canResume(selected)) this.openPrompt(selected, "resume");
+    else if (key === "u" && canResumeRun(selected)) this.openPrompt(selected, "resume");
     else if (key === "m" && mode) this.openPrompt(selected, mode);
-    else if (key === "e" && canRename(selected)) this.openPrompt(selected, "rename");
+    else if (key === "e" && canRenameRun(selected)) this.openPrompt(selected, "rename");
     else return false;
     return true;
   }
@@ -574,7 +494,12 @@ export class SubagentFleetComponent implements Component, Focusable {
         return;
       }
       if (result._tag === "Update" && result.movedSelection)
-        this.select(result.state.selected, rows);
+        this.applySelection(
+          this.shell.select(
+            result.state.selected,
+            rows.map((row) => row.run.id),
+          ),
+        );
     }
     this.options.requestRender();
   }
@@ -584,8 +509,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
     this.shell.syncLayout(safeWidth);
-    const projection = this.options.getProjection();
-    const tree = this.tree(projection);
+    const tree = this.tree(this.options.getProjection());
     const rows = tree.rows;
     this.reconcile(rows);
     const selected = rows[this.shell.state.selected]?.run;
@@ -595,130 +519,97 @@ export class SubagentFleetComponent implements Component, Focusable {
     ).length;
     const waiting = tree.runs.filter((run) => run.state === "waiting_for_parent").length;
     const paused = tree.runs.filter((run) => run.state === "paused").length;
-    const retained = tree.runs.filter((run) => run.state === "reported").length;
     const hidden = tree.runs.length - rows.length;
-    const titleRaw = ` /subagents · ${countLabel(tree.runs.length, "run")}${hidden ? ` · ${rows.length} visible` : ""}${working ? ` · ${working} running` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} reported` : ""} `;
+    const titleRaw = ` /subagents · ${countLabel(tree.runs.length, "run")}${hidden ? ` · ${rows.length} visible` : ""}${working ? ` · ${working} running` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""} `;
     const title = clipToWidth(titleRaw, Math.max(0, safeWidth - 2), "");
-    const help = this.helpText(safeWidth, selected);
-    const safeHelp = clipToWidth(help, Math.max(0, safeWidth - 2), "");
     return framedScreen(this.frame, {
       width: safeWidth,
       height,
       top: this.options.theme.fg("accent", title),
-      bottom: safeHelp,
+      // The footer already fits inside the frame.
+      bottom: this.helpText(safeWidth, selected),
       body: (bodyHeight) => {
         if (this.prompt) return this.renderPrompt(safeWidth, bodyHeight, this.prompt);
-        const showNotice = this.notice !== undefined && bodyHeight > 0;
-        const contentHeight = Math.max(0, bodyHeight - (showNotice ? 1 : 0));
-        const content =
-          this.shell.state.layout === "wide"
-            ? this.renderWide(safeWidth, contentHeight, rows, tree.runs, selected)
-            : this.shell.state.layout === "stacked"
-              ? this.renderStacked(safeWidth, contentHeight, rows, tree.runs, selected)
-              : this.renderNarrow(safeWidth, contentHeight, rows, tree.runs, selected);
-        return showNotice ? [this.renderNotice(safeWidth, this.notice!), ...content] : content;
+        const notice = bodyHeight > 0 ? this.notice : undefined;
+        const content = this.renderBody(
+          safeWidth,
+          Math.max(0, bodyHeight - (notice ? 1 : 0)),
+          rows,
+          duplicateRunNames(tree.runs),
+          selected,
+        );
+        return notice ? [this.renderNotice(safeWidth, notice), ...content] : content;
       },
     });
   }
 
   private renderNotice(width: number, notice: FleetNotice): string {
-    const inner = Math.max(0, width - 2);
-    const glyph = managerNoticeGlyph(notice.kind);
-    const color = notice.kind === "info" ? "muted" : notice.kind;
-    return framedRow(
-      this.frame,
-      this.options.theme.fg(color, `${glyph} ${sanitizeTerminalLine(notice.text)}`),
-      inner,
-    );
+    const line = toolStatusLine(this.options.theme, notice.kind, notice.text);
+    return framedRow(this.frame, line, Math.max(0, width - 2));
   }
 
   private renderPrompt(width: number, height: number, prompt: FleetPrompt): string[] {
+    const { theme } = this.options;
     const inner = Math.max(0, width - 2);
-    const title = promptTitle(prompt);
-    const instruction = promptInstruction(prompt.kind);
+    const { title, instruction } = PROMPTS[prompt.kind];
+    const heading = theme.fg("accent", theme.bold(`${title} ${prompt.runName}`));
+    const hint = theme.fg("dim", instruction);
     const inputLines = prompt.input.render(Math.max(1, inner)).slice(0, 1);
-    const feedback = prompt.feedback ? [this.options.theme.fg("warning", prompt.feedback)] : [];
+    const feedback = prompt.feedback ? [theme.fg("warning", prompt.feedback)] : [];
     const contextLines = prompt.context
-      ? wrapTextWithAnsi(
-          this.options.theme.fg("warning", `Question: ${prompt.context}`),
-          Math.max(1, inner),
-        )
+      ? wrapTextWithAnsi(theme.fg("warning", `Question: ${prompt.context}`), Math.max(1, inner))
       : [];
     const rows =
       height <= 1
         ? inputLines
         : height === 2
-          ? [
-              ...inputLines,
-              ...(feedback.length > 0 ? feedback : [this.options.theme.fg("dim", instruction)]),
-            ]
+          ? [...inputLines, ...(feedback.length > 0 ? feedback : [hint])]
           : height === 3 && feedback.length > 0
-            ? [
-                this.options.theme.fg("accent", this.options.theme.bold(title)),
-                ...inputLines,
-                ...feedback,
-              ]
+            ? [heading, ...inputLines, ...feedback]
             : [
-                this.options.theme.fg("accent", this.options.theme.bold(title)),
+                heading,
                 ...contextLines.slice(0, Math.max(0, height - 3 - feedback.length)),
-                this.options.theme.fg("dim", instruction),
+                hint,
                 ...inputLines,
                 ...feedback,
               ];
     return framedFill(this.frame, rows, height, inner);
   }
 
+  /** One run's row; a name in `duplicates` also shows the run's short id. */
   private runLine(
     row: FleetTreeRow,
     index: number,
     width: number,
-    scopeRuns: ReadonlyArray<SubagentRunView>,
+    duplicates: ReadonlySet<string>,
   ): string {
+    const { theme } = this.options;
     const { run } = row;
+    const now = this.options.getNow();
     const selected = index === this.shell.state.selected;
-    const selection = selected
-      ? this.options.theme.fg(this.shell.state.pane === "list" ? "accent" : "muted", ">")
-      : " ";
-    const branch = this.options.theme.fg("dim", runTreeBranch(row));
-    const disclosure = row.hasChildren
-      ? this.options.theme.fg("muted", row.expanded ? "▾" : "▸")
-      : " ";
-    const frame = spinnerFrameAt(this.options.getNow());
-    const glyph = this.options.theme.fg(
-      runStateColor(run.state),
-      animatedRunStateGlyph(run.state, frame),
-    );
-    const state =
-      run.state === "completed" || run.state === "reported"
-        ? `${runStateLabel(run.state)} ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
-        : runStateLabel(run.state);
-    const duplicateName = scopeRuns.some(
-      (candidate) => candidate.id !== run.id && candidate.name === run.name,
-    );
-    const shortId = shortRunId(run.id);
-    const identity = duplicateName ? `[${shortId}] ${run.name}` : run.name;
-    const label = sanitizeTerminalLine(
-      `${identity} · ${state} · ${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`,
-    );
-    return padListDetailRow(
-      `${selection} ${branch}${disclosure} ${glyph} ${
-        selected && this.shell.state.pane === "list"
-          ? focusedField(this.options.theme, label)
-          : this.options.theme.fg(managerTone.identity, sanitizeTerminalLine(identity)) +
-            this.options.theme.fg(
-              "muted",
-              ` · ${sanitizeTerminalLine(`${state} · ${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`)}`,
-            )
-      }`,
-      width,
-    );
+    const focused = selected && this.shell.state.pane === "list";
+    const selection = selected ? theme.fg(focused ? "accent" : "muted", ">") : " ";
+    const branch = theme.fg("dim", runTreeBranch(row));
+    const disclosure = row.hasChildren ? theme.fg("muted", row.expanded ? "▾" : "▸") : " ";
+    const glyph = theme.fg(runStateColor(run.state), runStateGlyph(run.state, spinnerFrameAt(now)));
+    const age =
+      run.state === "completed"
+        ? ` ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`
+        : "";
+    const details = `${runStateLabel(run.state)}${age} · ${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`;
+    const identity = duplicates.has(run.name) ? `[${shortRunId(run.id)}] ${run.name}` : run.name;
+    const label = focused
+      ? focusedField(theme, sanitizeTerminalLine(`${identity} · ${details}`))
+      : theme.fg(managerTone.identity, sanitizeTerminalLine(identity)) +
+        theme.fg("muted", ` · ${sanitizeTerminalLine(details)}`);
+    return padListDetailRow(`${selection} ${branch}${disclosure} ${glyph} ${label}`, width);
   }
 
   private listPane(
     rows: ReadonlyArray<FleetTreeRow>,
     limit: number,
     width: number,
-    scopeRuns: ReadonlyArray<SubagentRunView>,
+    duplicates: ReadonlySet<string>,
   ): string[] {
     // The rendered window is the authoritative list page size for half/full-page motions,
     // so stacked layouts page by their actual visible rows rather than the full height.
@@ -727,7 +618,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const pane = this.shell.state.pane === "list";
     return [
       listDetailHeading(this.options.theme, this.listHeading(rows, visible), pane),
-      ...visible.map(({ row, index }) => this.runLine(row, index, width, scopeRuns)),
+      ...visible.map(({ row, index }) => this.runLine(row, index, width, duplicates)),
     ];
   }
 
@@ -741,13 +632,9 @@ export class SubagentFleetComponent implements Component, Focusable {
     return `Subagents · ${start}–${end} of ${rows.length}${start > 1 ? " · ↑ more" : ""}${end < rows.length ? " · ↓ more" : ""}`;
   }
 
-  private keyLabel(id: FleetKeybindingId, fallback: string): string {
-    const printableFiltered = filterReservedKeyLabel(
-      this.options.keybindingLabel?.(id, fallback) || fallback,
-      FLEET_SHORTCUTS,
-      fallback,
-    );
-    const withoutTreeArrows = printableFiltered
+  private keyLabel(id: FullScreenSelectionKeybindingId, fallback: string): string {
+    const withoutTreeArrows = configuredKeyLabels(this.options.keybindingLabel, FLEET_SHORTCUTS)
+      .key(id, fallback)
       .split("/")
       .filter((label) => label !== "←" && label !== "→")
       .join("/");
@@ -773,11 +660,7 @@ export class SubagentFleetComponent implements Component, Focusable {
           : undefined;
     if (modal) return renderResponsiveManagerFooter(contentWidth, modal);
     if (!selected) return renderResponsiveManagerFooter(contentWidth, [[`${escape}/q Close`]]);
-    const available = fleetActionLabels(selected);
-    const actions =
-      available.length > 0 ? available.map((item) => item.full).join(" · ") : undefined;
-    const compactActions =
-      available.length > 0 ? available.map((item) => item.compact).join(" · ") : undefined;
+    const { actions, compactActions } = fleetActionLabels(selected);
     const configuredNavigation = this.options.keybindingLabel
       ? `${this.keyLabel("tui.select.up", "↑")}/${this.keyLabel("tui.select.down", "↓")}`
       : undefined;
@@ -835,48 +718,35 @@ export class SubagentFleetComponent implements Component, Focusable {
     return [padListDetailRow(position, width), ...window.visible];
   }
 
-  private renderWide(
+  /** The list and detail panes in the current layout; the list window is always taken first. */
+  private renderBody(
     width: number,
     height: number,
     rows: ReadonlyArray<FleetTreeRow>,
-    scopeRuns: ReadonlyArray<SubagentRunView>,
-    selected: SubagentRunView | undefined,
-  ): string[] {
-    const { listWidth, detailWidth } = wideListDetailGeometry(width, 38, 0.42);
-    const left = this.listPane(rows, Math.max(1, height - 1), listWidth, scopeRuns);
-    const right = this.detailWindow(this.detailLines(selected, detailWidth), height, detailWidth);
-    return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
-  }
-
-  private renderStacked(
-    width: number,
-    height: number,
-    rows: ReadonlyArray<FleetTreeRow>,
-    scopeRuns: ReadonlyArray<SubagentRunView>,
+    duplicates: ReadonlySet<string>,
     selected: SubagentRunView | undefined,
   ): string[] {
     const inner = width - 2;
-    const list = this.listPane(rows, stackedListHeight(height, rows.length) - 1, inner, scopeRuns);
-    const remaining = Math.max(0, height - list.length - 1);
-    const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
-    return framedStackedRows(this.frame, { list, detail, height, inner });
-  }
-
-  private renderNarrow(
-    width: number,
-    height: number,
-    rows: ReadonlyArray<FleetTreeRow>,
-    scopeRuns: ReadonlyArray<SubagentRunView>,
-    selected: SubagentRunView | undefined,
-  ): string[] {
-    const inner = width - 2;
+    const list = (limit: number, listWidth: number) =>
+      this.listPane(rows, limit, listWidth, duplicates);
+    const detail = (detailWidth: number, detailHeight: number) =>
+      this.detailWindow(this.detailLines(selected, detailWidth), detailHeight, detailWidth);
+    if (this.shell.state.layout === "wide") {
+      const { listWidth, detailWidth } = wideListDetailGeometry(width, 38, 0.42);
+      const left = list(Math.max(1, height - 1), listWidth);
+      const right = detail(detailWidth, height);
+      return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
+    }
+    if (this.shell.state.layout === "stacked") {
+      const listRows = list(stackedListHeight(height, rows.length) - 1, inner);
+      const detailRows = detail(inner, Math.max(0, height - listRows.length - 1));
+      return framedStackedRows(this.frame, { list: listRows, detail: detailRows, height, inner });
+    }
     const lines =
       this.shell.state.details && selected
-        ? this.detailWindow(this.detailLines(selected, inner), height, inner)
+        ? detail(inner, height)
         : rows.length
-          ? this.listPane(rows, Math.max(1, height - 1), inner, scopeRuns).slice(
-              height <= 1 ? 1 : 0,
-            )
+          ? list(Math.max(1, height - 1), inner).slice(height <= 1 ? 1 : 0)
           : [this.options.theme.fg("dim", "No subagents yet")];
     if (!this.shell.state.details) this.shell.resetDetailWindow();
     return framedFill(this.frame, lines, height, inner, this.shell.state.pane);

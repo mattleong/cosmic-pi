@@ -1,11 +1,11 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { renderModelContextLine } from "../src/footer/layout.ts";
 import { renderMetricsLines } from "../src/footer/metrics.ts";
 import { renderProviderUsageLines } from "../src/footer/provider-usage.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 
-const plainTheme = { fg: (_color: string, text: string) => text };
 const metric = (
   id: string,
   text: string,
@@ -36,8 +36,8 @@ describe("footer layout", () => {
       metric("session", "full-session", { compactText: "sess", order: 100 }),
       metric("metrics.input", "↑100k", { compactText: "↑1k", order: 200 }),
       metric("metrics.output", "↓12k", { compactText: "↓2k", order: 210 }),
-      metric("metrics.cacheRead", "R40k", { compactText: "R4k", order: 220 }),
-      metric("metrics.cacheWrite", "W10k", { compactText: "W1k", order: 230 }),
+      metric("metrics.cacheRead", "r40k", { compactText: "r4k", order: 220 }),
+      metric("metrics.cacheWrite", "w10k", { compactText: "w1k", order: 230 }),
       metric("metrics.other", "full-other", { compactText: "other", order: 235 }),
       metric("metrics.cost", "$0.123 (sub)", { compactText: "$0.12", align: "right", order: 240 }),
     ];

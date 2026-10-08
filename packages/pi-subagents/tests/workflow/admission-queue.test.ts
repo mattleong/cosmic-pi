@@ -4,11 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
-import {
-  makeWorkflowSlots,
-  makeWorkflowWaitOrder,
-  type WorkflowWait,
-} from "../../src/workflow/admission-queue.ts";
+import { makeWorkflowSlots, type WorkflowWait } from "../../src/workflow/admission-queue.ts";
 
 const patient: WorkflowWait = { onWait: Effect.void, abort: Effect.never };
 
@@ -16,7 +12,6 @@ describe("workflow slots", () => {
   it.effect("grants slots in queue order, so an earlier call that comes back goes first", () =>
     Effect.gen(function* () {
       const slots = makeWorkflowSlots(1);
-      const order = makeWorkflowWaitOrder();
       const granted: string[] = [];
       let waiting = 0;
       const wait: WorkflowWait = {
@@ -30,7 +25,7 @@ describe("workflow slots", () => {
           finish.set(label, done);
           return yield* slots
             .hold(
-              order(queuedAt),
+              slots.order(queuedAt),
               wait,
               Effect.sync(() => void granted.push(label)).pipe(
                 Effect.andThen(Deferred.await(done)),
@@ -51,20 +46,21 @@ describe("workflow slots", () => {
         yield* Deferred.succeed(finish.get(granted.at(-1)!)!, undefined);
       }
       expect(granted).toEqual(["first", "earlier", "second", "third"]);
+      // Only the calls that couldn't take a slot on arrival waited, each once.
+      expect(waiting).toBe(3);
     }),
   );
 
   it.effect("runs as many holders at once as it has slots", () =>
     Effect.gen(function* () {
       const slots = makeWorkflowSlots(2);
-      const order = makeWorkflowWaitOrder();
       const running = new Set<number>();
       let most = 0;
       const release = yield* Deferred.make<void>();
       const fibers = yield* Effect.forEach([0, 1, 2, 3, 4], (index) =>
         slots
           .hold(
-            order(index),
+            slots.order(index),
             patient,
             Effect.sync(() => {
               running.add(index);
@@ -86,11 +82,10 @@ describe("workflow slots", () => {
   it.effect("leaves cleanly when a waiter is interrupted or its wait is aborted", () =>
     Effect.gen(function* () {
       const slots = makeWorkflowSlots(1);
-      const order = makeWorkflowWaitOrder();
       const granted: string[] = [];
       const hold = (label: string, wait: WorkflowWait = patient) =>
         slots.hold(
-          order(0),
+          slots.order(0),
           wait,
           Effect.sync(() => void granted.push(label)).pipe(Effect.andThen(Effect.never)),
         );
@@ -112,36 +107,6 @@ describe("workflow slots", () => {
       yield* yieldUntil(() => granted.length === 2);
       expect(granted).toEqual(["holder", "next"]);
       yield* Fiber.interrupt(next);
-    }),
-  );
-
-  it.effect("reports a waiter that has to wait, once", () =>
-    Effect.gen(function* () {
-      const slots = makeWorkflowSlots(1);
-      const order = makeWorkflowWaitOrder();
-      let waits = 0;
-      const wait: WorkflowWait = {
-        onWait: Effect.sync(() => void (waits += 1)),
-        abort: Effect.never,
-      };
-      yield* slots.hold(order(0), wait, Effect.void);
-      expect(waits).toBe(0);
-      const release = yield* Deferred.make<void>();
-      let holding = false;
-      const holder = yield* slots
-        .hold(
-          order(1),
-          wait,
-          Effect.sync(() => void (holding = true)).pipe(Effect.andThen(Deferred.await(release))),
-        )
-        .pipe(Effect.forkChild);
-      yield* yieldUntil(() => holding);
-      const blocked = yield* slots.hold(order(2), wait, Effect.void).pipe(Effect.forkChild);
-      yield* yieldUntil(() => waits === 1);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(holder);
-      yield* Fiber.join(blocked);
-      expect(waits).toBe(1);
     }),
   );
 });

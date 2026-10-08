@@ -5,10 +5,14 @@ import {
   type JsonObject,
   JsonDocumentStore,
 } from "../platform/json-document.ts";
-import type { ConfigDocumentErrorFactory } from "./document-ops.ts";
+import {
+  makeConfigDocumentErrorFactory,
+  type ConfigDocumentErrorClass,
+  type ConfigDocumentErrorFactory,
+} from "./document-ops.ts";
 
 /** Project and global locations of one extension configuration document. */
-export interface ScopedDocumentPaths {
+interface ScopedDocumentPaths {
   readonly project: string;
   readonly global: string;
 }
@@ -23,9 +27,9 @@ export interface ScopedConfigMetadata {
 }
 
 export interface ScopedConfigStoreOptions<File, Resolved extends ScopedConfigMetadata, E> {
-  /** Maps document failures onto the package's tagged configuration error. */
-  readonly errorFactory: ConfigDocumentErrorFactory<E>;
-  /** Human-readable label used in read warnings, e.g. "Better OpenAI". */
+  /** The package's tagged configuration error; document failures map onto it. */
+  readonly error: ConfigDocumentErrorClass<E>;
+  /** Human-readable label used in error messages and read warnings, e.g. "Better OpenAI". */
   readonly label: string;
   /** Span prefix for the store's Effect.fn names, e.g. "OpenAIConfig". */
   readonly spanPrefix: string;
@@ -49,6 +53,8 @@ export interface ScopedConfigStoreOptions<File, Resolved extends ScopedConfigMet
 }
 
 export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, E> {
+  /** "Unable to <operation> <label> configuration." errors of the store's error class. */
+  readonly errorFactory: ConfigDocumentErrorFactory<E>;
   readonly configPaths: (
     cwd: string,
     agentDir: string,
@@ -94,7 +100,8 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
 export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadata, E>(
   options: ScopedConfigStoreOptions<File, Resolved, E>,
 ): ScopedConfigStore<File, Resolved, E> => {
-  const { decode, defaultDocument, errorFactory, resolve, spanPrefix } = options;
+  const { decode, defaultDocument, resolve, spanPrefix } = options;
+  const errorFactory = makeConfigDocumentErrorFactory(options.error, options.label);
 
   const configPaths = Effect.fn(`${spanPrefix}.configPaths`)((cwd: string, agentDir: string) =>
     Path.Path.useSync(
@@ -211,6 +218,7 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   };
 
   return {
+    errorFactory,
     configPaths,
     readRawConfig,
     readConfig,
@@ -220,3 +228,41 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     resolveCommittedConfig,
   };
 };
+
+/** Store operations used by `commitPreferredScope`. */
+export type PreferredScopeStore<Resolved extends ScopedConfigMetadata, E> = Pick<
+  ScopedConfigStore<unknown, Resolved, E>,
+  "readRawConfig" | "modifyConfig" | "resolveCommittedConfig"
+>;
+
+/**
+ * Atomically commits `change` to the preferred scope of the freshly resolved `current` config and
+ * returns the committed resolution. A project commit overlays the global document read beforehand.
+ * `afterCommit` runs inside the document store's commit region, so persistence and publication
+ * cannot be separated by interruption. With `fallbackWarning`, an unreadable global document logs
+ * that warning and overlays nothing instead of failing the commit.
+ */
+export const commitPreferredScope = <Resolved extends ScopedConfigMetadata, E, R = never>(
+  store: PreferredScopeStore<Resolved, E>,
+  current: Resolved,
+  change: (document: JsonObject) => JsonObject,
+  afterCommit: (next: Resolved) => Effect.Effect<void, never, R>,
+  options: { readonly fallbackWarning?: string } = {},
+): Effect.Effect<Resolved, E, JsonDocumentStore | R> =>
+  Effect.gen(function* () {
+    const { fallbackWarning } = options;
+    const read: Effect.Effect<JsonObject | undefined, E, JsonDocumentStore> =
+      current.configPath === current.projectConfigPath && current.globalConfigExists
+        ? store.readRawConfig(current.globalConfigPath)
+        : Effect.undefined;
+    const fallback = yield* fallbackWarning === undefined
+      ? read
+      : read.pipe(
+          Effect.catch(() => Effect.logWarning(fallbackWarning).pipe(Effect.as(undefined))),
+        );
+    return yield* store.modifyConfig(current.configPath, (document) => {
+      const committed = change(document);
+      const next = store.resolveCommittedConfig(current, committed, fallback);
+      return { value: next, document: committed, afterCommit: afterCommit(next) };
+    });
+  });

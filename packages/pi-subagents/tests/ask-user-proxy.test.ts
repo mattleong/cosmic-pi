@@ -34,6 +34,24 @@ const capability = (overrides: Partial<QuestionnaireCapability> = {}): Questionn
   ...overrides,
 });
 
+/** A child relay whose proxy decodes each wire request and asks the root's capability as `asker`. */
+const relayToRoot = (rootCapability: QuestionnaireCapability, asker: QuestionnaireOwner) => {
+  const root = bus();
+  const child = bus();
+  root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(rootCapability));
+  const detach = publishChildQuestionnaireRelay(
+    child,
+    "child",
+    () => true,
+    (wire, signal) => {
+      const decoded = decodeQuestionnaireProxyRequest(wire);
+      if (decoded instanceof InvalidSubagentRequestError) return Promise.reject(decoded);
+      return Effect.runPromise(askParentQuestionnaire(root, "root", decoded, asker), { signal });
+    },
+  );
+  return { child, detach, relay: queryQuestionnaireRelay(child, "child")! };
+};
+
 describe("structured questionnaire proxy boundary", () => {
   it("round-trips text questions and notes through the authenticated root and rejects text with choices", () => {
     const textRequest: AskUserRequest = {
@@ -43,32 +61,20 @@ describe("structured questionnaire proxy boundary", () => {
       outcome: "submitted",
       answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
     };
-    const root = bus();
-    const child = bus();
     const authenticated = owner("authenticated-text");
-    const textCapability = capability({
-      cancel: (received) => {
-        expect(received).toEqual(authenticated);
-        return Promise.resolve();
-      },
-      ask: (received, receivedOwner) => {
-        expect(received).toEqual(textRequest);
-        expect(receivedOwner).toEqual(authenticated);
-        return Promise.resolve(outcome);
-      },
-    });
-    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(textCapability));
-    const detach = publishChildQuestionnaireRelay(
-      child,
-      "child",
-      () => true,
-      (wire, signal) => {
-        const decoded = decodeQuestionnaireProxyRequest(wire);
-        if (decoded instanceof InvalidSubagentRequestError) return Promise.reject(decoded);
-        return Effect.runPromise(askParentQuestionnaire(root, "root", decoded, authenticated), {
-          signal,
-        });
-      },
+    const { relay, detach } = relayToRoot(
+      capability({
+        cancel: (received) => {
+          expect(received).toEqual(authenticated);
+          return Promise.resolve();
+        },
+        ask: (received, receivedOwner) => {
+          expect(received).toEqual(textRequest);
+          expect(receivedOwner).toEqual(authenticated);
+          return Promise.resolve(outcome);
+        },
+      }),
+      authenticated,
     );
     for (const choices of [[], [{ value: "a", label: "A", description: "A" }]]) {
       expect(
@@ -78,7 +84,7 @@ describe("structured questionnaire proxy boundary", () => {
         }),
       ).toBeInstanceOf(InvalidSubagentRequestError);
     }
-    return queryQuestionnaireRelay(child, "child")!
+    return relay
       .ask(textRequest, new AbortController().signal)
       .then((answer) => {
         expect(answer).toEqual(outcome);
@@ -108,27 +114,17 @@ describe("structured questionnaire proxy boundary", () => {
   });
 
   it("preserves deliberate cancellation through root capability and child relay", () => {
-    const root = bus();
-    const child = bus();
     const authenticated = owner("authenticated-request");
     let receivedOwner: QuestionnaireOwner | undefined;
-    const cancelling = capability({
-      ask: (_request, authenticatedOwner) => {
-        receivedOwner = authenticatedOwner;
-        return Promise.resolve({ outcome: "cancelled", answers: [] });
-      },
-    });
-    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(cancelling));
-    const detach = publishChildQuestionnaireRelay(
-      child,
-      "child",
-      () => true,
-      (_wire, signal) =>
-        Effect.runPromise(askParentQuestionnaire(root, "root", request, authenticated), {
-          signal,
-        }),
+    const { child, relay, detach } = relayToRoot(
+      capability({
+        ask: (_request, authenticatedOwner) => {
+          receivedOwner = authenticatedOwner;
+          return Promise.resolve({ outcome: "cancelled", answers: [] });
+        },
+      }),
+      authenticated,
     );
-    const relay = queryQuestionnaireRelay(child, "child")!;
     return relay.ask(request, new AbortController().signal).then((outcome) => {
       expect(outcome).toEqual({ outcome: "cancelled", answers: [] });
       expect(receivedOwner).toEqual(authenticated);

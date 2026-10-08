@@ -10,14 +10,8 @@ export interface HerdrBtwSessionInput {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }
 
-interface CapturedHerdrBtwSession extends HerdrBtwSessionInput {
-  readonly signal: AbortSignal | undefined;
-  readonly aborted: boolean;
-}
-
-export const captureHerdrBtwSession = (
-  ctx: ExtensionContext,
-): CapturedHerdrBtwSession | undefined => {
+/** Session input plus the start signal; undefined means the host session is unavailable. */
+export const captureHerdrBtwSession = (ctx: ExtensionContext) => {
   const host = captureSessionHost(ctx);
   if (host._tag === "Unavailable") return undefined;
   try {

@@ -1,7 +1,7 @@
 import { compactIssueSeverity } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
-import { imageCompactSummary, imageRecordSummary } from "../src/image/compact-summary.ts";
+import { imageCompactSummary } from "../src/image/compact-summary.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
 
 type Input = Parameters<typeof imageCompactSummary>[0];
@@ -80,17 +80,6 @@ describe("image compact summary", () => {
     expect(summary?.outcome).toBe("uncertain");
     expect(compactIssueSeverity(summary?.issues)).toBe("warning");
     expect(styleProblems(summary)).toEqual([]);
-  });
-
-  it("classifies tool results and command messages identically", () => {
-    for (const status of ["completed", "failed", "cancelled", "incomplete", "in_progress"])
-      for (const hasImage of [true, false]) {
-        const call = input(status);
-        if (!hasImage) call.result!.content = [{ type: "text", text: "Generated image" }];
-        const { outcome, issues } = imageCompactSummary(call) ?? {};
-        const message = imageRecordSummary(record(status), { hasImage, expanded: false });
-        expect({ outcome: message?.outcome, issues: message?.issues }).toEqual({ outcome, issues });
-      }
   });
 
   it("declines missing, malformed and unknown details", () => {

@@ -3,9 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { runCodePreviewSessionEffect } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/state";
-import { resolvePreviewPath } from "../paths/resolve";
 import { formatBytes } from "pi-cosmic-core";
 
 const PreviewByteLength = Schema.Natural;
@@ -16,66 +14,55 @@ const SkippedExistingFilePreview = Schema.Struct({
   maxBytes: PreviewByteLength,
   sizeExceeded: Schema.optional(Schema.Boolean),
 });
-export type ExistingFilePreview =
-  | { kind: "content"; content: string }
-  | typeof SkippedExistingFilePreview.Type;
+type SkippedExistingFile = typeof SkippedExistingFilePreview.Type;
+export type ExistingFilePreview = { kind: "content"; content: string } | SkippedExistingFile;
 const decodeSkippedExistingFilePreview = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
   onExcessProperty: "error",
 });
 
 const currentMaxWriteDiffBytes = () => codePreviewPerformanceConfig.maxWriteDiffBytes;
 const currentMaxChangedLineCells = () => codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
+// Pi writes content verbatim, so a leading byte order mark is part of the previous text.
+const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
 
+/**
+ * Reads an already resolved path. Resolving Pi's write target again would also rewrite Unicode
+ * spaces in the working directory, which Pi's own resolution keeps.
+ */
 export const readExistingFileForPreviewEffect = Effect.fn("CodePreviewWrite.readExisting")(
-  function* (path: string, cwd: string, nextContent = "") {
-    if (!path) return undefined;
-    const resolved = resolvePreviewPath(path, cwd);
+  function* (absolutePath: string, nextContent: string) {
     const nextBytes = Buffer.byteLength(nextContent, "utf8");
     const maxBytes = currentMaxWriteDiffBytes();
     if (nextBytes > maxBytes)
       return skippedExistingFile("new content too large", nextBytes, true, maxBytes);
     const fs = yield* FileSystem.FileSystem;
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const file = yield* fs.open(resolved, { flag: "r" });
-        const fileStat = yield* file.stat;
-        const size = ByteSize.toBigInt(fileStat.size);
-        if (fileStat.type !== "File")
-          return skippedExistingFile("previous path is not a regular file", Number(size));
-        if (size > BigInt(maxBytes))
-          return skippedExistingFile("previous file too large", Number(size), true, maxBytes);
-        const allocation = yield* file.readAlloc(maxBytes + 1);
-        const bytes = Option.getOrUndefined(allocation);
-        if (!bytes) return { kind: "content", content: "" } as const;
-        if (bytes.byteLength > maxBytes)
-          return skippedExistingFile("previous file too large", bytes.byteLength, true, maxBytes);
-        return {
-          kind: "content",
-          content: new TextDecoder().decode(bytes),
-        } as const;
-      }).pipe(
-        Effect.catch(() =>
-          fs.exists(resolved).pipe(
-            Effect.map((exists) =>
-              exists ? skippedExistingFile("previous content unavailable", undefined) : undefined,
-            ),
-            Effect.catch(() =>
-              Effect.succeed(skippedExistingFile("previous content unavailable", undefined)),
-            ),
+    return yield* Effect.gen(function* () {
+      // Only a regular file is opened: opening a FIFO blocks until a writer arrives.
+      const info = yield* fs.stat(absolutePath);
+      const size = ByteSize.toBigInt(info.size);
+      if (info.type !== "File")
+        return skippedExistingFile("previous path is not a regular file", Number(size));
+      if (size > BigInt(maxBytes))
+        return skippedExistingFile("previous file too large", Number(size), true, maxBytes);
+      const file = yield* fs.open(absolutePath, { flag: "r" });
+      const bytes = Option.getOrUndefined(yield* file.readAlloc(maxBytes + 1));
+      if (!bytes) return { kind: "content", content: "" } as const;
+      if (bytes.byteLength > maxBytes)
+        return skippedExistingFile("previous file too large", bytes.byteLength, true, maxBytes);
+      return { kind: "content", content: utf8.decode(bytes) } as const;
+    }).pipe(
+      Effect.scoped,
+      Effect.catch(() =>
+        fs.exists(absolutePath).pipe(
+          Effect.orElseSucceed(() => true),
+          Effect.map((exists) =>
+            exists ? skippedExistingFile("previous content unavailable", undefined) : undefined,
           ),
         ),
       ),
     );
   },
 );
-
-export function readExistingFileForPreview(
-  path: string,
-  cwd: string,
-  nextContent = "",
-): Promise<ExistingFilePreview | undefined> {
-  return runCodePreviewSessionEffect(readExistingFileForPreviewEffect(path, cwd, nextContent));
-}
 
 export function getWriteDiffSkipReason<BeforeInput>(
   before: BeforeInput,
@@ -85,13 +72,10 @@ export function getWriteDiffSkipReason<BeforeInput>(
   const decoded = decodeSkippedExistingFilePreview(before);
   if (Option.isNone(decoded)) return undefined;
   const nextBytes = Buffer.byteLength(nextContent, "utf8");
-  if (nextBytes > maxBytes)
-    return formatSkipReason("new content too large", nextBytes, true, maxBytes);
   return formatSkipReason(
-    decoded.value.reason,
-    decoded.value.byteLength,
-    decoded.value.sizeExceeded === true,
-    decoded.value.maxBytes,
+    nextBytes > maxBytes
+      ? skippedExistingFile("new content too large", nextBytes, true, maxBytes)
+      : decoded.value,
   );
 }
 
@@ -159,18 +143,12 @@ function skippedExistingFile(
   byteLength: number | undefined,
   sizeExceeded = false,
   maxBytes = currentMaxWriteDiffBytes(),
-): ExistingFilePreview {
-  const skipped: ExistingFilePreview = { kind: "skipped", reason, maxBytes, sizeExceeded };
+): SkippedExistingFile {
+  const skipped: SkippedExistingFile = { kind: "skipped", reason, maxBytes, sizeExceeded };
   return byteLength === undefined ? skipped : { ...skipped, byteLength };
 }
 
-function formatSkipReason(
-  reason: string,
-  byteLength: number | undefined,
-  sizeExceeded: boolean,
-  maxBytes = currentMaxWriteDiffBytes(),
-): string {
+function formatSkipReason({ reason, byteLength, sizeExceeded, maxBytes }: SkippedExistingFile) {
   if (byteLength === undefined) return reason;
-  if (!sizeExceeded) return `${reason} (${formatBytes(byteLength)})`;
-  return `${reason} (${formatBytes(byteLength)} > ${formatBytes(maxBytes)})`;
+  return `${reason} (${formatBytes(byteLength)}${sizeExceeded ? ` > ${formatBytes(maxBytes)}` : ""})`;
 }

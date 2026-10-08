@@ -26,6 +26,5 @@ export const makeXaiApplicationLayer = (
     canPublish: () => MutableRef.get(publicationOwner),
   }).pipe(Layer.provide(Layer.merge(nodePlatformLayer, AgentDirectory.layerFromHost(getAgentDir))));
 
-export type XaiApplicationLayer = ReturnType<typeof makeXaiApplicationLayer>;
-export type XaiApplication = Layer.Success<XaiApplicationLayer>;
-export type XaiRuntimeError = Layer.Error<XaiApplicationLayer>;
+export type XaiApplication = Layer.Success<ReturnType<typeof makeXaiApplicationLayer>>;
+export type XaiRuntimeError = Layer.Error<ReturnType<typeof makeXaiApplicationLayer>>;

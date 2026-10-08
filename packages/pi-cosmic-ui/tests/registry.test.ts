@@ -15,9 +15,9 @@ const text = (id: string, value = id): CosmicFooterTextContribution => ({
 });
 
 /** A registry whose render request runs `onRender` with the registry itself. */
-function registry(onRender: (registry: FooterRegistry) => void = () => undefined, active = true) {
+function registry(onRender: (registry: FooterRegistry) => void = () => undefined) {
   const renders = vi.fn(() => onRender(store));
-  const store = makeFooterRegistry({ requestRender: renders, sessionActive: () => active });
+  const store = makeFooterRegistry({ requestRender: renders, sessionActive: () => true });
   const ids = () => store.snapshot().contributions.map((entry) => entry.id);
   return { store, renders, ids };
 }
@@ -84,7 +84,7 @@ describe("footer registry", () => {
     if (!canonical) throw new Error("Expected a canonical contribution.");
 
     renders.mockClear();
-    store.invalidate();
+    store.upsert("owner", canonical);
     store.upsert("owner", canonical);
     expect(store.snapshot()).toBe(snapshot);
     expect(renders).toHaveBeenCalledTimes(2);
@@ -133,14 +133,14 @@ describe("footer registry", () => {
     expect(ids()).toEqual(["later"]);
   });
 
-  it("bounds a self-perpetuating invalidation and recovers for the next operation", () => {
-    const { store, renders } = registry((current) => current.invalidate());
-    store.invalidate();
+  it("bounds a self-perpetuating render loop and recovers for the next operation", () => {
+    const { store, renders } = registry((current) => current.upsert("owner", text("loop")));
+    store.upsert("owner", text("loop"));
     expect(renders).toHaveBeenCalledTimes(1 + FOOTER_REENTRANT_OPERATION_LIMIT);
 
     renders.mockClear();
     store.remove("missing");
-    store.invalidate();
+    store.upsert("owner", text("loop"));
     expect(renders).toHaveBeenCalledTimes(1 + FOOTER_REENTRANT_OPERATION_LIMIT);
   });
 
@@ -163,7 +163,6 @@ describe("footer registry", () => {
       for (let index = 0; index < count; index++) store.upsert("owner", text(`${prefix}${index}`));
     };
     upsertMany("early", FOOTER_PRE_SESSION_KEY_LIMIT + 2);
-    for (let index = 0; index < FOOTER_PRE_SESSION_KEY_LIMIT; index++) store.invalidate();
     const early = store.snapshot().contributions.map((entry) => entry.id);
     expect(early).toHaveLength(FOOTER_PRE_SESSION_KEY_LIMIT);
     expect(early[0]).toBe("early2");

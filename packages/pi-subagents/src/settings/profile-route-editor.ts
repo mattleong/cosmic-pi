@@ -34,6 +34,16 @@ export type ProfileWorkspaceTarget =
 export const profileWorkspaceScope = (target: ProfileWorkspaceTarget): ProfileSettingsScope =>
   target.kind === "session" ? "session" : target.set.scope;
 
+/** One editing target's identity; saved-set keys always carry their scope. */
+export const profileTargetKey = (target: ProfileWorkspaceTarget): string =>
+  target.kind === "session" ? "session" : `${target.set.scope}:${target.set.name}`;
+
+export const SCOPE_LABELS = {
+  session: "Session",
+  global: "Global",
+  project: "Project",
+} as const satisfies Record<ProfileSettingsScope, string>;
+
 export interface ProfileSettingsInspection extends SubagentConfigInspection {
   readonly session: SessionProfileSnapshot;
 }
@@ -67,15 +77,9 @@ export const runtimeEfforts = (
     : supportedByRuntime;
 };
 
-export const decodedAt = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
-  scope === "global" ? inspection.global : inspection.project;
-
 const profileSetAt = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) => {
-  const decoded = decodedAt(inspection, set.scope);
-  const profileSets = decoded?.file.profileSets;
-  return profileSets && Object.prototype.hasOwnProperty.call(profileSets, set.name)
-    ? profileSets[set.name]
-    : undefined;
+  const profileSets = inspection[set.scope]?.file.profileSets;
+  return profileSets && Object.hasOwn(profileSets, set.name) ? profileSets[set.name] : undefined;
 };
 
 const declaredAt = (
@@ -117,7 +121,7 @@ export const hasOwnProfileRouteDeclaration = (
   profile: ProfileId,
 ): boolean => {
   if (target.kind === "session") return inspection.session.overrides[profile] !== undefined;
-  const decoded = decodedAt(inspection, target.set.scope);
+  const decoded = inspection[target.set.scope];
   if (!decoded) return false;
   return (
     declaredAt(inspection, target.set, profile) !== undefined ||
@@ -137,7 +141,11 @@ export function loadProfileRouteDraft(
       return declared.candidates.length === 0
         ? { kind: "disabled", candidates: [] }
         : { kind: "explicit", candidates: cloneCandidates(declared.candidates) };
-    return inheritSessionDraft(inspection, profile);
+    const { baseline } = inspection.session;
+    return {
+      kind: baseline.profileSources[profile].endsWith("-invalid") ? "invalid" : "inherit",
+      candidates: cloneCandidates(baseline.profiles[profile].candidates),
+    };
   }
   const set = target.set;
   if (scopeRouteInvalid(inspection, set, profile)) return { kind: "invalid", candidates: [] };
@@ -149,16 +157,6 @@ export function loadProfileRouteDraft(
   if (declared === "disabled") return { kind: "disabled", candidates: [] };
   return { kind: "explicit", candidates: normalizeDeclaredProfileRoute(declared).candidates };
 }
-
-export const inheritSessionDraft = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-): ProfileRouteDraft => ({
-  kind: inspection.session.baseline.profileSources[profile].endsWith("-invalid")
-    ? "invalid"
-    : "inherit",
-  candidates: cloneCandidates(inspection.session.baseline.profiles[profile].candidates),
-});
 
 export const disableRouteDraft = (): ProfileRouteDraft => ({ kind: "disabled", candidates: [] });
 
@@ -229,6 +227,13 @@ export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
 export const runtimeLabel = (runtime: SubagentRuntime): string =>
   runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
 
+/** A candidate's place in its route. */
+export const profileRouteOptionLabel = (index: number): string =>
+  index <= 0 ? "Primary" : `Fallback ${index}`;
+
+export const CANDIDATE_LIMIT_ERROR = `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`;
+export const CANDIDATE_LIMIT_REACHED = `The ${MAX_PROFILE_CANDIDATES}-candidate limit has been reached.`;
+
 const candidateIssueMessage = (
   candidate: ProfileCandidate,
   code: ProfileCandidateValidationIssueCode,
@@ -261,8 +266,6 @@ export function updateCandidateControls(
   defaults: CandidateControlDefaults,
 ): CandidateUpdate {
   const notices: string[] = [];
-  if ((patch.host !== undefined && patch.host !== "local") || candidate.host !== "local")
-    return { notices, error: "Unsupported run host." };
   let next: ProfileCandidate = { ...candidate, ...patch };
 
   if (patch.runtime !== undefined && patch.runtime !== candidate.runtime) {
@@ -281,15 +284,13 @@ export function updateCandidateControls(
     if (!issue) return { candidate: next, notices };
     switch (issue.code) {
       case "model_selector_invalid":
-        return { notices, error: candidateIssueMessage(next, issue.code) };
       case "parent_requires_local_pi":
+      case "close_after_report_required":
         return { notices, error: candidateIssueMessage(next, issue.code) };
       case "fork_requires_local_pi":
         next = { ...next, context: "fresh" };
         notices.push("Fork works only with Local Pi. Context changed to Fresh.");
         break;
-      case "close_after_report_required":
-        return { notices, error: candidateIssueMessage(next, issue.code) };
       case "fast_mode_unsupported":
         next = { ...next, openaiFastMode: false };
         notices.push("The selected model does not support fast mode. Fast mode turned off.");
@@ -337,25 +338,16 @@ export type RouteDeclarationResult =
 export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclarationResult {
   if (draft.kind === "reset" || draft.kind === "inherit") return { valid: true };
   if (draft.kind === "disabled") return { valid: true, route: "disabled" };
-  if (
-    draft.kind === "invalid" ||
-    draft.candidates.length === 0 ||
-    draft.candidates.length > MAX_PROFILE_CANDIDATES
-  )
+  if (draft.candidates.length > MAX_PROFILE_CANDIDATES)
+    return { valid: false, error: CANDIDATE_LIMIT_ERROR };
+  if (draft.kind === "invalid" || draft.candidates.length === 0)
     return {
       valid: false,
-      error:
-        draft.candidates.length > MAX_PROFILE_CANDIDATES
-          ? `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`
-          : "This profile won't run until you fix it, disable it, or undo your changes.",
+      error: "This profile won't run until you fix it, disable it, or undo your changes.",
     };
   for (const [index, candidate] of draft.candidates.entries()) {
     const error = candidateValidationError(candidate);
-    if (error)
-      return {
-        valid: false,
-        error: `${index === 0 ? "Primary" : `Fallback ${index}`}: ${error}`,
-      };
+    if (error) return { valid: false, error: `${profileRouteOptionLabel(index)}: ${error}` };
   }
   const candidates = cloneCandidates(draft.candidates);
   return {

@@ -1,27 +1,20 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { registerExtensionCommand } from "pi-cosmic-core";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
+import { HerdrBtwError } from "./errors.ts";
 import { HERDR_BTW_COMMAND, HERDR_BTW_NEW_SUBCOMMAND, type HerdrBtwResult } from "./service.ts";
 
-export interface HerdrBtwCommandHandlers {
-  readonly open: (prompt?: string | undefined) => Promise<HerdrBtwResult>;
-  readonly openNew: (prompt?: string | undefined) => Promise<HerdrBtwResult>;
-}
+type SideSessionRun = (prompt?: string | undefined) => Promise<HerdrBtwResult>;
 
-const successMessage = (result: HerdrBtwResult): string => {
-  switch (result.mode) {
-    case "focused":
-      return "Switched to your BTW side session";
-    case "resumed":
-      return "Reopened your BTW side session";
-    case "created":
-      return "Opened a new BTW side session";
-  }
-};
+const SUCCESS_MESSAGES = {
+  focused: "Switched to your BTW side session",
+  resumed: "Reopened your BTW side session",
+  created: "Opened a new BTW side session",
+} satisfies Record<HerdrBtwResult["mode"], string>;
 
 /** Runs one side-session request from a terminal and reports how it went. */
 const sideSession =
-  (usage: string, run: (prompt?: string | undefined) => Promise<HerdrBtwResult>) =>
+  (usage: string, run: SideSessionRun) =>
   (args: string, ctx: ExtensionCommandContext): Promise<void> => {
     if (ctx.mode !== "tui") {
       notifyHerdrBtw(ctx, `Open Pi in an interactive terminal to use ${usage}`, "warning");
@@ -29,10 +22,11 @@ const sideSession =
     }
     const trimmed = args.trim();
     return run(trimmed || undefined).then(
-      (result) => notifyHerdrBtw(ctx, successMessage(result), "info"),
+      (result) => notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info"),
       (failure) => {
+        // Only workflow failures carry user-facing text; runtime and defect rejections do not.
         const message =
-          failure instanceof Error ? failure.message : "Couldn't open a BTW side session";
+          failure instanceof HerdrBtwError ? failure.message : "Couldn't open a BTW side session";
         notifyHerdrBtw(ctx, message, "error");
       },
     );
@@ -44,7 +38,7 @@ const sideSession =
  */
 export const registerHerdrBtwCommands = (
   pi: ExtensionAPI,
-  handlers: HerdrBtwCommandHandlers,
+  handlers: { readonly open: SideSessionRun; readonly openNew: SideSessionRun },
 ): void => {
   registerExtensionCommand(pi, {
     name: HERDR_BTW_COMMAND,

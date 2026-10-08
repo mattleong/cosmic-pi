@@ -14,7 +14,7 @@ export function benchLog(...args: ReadonlyArray<unknown>): void {
 }
 
 /** One printable benchmark table row: report labels mapped to formatted cells. */
-export type BenchTableRow = Record<string, string | number | boolean | undefined>;
+type BenchTableRow = Record<string, string | number | boolean | undefined>;
 
 /** Synchronous Effect Console bridge for tabular benchmark reporting. */
 export function benchTable(rows: ReadonlyArray<BenchTableRow>): void {
@@ -36,9 +36,9 @@ export type BenchResult = {
   opsPerSec: number;
 };
 
-export const WARMUP_MS = readPositiveNumber("BENCH_WARMUP_MS", 20);
-export const SAMPLE_MS = readPositiveNumber("BENCH_SAMPLE_MS", 80);
-export const SAMPLES = Math.floor(readPositiveNumber("BENCH_SAMPLES", 5));
+const WARMUP_MS = readPositiveNumber("BENCH_WARMUP_MS", 20);
+const SAMPLE_MS = readPositiveNumber("BENCH_SAMPLE_MS", 80);
+const SAMPLES = Math.floor(readPositiveNumber("BENCH_SAMPLES", 5));
 export const VERBOSE = isEnabled("BENCH_VERBOSE");
 
 export function printBenchHeader(name: string): void {
@@ -82,8 +82,8 @@ export function timeOnce(fn: () => void): number {
   return performance.now() - start;
 }
 
-export function printResults(results: BenchResult[], verbose = VERBOSE): void {
-  if (!verbose) {
+export function printResults(results: BenchResult[]): void {
+  if (!VERBOSE) {
     benchLog("Set BENCH_VERBOSE=1 to print the full raw benchmark table.");
     return;
   }
@@ -132,7 +132,7 @@ export function isEnabled(name: string): boolean {
   return /^(?:1|true|yes|on)$/i.test(readBenchEnvironment(name) ?? "");
 }
 
-export function readPositiveNumber(name: string, fallback: number): number {
+function readPositiveNumber(name: string, fallback: number): number {
   const value = Number(readBenchEnvironment(name));
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }

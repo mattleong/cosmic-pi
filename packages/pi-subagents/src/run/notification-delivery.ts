@@ -35,6 +35,10 @@ export interface QuestionNotificationReceipt {
   readonly claimToken: string;
 }
 
+/** Retry backoff: reset after progress or an empty outbox, otherwise doubled up to the cap. */
+const nextRetryDelay = (delayMillis: number, reset: boolean): number =>
+  reset ? COMPLETION_RETRY_INITIAL_MILLIS : Math.min(COMPLETION_RETRY_MAX_MILLIS, delayMillis * 2);
+
 type ActionDeliveryState =
   | { readonly _tag: "Idle" }
   | { readonly _tag: "Retry"; readonly immediate: boolean; readonly delayMillis: number };
@@ -56,41 +60,40 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
   let actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
 
-  const flushPendingCompletions = Effect.suspend(() =>
-    Effect.gen(function* () {
-      yield* Effect.sleep(Duration.millis(completionRetryDelayMillis));
-      yield* withCompletionGate(
-        Effect.gen(function* () {
-          const selected = yield* withLock(
-            Effect.sync(() => {
-              Latch.closeUnsafe(completionWake);
-              return collectCompletionDeliveryBatch(records);
-            }),
-          );
-          if (selected.length === 0) {
-            completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
-            return;
-          }
-          const runs = selected.map((item) => item.notification);
-          const delivery = yield* notify({ type: "completed", runs });
-          yield* withLock(
-            Effect.sync(() => {
-              const acknowledged = acknowledgeCompletionSelections(
-                selected,
-                deliveredCompletionKeys(delivery, runs),
-              );
-              const eligibleRemain = hasEligibleCompletion(records);
-              completionRetryDelayMillis =
-                !eligibleRemain || acknowledged > 0
-                  ? COMPLETION_RETRY_INITIAL_MILLIS
-                  : Math.min(COMPLETION_RETRY_MAX_MILLIS, completionRetryDelayMillis * 2);
-              if (eligibleRemain) Latch.openUnsafe(completionWake);
-            }),
-          );
-        }),
-      );
-    }),
-  );
+  // Effect.gen reruns its body on every execution, so each pass reads the current delay.
+  const flushPendingCompletions = Effect.gen(function* () {
+    yield* Effect.sleep(Duration.millis(completionRetryDelayMillis));
+    yield* withCompletionGate(
+      Effect.gen(function* () {
+        const selected = yield* withLock(
+          Effect.sync(() => {
+            Latch.closeUnsafe(completionWake);
+            return collectCompletionDeliveryBatch(records);
+          }),
+        );
+        if (selected.length === 0) {
+          completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+          return;
+        }
+        const runs = selected.map((item) => item.notification);
+        const delivery = yield* notify({ type: "completed", runs });
+        yield* withLock(
+          Effect.sync(() => {
+            const acknowledged = acknowledgeCompletionSelections(
+              selected,
+              deliveredCompletionKeys(delivery, runs),
+            );
+            const eligibleRemain = hasEligibleCompletion(records);
+            completionRetryDelayMillis = nextRetryDelay(
+              completionRetryDelayMillis,
+              !eligibleRemain || acknowledged > 0,
+            );
+            if (eligibleRemain) Latch.openUnsafe(completionWake);
+          }),
+        );
+      }),
+    );
+  });
 
   const completionWorker = Effect.forever(
     Latch.await(completionWake).pipe(Effect.andThen(flushPendingCompletions)),
@@ -146,10 +149,10 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
                         pendingActionNotifications.delete(notification.id);
                       acknowledged += 1;
                     }
-                    actionRetryDelayMillis =
-                      pendingActionNotifications.size === 0 || acknowledged > 0
-                        ? COMPLETION_RETRY_INITIAL_MILLIS
-                        : Math.min(COMPLETION_RETRY_MAX_MILLIS, actionRetryDelayMillis * 2);
+                    actionRetryDelayMillis = nextRetryDelay(
+                      actionRetryDelayMillis,
+                      pendingActionNotifications.size === 0 || acknowledged > 0,
+                    );
                     if (pendingActionNotifications.size === 0) return { _tag: "Idle" };
                     const immediate = [...pendingActionNotifications.values()].some(
                       (notification) =>

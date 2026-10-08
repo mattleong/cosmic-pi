@@ -5,9 +5,25 @@ import {
   makeClaudeResultCorrelation,
   SENT_UUID_LIMIT,
   uncorrelatedClaudeUserMessage,
-  zeroUsageComponents,
 } from "../src/backend/local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "../src/backend/local-claude-protocol.ts";
+import { zeroUsageComponents } from "../src/backend/local-claude-usage.ts";
+
+type UserEvent = Extract<ClaudeProtocolEvent, { readonly type: "user" }>;
+
+/** A plain replayed top-level user text frame; tests override only the fields they classify. */
+const userEvent = (overrides: Partial<UserEvent>): UserEvent => ({
+  type: "user",
+  text: "",
+  textLength: 0,
+  contentKind: "text",
+  toolResults: [],
+  isSynthetic: false,
+  isReplay: true,
+  isMeta: false,
+  isCompactSummary: false,
+  ...overrides,
+});
 
 describe("local Claude result correlation", () => {
   it("separates internal notifications from externally qualified task deliveries", () => {
@@ -33,19 +49,12 @@ describe("local Claude result correlation", () => {
   });
 
   it("recognizes only complete task-notification replay envelopes, labelled or not", () => {
-    const replay: Extract<ClaudeProtocolEvent, { readonly type: "user" }> = {
-      type: "user",
+    const replay = userEvent({
       text: "<task-notification><status>completed</status></task-notification>",
       textLength: 65,
-      contentKind: "text",
-      toolResults: [],
       uuid: "internal-notification",
       sessionId: "native-session",
-      isSynthetic: false,
-      isReplay: true,
-      isMeta: false,
-      isCompactSummary: false,
-    };
+    });
     const labelled = { ...replay, originKind: "task-notification" };
     expect(claudeTaskNotificationReplay(replay)).toBe("unlabelled");
     expect(claudeTaskNotificationReplay(labelled)).toBe("labelled");
@@ -124,22 +133,15 @@ describe("local Claude result correlation", () => {
   it("emits useful replay classification without message or identity values", () => {
     const secret = "secret-prompt-value";
     const message = uncorrelatedClaudeUserMessage(
-      {
-        type: "user",
+      userEvent({
         text: `<teammate-message>${secret}</teammate-message>`,
         textLength: 57,
-        contentKind: "text",
-        toolResults: [],
         uuid: "secret-uuid",
         sessionId: "secret-session",
         parentToolUseId: "secret-tool",
         originKind: "future-origin",
         originSubkind: "future-subkind",
-        isSynthetic: false,
-        isReplay: true,
-        isMeta: false,
-        isCompactSummary: false,
-      },
+      }),
       "different-native-session",
       {
         sequence: 17,

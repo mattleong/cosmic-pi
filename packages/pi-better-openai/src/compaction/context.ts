@@ -3,49 +3,31 @@ import {
   buildContextEntries,
   buildSessionProjection,
   sessionEntryToContextMessages,
+  type CompactionEntry,
   type ContextWithSystemEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import * as Predicate from "effect/Predicate";
+import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { decodeOpenAICompactionDetails } from "./protocol.ts";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+export const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
-type ComparableJson = Schema.Json;
-
-function ordered(value: ComparableJson): ComparableJson {
-  if (
-    value === null ||
-    Predicate.isString(value) ||
-    Predicate.isNumber(value) ||
-    Predicate.isBoolean(value)
-  )
-    return value;
-  if (Array.isArray(value)) return value.map(ordered);
-  return Object.fromEntries(
-    Object.entries<ComparableJson>(value)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => [key, ordered(item)]),
-  );
-}
+// The round trip drops undefined fields the way the SDK serializes them; Equal ignores key order.
+const asJson = <Value>(value: Value) => decodeJson(encodeJson(value));
 
 export function hasExactPrefix(actual: readonly unknown[], expected: readonly unknown[]): boolean {
   return (
     actual.length >= expected.length &&
-    expected.every(
-      (item, index) =>
-        encode(ordered(decodeJson(encode(item)))) ===
-        encode(ordered(decodeJson(encode(actual[index])))),
-    )
+    expected.every((item, index) => Equal.equals(asJson(item), asJson(actual[index])))
   );
 }
 
-export function latestOwnedCompaction(branch: readonly SessionEntry[]) {
-  const latest = branch.findLast((entry) => entry.type === "compaction");
-  return latest?.type === "compaction" && decodeOpenAICompactionDetails(latest.details)
-    ? latest
-    : undefined;
+/** The latest compaction when it is an owned checkpoint; a later Pi compaction supersedes it. */
+export function latestOwnedCheckpoint(branch: readonly SessionEntry[]) {
+  const entry = branch.findLast((item): item is CompactionEntry => item.type === "compaction");
+  const details = entry && decodeOpenAICompactionDetails(entry.details);
+  return entry && details ? { entry, checkpoint: details.checkpoint } : undefined;
 }
 
 export function isRetryOmittable(entry: SessionEntry): boolean {
@@ -62,11 +44,9 @@ export function retryOmissions(
   observed: readonly string[] = [],
   willRetry = false,
 ): string[] {
-  const checkpoint = latestOwnedCompaction(branch);
-  const checkpointIndex = checkpoint ? branch.indexOf(checkpoint) : -1;
-  const persisted = new Set(
-    checkpoint ? decodeOpenAICompactionDetails(checkpoint.details)?.checkpoint.omittedEntryIds : [],
-  );
+  const owned = latestOwnedCheckpoint(branch);
+  const checkpointIndex = owned ? branch.indexOf(owned.entry) : -1;
+  const persisted = new Set(owned?.checkpoint.omittedEntryIds);
   const requested = new Set(observed);
   if (willRetry) {
     const last = buildContextEntries([...branch]).findLast(
@@ -105,7 +85,7 @@ export function reconstructOpenAIContext(
   branch: readonly SessionEntry[],
   observedOmissions: readonly string[] = [],
 ) {
-  const checkpoint = latestOwnedCompaction(branch);
+  const checkpoint = latestOwnedCheckpoint(branch)?.entry;
   if (!checkpoint) return undefined;
   const checkpointIndex = branch.indexOf(checkpoint);
   if (
@@ -169,7 +149,6 @@ export function reconstructOpenAIContext(
     coverageChanged,
     entries,
     coveredEntries: [...snapshot, ...conversation.filter((entry) => coveredIds.has(entry.id))],
-    nativeMessages: buildSessionProjection([...branch]).messages,
     messages: entries.flatMap(sessionEntryToContextMessages),
   };
 }
@@ -193,7 +172,7 @@ export function repairOpenAIContext(
       if (cursor < messages.length && hasExactPrefix([messages[cursor]], [expected])) cursor++;
       else if (isRetryOmittable(entry)) omitted.add(entry.id);
       else {
-        if (!latestOwnedCompaction(branch)) return undefined;
+        if (!latestOwnedCheckpoint(branch)) return undefined;
         throw new Error("Unable to identify the native session context prefix.");
       }
     }

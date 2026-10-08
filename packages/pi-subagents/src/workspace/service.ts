@@ -35,7 +35,7 @@ export interface WorkspaceServiceContract {
     target: WorkspaceIntegrationTarget,
   ) => Effect.Effect<WorkspaceIntegration, WorkspaceError>;
   readonly revise: (
-    target: WorkspaceSettledTarget & { readonly revisionId?: string },
+    target: WorkspaceSettledTarget,
   ) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
   readonly fork: (
     target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
@@ -51,14 +51,11 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSettledTarget,
     confirm: (discard: Effect.Effect<void, WorkspaceError>) => Effect.Effect<boolean, E>,
   ) => Effect.Effect<boolean, WorkspaceError | E>;
-  readonly recoverDiscard: (
-    target: WorkspaceSettledTarget & { readonly recoveryRiskAccepted: true },
-  ) => Effect.Effect<void, WorkspaceError>;
   readonly inspect: (target: WorkspaceTarget) => Effect.Effect<WorkspaceRecord, WorkspaceError>;
   readonly list: (input: {
     readonly ownerId: string;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
-  readonly listAll: () => Effect.Effect<WorkspaceListing, WorkspaceError>;
+  readonly listAll: Effect.Effect<WorkspaceListing, WorkspaceError>;
 }
 
 export class WorkspaceService extends Context.Service<WorkspaceService, WorkspaceServiceContract>()(
@@ -89,10 +86,9 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
                 confirm(discard.pipe(Effect.provideService(SafeFile, safe))),
               ),
             ),
-          recoverDiscard: (input) => run(engine.recoverDiscard(input)),
           inspect: (input) => run(engine.inspect(input)),
           list: (input) => run(engine.list(input)),
-          listAll: () => run(engine.listAll()),
+          listAll: run(engine.listAll),
         });
       }),
     ).pipe(Layer.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));

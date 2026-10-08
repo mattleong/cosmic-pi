@@ -3,11 +3,11 @@ import {
   activityAttentionLabels,
   activityPlanned,
   activityQueued,
+  addAttention,
   compactNotices,
+  type ActivityAttentionCounts,
 } from "./attention.ts";
-import type { ActivityAttentionCounts } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
-import type { ActivityPhase } from "./protocol.ts";
 
 /**
  * Work in a branch, each source counted once; workflow rows are containers, not work. Planned
@@ -59,12 +59,7 @@ export const addGroupSummaries = (left: GroupSummary, right: GroupSummary): Grou
   awaited: left.awaited + right.awaited,
   planned: left.planned + right.planned,
   unrun: left.unrun + right.unrun,
-  attention: {
-    user: left.attention.user + right.attention.user,
-    parent: left.attention.parent + right.attention.parent,
-    blocked: left.attention.blocked + right.attention.blocked,
-    failed: left.attention.failed + right.attention.failed,
-  },
+  attention: addAttention(left.attention, right.attention),
 });
 
 const plannedSummary = (row: ActivityRow): GroupSummary => ({
@@ -147,23 +142,16 @@ export const workStateLabels = (summary: GroupSummary): string[] => {
 
 export type PhaseState = "pending" | "running" | "done" | "failed" | "stopped" | "skipped";
 /** Phases in each state. */
-export interface PhaseCounts {
-  readonly pending: number;
-  readonly running: number;
-  readonly done: number;
-  readonly failed: number;
-  readonly stopped: number;
-  readonly skipped: number;
-}
+export type PhaseCounts = Readonly<Record<PhaseState, number>>;
 
 /**
  * Settled phases, for history placement only. Done, failed, stopped and skipped phases have all
  * settled; display counts keep them apart, so only done phases count as done.
  */
 export const phaseFinished = (state: PhaseState): boolean =>
-  state === "done" || state === "failed" || state === "stopped" || state === "skipped";
+  state !== "pending" && state !== "running";
 
-export const countPhases = (states: readonly PhaseState[]): PhaseCounts => {
+export const countPhases = (states: readonly PhaseState[]) => {
   const counts = {
     pending: 0,
     running: 0,
@@ -178,45 +166,20 @@ export const countPhases = (states: readonly PhaseState[]): PhaseCounts => {
 
 /**
  * Done phases out of all phases, then stopped and skipped phases, which never count as done.
- * Failed phases show as attention through their members' failure counts instead.
+ * Rows leave failed phases to their members' failure notices; details name them after the done
+ * count when `failed` is set.
  */
-export const phaseCountLabels = (counts: PhaseCounts, total: number, noun: string): string[] => [
+export const phaseCountLabels = (
+  counts: PhaseCounts,
+  total: number,
+  noun: string,
+  failed = false,
+): string[] => [
   `${counts.done}/${total} ${noun}`,
+  ...(failed && counts.failed ? [`${counts.failed} failed`] : []),
   ...(counts.stopped ? [`${counts.stopped} stopped`] : []),
   ...(counts.skipped ? [`${counts.skipped} skipped`] : []),
 ];
-
-/** The work and planned declarations a phase state is derived from. */
-export interface PhaseProgress extends Pick<
-  GroupSummary,
-  "items" | "terminal" | "stopped" | "skipped" | "planned"
-> {
-  readonly failed: number;
-}
-
-/**
- * The producer's own work count when it sends one. Retention, row caps and provider eviction can
- * hide finished members, so visible rows alone would show a phase that ran as skipped. A producer
- * that does not count failures leaves them to the visible members.
- */
-export const phaseProgress = (phase: ActivityPhase, members: GroupSummary): PhaseProgress =>
-  phase.work
-    ? {
-        items: phase.work.items,
-        terminal: phase.work.finished,
-        stopped: phase.work.stopped,
-        skipped: phase.work.skipped ?? 0,
-        failed: phase.work.failed ?? members.attention.failed,
-        planned: members.planned,
-      }
-    : {
-        items: members.items,
-        terminal: members.terminal,
-        stopped: members.stopped,
-        skipped: members.skipped,
-        failed: members.attention.failed,
-        planned: members.planned,
-      };
 
 /** Wall span across started members, not summed effort; queued members have not started. */
 export function workflowMemberSpan(
@@ -250,18 +213,19 @@ export const declaredPlanned = (
 };
 
 /**
- * Derives one phase's state from its progress and the workflow row. `current` is the index of the
- * workflow's current phase. The current phase of a live workflow stays running between its
- * sequential members. Settled work that was all skipped is skipped, work that all stopped or was
- * skipped is stopped, and settled work with any failure is failed, never done. A phase without
- * work that the workflow passed, or ended before reaching, is skipped; while the workflow is live,
- * planned agents keep it pending, since the script can still call them.
+ * Derives one phase's state from its summary, which carries the producer's own counts when it
+ * sends them, and the workflow row. `current` is the index of the workflow's current phase. The
+ * current phase of a live workflow stays running between its sequential members. Settled work
+ * that was all skipped is skipped, work that all stopped or was skipped is stopped, and settled
+ * work with any failure is failed, never done. A phase without work that the workflow passed, or
+ * ended before reaching, is skipped; while the workflow is live, planned agents keep it pending,
+ * since the script can still call them.
  */
 export function phaseState(
   workflow: ActivityRow,
   index: number,
   current: number | undefined,
-  progress: PhaseProgress,
+  progress: GroupSummary,
 ): PhaseState {
   const live = !isFinished(workflow);
   if (progress.terminal < progress.items) return "running";
@@ -269,7 +233,7 @@ export function phaseState(
     if (live && current === index) return "running";
     if (progress.skipped === progress.items) return "skipped";
     if (progress.stopped + progress.skipped === progress.items) return "stopped";
-    return progress.failed > 0 ? "failed" : "done";
+    return progress.attention.failed > 0 ? "failed" : "done";
   }
   if (index === current && live) return "running";
   const passed = current !== undefined && index < current;

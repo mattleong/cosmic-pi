@@ -1,7 +1,6 @@
-import { requiredAt } from "./types";
-
 const ALIGNMENT_SCORE_EPSILON = 1e-9;
 
+/** Pair weight, or `-Infinity` for a pair that may not align. DP cells stay finite and >= 0. */
 type PairScoreAt = (beforeIndex: number, afterIndex: number) => number;
 
 function sameAlignmentScore(a: number, b: number): boolean {
@@ -20,8 +19,7 @@ export function suffixAlignedPairs(
     const rowOffset = i * columns;
     const nextRowOffset = rowOffset + columns;
     for (let j = afterLength - 1; j >= 0; j--) {
-      const pairScore = scoreAt(i, j);
-      const align = Number.isFinite(pairScore) ? dp[nextRowOffset + j + 1]! + pairScore : pairScore;
+      const align = dp[nextRowOffset + j + 1]! + scoreAt(i, j);
       dp[rowOffset + j] = Math.max(align, dp[nextRowOffset + j]!, dp[rowOffset + j + 1]!);
     }
   }
@@ -32,9 +30,7 @@ export function suffixAlignedPairs(
   while (i < beforeLength && j < afterLength) {
     const rowOffset = i * columns;
     const nextRowOffset = rowOffset + columns;
-    const pairScore = scoreAt(i, j);
-    const align = Number.isFinite(pairScore) ? dp[nextRowOffset + j + 1]! + pairScore : pairScore;
-    if (Number.isFinite(pairScore) && sameAlignmentScore(dp[rowOffset + j]!, align)) {
+    if (sameAlignmentScore(dp[rowOffset + j]!, dp[nextRowOffset + j + 1]! + scoreAt(i, j))) {
       pairs.push([i, j]);
       i++;
       j++;
@@ -71,16 +67,10 @@ export function suffixAlignmentScore(
   for (let i = beforeLength - 1; i >= 0; i--) {
     current[afterLength] = 0;
     for (let j = afterLength - 1; j >= 0; j--) {
-      const pairScore = scoreAt(i, j);
-      const match = Number.isFinite(pairScore) ? numericAt(next, j + 1) + pairScore : pairScore;
-      current[j] = Math.max(match, numericAt(next, j), numericAt(current, j + 1));
+      current[j] = Math.max(next[j + 1]! + scoreAt(i, j), next[j]!, current[j + 1]!);
     }
     [next, current] = [current, next];
   }
 
-  return numericAt(next, 0);
-}
-
-function numericAt(values: ArrayLike<number>, index: number): number {
-  return requiredAt(values, index, "alignment cell");
+  return next[0]!;
 }

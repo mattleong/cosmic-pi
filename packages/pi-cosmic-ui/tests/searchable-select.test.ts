@@ -3,45 +3,31 @@ import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { SearchableSelectPage } from "../src/manager/searchable-select.ts";
 
+const choice = (name: string) => {
+  const value = `openai/model-${name}`;
+  return {
+    value,
+    item: { value, label: value, description: `Model ${name}` },
+    searchText: `openai model ${name}`,
+    payload: value,
+  };
+};
+
 const page = (height = 14, notice?: string) => {
-  const select = vi.fn();
-  const baseOptions = {
+  const options = {
     theme: plainTheme,
     breadcrumb: "/profiles › reviewer › Primary › Model",
     title: "Choose model",
     subtitle: "[G] global · Local Pi",
-    choices: [
-      {
-        value: "openai/model-one",
-        item: {
-          value: "openai/model-one",
-          label: "openai/model-one",
-          description: "Model One",
-        },
-        searchText: "openai model one",
-        payload: "openai/model-one",
-      },
-      {
-        value: "openai/model-two",
-        item: {
-          value: "openai/model-two",
-          label: "openai/model-two",
-          description: "Model Two",
-        },
-        searchText: "openai model two",
-        payload: "openai/model-two",
-      },
-    ],
+    choices: [choice("one"), choice("two")],
     current: "openai/model-one",
+    notice,
     getHeight: () => height,
     requestRender: vi.fn(),
-    select,
+    select: vi.fn(),
     cancel: vi.fn(),
   };
-  const component = new SearchableSelectPage<string>(
-    notice ? { ...baseOptions, notice } : baseOptions,
-  );
-  return { component, select, options: baseOptions };
+  return { component: new SearchableSelectPage<string>(options), select: options.select, options };
 };
 
 describe("searchable selector state", () => {
@@ -115,27 +101,18 @@ describe("searchable selector state", () => {
   });
 
   it("keeps disabled rows visible without selecting them", () => {
-    const select = vi.fn();
+    const fixture = page(12);
     const component = new SearchableSelectPage({
-      theme: plainTheme,
-      breadcrumb: "/models",
-      title: "Choose model",
-      subtitle: "",
+      ...fixture.options,
+      current: undefined,
       choices: [
         {
-          value: "disabled",
-          item: { value: "disabled", label: "Disabled model" },
-          searchText: "disabled",
-          payload: "disabled",
+          ...choice("disabled"),
           enabled: false,
           disabledReason: "Unavailable in this runtime",
           disabledHint: "runtime-unavailable-marker",
         },
       ],
-      getHeight: () => 12,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
     });
 
     expect(component.render(80).join("\n")).toContain("runtime-unavailable-marker");
@@ -145,8 +122,23 @@ describe("searchable selector state", () => {
     component.handleInput("disabled");
     component.handleInput("\r");
 
-    expect(select).not.toHaveBeenCalled();
+    expect(fixture.select).not.toHaveBeenCalled();
     expect(component.render(80).join("\n")).toContain("Unavailable in this runtime");
+  });
+
+  it("advertises the configured cancel key and its closing outcome while searching", () => {
+    const fixture = page();
+    const component = new SearchableSelectPage({
+      ...fixture.options,
+      initialSearchMode: true,
+      cancelBehavior: "close",
+      keybindingLabel: (id, fallback) => (id === "tui.select.cancel" ? "C-g" : fallback),
+    });
+    const frame = component.render(120).join("\n");
+    expect(frame).toContain("C-g");
+    // Esc is not bound, and cancelling closes the page rather than leaving search.
+    expect(frame).not.toContain("Esc");
+    expect(frame).not.toContain("Done");
   });
 
   it("keeps zero-height empty and reserves tiny heights for the frame", () => {

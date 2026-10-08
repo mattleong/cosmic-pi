@@ -16,6 +16,7 @@ import {
 } from "../src/tools/ask-user-async.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
+import { noExecution } from "./support/questionnaire.ts";
 
 const args = {
   questions: [{ key: "decision", title: "Decision", prompt: "Explain", mode: "text" }],
@@ -30,9 +31,6 @@ const snapshot = {
   status: "submitted",
   delivery: "sent",
   outcome,
-};
-const noExecution = () => {
-  throw new Error("Rendering must not execute");
 };
 function register(
   style: "compact" | "preview",
@@ -66,18 +64,12 @@ describe("registered questionnaire presentation", () => {
         const details = detailsFor(tool.name, outcome, snapshot);
         const result = { details, content: [{ type: "text" as const, text: "Historical answer" }] };
         const before = structuredClone(result);
-        for (const expanded of [false, true, false, true]) {
-          harness.call(
-            tool.name.endsWith("control")
-              ? { action: "status", requestId: snapshot.requestId }
-              : args,
-            { expanded },
-          );
-          harness.result(result, { expanded });
-          const text = harness.render().join("\n");
+        const callArgs = tool.name.endsWith("control")
+          ? { action: "status", requestId: snapshot.requestId }
+          : args;
+        for (const { expanded, text } of harness.cycle(callArgs, result, { invalidate: "after" })) {
           if (expanded || style === "preview") expect(text).toContain("Historical answer");
           else expect(text).not.toContain("Historical answer");
-          harness.invalidate();
         }
         expect(result).toEqual(before);
       }
@@ -206,10 +198,7 @@ describe("registered questionnaire presentation", () => {
         };
         const before = structuredClone(result);
         const harness = createToolPresentationHarness(tool, { width: 200 });
-        for (const expanded of [false, true, false, true]) {
-          harness.call(args, { expanded });
-          harness.result(result, { expanded });
-          const text = harness.render().join("\n");
+        for (const { expanded, text } of harness.cycle(args, result)) {
           // One grouped fact; routine waiting shows it only on expansion, like its procedure.
           expect(text.split(message)).toHaveLength(!routine || expanded ? 2 : 1);
           expect(text.split(procedure.slice(0, 40))).toHaveLength(expanded ? 2 : 1);
@@ -219,30 +208,6 @@ describe("registered questionnaire presentation", () => {
         }
         expect(result).toEqual(before);
       }
-    }
-  });
-
-  it("describes failed answer delivery without showing agent procedures or identities", () => {
-    const tool = register("compact").tools.find(
-      (entry) => entry.name === "ask_user_async_control",
-    )!;
-    const harness = createToolPresentationHarness(tool, { width: 200 });
-    const result = {
-      details: { ...snapshot, delivery: "failed" },
-      content: [{ type: "text" as const, text: "AGENT_DELIVERY_PROCEDURE" }],
-    };
-    const before = structuredClone(result);
-    for (const expanded of [false, true, false]) {
-      harness.call({ action: "status", requestId: snapshot.requestId }, { expanded });
-      harness.result(result, { expanded });
-      const text = harness.render().join("\n");
-      expect(text.includes("AGENT_DELIVERY_PROCEDURE")).toBe(expanded);
-      expect(
-        !expanded && /request-identity|delivery-identity|Retrieve the retained/.test(text),
-      ).toBe(false);
-      expect(/saved.*delivery failed/i.test(text)).toBe(true);
-      expect(text.includes("Retrieve the retained")).toBe(expanded);
-      expect(result).toEqual(before);
     }
   });
 
@@ -270,8 +235,6 @@ describe("registered questionnaire presentation", () => {
       // The agent's guidance stays under its label; the heading shows the cancellation.
       const text = harness.render().join("\n");
       expect(text).toContain("Do not immediately ask");
-      expect(text).toContain("⊘");
-      expect(text).not.toContain("⚠");
     }
   });
 

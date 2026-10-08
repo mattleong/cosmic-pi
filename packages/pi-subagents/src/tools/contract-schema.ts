@@ -20,9 +20,9 @@ import {
 } from "../run/model.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { MAX_CARD_QUESTION_CHARS, MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
+import { MAX_CARD_QUESTION_CHARS, MAX_FAILURE_CODE_CHARS, NonEmptyText } from "./details-schema.ts";
 import type { ActionFailureDisposition } from "./outcome.ts";
-import type { SubagentLifecycleInput } from "./schema.ts";
+import { AWAIT_UNTIL, type SubagentLifecycleInput } from "./schema.ts";
 
 export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
 export const SUBAGENT_CONTRACT_VERSION = 1;
@@ -41,20 +41,18 @@ const FAILURE_DISPOSITIONS = [
   "failed",
 ] as const satisfies ReadonlyArray<ActionFailureDisposition>;
 
-const text = (maximum: number) =>
-  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 const count = Schema.Number.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0),
   Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
 );
-const RunIdSchema = text(MAX_PROTOCOL_ID_CHARS);
+const RunIdSchema = NonEmptyText(MAX_PROTOCOL_ID_CHARS);
 const RunIdsSchema = Schema.Array(RunIdSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS));
-const NameSchema = text(MAX_NAME_CHARS);
+const NameSchema = NonEmptyText(MAX_NAME_CHARS);
 const ProfileSchema = Schema.Literals(PROFILE_IDS);
 const StateSchema = Schema.Literals(SUBAGENT_RUN_STATES);
 const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
-const UntilSchema = Schema.Literals(["all_finished", "any_finished"]);
+const UntilSchema = Schema.Literals(AWAIT_UNTIL);
 
 const envelope = <Tool extends string>(tool: Tool) => ({
   contract: Schema.Literal(SUBAGENT_CONTRACT_ID),
@@ -63,7 +61,7 @@ const envelope = <Tool extends string>(tool: Tool) => ({
 });
 
 /** Report dispositions that never carry text. Every omission is named; none is silent. */
-export const WITHHELD_REPORT_STATUSES = [
+const WITHHELD_REPORT_STATUSES = [
   /** Finished but not delivered by this call; the report stays unconsumed for later delivery. */
   "deferred",
   /** Another operation owns this generation. */
@@ -80,7 +78,7 @@ const ReportSchema = Schema.Union([
   /** `delivered` consumes this call's owned receipt; `read_back` is opt-in and consumes nothing. */
   Schema.Struct({
     status: Schema.Literals(["delivered", "read_back"]),
-    text: text(MAX_CONTRACT_REPORT_CHARS),
+    text: NonEmptyText(MAX_CONTRACT_REPORT_CHARS),
   }),
   WithheldReportSchema,
 ]);
@@ -91,7 +89,10 @@ const AttentionSchema = Schema.Union([
     kind: Schema.Literals(["containment", "admission-paused", "question-unavailable"]),
   }),
   Schema.Struct({ kind: Schema.Literal("paused"), canResume: Schema.Boolean }),
-  Schema.Struct({ kind: Schema.Literal("question"), message: text(MAX_CONTRACT_QUESTION_CHARS) }),
+  Schema.Struct({
+    kind: Schema.Literal("question"),
+    message: NonEmptyText(MAX_CONTRACT_QUESTION_CHARS),
+  }),
 ]);
 
 const RecoveryFields = {
@@ -102,8 +103,8 @@ const RecoveryFields = {
 
 const FailureSchema = Schema.Struct({
   disposition: Schema.Literals(FAILURE_DISPOSITIONS),
-  code: Schema.optionalKey(text(MAX_FAILURE_CODE_CHARS)),
-  message: text(MAX_CONTRACT_MESSAGE_CHARS),
+  code: Schema.optionalKey(NonEmptyText(MAX_FAILURE_CODE_CHARS)),
+  message: NonEmptyText(MAX_CONTRACT_MESSAGE_CHARS),
 });
 
 const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
@@ -128,10 +129,10 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     warnings: Schema.Array(
       Schema.Struct({
         source: Schema.optionalKey(Schema.Literals(["child", "system"])),
-        message: text(MAX_CONTRACT_MESSAGE_CHARS),
+        message: NonEmptyText(MAX_CONTRACT_MESSAGE_CHARS),
       }),
     ).check(Schema.isMaxLength(2)),
-    error: Schema.optionalKey(text(MAX_CONTRACT_ERROR_CHARS)),
+    error: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_ERROR_CHARS)),
     report,
   });
 
@@ -231,7 +232,6 @@ export type SubagentAwaitContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.a
 export type SubagentStatusContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.status>;
 export type SubagentLifecycleContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.lifecycle>;
 export type ContractRunTarget = typeof RunTargetSchema.Type;
-export type ContractWithheldRunTarget = typeof WithheldRunTargetSchema.Type;
 export type ContractReport = typeof ReportSchema.Type;
 export type ContractWithheldReport = typeof WithheldReportSchema.Type;
 export type ContractAttention = typeof AttentionSchema.Type;
@@ -256,14 +256,13 @@ export const encodeSubagentContract = Schema.encodeSync(
 );
 
 export const isSubagentContractTool = (tool: string): tool is SubagentContractTool =>
-  Object.prototype.hasOwnProperty.call(CONTRACT_SCHEMAS, tool);
+  Object.hasOwn(CONTRACT_SCHEMAS, tool);
 
 /** Strict decode of one tool's contract; any mismatch, excess key, or hostile value is undefined. */
 export const decodeSubagentContract = <Tool extends SubagentContractTool, ValueInput>(
   tool: Tool,
   value: ValueInput,
 ): SubagentContract<Tool> | undefined => {
-  if (!isSubagentContractTool(tool)) return undefined;
   const schema: (typeof CONTRACT_SCHEMAS)[Tool] = CONTRACT_SCHEMAS[tool];
   const decoded = decodeUnknownOrUndefined(schema, value, STRICT_PARSE_OPTIONS);
   return decoded === undefined ? undefined : freezeSnapshot(decoded);

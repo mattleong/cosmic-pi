@@ -3,17 +3,13 @@ import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
+  duplicateRunNames,
   formatRunRouteLine,
   formatSessionActivity,
   formatSessionAge,
   shortRunId,
 } from "../ui/run-presentation.ts";
-import {
-  animatedRunStateGlyph,
-  runStateColor,
-  runStateGlyph,
-  runStateLabel,
-} from "../ui/run-state.ts";
+import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -40,17 +36,17 @@ const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): str
   return routeLines.map((line) => clipToWidth(`${prefix}${line}`, width));
 };
 
-const runUsage = (run: SubagentRunCard): string => aggregateUsage([run], "compact");
-
-interface RunIdentity {
-  readonly plain: string;
-  readonly themed: string;
+/** One run's row parts, each computed once for every layout. */
+interface RunRow {
+  readonly run: SubagentRunCard;
+  readonly identity: { readonly plain: string; readonly themed: string };
+  readonly intent: string;
+  readonly state: string;
+  readonly usage: string;
 }
 
 const renderHierarchyRow = (
-  run: SubagentRunCard,
-  identity: RunIdentity,
-  usage: string,
+  { run, identity, usage }: RunRow,
   width: number,
   theme: Theme,
 ): string => {
@@ -85,27 +81,12 @@ export interface RunHierarchy {
   readonly contextOmitted?: boolean | undefined;
 }
 
-export interface ResponsiveRunRowOptions {
+interface ResponsiveRunRowOptions {
   readonly frame?: number;
   /** Expanded rows show every run ID; collapsed rows only tell same-named runs apart. */
   readonly fullId?: boolean;
   readonly hierarchy?: RunHierarchy | undefined;
 }
-
-/** The ID a row shows: all of it expanded, a short form for a shared name, else none. */
-const rowRunId = (
-  run: SubagentRunCard,
-  fullId: boolean,
-  sharedNames: ReadonlySet<string>,
-): string | undefined =>
-  fullId ? run.id : sharedNames.has(run.name) ? shortRunId(run.id) : undefined;
-
-const sharedRunNames = (runs: ReadonlyArray<SubagentRunCard>): ReadonlySet<string> => {
-  const seen = new Set<string>();
-  const shared = new Set<string>();
-  for (const run of runs) (seen.has(run.name) ? shared : seen).add(run.name);
-  return shared;
-};
 
 export const renderResponsiveRunRows = (
   runs: ReadonlyArray<SubagentRunCard>,
@@ -116,56 +97,52 @@ export const renderResponsiveRunRows = (
   const safeWidth = Math.max(1, width);
   const treeRows = options.hierarchy ? projectRunCardTree(runs) : undefined;
   const displayRuns = treeRows?.map((row) => row.run) ?? runs;
-  const sharedNames = sharedRunNames(displayRuns);
-  const identities = displayRuns.map((run, index): RunIdentity => {
-    const glyph =
-      options.frame === undefined
-        ? runStateGlyph(run.state)
-        : animatedRunStateGlyph(run.state, options.frame);
-    const shownId = rowRunId(run, options.fullId === true, sharedNames);
-    const row = treeRows?.[index];
-    const branch = row ? runTreeBranch(row) : "";
+  const sharedNames = duplicateRunNames(displayRuns);
+  const rows = displayRuns.map((run, index): RunRow => {
+    const glyph = runStateGlyph(run.state, options.frame);
+    // All of the ID expanded, a short form for a shared name, else none.
+    const shownId = options.fullId
+      ? run.id
+      : sharedNames.has(run.name)
+        ? shortRunId(run.id)
+        : undefined;
+    const treeRow = treeRows?.[index];
+    const branch = treeRow ? runTreeBranch(treeRow) : "";
     const awaited = options.hierarchy?.awaitedRunIds?.has(run.id) ? "◎ " : "";
-    const identity = `${branch}${awaited}${glyph} ${sanitizeTerminalLine(run.name)}`;
-    const themedIdentity = theme.fg(runStateColor(run.state), identity);
-    if (shownId === undefined) return { plain: identity, themed: themedIdentity };
-    const id = sanitizeTerminalLine(shownId);
+    const name = `${branch}${awaited}${glyph} ${sanitizeTerminalLine(run.name)}`;
+    const themedName = theme.fg(runStateColor(run.state), name);
+    const id = shownId === undefined ? undefined : sanitizeTerminalLine(shownId);
     return {
-      plain: `${identity} · ${id}`,
-      themed: `${themedIdentity}${theme.fg("dim", " · ")}${theme.fg("muted", id)}`,
+      run,
+      identity:
+        id === undefined
+          ? { plain: name, themed: themedName }
+          : {
+              plain: `${name} · ${id}`,
+              themed: `${themedName}${theme.fg("dim", " · ")}${theme.fg("muted", id)}`,
+            },
+      intent: sanitizeTerminalLine(run.writeIntent),
+      state: sanitizeTerminalLine(
+        [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
+      ),
+      usage: aggregateUsage([run], "compact"),
     };
   });
-  const intents = displayRuns.map((run) => sanitizeTerminalLine(run.writeIntent));
-  const states = displayRuns.map((run) =>
-    sanitizeTerminalLine(
-      [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
-    ),
-  );
-  const usages = displayRuns.map(runUsage);
-  if (treeRows)
-    return displayRuns.map((run, index) =>
-      renderHierarchyRow(
-        run,
-        identities[index] ?? { plain: "", themed: "" },
-        usages[index] ?? "",
-        safeWidth,
-        theme,
-      ),
-    );
+  if (treeRows) return rows.map((row) => renderHierarchyRow(row, safeWidth, theme));
   const routes = displayRuns.map((run) => formatRunRouteLine(run));
-  const intentWidth = intents.reduce((max, intent) => Math.max(max, visibleWidth(intent)), 0);
+  const intentWidth = rows.reduce((max, row) => Math.max(max, visibleWidth(row.intent)), 0);
   const identityWidth = Math.min(
-    Math.max(16, ...identities.map((identity) => visibleWidth(identity.plain))),
+    Math.max(16, ...rows.map((row) => visibleWidth(row.identity.plain))),
     Math.max(16, Math.floor(safeWidth * 0.28)),
   );
   const stateWidth = Math.min(
-    Math.max(14, ...states.map((state) => visibleWidth(state))),
+    Math.max(14, ...rows.map((row) => visibleWidth(row.state))),
     Math.max(14, Math.floor(safeWidth * 0.28)),
   );
-  const hasUsage = usages.some(Boolean);
+  const hasUsage = rows.some((row) => Boolean(row.usage));
   const usageWidth = hasUsage
     ? Math.min(
-        Math.max(...usages.map((usage) => visibleWidth(usage))),
+        Math.max(...rows.map((row) => visibleWidth(row.usage))),
         Math.max(8, Math.floor(safeWidth * 0.18)),
       )
     : 0;
@@ -176,27 +153,23 @@ export const renderResponsiveRunRows = (
     routeWidth >= 12 &&
     routes.every((route) => visibleWidth(route) <= routeWidth)
   )
-    return displayRuns.map((run, index) => {
-      const color = runStateColor(run.state);
-      const identity = clipToWidth(identities[index]?.themed ?? "", identityWidth);
-      const route = formatRunRouteLine(run, theme);
-      const intent = theme.fg(
-        run.writeIntent === "writer" ? "warning" : "muted",
-        intents[index] ?? "",
-      );
-      const usage = theme.fg("muted", clipToWidth(usages[index] ?? "", usageWidth));
-      const state = theme.fg(color, clipToWidth(states[index] ?? "", stateWidth));
+    return rows.map((row) => {
+      const color = runStateColor(row.run.state);
+      const identity = clipToWidth(row.identity.themed, identityWidth);
+      const route = formatRunRouteLine(row.run, theme);
+      const intent = theme.fg(row.run.writeIntent === "writer" ? "warning" : "muted", row.intent);
+      const usage = theme.fg("muted", clipToWidth(row.usage, usageWidth));
+      const state = theme.fg(color, clipToWidth(row.state, stateWidth));
       const usageColumn = hasUsage ? ` · ${padVisible(usage, usageWidth)}` : "";
       return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)}${usageColumn} · ${padVisible(state, stateWidth)}`;
     });
-  return displayRuns.flatMap((run, index) => {
+  return rows.flatMap(({ run, identity, usage }) => {
     const color = runStateColor(run.state);
-    const identity = identities[index] ?? { plain: "", themed: "" };
     const compactStatus = [
       runStateLabel(run.state),
       run.currentTool ? sanitizeTerminalLine(run.currentTool) : undefined,
       run.writeIntent === "writer" ? "writer" : undefined,
-      usages[index],
+      usage,
     ]
       .filter(Boolean)
       .join(" · ");

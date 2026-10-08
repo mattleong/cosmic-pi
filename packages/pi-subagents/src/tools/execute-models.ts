@@ -46,6 +46,7 @@ export const executeModelsAction = (
   Effect.gen(function* () {
     const profileService = yield* SubagentProfileService;
     const snapshot = yield* profileService.capture;
+    const { fallbackProfile } = snapshot.effectiveConfig;
     const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
     const environment = hostProfileEnvironment(pi, ctx);
     const profiles: ReadonlyArray<SubagentProfileView> = ids.flatMap((id) => {
@@ -71,7 +72,7 @@ export const executeModelsAction = (
           id: definition.id,
           description: definition.description,
           source: snapshot.effectiveConfig.profileSources[definition.id],
-          isDefault: definition.id === "generalist",
+          isDefault: definition.id === fallbackProfile,
           defaultContext: definition.defaultContext,
           defaultWriteIntent: definition.defaultWriteIntent,
           ...(definition.defaultEffort !== undefined && {
@@ -85,15 +86,9 @@ export const executeModelsAction = (
       content: [
         {
           type: "text" as const,
-          text: boundToolOutput(
-            formatProfileDiscovery(profiles, snapshot.effectiveConfig.fallbackProfile),
-          ),
+          text: boundToolOutput(formatProfileDiscovery(profiles, fallbackProfile)),
         },
       ],
-      details: makeCompactToolDetails({
-        action: "models",
-        profiles,
-        fallbackProfile: snapshot.effectiveConfig.fallbackProfile,
-      }),
+      details: makeCompactToolDetails({ action: "models", profiles, fallbackProfile }),
     };
   });

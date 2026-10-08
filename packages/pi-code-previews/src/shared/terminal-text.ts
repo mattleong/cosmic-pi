@@ -2,29 +2,12 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const ESCAPE_CODE = 0x1b;
-const CARRIAGE_RETURN_CODE = 0x0d;
 
-/** C0/C1 control code units rendered as the replacement symbol (tab and newline stay). */
-function isReplacedControlCode(code: number): boolean {
-  return (
-    code <= 0x08 ||
-    code === 0x0b ||
-    code === 0x0c ||
-    (code >= 0x0e && code <= 0x1f) ||
-    (code >= 0x7f && code <= 0x9f)
-  );
-}
-
+/** C0/C1 controls render as symbols: ESC and CR keep distinct ones; tab and newline stay. */
 export function escapeControlChars(text: string): string {
-  let out = "";
-  for (let index = 0; index < text.length; index++) {
-    const code = text.charCodeAt(index);
-    if (code === ESCAPE_CODE) out += "␛";
-    else if (code === CARRIAGE_RETURN_CODE) out += "␍";
-    else if (isReplacedControlCode(code)) out += "�";
-    else out += text[index];
-  }
-  return out;
+  return text.replace(/\p{Cc}/gu, (char) =>
+    char === "\t" || char === "\n" ? char : char === "\x1b" ? "␛" : char === "\r" ? "␍" : "�",
+  );
 }
 
 /**

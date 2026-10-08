@@ -1,23 +1,24 @@
-import { Box, Container, Image, type Component } from "@earendil-works/pi-tui";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import {
   animationSchedulerProbe,
   applyPresentationSettings,
-  captureRegistrations,
   createToolPresentationHarness,
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
-import { registerExtensionCommand } from "pi-cosmic-core";
 import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { imageRecordSummary } from "../src/image/compact-summary.ts";
 import { renderImageContent } from "../src/image/presentation.ts";
-import { registerOpenAIImage, registerOpenAIImageMessageRenderer } from "../src/image/register.ts";
 import { imageResultText } from "../src/image/result-text.ts";
+import {
+  countImages,
+  pngPart as image,
+  registerImagePresentation,
+  textPart as text,
+} from "./image-fixtures.ts";
 
 const styles = ["compact", "preview"] as const;
 const backgrounds = ["on", "off", "border"] as const;
-const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 const details = {
   id: "image-identity",
   status: "completed",
@@ -29,7 +30,6 @@ const details = {
   action: "generate" as const,
   outputFormat: "png" as const,
 };
-const text = (value: string) => ({ type: "text" as const, text: value });
 function register(
   style: (typeof styles)[number],
   background: (typeof backgrounds)[number] = "on",
@@ -40,29 +40,8 @@ function register(
     toolCallBackground: background,
     toolCallTiming: false,
   });
-  const { tools, messageRenderers } = captureRegistrations((pi) => {
-    // The application installs the message renderer at factory time, before any session.
-    const noteCwd = registerOpenAIImageMessageRenderer(pi);
-    registerOpenAIImage(
-      pi,
-      registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
-      () => {
-        throw new Error("Rendering must not execute");
-      },
-      () => {
-        throw new Error("Rendering must not update context");
-      },
-      { noteCwd, scheduleAnimation },
-    );
-  });
-  return { tool: tools[0]!, message: messageRenderers.get("openai-image")! };
+  return registerImagePresentation(scheduleAnimation);
 }
-const images = (component: Component): number =>
-  component instanceof Image
-    ? 1
-    : component instanceof Container || component instanceof Box
-      ? component.children.reduce((count, child) => count + images(child), 0)
-      : 0;
 const occurrences = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 /** Rendered rows without padding, blank rows, or trailing space. */
 const rows = (lines: readonly string[]) =>
@@ -165,12 +144,11 @@ describe("registered image presentation", () => {
   it.each(styles)("shows progress without the partial text while running in %s mode", (style) => {
     const harness = createToolPresentationHarness(register(style).tool, { theme, width: 160 });
     const partial = { details: undefined, content: [text("PARTIAL_PROGRESS via model…")] };
-    for (const expanded of [false, true]) {
-      const live = { expanded, executionStarted: true, isPartial: true };
-      harness.call({ prompt: details.prompt }, live);
-      harness.result(partial, live);
-      expect(harness.render().join("\n")).not.toContain("PARTIAL_PROGRESS");
-    }
+    const frames = harness.cycle({ prompt: details.prompt }, partial, {
+      states: [false, true],
+      overrides: () => ({ executionStarted: true, isPartial: true }),
+    });
+    for (const { text } of frames) expect(text).not.toContain("PARTIAL_PROGRESS");
   });
 
   it("does not let raw prose claim structured image metadata", () => {
@@ -201,7 +179,7 @@ describe("registered image presentation", () => {
           { expanded, outputPad: 0 },
           theme,
         )!;
-        expect(images(component)).toBe(1);
+        expect(countImages(component)).toBe(1);
         expect(component.render(160).join("\n").includes("Second raw diagnostic")).toBe(expanded);
       }
     },
@@ -292,7 +270,7 @@ describe("registered image presentation", () => {
             { expanded, outputPad: 0 },
             theme,
           )!;
-          expect(images(component)).toBe(1);
+          expect(countImages(component)).toBe(1);
           const rendered = component.render(160).join("\n");
           expect(rendered.includes(details.revisedPrompt)).toBe(expanded);
         }

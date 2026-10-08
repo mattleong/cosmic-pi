@@ -33,11 +33,9 @@ const exitOf = (child: IpcChildProcess) =>
 export const killChild = (child: IpcChildProcess) =>
   Effect.sync(() => child.kill("SIGKILL")).pipe(Effect.andThen(exitOf(child)));
 
-export interface IpcChildOptions {
+interface IpcChildOptions {
   /** Bounds each `wait` and `exited`. */
   readonly timeout: Duration.Input;
-  /** Replaces the inherited environment when given. */
-  readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
 /** Stderr kept for failure reports; older output is dropped so a chatty child never blocks. */
@@ -58,7 +56,6 @@ export const spawnIpcChild = (
     Effect.sync(() => {
       const child = nodeSpawn(process.execPath, ["--import", "jiti/register", script, ...args], {
         stdio: ["ignore", "ignore", "pipe", "ipc"],
-        ...(options.env && { env: options.env }),
       });
       const messages: IpcMessage[] = [];
       child.on("message", (message) => messages.push(message));

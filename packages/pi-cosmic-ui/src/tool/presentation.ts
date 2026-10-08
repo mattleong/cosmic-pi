@@ -1,10 +1,11 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import {
   managerActivityColor,
   managerActivityGlyph,
+  managerNoticeColor,
   managerNoticeGlyph,
   type ManagerActivityKind,
   type ManagerNoticeKind,
@@ -19,23 +20,20 @@ export const composeToolComponent = (render: (width: number) => string[]): Compo
 export interface ToolHeader {
   readonly title: string;
   readonly subtitle?: string | undefined;
-  readonly maxSubtitleWidth?: number | undefined;
 }
 
-/** Pi-native tool title and optional bounded subtitle. */
+/** Pi-native tool title and optional subtitle, bounded to 160 columns. */
 export const renderToolHeader = (header: ToolHeader, theme: Pick<Theme, "bold" | "fg">): string => {
   const title = theme.fg("toolTitle", theme.bold(sanitizeTerminalLine(header.title)));
   if (!header.subtitle) return title;
-  const subtitle = sanitizeTerminalLine(header.subtitle);
-  const maximum = Math.max(1, header.maxSubtitleWidth ?? 160);
-  const clipped = clipToWidth(subtitle, maximum, "… [truncated]");
+  const clipped = clipToWidth(sanitizeTerminalLine(header.subtitle), 160, "… [truncated]");
   return `${title} ${theme.fg("dim", clipped)}`;
 };
 
-export type ToolStatusKind = ManagerActivityKind | ManagerNoticeKind;
+type ToolStatusKind = ManagerActivityKind | ManagerNoticeKind;
 
-const noticeColor = (kind: ManagerNoticeKind): ThemeColor =>
-  kind === "info" ? "muted" : kind === "success" ? "success" : kind;
+const isNotice = (kind: ToolStatusKind): kind is ManagerNoticeKind =>
+  kind === "info" || kind === "success" || kind === "warning" || kind === "error";
 
 /** Shared glyph/color status row for tool activity and notices. */
 export const toolStatusLine = (
@@ -44,14 +42,9 @@ export const toolStatusLine = (
   text: string,
   frame = 0,
 ): string => {
-  const activity = !(
-    kind === "info" ||
-    kind === "success" ||
-    kind === "warning" ||
-    kind === "error"
-  );
-  const glyph = activity ? managerActivityGlyph(kind, frame) : managerNoticeGlyph(kind);
-  const color = activity ? managerActivityColor(kind) : noticeColor(kind);
+  const [glyph, color]: readonly [string, ThemeColor] = isNotice(kind)
+    ? [managerNoticeGlyph(kind), managerNoticeColor(kind)]
+    : [managerActivityGlyph(kind, frame), managerActivityColor(kind)];
   return theme.fg(color, `${glyph} ${sanitizeTerminalLine(text)}`);
 };
 
@@ -59,30 +52,27 @@ export const toolStatusLine = (
 export const toolRunningLine = (theme: Pick<Theme, "fg">, frame = 0): string =>
   toolStatusLine(theme, "running", "Running…", frame);
 
-export const expandKeyHint = (keys: ReadonlyArray<string>, fallback = "ctrl+o to expand"): string =>
-  keys.length > 0 ? `${keys.map(sanitizeTerminalLine).join("/")} to expand` : fallback;
-
 /** The configured tool-expansion keys, as Pi's own tools show them: "ctrl+o to expand". */
 export const toolExpandHint = (): string => {
-  let keys: ReadonlyArray<string> = [];
-  try {
+  const keys = invokeHostCallback((): ReadonlyArray<string> => {
     const configured: unknown = getKeybindings().getKeys("app.tools.expand");
-    if (Array.isArray(configured))
-      keys = configured
-        .slice(0, 4)
-        .filter((key): key is string => Predicate.isString(key) && key.length <= 32);
-  } catch {
-    keys = [];
-  }
-  return expandKeyHint(keys);
+    return Array.isArray(configured)
+      ? configured
+          .slice(0, 4)
+          .filter((key): key is string => Predicate.isString(key) && key.length <= 32)
+      : [];
+  }, []);
+  return keys.length > 0
+    ? `${keys.map(sanitizeTerminalLine).join("/")} to expand`
+    : "ctrl+o to expand";
 };
 
 export const renderExpansionAffordance = (
   label: string,
   expanded: boolean,
   theme: Pick<Theme, "fg">,
-  hint = toolExpandHint(),
 ): string => {
+  const hint = toolExpandHint();
   const suffix = expanded || !hint ? "" : ` · ${sanitizeTerminalLine(hint)}`;
   return `${theme.fg("accent", expanded ? "▾" : "▸")} ${theme.fg("muted", `${sanitizeTerminalLine(label)}${suffix}`)}`;
 };

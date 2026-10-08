@@ -33,13 +33,13 @@ describe("fleet hierarchy", () => {
   ];
 
   it("scopes rows to the visibility root's descendants and never renders the root itself", () => {
-    const tree = projectFleetTree(runs, "parent", new Set());
+    const tree = projectFleetTree(runs, "parent");
     expect(tree.rows.map((row) => row.run.id)).toEqual(["child", "grandchild"]);
     expect(tree.runs.map((run) => run.id)).toEqual(["child", "grandchild"]);
   });
 
   it("drops runs outside the scoped subtree instead of promoting them to roots", () => {
-    const tree = projectFleetTree(runs, "root", new Set());
+    const tree = projectFleetTree(runs, "root");
     expect(tree.runs.map((run) => run.id)).not.toContain("stray");
     expect(tree.rows.map((row) => row.run.id)).toEqual([
       "parent",
@@ -63,7 +63,6 @@ describe("fleet hierarchy", () => {
         { id: "child", parentRunId: "caller" },
       ],
       "caller",
-      new Set(),
     );
     expect(tree.rows.map((row) => row.run.id)).toEqual(["child"]);
   });

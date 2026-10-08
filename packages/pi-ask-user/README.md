@@ -10,7 +10,6 @@ Structured questionnaires that let the agent ask you for decisions instead of gu
 - **Review before submit**, with unanswered questions highlighted.
 - **Hide and resume** without losing drafts, from `/ask-user` or the Cosmic UI Activity view.
 - **Subagent questions** from local Pi children appear in the root session under the agent that asked.
-- **Private forms** for other local extensions through `pi-ask-user/protocol`.
 
 ## Install
 
@@ -61,6 +60,6 @@ Pi's external-editor binding edits long answers and notes outside the dialog.
 
 ## How it works
 
-Every questionnaire, async request, child question, and extension form shares one FIFO queue, so only one dialog is shown at a time. Async answers reach the agent as a steering message, or go straight to a caller that is already awaiting them. RPC sessions fall back to Pi's native `select` and `input` dialogs; JSON and print modes don't register the tools. The extension makes no model calls and stores answers only in Pi's session history.
+Every questionnaire, async request, and child question shares one FIFO queue, so only one dialog is shown at a time. Async answers reach the agent as a steering message, or go straight to a caller that is already awaiting them. RPC sessions fall back to Pi's native `select` and `input` dialogs; JSON and print modes don't register the tools. The extension makes no model calls and stores answers only in Pi's session history.
 
-See [docs/reference.md](docs/reference.md) for the full tool contract, limits, delivery semantics, and forms protocol, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.
+See [docs/reference.md](docs/reference.md) for the full tool contract, limits, and delivery semantics, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

@@ -10,7 +10,7 @@ Shared Effect v4 foundations for the Cosmic Pi extensions. It's a library, not a
 - **Coordination:** single-flight refresh, subscription polling, and per-file serialization across independent runtimes.
 - **Host edges:** the shared `/<extension>` command registrar, settings argument parsing, session capture helpers, and Pi tool output schemas.
 - **Security:** secret-safe tagged errors, redaction, and terminal sanitization.
-- **Test kit:** `pi-cosmic-core/testing` with in-memory documents, fake HTTP layers, lifecycle probes, Pi host fixtures, and a real-process IPC harness.
+- **Test kit:** `pi-cosmic-core/testing` with in-memory documents, fake HTTP layers, lifecycle probes, Pi host fixtures and a recording extension host, and a real-process IPC harness; `pi-cosmic-core/testing/sdk` runs real Pi SDK sessions with faux inference.
 
 ## Install
 

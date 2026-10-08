@@ -8,32 +8,25 @@ import * as TestClock from "effect/testing/TestClock";
 import { SubagentBackendRegistry, makeSubagentBackendRegistry } from "../../src/backend/service.ts";
 import { processError } from "../../src/run/errors.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { getFailedStartRecovery } from "../../src/run/launch.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
   fakeNativeReportBackendLayer,
+  inputDeliveryFrame,
   nativeReportServiceFixture,
   nativeReportRequest,
   request,
   localServiceFixture,
+  reviewerContinuation,
   withService,
   awaitRuns,
 } from "./fixtures/service-harness.ts";
-import { profileCandidate } from "../fixtures/profiles.ts";
 
-const continuation = (
-  selectedCandidateIndex: number,
-  skippedCandidates: ProfileRouteContinuation["skippedCandidates"] = [],
-): ProfileRouteContinuation => ({
-  profile: "reviewer",
-  routeSource: "global",
-  candidates: [profileCandidate("openai-codex/gpt-5.6-sol"), profileCandidate("parent")],
-  selectedCandidateIndex,
-  skippedCandidates,
-});
+/** A native reviewer on its first route candidate. */
+const reviewerNative = () =>
+  nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerContinuation(0) });
 
 /** A child fake whose first prompt the backend rejects. */
 const rejectedPrompt = (extra: Parameters<typeof fakeChildLayer>[1] = {}) =>
@@ -50,7 +43,7 @@ const startFailedReviewer = (
 ) =>
   Effect.gen(function* () {
     const run = yield* service.start(
-      request({ profile: "reviewer", routeContinuation: continuation(0), ...overrides }),
+      request({ profile: "reviewer", routeContinuation: reviewerContinuation(0), ...overrides }),
     );
     fake.controls[0]?.exit(1);
     yield* yieldUntil(() => fake.controls[0]?.released() === 1);
@@ -101,20 +94,9 @@ describe("explicit profile-route retry", () => {
           layer: registry,
         });
         return withService(layer, function* (service) {
-          const run = yield* service.start(
-            nativeReportRequest({
-              closeOnReport: true,
-              profile: "reviewer",
-              routeContinuation: continuation(0),
-            }),
-          );
+          const run = yield* service.start(reviewerNative());
           const control = backend.controls[0]!;
-          control.offer({
-            type: "input_delivery",
-            assignmentEpoch: 1,
-            sequence: 1,
-            state: "pending",
-          });
+          control.offer(inputDeliveryFrame(1, 1, "pending"));
           yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "pending");
           const failure = processError(
             "steer",
@@ -160,13 +142,7 @@ describe("explicit profile-route retry", () => {
     () => {
       const { backend, layer, projections } = nativeReportServiceFixture();
       return withService(layer, function* (service) {
-        const run = yield* service.start(
-          nativeReportRequest({
-            closeOnReport: true,
-            profile: "reviewer",
-            routeContinuation: continuation(0),
-          }),
-        );
+        const run = yield* service.start(reviewerNative());
         backend.controls[0]!.offer({
           type: "exit",
           exitCode: null,
@@ -186,6 +162,13 @@ describe("explicit profile-route retry", () => {
         expect(yield* Effect.flip(service.claimRetryContinuation(run.id))).toMatchObject({
           code: "retry_outcome_uncertain",
         });
+        const observed = yield* service.withStatusObservations([run.id], ({ observations }) =>
+          Effect.succeed(observations[0]),
+        );
+        expect(observed?.recovery).toMatchObject({
+          retryDisposition: "blocked",
+          hasRemainingCandidate: true,
+        });
       });
     },
   );
@@ -193,21 +176,10 @@ describe("explicit profile-route retry", () => {
   it.effect("resolved transient steering does not poison assignment retry eligibility", () => {
     const { backend, layer, projections } = nativeReportServiceFixture();
     return withService(layer, function* (service) {
-      const run = yield* service.start(
-        nativeReportRequest({
-          closeOnReport: true,
-          profile: "reviewer",
-          routeContinuation: continuation(0),
-        }),
-      );
+      const run = yield* service.start(reviewerNative());
       const control = backend.controls[0]!;
-      control.offer({ type: "input_delivery", assignmentEpoch: 1, sequence: 1, state: "pending" });
-      control.offer({
-        type: "input_delivery",
-        assignmentEpoch: 1,
-        sequence: 1,
-        state: "confirmed",
-      });
+      control.offer(inputDeliveryFrame(1, 1, "pending"));
+      control.offer(inputDeliveryFrame(1, 1, "confirmed"));
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
       control.offer({
         type: "backend_failure",
@@ -231,7 +203,7 @@ describe("explicit profile-route retry", () => {
     );
     return withService(layer, function* (service) {
       const failed = yield* service.start(
-        request({ profile: "reviewer", routeContinuation: continuation(0) }),
+        request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
       );
       fake.controls[0]!.exit(1);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
@@ -239,7 +211,7 @@ describe("explicit profile-route retry", () => {
       const waiting = yield* service
         .startRetrySessionOwned(
           {
-            ...request({ profile: "reviewer", routeContinuation: continuation(1) }),
+            ...request({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
             supersedes: { runId: failed.id, claimToken: claim.claimToken },
           },
           () => {
@@ -273,7 +245,7 @@ describe("explicit profile-route retry", () => {
         return withService(layer, function* (service) {
           const admitted = request({
             profile: "reviewer",
-            routeContinuation: continuation(eligible ? 0 : 1),
+            routeContinuation: reviewerContinuation(eligible ? 0 : 1),
           });
           const failure = yield* (
             eligible ? service.startSessionOwned(admitted) : service.start(admitted)
@@ -312,7 +284,7 @@ describe("explicit profile-route retry", () => {
     return withService(layer, function* (service) {
       const completed = yield* Deferred.make<void>();
       const starting = yield* service
-        .start(request({ profile: "reviewer", routeContinuation: continuation(0) }))
+        .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
         .pipe(
           Effect.flip,
           Effect.tap(() => Deferred.succeed(completed, undefined)),
@@ -339,13 +311,10 @@ describe("explicit profile-route retry", () => {
       const failedRun = yield* service.start(
         request({
           profile: "reviewer",
-          routeContinuation: continuation(0),
+          routeContinuation: reviewerContinuation(0),
           selection: {
             source: "profile-candidate",
             routeSource: "global",
-            host: "local",
-            runtime: "pi",
-            closeOnReport: true,
             candidateIndex: 0,
             reason: "Profile reviewer selected candidate 1.",
             skippedCandidates: [],
@@ -383,7 +352,7 @@ describe("explicit profile-route retry", () => {
           name: failedRun.name,
           task: failedRun.task,
           profile: "reviewer",
-          routeContinuation: continuation(1, [
+          routeContinuation: reviewerContinuation(1, [
             {
               candidateIndex: 0,
               candidate: "local/pi/openai-codex/gpt-5.6-sol",
@@ -394,9 +363,6 @@ describe("explicit profile-route retry", () => {
           selection: {
             source: "profile-parent-candidate",
             routeSource: "global",
-            host: "local",
-            runtime: "pi",
-            closeOnReport: true,
             candidateIndex: 1,
             reason: `Profile reviewer continued failed run ${failedRun.id} with candidate 2.`,
             skippedCandidates: [],
@@ -427,7 +393,7 @@ describe("explicit profile-route retry", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const failedRun = yield* service.start(
-        request({ profile: "reviewer", routeContinuation: continuation(0) }),
+        request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
       );
       const cleanupGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateRelease(cleanupGate);
@@ -473,7 +439,7 @@ describe("explicit profile-route retry", () => {
       yield* service.releaseRetryClaim(failedRun.id, claim.claimToken);
       const stale = yield* service
         .startRetrySessionOwned({
-          ...request({ routeContinuation: continuation(1) }),
+          ...request({ routeContinuation: reviewerContinuation(1) }),
           supersedes: { runId: failedRun.id, claimToken: claim.claimToken },
         })
         .pipe(Effect.flip);
@@ -493,7 +459,7 @@ describe("explicit profile-route retry", () => {
     );
     return withService(layer, function* (service) {
       const failure = yield* service
-        .start(request({ profile: "reviewer", routeContinuation: continuation(0) }))
+        .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
         .pipe(Effect.flip);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       const failedRun = (yield* service.list)[0]!;
@@ -512,7 +478,7 @@ describe("explicit profile-route retry", () => {
     const { layer } = localServiceFixture({}, rejectedPrompt({ releaseDefect: true }));
     return withService(layer, function* (service) {
       const failure = yield* service
-        .start(request({ profile: "reviewer", routeContinuation: continuation(0) }))
+        .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
         .pipe(Effect.flip);
       const recovery = getFailedStartRecovery(failure);
       expect(recovery).toMatchObject({
@@ -548,7 +514,7 @@ describe("explicit profile-route retry", () => {
             profile: "worker",
             writeIntent: "writer",
             writes: ["src/retry-owner.ts"],
-            routeContinuation: continuation(0),
+            routeContinuation: reviewerContinuation(0),
           }),
         )
         .pipe(Effect.flip);

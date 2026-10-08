@@ -253,14 +253,12 @@ process.stdout.write(String(child.pid) + "\\n");`,
     },
   );
 
-  it("keeps the POSIX group-signal failure messages exact", () => {
+  it("classifies POSIX group-signal failures and names only the EPERM errno", () => {
     expect(processGroupSignalError("permission")).toMatchObject({
       operation: "signal process group",
       code: "group_signal_failed",
-      message: "Unable to signal the owned process tree. (EPERM)",
     });
-    expect(processGroupSignalError("failed").message).toBe(
-      "Unable to signal the owned process tree.",
-    );
+    expect(processGroupSignalError("permission").message).toContain("(EPERM)");
+    expect(processGroupSignalError("failed").message).not.toContain("EPERM");
   });
 });

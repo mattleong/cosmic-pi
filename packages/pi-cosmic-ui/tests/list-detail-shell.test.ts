@@ -15,6 +15,14 @@ const lines = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => `L${index + 1}`);
 const ids = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => `row-${index}`);
+/** A wide shell with the detail pane focused on the first row. */
+const detailShell = (rows = ["a"]): ListDetailShell => {
+  const shell = new ListDetailShell();
+  shell.syncLayout(120);
+  shell.select(0, rows);
+  shell.enterPane();
+  return shell;
+};
 
 describe("ListDetailShell selection", () => {
   it("keeps the selected identity across reorder and clamps out-of-range targets", () => {
@@ -42,10 +50,7 @@ describe("ListDetailShell selection", () => {
   });
 
   it("resets the detail scroll only when the row identity changes", () => {
-    const shell = new ListDetailShell();
-    shell.syncLayout(120);
-    shell.select(0, ["a", "b"]);
-    shell.enterPane();
+    const shell = detailShell(["a", "b"]);
     shell.detailWindow(lines(30), 11);
     shell.applyMotion("half-page-up", { rowCount: 2, hasSelection: true });
     expect(shell.state.detailScroll).toBe(5);
@@ -59,10 +64,7 @@ describe("ListDetailShell selection", () => {
 
 describe("ListDetailShell motions", () => {
   it("returns Esc from the detail pane to the list and closes from the list; q always closes", () => {
-    const shell = new ListDetailShell();
-    shell.syncLayout(120);
-    shell.select(0, ["a"]);
-    shell.enterPane();
+    const shell = detailShell();
     expect(shell.state.pane).toBe("detail");
 
     expect(shell.applyMotion("cancel", { rowCount: 1, hasSelection: true })._tag).toBe("Update");
@@ -103,10 +105,7 @@ describe("ListDetailShell motions", () => {
   });
 
   it("scrolls the focused detail pane by its own page size and reports scrolledDetail", () => {
-    const shell = new ListDetailShell();
-    shell.syncLayout(120);
-    shell.select(0, ["a"]);
-    shell.enterPane();
+    const shell = detailShell();
     shell.visibleWindow(50, 18);
     shell.detailWindow(lines(30), 11);
 
@@ -133,10 +132,7 @@ describe("ListDetailShell motions", () => {
   });
 
   it("cannot scroll after the detail window bookkeeping was reset", () => {
-    const shell = new ListDetailShell();
-    shell.syncLayout(120);
-    shell.select(0, ["a"]);
-    shell.enterPane();
+    const shell = detailShell();
     shell.detailWindow(lines(30), 6);
     shell.resetDetailWindow();
     expect(shell.applyMotion("up", { rowCount: 1, hasSelection: true })).toMatchObject({

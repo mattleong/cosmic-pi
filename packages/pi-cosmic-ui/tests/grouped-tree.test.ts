@@ -10,7 +10,7 @@ import {
 import { retainActivity, type ActivityRow } from "../src/activity/model.ts";
 import { activityRow, memberRow, withStatus, workflowRow } from "./support/activity.ts";
 
-const checklist = { hideHistory: true, retainPhaseHistory: true } as const;
+const checklist = { hideHistory: true } as const;
 const root = (tree: readonly GroupedActivityRow[]) =>
   tree.find((entry) => entry.type === "workflow")!;
 const phases = (tree: readonly GroupedActivityRow[]) =>
@@ -308,10 +308,6 @@ describe("grouped activity projection", () => {
       phaseCounts: { done: 1 },
       summary: { items: 2, terminal: 1 },
     });
-    const withoutChecklist = groupedActivityTree([workflow, mapped, reviewing], {
-      hideHistory: true,
-    });
-    expect(phases(withoutChecklist).map((entry) => entry.title)).toEqual(["Review", "Ship"]);
   });
   it("counts queued placeholders separately from started work", () => {
     const workflow = workflowRow("workflow", ["Find"], "running", "Find");

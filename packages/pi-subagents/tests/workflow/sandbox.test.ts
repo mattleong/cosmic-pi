@@ -2,6 +2,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
+import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "@effect/vitest";
 import {
   runWorkflowSandbox,
@@ -24,17 +25,20 @@ const host = (overrides: Partial<WorkflowSandboxHost<never>> = {}): WorkflowSand
   ...overrides,
 });
 
+/** Runs a script in a scope of its own, against {@link host} with `overrides`. */
+const execute = (
+  body: string,
+  overrides: Partial<WorkflowSandboxHost<never>> = {},
+  { args = null, abort = Effect.never }: { args?: Schema.Json; abort?: Effect.Effect<void> } = {},
+) => Effect.scoped(runWorkflowSandbox(body, args, host(overrides), abort, undefined));
+
 describe("workflow sandbox boundary", () => {
   it.live("returns the script value and its text output", () =>
     Effect.gen(function* () {
-      const outcome = yield* Effect.scoped(
-        runWorkflowSandbox(
-          "console.log('hi'); return { got: await agent('x'), args };",
-          { n: 1 },
-          host(),
-          Effect.never,
-          undefined,
-        ),
+      const outcome = yield* execute(
+        "console.log('hi'); return { got: await agent('x'), args };",
+        {},
+        { args: { n: 1 } },
       );
       expect(outcome).toEqual({
         _tag: "Completed",
@@ -46,9 +50,7 @@ describe("workflow sandbox boundary", () => {
 
   it.live("reports script failures with their message", () =>
     Effect.gen(function* () {
-      const outcome = yield* Effect.scoped(
-        runWorkflowSandbox("await workflow('x');", null, host(), Effect.never, undefined),
-      );
+      const outcome = yield* execute("await workflow('x');");
       expect(outcome).toMatchObject({
         _tag: "Failed",
         kind: "script",
@@ -59,14 +61,8 @@ describe("workflow sandbox boundary", () => {
 
   it.live("reports a failure's stack in script lines, without the prelude's frames", () =>
     Effect.gen(function* () {
-      const outcome = yield* Effect.scoped(
-        runWorkflowSandbox(
-          "const a = 1;\nconst read = (value) => value.missing.deeper;\nread(null);",
-          null,
-          host(),
-          Effect.never,
-          undefined,
-        ),
+      const outcome = yield* execute(
+        "const a = 1;\nconst read = (value) => value.missing.deeper;\nread(null);",
       );
       expect(outcome._tag).toBe("Failed");
       const stack = outcome._tag === "Failed" ? (outcome.failure.stack ?? "") : "";
@@ -94,23 +90,15 @@ describe("workflow sandbox boundary", () => {
       const started = yield* Deferred.make<void>();
       const finalized = yield* Ref.make(false);
       const fiber = yield* Effect.forkChild(
-        Effect.scoped(
-          runWorkflowSandbox(
-            "return await agent('long');",
-            null,
-            host({
-              agent: () =>
-                Deferred.succeed(started, undefined).pipe(
-                  Effect.andThen(Effect.never),
-                  Effect.ensuring(
-                    Effect.sleep("20 millis").pipe(Effect.andThen(Ref.set(finalized, true))),
-                  ),
-                ),
-            }),
-            Effect.never,
-            undefined,
-          ),
-        ),
+        execute("return await agent('long');", {
+          agent: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(
+                Effect.sleep("20 millis").pipe(Effect.andThen(Ref.set(finalized, true))),
+              ),
+            ),
+        }),
       );
       yield* Deferred.await(started);
       yield* Fiber.interrupt(fiber);
@@ -123,16 +111,10 @@ describe("workflow sandbox boundary", () => {
       const started = yield* Deferred.make<void>();
       const stop = yield* Deferred.make<void>();
       const fiber = yield* Effect.forkChild(
-        Effect.scoped(
-          runWorkflowSandbox(
-            "console.log('before the agent'); return await agent('long');",
-            null,
-            host({
-              agent: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-            }),
-            Deferred.await(stop),
-            undefined,
-          ),
+        execute(
+          "console.log('before the agent'); return await agent('long');",
+          { agent: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)) },
+          { abort: Deferred.await(stop) },
         ),
       );
       yield* Deferred.await(started);
@@ -148,18 +130,10 @@ describe("workflow sandbox boundary", () => {
   it.live("interrupts host calls the script left running when it returns", () =>
     Effect.gen(function* () {
       const interrupted = yield* Deferred.make<void>();
-      const outcome = yield* Effect.scoped(
-        runWorkflowSandbox(
-          "agent('forgotten'); return 'early';",
-          null,
-          host({
-            agent: () =>
-              Effect.never.pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined))),
-          }),
-          Effect.never,
-          undefined,
-        ),
-      );
+      const outcome = yield* execute("agent('forgotten'); return 'early';", {
+        agent: () =>
+          Effect.never.pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined))),
+      });
       expect(outcome).toMatchObject({ _tag: "Completed", value: "early" });
       yield* Deferred.await(interrupted).pipe(Effect.timeout("2 seconds"));
     }),

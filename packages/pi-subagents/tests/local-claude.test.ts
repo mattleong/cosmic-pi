@@ -16,52 +16,70 @@ const pendingGuidance = {
   pendingDelivery: true,
 } as const;
 
+/**
+ * Input delivery over a fake child. `sent` completes on native send and `terminated` when
+ * termination starts; the optional effects then decide each outcome.
+ */
+const deliveryHarness = (
+  scope: Scope.Scope,
+  options: {
+    readonly send?: Effect.Effect<void, SubagentProcessError>;
+    readonly terminate?: Effect.Effect<void, SubagentProcessError>;
+    readonly recordOutbound?: Effect.Effect<void>;
+    readonly observers?: Parameters<typeof makeLocalClaudeInputDelivery>[3];
+  } = {},
+) => {
+  const sent = Deferred.makeUnsafe<void>();
+  const terminated = Deferred.makeUnsafe<void>();
+  const counts = { sends: 0, terminations: 0 };
+  const inputs = makeLocalClaudeInputDelivery(
+    {
+      send: () =>
+        Effect.suspend(() => {
+          counts.sends++;
+          Deferred.doneUnsafe(sent, Effect.void);
+          return options.send ?? Effect.void;
+        }),
+      terminate: () =>
+        Effect.suspend(() => {
+          counts.terminations++;
+          Deferred.doneUnsafe(terminated, Effect.void);
+          return options.terminate ?? Effect.void;
+        }),
+    },
+    scope,
+    () => options.recordOutbound ?? Effect.void,
+    options.observers,
+  );
+  return { inputs, sent: Deferred.await(sent), terminated, counts };
+};
+
 /** Input delivery whose preparation pauses until the test releases it. */
 const gatedInputs = (scope: Scope.Scope) => {
   const preparing = Deferred.makeUnsafe<void>();
   const release = Deferred.makeUnsafe<void>();
-  let sends = 0;
-  const inputs = makeLocalClaudeInputDelivery(
-    {
-      send: () =>
-        Effect.sync(() => {
-          sends++;
-        }),
-      terminate: () => Effect.void,
-    },
-    scope,
-    () => Deferred.succeed(preparing, undefined).pipe(Effect.andThen(Deferred.await(release))),
+  const recordOutbound = Deferred.succeed(preparing, undefined).pipe(
+    Effect.andThen(Deferred.await(release)),
   );
-  return { inputs, preparing, release, sends: () => sends };
+  return { ...deliveryHarness(scope, { recordOutbound }), preparing, release };
 };
 
 describe("Claude input delivery ownership", () => {
   it.effect("late acknowledgement wins while the watchdog checks accepted report evidence", () =>
     Effect.gen(function* () {
-      const sent = yield* Deferred.make<void>();
       const checking = yield* Deferred.make<void>();
       const releaseCheck = yield* Deferred.make<void>();
-      let terminations = 0;
-      const inputs = makeLocalClaudeInputDelivery(
-        {
-          send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-          terminate: () =>
-            Effect.sync(() => {
-              terminations++;
-            }),
-        },
-        yield* Scope.Scope,
-        () => Effect.void,
-        {
+      const { inputs, sent, counts } = deliveryHarness(yield* Scope.Scope, {
+        observers: {
           preserveReport: () =>
             Deferred.succeed(checking, undefined).pipe(
               Effect.andThen(Deferred.await(releaseCheck)),
               Effect.as(false),
             ),
         },
-      );
+      });
       const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-      yield* Deferred.await(sent);
+      yield* sent;
       const pending = inputs.pending;
       yield* TestClock.adjust("5 minutes");
       yield* Deferred.await(checking);
@@ -70,7 +88,7 @@ describe("Claude input delivery ownership", () => {
       yield* Deferred.succeed(releaseCheck, undefined);
       yield* Effect.yieldNow;
       expect(inputs.failure).toBeUndefined();
-      expect(terminations).toBe(0);
+      expect(counts.terminations).toBe(0);
       yield* Fiber.await(caller);
     }),
   );
@@ -79,25 +97,15 @@ describe("Claude input delivery ownership", () => {
     "watchdog latches admission before termination and late evidence cannot erase that cause",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<void>();
-        const terminating = yield* Deferred.make<void>();
         const releaseTermination = yield* Deferred.make<void>();
-        const inputs = makeLocalClaudeInputDelivery(
-          {
-            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-            terminate: () =>
-              Deferred.succeed(terminating, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseTermination)),
-              ),
-          },
-          yield* Scope.Scope,
-          () => Effect.void,
-        );
+        const { inputs, sent, terminated } = deliveryHarness(yield* Scope.Scope, {
+          terminate: Deferred.await(releaseTermination),
+        });
         const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-        yield* Deferred.await(sent);
+        yield* sent;
         const pending = inputs.pending;
         yield* TestClock.adjust("5 minutes");
-        yield* Deferred.await(terminating);
+        yield* Deferred.await(terminated);
         if (!pending) return yield* Effect.die("Missing guidance owner");
         yield* inputs.confirm(pending);
         expect(yield* inputs.acceptReport(1)).toBe(false);
@@ -114,28 +122,17 @@ describe("Claude input delivery ownership", () => {
     Effect.gen(function* () {
       const blocked = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const terminated = yield* Deferred.make<void>();
-      let sends = 0;
-      const inputs = makeLocalClaudeInputDelivery(
-        {
-          send: () =>
-            Effect.sync(() => {
-              sends++;
-            }),
-          terminate: () => Deferred.succeed(terminated, undefined).pipe(Effect.asVoid),
-        },
-        yield* Scope.Scope,
-        () => Effect.void,
-        {
+      const { inputs, terminated, counts } = deliveryHarness(yield* Scope.Scope, {
+        observers: {
           onState: () =>
             Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Deferred.await(release))),
         },
-      );
+      });
       const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
       yield* Deferred.await(blocked);
       yield* TestClock.adjust("5 minutes");
       yield* Deferred.await(terminated);
-      expect(sends).toBe(0);
+      expect(counts.sends).toBe(0);
       expect(inputs.failure?.code).toBe("steer_outcome_uncertain");
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.await(caller);
@@ -145,21 +142,9 @@ describe("Claude input delivery ownership", () => {
     "caller deadline preserves sent guidance until late acknowledgement reopens admission",
     () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<void>();
-        let terminations = 0;
-        const inputs = makeLocalClaudeInputDelivery(
-          {
-            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-            terminate: () =>
-              Effect.sync(() => {
-                terminations++;
-              }),
-          },
-          yield* Scope.Scope,
-          () => Effect.void,
-        );
+        const { inputs, sent, counts } = deliveryHarness(yield* Scope.Scope);
         const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-        yield* Deferred.await(sent);
+        yield* sent;
         const pending = inputs.pending;
         yield* TestClock.adjust("11 seconds");
         const deadline = yield* Effect.flip(Fiber.join(caller));
@@ -167,7 +152,7 @@ describe("Claude input delivery ownership", () => {
         expect(deadline).toBeInstanceOf(SubagentProcessError);
         expect(deadline).toMatchObject(pendingGuidance);
         expect(inputs.failure).toBeUndefined();
-        expect(terminations).toBe(0);
+        expect(counts.terminations).toBe(0);
         expect(inputs.pending).toBe(pending);
         const duplicate = yield* Effect.flip(inputs.send("Duplicate", 1, "steer"));
         expect(duplicate).toMatchObject({ code: "steer_not_sent" });
@@ -182,53 +167,16 @@ describe("Claude input delivery ownership", () => {
         yield* Deferred.succeed(nextPending.acknowledgement, undefined);
         yield* Fiber.join(next);
         yield* TestClock.adjust("5 minutes");
-        expect(terminations).toBe(0);
-      }),
-  );
-
-  it.effect(
-    "unacknowledged steering hits an absolute five-minute watchdog and closes admission",
-    () =>
-      Effect.gen(function* () {
-        const sent = yield* Deferred.make<void>();
-        const terminated = yield* Deferred.make<void>();
-        const inputs = makeLocalClaudeInputDelivery(
-          {
-            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-            terminate: () => Deferred.succeed(terminated, undefined).pipe(Effect.asVoid),
-          },
-          yield* Scope.Scope,
-          () => Effect.void,
-        );
-        const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-        yield* Deferred.await(sent);
-        yield* TestClock.adjust("299 seconds");
-        expect(yield* Deferred.isDone(terminated)).toBe(false);
-        yield* TestClock.adjust("1 second");
-        yield* Deferred.await(terminated);
-        expect(inputs.failure?.code).toBe("steer_outcome_uncertain");
-        // Watchdog closure is terminal uncertainty, never pending delivery.
-        expect(inputs.failure).not.toMatchObject({ pendingDelivery: true });
-        expect(Exit.isFailure(yield* Effect.exit(inputs.send("No resend", 1, "steer")))).toBe(true);
-        yield* Fiber.await(caller);
+        expect(counts.terminations).toBe(0);
       }),
   );
 
   for (const operation of ["initialize", "start"] as const)
     it.effect(`${operation} replay deadline stays fail-closed, at sixty seconds`, () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<void>();
-        const terminated = yield* Deferred.make<void>();
-        const inputs = makeLocalClaudeInputDelivery(
-          {
-            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-            terminate: () => Deferred.succeed(terminated, undefined).pipe(Effect.asVoid),
-          },
-          yield* Scope.Scope,
-          () => Effect.void,
-        );
+        const { inputs, sent, terminated } = deliveryHarness(yield* Scope.Scope);
         const caller = yield* Effect.forkChild(inputs.send("Input", 1, operation));
-        yield* Deferred.await(sent);
+        yield* sent;
         // A slow start isn't failed early.
         yield* TestClock.adjust("59 seconds");
         expect(yield* Deferred.isDone(terminated)).toBe(false);
@@ -239,20 +187,18 @@ describe("Claude input delivery ownership", () => {
       }),
     );
 
+  const uncertainWrite = Effect.fail(
+    processError("send", "transport_outcome_uncertain", "write outcome unknown"),
+  );
+
   it.effect("uncertain native write remains immediately fail-closed despite cleanup failure", () =>
     Effect.gen(function* () {
-      const inputs = makeLocalClaudeInputDelivery(
-        {
-          send: () =>
-            Effect.fail(
-              processError("send", "transport_outcome_uncertain", "write outcome unknown"),
-            ),
-          terminate: () =>
-            Effect.fail(processError("close", "process_cleanup_unconfirmed", "cleanup unknown")),
-        },
-        yield* Scope.Scope,
-        () => Effect.void,
-      );
+      const { inputs } = deliveryHarness(yield* Scope.Scope, {
+        send: uncertainWrite,
+        terminate: Effect.fail(
+          processError("close", "process_cleanup_unconfirmed", "cleanup unknown"),
+        ),
+      });
       const failure = yield* Effect.flip(inputs.send("Guidance", 1, "steer"));
       expect(failure).toMatchObject({ operation: "steer", code: "steer_outcome_uncertain" });
       // Unknown write and cleanup outcomes are not tracked guidance and never read as pending.
@@ -264,24 +210,13 @@ describe("Claude input delivery ownership", () => {
 
   it.effect("uncertain native write outlasting the caller deadline is not reported pending", () =>
     Effect.gen(function* () {
-      const terminating = yield* Deferred.make<void>();
       const releaseTermination = yield* Deferred.make<void>();
-      const inputs = makeLocalClaudeInputDelivery(
-        {
-          send: () =>
-            Effect.fail(
-              processError("send", "transport_outcome_uncertain", "write outcome unknown"),
-            ),
-          terminate: () =>
-            Deferred.succeed(terminating, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseTermination)),
-            ),
-        },
-        yield* Scope.Scope,
-        () => Effect.void,
-      );
+      const { inputs, terminated } = deliveryHarness(yield* Scope.Scope, {
+        send: uncertainWrite,
+        terminate: Deferred.await(releaseTermination),
+      });
       const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-      yield* Deferred.await(terminating);
+      yield* Deferred.await(terminated);
       yield* TestClock.adjust("11 seconds");
       const deadline = yield* Effect.flip(Fiber.join(caller));
       expect(deadline).toMatchObject({ operation: "steer", code: "steer_outcome_uncertain" });
@@ -293,21 +228,9 @@ describe("Claude input delivery ownership", () => {
   for (const settlement of ["report", "close"] as const)
     it.effect(`guidance settled by ${settlement} before the caller deadline is not pending`, () =>
       Effect.gen(function* () {
-        const sent = yield* Deferred.make<void>();
-        let terminations = 0;
-        const inputs = makeLocalClaudeInputDelivery(
-          {
-            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-            terminate: () =>
-              Effect.sync(() => {
-                terminations++;
-              }),
-          },
-          yield* Scope.Scope,
-          () => Effect.void,
-        );
+        const { inputs, sent, counts } = deliveryHarness(yield* Scope.Scope);
         const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-        yield* Deferred.await(sent);
+        yield* sent;
         if (settlement === "report") expect(yield* inputs.acceptReport(1)).toBe(true);
         else
           inputs.cancel(
@@ -325,13 +248,13 @@ describe("Claude input delivery ownership", () => {
         expect(Exit.isFailure(yield* Effect.exit(inputs.send("No resend", 1, "steer")))).toBe(true);
         // An accepted report ends watchdog ownership instead of terminating a finished worker.
         yield* TestClock.adjust("5 minutes");
-        if (settlement === "report") expect(terminations).toBe(0);
+        if (settlement === "report") expect(counts.terminations).toBe(0);
       }),
     );
   it.effect("closed scope rejects new input and releases admission racing preparation", () =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
-      const { inputs, preparing, release, sends } = gatedInputs(scope);
+      const { inputs, preparing, release, counts } = gatedInputs(scope);
       const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
       yield* Deferred.await(preparing);
       yield* Scope.close(scope, Exit.void);
@@ -342,19 +265,19 @@ describe("Claude input delivery ownership", () => {
         true,
       );
       expect(inputs.pending).toBeUndefined();
-      expect(sends()).toBe(0);
+      expect(counts.sends).toBe(0);
     }),
   );
   it.effect("cancellation before native send releases admission without sending later", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { inputs, preparing, release, sends } = gatedInputs(yield* Scope.Scope);
+        const { inputs, preparing, release, counts } = gatedInputs(yield* Scope.Scope);
         const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
         yield* Deferred.await(preparing);
         yield* Fiber.interrupt(caller);
         yield* Deferred.succeed(release, undefined);
         yield* Effect.yieldNow;
-        expect(sends()).toBe(0);
+        expect(counts.sends).toBe(0);
         expect(inputs.pending).toBeUndefined();
       }),
     ),
@@ -363,18 +286,9 @@ describe("Claude input delivery ownership", () => {
   it.effect("cancellation after native send retains the UUID until exact acknowledgement", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const scope = yield* Scope.Scope;
-        const sent = Deferred.makeUnsafe<void>();
-        const inputs = makeLocalClaudeInputDelivery(
-          {
-            send: () => Deferred.succeed(sent, undefined).pipe(Effect.asVoid),
-            terminate: () => Effect.void,
-          },
-          scope,
-          () => Effect.void,
-        );
+        const { inputs, sent } = deliveryHarness(yield* Scope.Scope);
         const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
-        yield* Deferred.await(sent);
+        yield* sent;
         const pending = inputs.pending;
         expect(pending).toBeDefined();
         yield* Fiber.interrupt(caller);

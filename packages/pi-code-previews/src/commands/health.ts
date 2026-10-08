@@ -1,8 +1,5 @@
-import * as Predicate from "effect/Predicate";
-
 import { notifyAtHostBoundary, type ExtensionSubcommand } from "pi-cosmic-core";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
-import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
+import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";
 import { formatOnOff } from "../config/values";
@@ -56,25 +53,20 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Settings file: ${getSettingsPath()}`,
       ...codePreviewSettingsProblems.map((problem) => describeSettingsProblem(problem, ctx.cwd)),
     ];
-    if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
+    if (!hasCustomSurface(ctx)) {
       if (ctx.hasUI) notifyAtHostBoundary(ctx, lines.join("\n"), "info");
       return Promise.resolve();
     }
-    return openOwnedSurfacePromise<undefined>(ctx, {
+    return openCommandSurface(ctx, {
       placement: "overlay",
-      closedValue: undefined,
       create: ({ theme, finish }) =>
         new TextPanelComponent({
           theme,
-          title: theme.bold(lines[0] ?? "Code preview health"),
+          title: lines[0] ?? "Code preview health",
           lines: lines.slice(1),
           done: () => finish(undefined),
-          frame: listDetailFrame(theme),
           dismiss: "any-key",
         }),
-    }).then((outcome) => {
-      // A failed opening rejects the command, as Pi's own custom Promise does.
-      if (Predicate.isTagged(outcome, "Failed")) throw outcome.cause;
     });
   },
 };

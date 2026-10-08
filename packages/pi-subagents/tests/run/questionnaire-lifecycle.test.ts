@@ -7,14 +7,51 @@ import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
 import {
   QUESTIONNAIRE_CAPABILITY_QUERY,
   type AskUserOutcome,
+  type AskUserRequest,
   type QuestionnaireCapability,
   type QuestionnaireOwner,
 } from "pi-ask-user/protocol";
 import { askParentQuestionnaire } from "../../src/boundary/host-ask-user.ts";
 import { eventBus, pickQuestionnaire } from "../support/questionnaire.ts";
-import { fakeChildLayer, request, serviceLayer, withService } from "./fixtures/service-harness.ts";
+import {
+  fakeChildLayer,
+  request,
+  serviceLayer,
+  withService,
+  type FakeChildControl,
+} from "./fixtures/service-harness.ts";
 
-const argumentsJson = JSON.stringify(pickQuestionnaire);
+const askUser = (child: FakeChildControl, requestId: string) =>
+  child.offerIpc({
+    channel: "pi-subagents",
+    type: "proxy_request",
+    requestId,
+    tool: "ask_user",
+    argumentsJson: JSON.stringify(pickQuestionnaire),
+  });
+
+interface QuestionnaireProbe {
+  owner?: QuestionnaireOwner;
+  interrupted: boolean;
+  cleaned: boolean;
+}
+
+/** A questionnaire that never answers; its interruption cleanup waits for `release`. */
+const blockingQuestionnaire = (release: Deferred.Deferred<void>) => {
+  const state: QuestionnaireProbe = { interrupted: false, cleaned: false };
+  const handler = (_request: AskUserRequest, owner: QuestionnaireOwner) => {
+    state.owner = owner;
+    return Effect.never.pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => void (state.interrupted = true)).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Effect.sync(() => void (state.cleaned = true))),
+        ),
+      ),
+    );
+  };
+  return { state, handler };
+};
 
 describe("assignment-owned questionnaire proxy", () => {
   it.effect("does not reopen a settled request identity within an assignment", () =>
@@ -34,19 +71,11 @@ describe("assignment-owned questionnaire proxy", () => {
       yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "replay" }));
         const child = fake.controls[0]!;
-        const send = () =>
-          child.offerIpc({
-            channel: "pi-subagents",
-            type: "proxy_request",
-            requestId: "same",
-            tool: "ask_user",
-            argumentsJson,
-          });
-        send();
+        askUser(child, "same");
         yield* yieldUntil(() =>
           child.ipc.some((message) => message.type === "proxy_response" && message.ok),
         );
-        send();
+        askUser(child, "same");
         yield* yieldUntil(() =>
           child.ipc.some((message) => message.type === "proxy_response" && !message.ok),
         );
@@ -100,13 +129,7 @@ describe("assignment-owned questionnaire proxy", () => {
         const running = yield* withService(layer, function* (service) {
           const run = yield* service.start(request({ name: "root-editor" }));
           const child = fake.controls[0]!;
-          child.offerIpc({
-            channel: "pi-subagents",
-            type: "proxy_request",
-            requestId: "q-editor",
-            tool: "ask_user",
-            argumentsJson,
-          });
+          askUser(child, "q-editor");
           yield* yieldUntil(() => owner !== undefined);
           child.offerIpc({ channel: "pi-subagents", type: "proxy_cancel", requestId: "q-editor" });
           yield* yieldUntil(() => aborted);
@@ -151,44 +174,20 @@ describe("assignment-owned questionnaire proxy", () => {
         initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
         initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
       });
-      let owner: QuestionnaireOwner | undefined;
-      let interrupted = false;
-      let cleaned = false;
-      const layer = serviceLayer({
-        questionnaireHandler: (_request, authenticatedOwner) => {
-          owner = authenticatedOwner;
-          return Effect.never.pipe(
-            Effect.onInterrupt(() =>
-              Effect.sync(() => {
-                interrupted = true;
-              }).pipe(
-                Effect.andThen(Deferred.await(release)),
-                Effect.andThen(
-                  Effect.sync(() => {
-                    cleaned = true;
-                  }),
-                ),
-              ),
-            ),
-          );
-        },
-      }).pipe(Layer.provide(fake.layer));
+      const questionnaire = blockingQuestionnaire(release);
+      const layer = serviceLayer({ questionnaireHandler: questionnaire.handler }).pipe(
+        Layer.provide(fake.layer),
+      );
       yield* withService(layer, function* (service) {
         const starting = yield* service
           .start(request({ name: "compensated" }))
           .pipe(Effect.flip, Effect.forkScoped);
         yield* yieldUntil(() => fake.controls[0]?.sent("prompt") === true);
         const child = fake.controls[0]!;
-        child.offerIpc({
-          channel: "pi-subagents",
-          type: "proxy_request",
-          requestId: "q-start",
-          tool: "ask_user",
-          argumentsJson,
-        });
-        yield* yieldUntil(() => owner !== undefined);
+        askUser(child, "q-start");
+        yield* yieldUntil(() => questionnaire.state.owner !== undefined);
         yield* Deferred.succeed(promptGate, undefined);
-        yield* yieldUntil(() => interrupted);
+        yield* yieldUntil(() => questionnaire.state.interrupted);
         for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
         // Record before releasing so a regression fails here instead of stalling shutdown.
         const releasedBeforeCleanup = child.released();
@@ -196,7 +195,7 @@ describe("assignment-owned questionnaire proxy", () => {
         const failure = yield* Fiber.join(starting);
         expect(releasedBeforeCleanup).toBe(0);
         expect(failure.message).toContain("Prompt was rejected.");
-        expect(cleaned).toBe(true);
+        expect(questionnaire.state.cleaned).toBe(true);
         expect(child.released()).toBe(1);
       });
     }),
@@ -207,46 +206,22 @@ describe("assignment-owned questionnaire proxy", () => {
       Effect.gen(function* () {
         const fake = fakeChildLayer();
         const release = yield* Deferred.make<void>();
-        let owner: QuestionnaireOwner | undefined;
-        let interrupted = false;
-        let cleaned = false;
+        const { state, handler } = blockingQuestionnaire(release);
         let finished = false;
-        const layer = serviceLayer({
-          questionnaireHandler: (_request, authenticatedOwner) => {
-            owner = authenticatedOwner;
-            return Effect.never.pipe(
-              Effect.onInterrupt(() =>
-                Effect.sync(() => {
-                  interrupted = true;
-                }).pipe(
-                  Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      cleaned = true;
-                    }),
-                  ),
-                ),
-              ),
-            );
-          },
-        }).pipe(Layer.provide(fake.layer));
+        const layer = serviceLayer({ questionnaireHandler: handler }).pipe(
+          Layer.provide(fake.layer),
+        );
         const running = yield* withService(layer, function* (service) {
           const run = yield* service.start(request({ name: "question" }));
           const child = fake.controls[0]!;
-          child.offerIpc({
-            channel: "pi-subagents",
-            type: "proxy_request",
-            requestId: "q-1",
-            tool: "ask_user",
-            argumentsJson,
-          });
-          yield* yieldUntil(() => owner !== undefined);
-          expect(owner).toMatchObject({ runId: run.id, requestId: "q-1" });
-          expect(owner!.assignmentEpoch).toBeGreaterThan(0);
+          askUser(child, "q-1");
+          yield* yieldUntil(() => state.owner !== undefined);
+          expect(state.owner).toMatchObject({ runId: run.id, requestId: "q-1" });
+          expect(state.owner!.assignmentEpoch).toBeGreaterThan(0);
           if (ending === "stop") yield* service.stop(run.id);
           if (ending === "interrupt") {
             yield* service.interrupt(run.id);
-            yield* yieldUntil(() => interrupted);
+            yield* yieldUntil(() => state.interrupted);
           }
           if (ending === "exit") {
             child.exit(1);
@@ -260,12 +235,12 @@ describe("assignment-owned questionnaire proxy", () => {
           ),
           Effect.forkChild,
         );
-        yield* yieldUntil(() => interrupted);
-        expect(cleaned).toBe(false);
+        yield* yieldUntil(() => state.interrupted);
+        expect(state.cleaned).toBe(false);
         expect(finished).toBe(false);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(running);
-        expect(cleaned).toBe(true);
+        expect(state.cleaned).toBe(true);
         expect(finished).toBe(true);
       }),
     );

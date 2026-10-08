@@ -46,6 +46,19 @@ describe("OpenAI image resources", () => {
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
+  it.effect("reports a failed output-path probe as a typed save failure", () =>
+    Effect.gen(function* () {
+      const { fs: realFs, path, root, directory } = yield* tempImages;
+      // A platform failure other than a missing path, such as EACCES on an ancestor.
+      const probeFailure = realFs.readFile(path.join(root, "missing")).pipe(Effect.as(false));
+      const hostileFs: typeof realFs = Object.assign({}, realFs, { exists: () => probeFailure });
+      const failure = yield* makeImageOutput({ fs: hostileFs, path, sharp: pngSharp })
+        .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
+    }).pipe(provideBuiltLayer(nodePlatformLayer)),
+  );
+
   it.effect("maps close defects without replacing typed write or sync failures", () =>
     Effect.gen(function* () {
       const { fs: realFs, path, root } = yield* tempImages;

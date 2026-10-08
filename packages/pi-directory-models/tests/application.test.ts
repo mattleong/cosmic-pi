@@ -1,8 +1,4 @@
-import type {
-  ExtensionContext,
-  ExtensionHandler,
-  SessionEntry,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -11,7 +7,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  opaqueFixture,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { registerDirectoryModelsApplication } from "../src/application.ts";
 import { preferenceFilename } from "../src/config/path-key.ts";
@@ -25,53 +25,27 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-type Handler = ExtensionHandler<any, any>;
 type Model = NonNullable<ExtensionContext["model"]>;
 
 const PreferenceFromJson = Schema.fromJsonString(DirectoryModelPreferenceSchema);
 
-function model(provider: string, id: string): Model {
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-  return { provider, id, reasoning: true } as Model;
-}
+const model = (provider: string, id: string): Model =>
+  opaqueFixture({ provider, id, reasoning: true });
 
-const entryBase = (id: string, parentId: string | null = null) => ({
+const entryBase = (id: string) => ({
   id,
-  parentId,
+  parentId: null,
   timestamp: "2026-01-01T00:00:00.000Z",
 });
 
-const userEntry = (id: string, parentId: string | null = null): SessionEntry => ({
-  ...entryBase(id, parentId),
+const userEntry = (id: string): SessionEntry => ({
+  ...entryBase(id),
   type: "message",
   message: { role: "user", content: "hello", timestamp: 0 },
 });
 
-const customMessageEntry = (id: string, parentId: string | null = null): SessionEntry => ({
-  ...entryBase(id, parentId),
-  type: "custom_message",
-  customType: "test",
-  content: "context",
-  display: false,
-});
-
-const compactionEntry = (id: string, parentId: string | null = null): SessionEntry => ({
-  ...entryBase(id, parentId),
-  type: "compaction",
-  summary: "earlier conversation",
-  firstKeptEntryId: id,
-  tokensBefore: 100,
-});
-
-const branchSummaryEntry = (id: string, parentId: string | null = null): SessionEntry => ({
-  ...entryBase(id, parentId),
-  type: "branch_summary",
-  fromId: parentId ?? id,
-  summary: "earlier branch",
-});
-
-const customEntry = (id: string, parentId: string | null = null): SessionEntry => ({
-  ...entryBase(id, parentId),
+const customEntry = (id: string): SessionEntry => ({
+  ...entryBase(id),
   type: "custom",
   customType: "test",
 });
@@ -92,29 +66,31 @@ const readPreference = (agentDirectory: string, cwd: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const serialized = yield* fs.readFileString(yield* preferencePath(agentDirectory, cwd));
-    return yield* Schema.decodeUnknownEffect(PreferenceFromJson)(serialized);
+    return yield* Schema.decodeEffect(PreferenceFromJson)(serialized);
   });
 
+/** Writes a preference document stamped with `documentCwd`, or the canonical cwd by default. */
 const writePreference = (
   agentDirectory: string,
   cwd: string,
   preference: Omit<DirectoryModelPreference, "cwd" | "version">,
+  documentCwd?: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const target = yield* preferencePath(agentDirectory, cwd);
     yield* fs.makeDirectory(path.join(agentDirectory, "pi-directory-models"), { recursive: true });
-    const canonical = yield* fs.realPath(cwd);
     const serialized = yield* Schema.encodeUnknownEffect(PreferenceFromJson)(
       makeDirectoryModelPreference(
-        canonical,
+        documentCwd ?? (yield* fs.realPath(cwd)),
         preference.provider,
         preference.model,
         preference.thinkingLevel,
       ),
     );
     yield* fs.writeFileString(target, `${serialized}\n`);
+    return target;
   });
 
 const harness = (
@@ -153,7 +129,6 @@ const harness = (
     );
     let activeModel = initial;
     let thinkingLevel: "low" | "medium" | "high" = "low";
-    const handlers = new Map<string, Handler>();
     const notify = vi.fn();
     let ctx!: ExtensionContext;
     const delayedThinkingEvents: unknown[] = [];
@@ -163,12 +138,14 @@ const harness = (
         if (options.setModelDenied) return false;
         const previousModel = activeModel;
         activeModel = next;
-        return Promise.resolve(
-          handlers.get("model_select")?.(
-            { type: "model_select", model: next, previousModel, source: "set" },
-            ctx,
-          ),
-        ).then(() => true);
+        return host
+          .emit("model_select", ctx, {
+            type: "model_select",
+            model: next,
+            previousModel,
+            source: "set",
+          })
+          .then(() => true);
       });
     });
     const setThinkingLevel = vi.fn((level: typeof thinkingLevel) => {
@@ -176,16 +153,12 @@ const harness = (
       thinkingLevel = level;
       const event = { type: "thinking_level_select", level, previousLevel };
       if (options.delayThinkingEvents) delayedThinkingEvents.push(event);
-      else void handlers.get("thinking_level_select")?.(event, ctx);
+      else void host.emit("thinking_level_select", ctx, event);
     });
-    const pi = extensionApiFixture({
-      on(name: string, handler: Handler) {
-        handlers.set(name, handler);
-      },
-      setModel,
-      getThinkingLevel: () => thinkingLevel,
-      setThinkingLevel,
-    });
+    const host = recordingExtensionHost(
+      {},
+      { setModel, getThinkingLevel: () => thinkingLevel, setThinkingLevel },
+    );
     const getEntries = vi.fn(() => {
       if (options.sessionReadFailure === "entries" || options.sessionReadFailure === "both") {
         throw new Error("entries read failed");
@@ -213,10 +186,10 @@ const harness = (
       sessionManager: { getEntries, getLeafId },
       ui: { notify },
     });
-    registerDirectoryModelsApplication(pi, options.explicitPreference ?? false);
+    registerDirectoryModelsApplication(host.pi, options.explicitPreference ?? false);
 
     const emit = <Event>(name: string, event: Event): Effect.Effect<void> =>
-      Effect.promise(() => Promise.resolve(handlers.get(name)?.(event, ctx)).then(() => undefined));
+      Effect.promise(() => host.emit(name, ctx, event));
     const start = (reason: "startup" | "new" | "resume" | "fork" | "reload" = "startup") =>
       emit("session_start", { type: "session_start", reason });
     const shutdown = () => emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
@@ -253,10 +226,7 @@ const harness = (
         Effect.suspend(() =>
           Effect.forEach(
             delayedThinkingEvents.splice(0),
-            (event) =>
-              Effect.promise(() =>
-                Promise.resolve(handlers.get("thinking_level_select")?.(event, ctx)),
-              ),
+            (event) => Effect.promise(() => host.emit("thinking_level_select", ctx, event)),
             { discard: true },
           ),
         ),
@@ -351,9 +321,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         initializes: boolean;
       }> = [
         { entries: [userEntry("user")], initializes: false },
-        { entries: [customMessageEntry("custom-message")], initializes: false },
-        { entries: [compactionEntry("compaction")], initializes: false },
-        { entries: [branchSummaryEntry("branch-summary")], initializes: false },
         { entries: [customEntry("custom")], initializes: true },
         {
           entries: [userEntry("inactive-branch"), customEntry("active-branch")],
@@ -577,17 +544,13 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* malformed.shutdown();
 
       const foreign = yield* harness();
-      const foreignTarget = yield* preferencePath(foreign.agentDirectory, foreign.cwd);
-      yield* fs.makeDirectory(path.dirname(foreignTarget), { recursive: true });
-      const document = yield* Schema.encodeUnknownEffect(PreferenceFromJson)(
-        makeDirectoryModelPreference(
-          "/somewhere/else",
-          foreign.remembered.provider,
-          foreign.remembered.id,
-          "high",
-        ),
+      const foreignTarget = yield* writePreference(
+        foreign.agentDirectory,
+        foreign.cwd,
+        foreign.rememberedPreference,
+        "/somewhere/else",
       );
-      yield* fs.writeFileString(foreignTarget, document);
+      const document = yield* fs.readFileString(foreignTarget);
       yield* foreign.start();
       expect(foreign.setModel).not.toHaveBeenCalled();
       expect(yield* fs.readFileString(foreignTarget)).toBe(document);

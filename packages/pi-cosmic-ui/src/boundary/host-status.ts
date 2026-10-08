@@ -1,21 +1,21 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createCosmicFooterClient, makeHostStateWatch } from "../footer/client.ts";
-import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
+import {
+  invokeBestEffort,
+  invokeHostCallback,
+  notifyListeners,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
 import { makeHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
-
-export interface HostUiTickerOwner {
-  readonly start: HostUiTickerPool["start"];
-  readonly shutdown: () => Promise<void>;
-}
 
 /** Rotates the process-shared pool before awaiting the old pool's Effect cleanup. */
 export const makeHostUiTickerOwner = (
   createPool: () => HostUiTickerPool = makeHostUiTickerPool,
-): HostUiTickerOwner => {
+) => {
   let pool = createPool();
   return {
-    start: (intervalMs, tick) => pool.start(intervalMs, tick),
+    start: (intervalMs: number, tick: () => void) => pool.start(intervalMs, tick),
     shutdown: () => {
       const previous = pool;
       pool = createPool();
@@ -36,18 +36,19 @@ export const makeSetStatusSafely =
   (statusKey: string) =>
   (ctx: ExtensionContext | undefined, text?: string): void => {
     if (!ctx) return;
-    try {
+    // Host UI may already be tearing down.
+    invokeBestEffort(() => {
       if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
-      const sanitized = text === undefined ? undefined : sanitizeTerminalLine(text) || undefined;
-      ctx.ui.setStatus(statusKey, sanitized);
-    } catch {
-      // Host UI may already be tearing down.
-    }
+      ctx.ui.setStatus(
+        statusKey,
+        text === undefined ? undefined : sanitizeTerminalLine(text) || undefined,
+      );
+    });
   };
 
-export type FooterStatusPlacement = Omit<CosmicFooterStatusContribution, "kind" | "id">;
+type FooterStatusPlacement = Omit<CosmicFooterStatusContribution, "kind" | "id">;
 
-export interface FooterStatusDeclaration {
+interface FooterStatusDeclaration {
   readonly activate: (ctx: ExtensionContext | undefined) => void;
   readonly shutdown: () => void;
 }
@@ -80,13 +81,7 @@ export function makeFooterStatusDeclaration(options: {
   };
   return {
     activate(ctx) {
-      let tui = false;
-      try {
-        tui = ctx?.mode === "tui";
-      } catch {
-        tui = false;
-      }
-      if (!tui) return shutdown();
+      if (!invokeHostCallback(() => ctx?.mode === "tui", false)) return shutdown();
       declared = true;
       watch.start();
       client.query();
@@ -105,12 +100,12 @@ export interface ProjectionBridge<P> {
   readonly clear: () => void;
 }
 
-export interface ProjectionBridgeOptions<P> {
+interface ProjectionBridgeOptions<P> {
   readonly statusKey: string;
   readonly emptyProjection: () => P;
   readonly footerStatus: (projection: P) => string | undefined;
-  /** Optional Cosmic footer placement declaration for this status entry. */
-  readonly footerPlacement?: FooterStatusDeclaration;
+  /** Cosmic footer placement declaration for this status entry. */
+  readonly footerPlacement: FooterStatusDeclaration;
 }
 
 export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): ProjectionBridge<P> {
@@ -122,16 +117,13 @@ export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): Pr
 
   const updateFooter = () =>
     setStatusSafely(context, footerEnabled ? options.footerStatus(projection) : undefined);
-  const notifyListeners = () => {
-    for (const listener of listeners) invokeHostCallback(listener, undefined);
-  };
 
   return {
     get: () => projection,
     publish: (next) => {
       projection = next;
       updateFooter();
-      notifyListeners();
+      notifyListeners(listeners);
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -140,7 +132,7 @@ export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): Pr
     setContext: (next) => {
       if (context && context !== next) setStatusSafely(context, undefined);
       context = next;
-      options.footerPlacement?.activate(next);
+      options.footerPlacement.activate(next);
       updateFooter();
     },
     setFooterEnabled: (enabled) => {
@@ -149,10 +141,10 @@ export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): Pr
     },
     clear: () => {
       setStatusSafely(context, undefined);
-      options.footerPlacement?.shutdown();
+      options.footerPlacement.shutdown();
       context = undefined;
       projection = options.emptyProjection();
-      notifyListeners();
+      notifyListeners(listeners);
     },
   };
 }

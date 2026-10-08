@@ -10,13 +10,10 @@ export interface UltracodeRequest {
 }
 
 const BUDGET_PREFIX = /^\+(\d+)(?:\.(\d+))?([km]?)(?:\s+|$)/iu;
-
-const unitMultiplier = (unit: string): number => {
-  const lower = unit.toLowerCase();
-  if (lower === "k") return 1_000;
-  if (lower === "m") return 1_000_000;
-  return 1;
-};
+const UNIT_MULTIPLIERS = new Map([
+  ["k", 1_000],
+  ["m", 1_000_000],
+]);
 
 /**
  * Splits a leading budget off the task. The prefix counts only when it is a positive whole
@@ -28,7 +25,8 @@ export const parseUltracodeRequest = (args: string): UltracodeRequest => {
   if (!match) return { task: text };
   const [prefix, whole = "", fraction = "", unit = ""] = match;
   // Scaled from the digits, so a decimal such as 1.1k is exactly 1100.
-  const budget = (Number(`${whole}${fraction}`) * unitMultiplier(unit)) / 10 ** fraction.length;
+  const multiplier = UNIT_MULTIPLIERS.get(unit.toLowerCase()) ?? 1;
+  const budget = (Number(`${whole}${fraction}`) * multiplier) / 10 ** fraction.length;
   if (!Number.isSafeInteger(budget) || budget < 1) return { task: text };
   return { task: text.slice(prefix.length).trim(), budget };
 };

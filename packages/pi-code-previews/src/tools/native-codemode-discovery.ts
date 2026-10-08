@@ -1,8 +1,9 @@
 import { parse, type AnyNode, type CallExpression, type Expression, type Pattern } from "acorn";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { isNativeMcpName } from "./native-mcp-identity";
+import { ownData } from "./native-safe-content";
 
 const MAX_SOURCE_CHARS = 32768;
 const MAX_NODES = 4096;
@@ -11,7 +12,7 @@ const Source = Schema.String.check(Schema.isMaxLength(MAX_SOURCE_CHARS));
 const helpers = new Set(["searchTools", "describeTool", "describeNamespace"]);
 
 /** Program intent only; never a helper execution receipt, dispatch count, or remote identity. */
-export interface NativeDiscoveryIntent {
+interface NativeDiscoveryIntent {
   readonly kind: "mcp" | "tools";
   readonly discoveryOnly: boolean;
 }
@@ -230,39 +231,37 @@ function classify(source: string): NativeDiscoveryIntent | undefined {
     { node: program, active: true, depth: 0 },
   ];
   const shadowed = new Set<string>();
+  const shadow = (pattern: Pattern | Expression) =>
+    bindings(pattern).forEach((name) => shadowed.add(name));
   const calls: CallExpression[] = [];
   let exclusive = true;
   let inspected = 0;
   while (stack.length) {
-    const frame = stack.pop()!;
-    const { node, active, depth } = frame;
+    const { node, active, depth } = stack.pop()!;
     if (++inspected > MAX_NODES || depth > MAX_DEPTH) return undefined;
-    if (node.type === "VariableDeclarator") bindings(node.id).forEach((name) => shadowed.add(name));
+    if (node.type === "VariableDeclarator") shadow(node.id);
     if (
       node.type === "FunctionDeclaration" ||
       node.type === "FunctionExpression" ||
       node.type === "ArrowFunctionExpression"
     ) {
       if (node.id) shadowed.add(node.id.name);
-      node.params.flatMap(bindings).forEach((name) => shadowed.add(name));
+      node.params.forEach((param) => shadow(param));
     }
     if ((node.type === "ClassDeclaration" || node.type === "ClassExpression") && node.id)
       shadowed.add(node.id.name);
-    if (node.type === "CatchClause" && node.param)
-      bindings(node.param).forEach((name) => shadowed.add(name));
+    if (node.type === "CatchClause" && node.param) shadow(node.param);
     if (
       node.type === "AssignmentExpression" ||
       node.type === "UpdateExpression" ||
       (node.type === "UnaryExpression" && node.operator === "delete")
     )
-      bindings(node.type === "AssignmentExpression" ? node.left : node.argument).forEach((name) =>
-        shadowed.add(name),
-      );
+      shadow(node.type === "AssignmentExpression" ? node.left : node.argument);
     if (
       (node.type === "ForInStatement" || node.type === "ForOfStatement") &&
       node.left.type !== "VariableDeclaration"
     )
-      bindings(node.left).forEach((name) => shadowed.add(name));
+      shadow(node.left);
     if (active) {
       if (node.type === "CallExpression") {
         if (node.callee.type === "Identifier" && ["eval", "Function"].includes(node.callee.name))
@@ -331,19 +330,15 @@ function classify(source: string): NativeDiscoveryIntent | undefined {
 export function createNativeDiscoveryProjector(): NativeDiscoveryProjector {
   let previous: string | undefined;
   let intent: NativeDiscoveryIntent | undefined;
-  return (args) =>
-    invokeHostCallback(() => {
-      if (!Predicate.isObject(args) || Array.isArray(args)) return undefined;
-      const property = Object.getOwnPropertyDescriptor(args, "code");
-      if (!property || !("value" in property)) return undefined;
-      const source = decodeUnknownOrUndefined(Source, property.value);
-      if (source === undefined) return undefined;
-      if (source !== previous) {
-        previous = source;
-        intent = invokeHostCallback(() => classify(source), undefined);
-      }
-      return intent;
-    }, undefined);
+  return (args) => {
+    const source = ownData(args, "code", Source);
+    if (source === undefined) return undefined;
+    if (source !== previous) {
+      previous = source;
+      intent = invokeHostCallback(() => classify(source), undefined);
+    }
+    return intent;
+  };
 }
 
 export function nativeDiscoveryLabel(

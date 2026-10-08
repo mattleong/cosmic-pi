@@ -7,15 +7,10 @@ import type { WorkflowSandboxHost } from "../boundary/codemode-sandbox.ts";
 import type { WorkflowRunFileError, WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
 import { makeWorkflowAgentCall, type WorkflowHost } from "./agent.ts";
-import type { WorkflowSlots, WorkflowWaitOrder } from "./admission-queue.ts";
+import type { WorkflowSlots } from "./admission-queue.ts";
 import type { WorkflowBudget } from "./budget.ts";
 import type { WorkflowJournalContract, WorkflowReplay } from "./journal.ts";
-import {
-  addWorkflowUsage,
-  WORKFLOW_AGENT_LIMIT,
-  type WorkflowAgentView,
-  type WorkflowPlannedAgent,
-} from "./model.ts";
+import { addWorkflowUsage, WORKFLOW_AGENT_LIMIT, type WorkflowAgentView } from "./model.ts";
 import {
   workflowResultJsonLine,
   workflowResultOverflow,
@@ -45,14 +40,13 @@ export interface WorkflowRunSetup {
   readonly host: WorkflowHost;
   readonly replay: WorkflowReplay | undefined;
   readonly slots: WorkflowSlots;
-  readonly order: (queuedAt: number) => WorkflowWaitOrder;
   readonly budget: WorkflowBudget;
   readonly control: WorkflowRunControl;
   /** The run's private files; undefined when they couldn't be created. */
   readonly files: WorkflowRunFiles | undefined;
 }
 
-export interface WorkflowMembersServices {
+interface WorkflowMembersServices {
   readonly runs: WorkflowRuns;
   readonly subagents: SubagentServiceContract;
   readonly journal: WorkflowJournalContract;
@@ -73,19 +67,18 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
     setup: WorkflowRunSetup,
     draft: WorkflowAgentDraft,
     skip: Deferred.Deferred<void>,
-  ) => {
-    const register = (runId: string, claimed?: WorkflowPlannedAgent) =>
-      Effect.sync(() => {
-        const agent = workflowAgentFromDraft(draft, runId, claimed);
-        if (agent.state === "queued") setup.control.skips.set(runId, skip);
-        return agent;
-      });
-    return runs
+  ) =>
+    runs
       .modifyEffect(setup.id, (run) => {
         const [claimed, rest] = claimWorkflowPlanned(run, draft);
         return (claimed ? Effect.succeed(claimed.runId) : subagents.reserveRunId).pipe(
-          Effect.flatMap((runId) => register(runId, claimed)),
-          Effect.map((agent) => [agent, withAgent(rest, agent)] as const),
+          Effect.flatMap((runId) =>
+            Effect.sync(() => {
+              const agent = workflowAgentFromDraft(draft, runId, claimed);
+              if (agent.state === "queued") setup.control.skips.set(runId, skip);
+              return [agent, withAgent(rest, agent)] as const;
+            }),
+          ),
         );
       })
       .pipe(
@@ -95,7 +88,6 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
           () => Effect.die(new Error(`Workflow run ${setup.id} was evicted while it was live.`)),
         ),
       );
-  };
 
   /**
    * Claims the planned entry the call would claim when the user skipped it, and publishes the
@@ -108,28 +100,27 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
   ) =>
     Clock.currentTimeMillis.pipe(
       Effect.flatMap((queuedAt) =>
-        runs.modifyEffect(setup.id, (run) =>
-          Effect.sync(() => {
-            const [claimed, rest] = claimSkippedWorkflowPlanned(run, claim);
-            if (claimed === undefined) return [undefined, run] as const;
-            const draft = { ...claim, callId: ++setup.control.calls, queuedAt };
-            const agent = workflowAgentFromDraft(draft, claimed.runId, claimed);
-            return [agent, withAgent(rest, agent)] as const;
-          }),
-        ),
+        runs.modify(setup.id, (run) => {
+          const [claimed, rest] = claimSkippedWorkflowPlanned(run, claim);
+          if (claimed === undefined) return [undefined, run] as const;
+          const draft = { ...claim, callId: ++setup.control.calls, queuedAt };
+          const agent = workflowAgentFromDraft(draft, claimed.runId, claimed);
+          return [agent, withAgent(rest, agent)] as const;
+        }),
       ),
     );
 
   /** Logs the run's first run-file failure; later writes are still tried. */
-  const warnOnce = (setup: WorkflowRunSetup, error: WorkflowRunFileError) => {
-    const journal = setup.control.journal;
-    if (journal.warned) return Effect.void;
-    journal.warned = true;
-    return runs.recordEvent(
-      setup.id,
-      workflowServiceLog("warning", `The results journal may be incomplete: ${error.message}`),
-    );
-  };
+  const warnOnce = (setup: WorkflowRunSetup, error: WorkflowRunFileError) =>
+    Effect.suspend(() => {
+      const journal = setup.control.journal;
+      if (journal.warned) return Effect.void;
+      journal.warned = true;
+      return runs.recordEvent(
+        setup.id,
+        workflowServiceLog("warning", `The results journal may be incomplete: ${error.message}`),
+      );
+    });
 
   /**
    * The line as written: a result too long for it is saved in full beside the journal and the
@@ -186,7 +177,6 @@ export const makeWorkflowMembers = (services: WorkflowMembersServices) => {
         host: setup.host,
         replay: setup.replay,
         slots: setup.slots,
-        order: setup.order,
         budget: setup.budget,
         nextCall: Effect.sync(() =>
           setup.control.calls >= WORKFLOW_AGENT_LIMIT ? undefined : ++setup.control.calls,

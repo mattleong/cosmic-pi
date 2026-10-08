@@ -26,7 +26,6 @@ import {
   type SupervisorChannelConfig,
   type SupervisorEvent,
   type SupervisorRunId,
-  SupervisorOpenSessionRpc,
   SupervisorRpcGroup,
 } from "../supervisor/protocol.ts";
 import {
@@ -57,7 +56,6 @@ const LOOPBACK_HOST = "127.0.0.1" as const;
 const CHANNEL_ROOT = "supervisor-channels-v3";
 const CONNECTION_CONFIG_FILE = "connection.json";
 const EVENT_CAPACITY = 64;
-const MAX_CONNECTIONS = 4;
 const MAX_ACTIVE_RPC_REQUESTS = 32;
 const AUTH_TIMEOUT_MILLIS = 5_000;
 
@@ -89,7 +87,6 @@ export interface SupervisorConnectionMetadata {
 export interface SupervisorChannelHandle extends SupervisorChannelControls {
   readonly metadata: SupervisorConnectionMetadata;
   readonly events: Queue.Dequeue<SupervisorEvent, Cause.Done>;
-  readonly close: Effect.Effect<void, SupervisorChannelError>;
 }
 
 export interface SupervisorChannelContract {
@@ -166,10 +163,11 @@ interface PreparedStateDirectory {
 }
 
 interface StagedNodeChannelAcquisition {
-  prepared: PreparedStateDirectory | undefined;
-  ownsStateDirectory: boolean;
+  /** Set once this acquisition created the state directory. */
+  ownedState: PreparedStateDirectory | undefined;
   internalScope: Scope.Closeable | undefined;
-  handle: SupervisorChannelHandle | undefined;
+  /** Set once every resource is acquired; it then owns their whole release. */
+  close: Effect.Effect<void, SupervisorChannelError> | undefined;
 }
 
 class SupervisorPrivateStateError extends Schema.TaggedError<SupervisorPrivateStateError>()(
@@ -198,8 +196,7 @@ const privateStateOperation = <Value>(
 const prepareStateDirectory = (
   agentDirectory: string,
   runId: string,
-  onPrepared: (prepared: PreparedStateDirectory) => void,
-  onCreated: () => void,
+  onCreated: (prepared: PreparedStateDirectory) => void,
 ): Effect.Effect<PreparedStateDirectory, SupervisorPrivateStateError> =>
   Effect.gen(function* () {
     const canonicalAgentDirectory = yield* privateStateOperation("resolve-agent-directory", () =>
@@ -214,7 +211,6 @@ const prepareStateDirectory = (
       stateDirectory,
       connectionConfigPath: join(stateDirectory, CONNECTION_CONFIG_FILE),
     } satisfies PreparedStateDirectory;
-    onPrepared(prepared);
     let directoryCreated = false;
     const removeLateDirectory = () =>
       directoryCreated ? fs.rmdir(stateDirectory).catch(() => undefined) : Promise.resolve();
@@ -222,7 +218,7 @@ const prepareStateDirectory = (
       try: (signal) =>
         fs.mkdir(stateDirectory, { mode: 0o700 }).then(() => {
           directoryCreated = true;
-          onCreated();
+          onCreated(prepared);
           if (signal.aborted)
             return removeLateDirectory().then(() => {
               throw new Error("state-directory-acquisition-interrupted");
@@ -244,16 +240,19 @@ const writePrivateConfig = (path: string, value: SupervisorChannelConfig): Promi
   return writeExclusive(path, source);
 };
 
-const removePrivateState = (
-  stateDirectory: string,
-  connectionConfigPath: string,
-): Effect.Effect<void, SupervisorPrivateStateError> =>
+const removePrivateState = ({
+  stateDirectory,
+  connectionConfigPath,
+}: PreparedStateDirectory): Effect.Effect<void, SupervisorPrivateStateError> =>
   Effect.gen(function* () {
     const configStat = yield* privateStateOperation("stat-channel-config", () =>
       fs.lstat(connectionConfigPath),
     ).pipe(
-      Effect.map(Option.some),
-      Effect.catch((error) => (error.code === "ENOENT" ? Effect.succeedNone : Effect.fail(error))),
+      Effect.asSome,
+      Effect.catchIf(
+        (error) => error.code === "ENOENT",
+        () => Effect.succeedNone,
+      ),
     );
     if (Option.isSome(configStat)) {
       if (!configStat.value.isFile() || configStat.value.isSymbolicLink())
@@ -279,28 +278,27 @@ const acquireNodeChannelEffect = (
   runId: SupervisorRunId,
   events: Queue.Queue<SupervisorEvent, Cause.Done>,
   resultContract: ResultContract | undefined,
-): Effect.Effect<SupervisorChannelHandle, SupervisorChannelError> =>
+): Effect.Effect<
+  {
+    readonly handle: SupervisorChannelHandle;
+    readonly close: Effect.Effect<void, SupervisorChannelError>;
+  },
+  SupervisorChannelError
+> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const acquisition: StagedNodeChannelAcquisition = {
-        prepared: undefined,
-        ownsStateDirectory: false,
+        ownedState: undefined,
         internalScope: undefined,
-        handle: undefined,
+        close: undefined,
       };
 
       const cleanupPartial = Effect.gen(function* () {
-        if (acquisition.handle)
-          return yield* acquisition.handle.close.pipe(Effect.catchCause(() => Effect.void));
+        if (acquisition.close) return yield* acquisition.close.pipe(Effect.ignoreCause);
         if (acquisition.internalScope)
-          yield* Scope.close(acquisition.internalScope, Exit.void).pipe(
-            Effect.catchCause(() => Effect.void),
-          );
-        if (acquisition.ownsStateDirectory && acquisition.prepared)
-          yield* removePrivateState(
-            acquisition.prepared.stateDirectory,
-            acquisition.prepared.connectionConfigPath,
-          ).pipe(Effect.ignore);
+          yield* Scope.close(acquisition.internalScope, Exit.void).pipe(Effect.ignoreCause);
+        if (acquisition.ownedState)
+          yield* removePrivateState(acquisition.ownedState).pipe(Effect.ignore);
       });
 
       return yield* Effect.gen(function* () {
@@ -318,16 +316,9 @@ const acquireNodeChannelEffect = (
           makeTokenVerifier(Redacted.value(token)).pipe(Effect.mapError(cryptoUnavailable)),
         );
         const prepared = yield* restore(
-          prepareStateDirectory(
-            options.agentDirectory,
-            runId,
-            (candidate) => {
-              acquisition.prepared = candidate;
-            },
-            () => {
-              acquisition.ownsStateDirectory = true;
-            },
-          ).pipe(
+          prepareStateDirectory(options.agentDirectory, runId, (created) => {
+            acquisition.ownedState = created;
+          }).pipe(
             Effect.mapError(() =>
               channelError(
                 "open channel",
@@ -364,35 +355,27 @@ const acquireNodeChannelEffect = (
           events,
           resultContract,
         });
-        // Cache the whole release so interruption cannot separate session shutdown from resources.
-        const close = yield* Effect.cached(
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* session.shutdown;
-              yield* Scope.close(internalScope, Exit.void);
-              yield* removePrivateState(
-                prepared.stateDirectory,
-                prepared.connectionConfigPath,
-              ).pipe(
-                Effect.mapError(() =>
-                  channelError(
-                    "cleanup",
-                    "cleanup_failed",
-                    "Supervisor private state cleanup could not be confirmed.",
-                  ),
-                ),
-              );
-            }),
-          ),
-        );
-        const handle: SupervisorChannelHandle = { metadata, events, ...session.controls, close };
-        acquisition.handle = handle;
+        // Runs exactly once and uninterruptibly: from partial cleanup below, or from the owning
+        // scope's release, so session shutdown is never separated from the resources.
+        const close = Effect.gen(function* () {
+          yield* session.shutdown;
+          yield* Scope.close(internalScope, Exit.void);
+          yield* removePrivateState(prepared).pipe(
+            Effect.mapError(() =>
+              channelError(
+                "cleanup",
+                "cleanup_failed",
+                "Supervisor private state cleanup could not be confirmed.",
+              ),
+            ),
+          );
+        });
+        acquisition.close = close;
+        const handle: SupervisorChannelHandle = { metadata, events, ...session.controls };
         const serialization = makeSupervisorRpcSerialization(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
         const protocol = yield* makeSupervisorRpcServerProtocol({
           server: baseServer,
           authTimeoutMillis: options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS,
-          maxConnections: MAX_CONNECTIONS,
-          openSessionTag: SupervisorOpenSessionRpc._tag,
           onDisconnect: session.disconnect,
         }).pipe(
           Effect.provideService(RpcSerialization.RpcSerialization, serialization),
@@ -441,7 +424,7 @@ const acquireNodeChannelEffect = (
                 ),
             }),
           );
-        return handle;
+        return { handle, close };
       }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanupPartial)));
     }),
   );
@@ -449,22 +432,22 @@ const acquireNodeChannelEffect = (
 export const makeSupervisorChannel = (
   options: SupervisorChannelLayerOptions,
 ): SupervisorChannelContract => ({
-  open: (request) =>
-    Effect.gen(function* () {
-      if (!isSupervisorRunId(request.runId))
-        return yield* channelError(
-          "open channel",
-          "invalid_run_id",
-          "Supervisor channel run identity is invalid.",
-        );
-      const runId: SupervisorRunId = request.runId;
-      const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
-      return yield* Effect.acquireRelease(
-        acquireNodeChannelEffect(options, runId, events, request.resultContract),
-        (acquired) => acquired.close.pipe(Effect.orDie),
-        { interruptible: true },
+  open: Effect.fn("SupervisorChannel.open")(function* (request: SupervisorChannelOpenRequest) {
+    if (!isSupervisorRunId(request.runId))
+      return yield* channelError(
+        "open channel",
+        "invalid_run_id",
+        "Supervisor channel run identity is invalid.",
       );
-    }),
+    const runId: SupervisorRunId = request.runId;
+    const events = yield* Queue.dropping<SupervisorEvent, Cause.Done>(EVENT_CAPACITY);
+    const { handle } = yield* Effect.acquireRelease(
+      acquireNodeChannelEffect(options, runId, events, request.resultContract),
+      ({ close }) => close.pipe(Effect.orDie),
+      { interruptible: true },
+    );
+    return handle;
+  }),
 });
 
 export class SupervisorChannel extends Context.Service<

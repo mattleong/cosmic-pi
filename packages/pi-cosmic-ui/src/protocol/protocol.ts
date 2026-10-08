@@ -2,18 +2,18 @@ import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, sanitizeTerminalLine } from "pi-cosmic-core";
-import { detachCosmicFooterContribution } from "./canonicalization.ts";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 2 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v2:host:query";
 export const COSMIC_UI_HOST_STATE = "cosmic-ui:v2:host:state";
 export const COSMIC_UI_FOOTER_UPSERT = "cosmic-ui:v2:footer:upsert";
 export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v2:footer:remove";
-export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v2:footer:invalidate";
 
-export type CosmicFooterTone = "normal" | "accent" | "dim" | "success" | "warning" | "error";
-export type CosmicFooterRegion = "identity" | "metrics" | "details";
-export const COSMIC_FOOTER_COLOR_TOKENS = [
+const Tone = Schema.Literals(["normal", "accent", "dim", "success", "warning", "error"]);
+const Region = Schema.Literals(["identity", "metrics", "details"]);
+type CosmicFooterTone = typeof Tone.Type;
+type CosmicFooterRegion = typeof Region.Type;
+const COSMIC_FOOTER_COLOR_TOKENS = [
   "accent",
   "border",
   "borderAccent",
@@ -106,7 +106,17 @@ export type CosmicFooterContribution =
   | CosmicFooterTextContribution
   | CosmicFooterStatusContribution;
 
-export { detachCosmicFooterContribution };
+const canonicalContributions = new WeakSet<CosmicFooterContribution>();
+
+/** Returns one detached, frozen contribution. Already-normalized values retain their identity. */
+export const detachCosmicFooterContribution = (
+  contribution: CosmicFooterContribution,
+): CosmicFooterContribution => {
+  if (canonicalContributions.has(contribution)) return contribution;
+  const detached = Object.freeze({ ...contribution });
+  canonicalContributions.add(detached);
+  return detached;
+};
 
 export interface CosmicUiHostState {
   /** True only while Cosmic UI owns the live custom-footer slot. */
@@ -134,67 +144,58 @@ export interface CosmicFooterRemoveEvent {
   owner: string;
   id?: string;
 }
-export interface CosmicFooterInvalidateEvent {
-  version: typeof COSMIC_UI_PROTOCOL_VERSION;
-  owner?: string;
-  id?: string;
-}
 
+const Version = Schema.Literal(COSMIC_UI_PROTOCOL_VERSION);
 const NonEmpty = Schema.String.check(Schema.isNonEmpty());
-const FooterColorSchema = Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS);
-const HostQueryData = Schema.Struct({
-  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
-  respond: Schema.Unknown,
-});
+const HostQueryData = Schema.Struct({ version: Version, respond: Schema.Unknown });
 const HostStateData = Schema.Struct({
-  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  version: Version,
   active: Schema.Boolean,
   ready: Schema.Boolean,
   hidden: Schema.Array(Schema.String),
 });
-const TextContributionData = Schema.Struct({
-  kind: Schema.Literal("text"),
+/** Placement shared by text and status contributions. */
+const placementFields = {
   id: NonEmpty,
-  region: Schema.Literals(["identity", "metrics", "details"]),
-  text: Schema.String,
-  compactText: Schema.optional(Schema.String),
+  region: Region,
   align: Schema.optional(Schema.Literals(["left", "right"])),
-  tone: Schema.optional(
-    Schema.Literals(["normal", "accent", "dim", "success", "warning", "error"]),
-  ),
   priority: Schema.optional(Schema.Finite),
   order: Schema.optional(Schema.Finite),
+};
+const TextContributionData = Schema.Struct({
+  kind: Schema.Literal("text"),
+  ...placementFields,
+  text: Schema.String,
+  compactText: Schema.optional(Schema.String),
+  tone: Schema.optional(Tone),
   label: Schema.optional(NonEmpty),
-  color: Schema.optional(FooterColorSchema),
+  color: Schema.optional(Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS)),
   decorates: Schema.optional(NonEmpty),
 });
 const StatusContributionData = Schema.Struct({
   kind: Schema.Literal("status"),
-  id: NonEmpty,
-  region: Schema.Literals(["identity", "metrics", "details"]),
-  align: Schema.optional(Schema.Literals(["left", "right"])),
-  priority: Schema.optional(Schema.Finite),
-  order: Schema.optional(Schema.Finite),
+  ...placementFields,
 });
 const UpsertData = Schema.Struct({
-  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  version: Version,
   owner: NonEmpty,
   contribution: Schema.Union([TextContributionData, StatusContributionData]),
 });
 const RemoveData = Schema.Struct({
-  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  version: Version,
   owner: NonEmpty,
   id: Schema.optional(NonEmpty),
 });
-const InvalidateData = Schema.Struct({
-  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
-  owner: Schema.optional(NonEmpty),
-  id: Schema.optional(NonEmpty),
+
+const detachHostState = ({ active, ready, hidden }: CosmicUiHostState) => ({
+  active,
+  ready,
+  hidden: Object.freeze([...hidden]),
 });
 
 /**
  * Reads every hostile query field exactly once and returns a detached plain snapshot.
- * Callers at the event-bus boundary must invoke this through HostCallbackBoundary.
+ * Callers at the event-bus boundary must invoke this through core's `invokeHostCallback`.
  */
 export function normalizeCosmicUiHostQuery<ValueInput>(
   value: ValueInput,
@@ -204,14 +205,8 @@ export function normalizeCosmicUiHostQuery<ValueInput>(
   const respond = query.respond;
   return Object.freeze({
     version: query.version,
-    respond: (state: CosmicUiHostState) => {
-      const detached = Object.freeze({
-        active: state.active,
-        ready: state.ready,
-        hidden: Object.freeze([...state.hidden]),
-      });
-      Function.prototype.apply.call(respond, query, [detached]);
-    },
+    respond: (state: CosmicUiHostState) =>
+      void Function.prototype.apply.call(respond, query, [Object.freeze(detachHostState(state))]),
   });
 }
 
@@ -220,14 +215,7 @@ export function normalizeCosmicUiHostStateEvent<ValueInput>(
   value: ValueInput,
 ): CosmicUiHostStateEvent | undefined {
   const event = decodeUnknownOrUndefined(HostStateData, value);
-  return event
-    ? Object.freeze({
-        version: event.version,
-        active: event.active,
-        ready: event.ready,
-        hidden: Object.freeze([...event.hidden]),
-      })
-    : undefined;
+  return event && Object.freeze({ version: event.version, ...detachHostState(event) });
 }
 
 /** Reads every hostile upsert field exactly once into a detached plain snapshot. */
@@ -248,12 +236,12 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
       ...(sanitizedLabel !== undefined && { label: sanitizedLabel }),
     };
   }
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return Object.freeze({
     version: event.version,
     owner: event.owner,
+    // SAFETY: Boundary decoding validates the value; optional fields decode as possibly undefined.
     contribution: detachCosmicFooterContribution(contribution as CosmicFooterContribution),
-  }) as CosmicFooterUpsertEvent;
+  });
 }
 
 /** Reads every hostile remove field exactly once into a detached plain snapshot. */
@@ -262,22 +250,6 @@ export function normalizeCosmicFooterRemoveEvent<ValueInput>(
 ): CosmicFooterRemoveEvent | undefined {
   const event = decodeUnknownOrUndefined(RemoveData, value);
   if (!event) return undefined;
-  const snapshot: CosmicFooterRemoveEvent = {
-    version: event.version,
-    owner: event.owner,
-  };
-  if (event.id !== undefined) snapshot.id = event.id;
-  return Object.freeze(snapshot);
-}
-
-/** Reads every hostile invalidation field exactly once into a detached plain snapshot. */
-export function normalizeCosmicFooterInvalidateEvent<ValueInput>(
-  value: ValueInput,
-): CosmicFooterInvalidateEvent | undefined {
-  const event = decodeUnknownOrUndefined(InvalidateData, value);
-  if (!event) return undefined;
-  const snapshot: CosmicFooterInvalidateEvent = { version: event.version };
-  if (event.owner !== undefined) snapshot.owner = event.owner;
-  if (event.id !== undefined) snapshot.id = event.id;
-  return Object.freeze(snapshot);
+  const { version, owner, id } = event;
+  return Object.freeze({ version, owner, ...(id !== undefined && { id }) });
 }

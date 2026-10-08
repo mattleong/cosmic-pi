@@ -1,6 +1,6 @@
 import * as Predicate from "effect/Predicate";
 
-export type RuntimeTypeName =
+type RuntimeTypeName =
   | "undefined"
   | "object"
   | "boolean"

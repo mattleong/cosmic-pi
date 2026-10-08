@@ -1,24 +1,12 @@
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { deliverTerminalReport } from "./terminal-report-delivery.ts";
 import * as Stream from "effect/Stream";
-import type { LocalCliProcessContract } from "../boundary/local-cli-process.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
-import type {
-  SupervisorChannelHandle,
-  SupervisorChannelContract,
-} from "../boundary/supervisor-channel.ts";
-import {
-  isOutcomeUncertain,
-  processError,
-  SubagentProcessError,
-  type SubagentError,
-} from "../run/errors.ts";
+import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
+import { isOutcomeUncertain, processError, type SubagentError } from "../run/errors.ts";
 import { emptyUsage, type SubagentUsage } from "../run/model.ts";
 import {
   decodeCodexEnvelope,
@@ -37,48 +25,22 @@ import {
   type CodexNotification,
   type CodexRequest,
 } from "./local-codex-protocol.ts";
-import { classifyLocalCliInterruptOwnership } from "./local-cli-interruption.ts";
-import {
-  toBackendExit,
-  type BackendDriver,
-  type BackendEvent,
-  type BackendLaunchRequest,
-} from "./model.ts";
-import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
-import {
-  correlatedRequest,
-  protocolError,
-  supervisorError,
-  unsupported as unsupportedCapability,
-} from "./driver-shared.ts";
-import { startLocalCli } from "./local-cli-startup.ts";
+import { makeLocalCliInterrupts, type LocalCliInterrupt } from "./local-cli-interruption.ts";
+import { toBackendExit, type BackendLaunchRequest } from "./model.ts";
+import { makeLocalCliEventIngress } from "./local-cli-events.ts";
+import { correlatedRequest, protocolError, supervisorError } from "./driver-shared.ts";
+import { deliverTerminalReport, makeLocalCliBackendDriver } from "./local-cli-driver.ts";
 
-const EVENT_CAPACITY = 512;
 const RPC_TIMEOUT = "10 seconds";
-
-const unsupported = (capability: string) =>
-  unsupportedCapability(
-    "local/codex",
-    capability,
-    `Local Codex app-server does not expose ${capability} in the hardened protocol subset.`,
-  );
 
 interface PendingResponse {
   readonly method: CodexRequest["method"];
   readonly deferred: Deferred.Deferred<unknown, SubagentError>;
 }
 
-interface PendingInterrupt {
+/** Completed by the matching interrupted turn completion. */
+interface PendingInterrupt extends LocalCliInterrupt {
   readonly turnId: string;
-  readonly assignmentEpoch: number;
-  readonly completion: Deferred.Deferred<void, SubagentError>;
-  /**
-   * Set when the public interrupt call timed out with an uncertain outcome. The
-   * lifecycle then remains exactly owned: a late matching interrupted turn
-   * completion settles the assignment through `run_settled` instead of failing.
-   */
-  abandoned: boolean;
-  completionSeen: boolean;
 }
 
 const OUTCOME_CODES = new Map<CodexRequest["method"], string>([
@@ -121,9 +83,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   supervisor: SupervisorChannelHandle,
 ) {
   const scope = yield* Scope.Scope;
-  const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
-  const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
-    events,
+  const { events, offer, release, acknowledge } = yield* makeLocalCliEventIngress(
     child.acknowledge,
   );
   const responses = new Map<string, PendingResponse>();
@@ -133,25 +93,24 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   let sessionId: string | undefined;
   let activeTurnId: string | undefined;
   let runStartedTurnId: string | undefined;
-  let pendingInterrupt: PendingInterrupt | undefined;
+  const interrupts = makeLocalCliInterrupts<PendingInterrupt>(
+    "Codex",
+    { offer, release },
+    () => assignmentEpoch,
+  );
   let cumulativeUsage: SubagentUsage = emptyUsage();
 
   const cancelPending = (error: SubagentError) => {
     for (const pending of responses.values())
       Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
     responses.clear();
-    if (pendingInterrupt) {
-      Deferred.doneUnsafe(pendingInterrupt.completion, Effect.fail(error));
-      pendingInterrupt = undefined;
-    }
+    interrupts.cancel(error);
     supervisor.cancelPending(error.message);
   };
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      cancelPending(processError("close", "local_codex_closed", "Local Codex backend closed."));
-      acknowledgeAll();
-      Queue.endUnsafe(events);
-    }),
+    Effect.sync(() =>
+      cancelPending(processError("close", "local_codex_closed", "Local Codex backend closed.")),
+    ),
   );
 
   const onUsage = (event: CodexUsage, raw: LocalCliWireEvent) => {
@@ -238,20 +197,10 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     const completedEpoch = assignmentEpoch;
     activeTurnId = undefined;
     if (runStartedTurnId === event.turnId) runStartedTurnId = undefined;
-    const interrupt = pendingInterrupt;
+    const interrupt = interrupts.current;
     if (event.status === "interrupted") {
-      if (interrupt?.turnId === event.turnId && interrupt.assignmentEpoch === completedEpoch) {
-        interrupt.completionSeen = true;
-        if (interrupt.abandoned) {
-          // The exact native interrupted settlement arrived after the
-          // public interrupt timed out; settle it as a pause rather
-          // than failing the run.
-          pendingInterrupt = undefined;
-          return offer({ type: "run_settled", assignmentEpoch: interrupt.assignmentEpoch }, raw);
-        }
-        Deferred.doneUnsafe(interrupt.completion, Effect.void);
-        return release(raw);
-      }
+      if (interrupt?.turnId === event.turnId && interrupt.epoch === completedEpoch)
+        return interrupts.complete(interrupt, raw);
       return offer(
         {
           type: "protocol_error",
@@ -274,20 +223,26 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     // accepted epoch evidence. Codex cannot complete the tool call and then the turn
     // before that causal write, so this query is independent of adapter queue scheduling.
     return supervisor.hasAcceptedReport(completedEpoch).pipe(
-      Effect.mapError((error) =>
-        protocolError(`Unable to confirm Codex supervisor report ownership: ${error.message}`),
-      ),
-      Effect.flatMap((accepted) =>
-        accepted
-          ? release(raw)
-          : offer(
-              {
-                type: "protocol_error",
-                message: "Codex turn completed without an accepted supervisor report.",
-              },
-              raw,
-            ),
-      ),
+      Effect.matchEffect({
+        onFailure: (error) =>
+          offer(
+            {
+              type: "protocol_error",
+              message: `Unable to confirm Codex supervisor report ownership: ${error.message}`,
+            },
+            raw,
+          ),
+        onSuccess: (accepted) =>
+          accepted
+            ? release(raw)
+            : offer(
+                {
+                  type: "protocol_error",
+                  message: "Codex turn completed without an accepted supervisor report.",
+                },
+                raw,
+              ),
+      }),
     );
   };
 
@@ -300,10 +255,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       Effect.flatMap((event) => {
         if (event.type === "ignored") return release(raw);
         if (event.type === "warning")
-          return offer(
-            { type: "warning", source: "runtime-extension", message: event.message },
-            raw,
-          );
+          return offer({ type: "warning", message: event.message }, raw);
         if ("threadId" in event && threadId && event.threadId !== threadId) return release(raw);
         // Every steerable notification carries a turn id; only turn_started may open one.
         if ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId)
@@ -345,7 +297,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   const consumeRaw = (raw: LocalCliWireEvent): Effect.Effect<void> => {
     if (raw.type === "protocol_error")
       return offer({ type: "protocol_error", message: raw.message }, raw);
-    if (raw.type === "exit") return release(raw);
     return decodeCodexEnvelope(raw.value).pipe(
       Effect.flatMap((envelope) => {
         if (envelope.type === "server_request")
@@ -397,7 +348,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
 
   yield* Stream.fromQueue(child.events).pipe(
     Stream.runForEach(consumeRaw),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.ensuring(
       Effect.sync(() =>
         cancelPending(
@@ -409,7 +360,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   );
   yield* Stream.fromQueue(supervisor.events).pipe(
     Stream.runForEach((event) => offer(event)),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.forkScoped,
   );
 
@@ -493,21 +444,20 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     };
   });
 
-  const requireThread = (): Effect.Effect<string, SubagentProcessError> =>
+  const currentThread = Effect.suspend(() =>
     threadId
       ? Effect.succeed(threadId)
       : Effect.fail(
           processError("control", "codex_thread_uninitialized", "Codex thread is not initialized."),
-        );
-  const requireActiveTurn = (): Effect.Effect<
-    { readonly threadId: string; readonly turnId: string },
-    SubagentProcessError
-  > =>
+        ),
+  );
+  const activeTurn = Effect.suspend(() =>
     threadId && activeTurnId
       ? Effect.succeed({ threadId, turnId: activeTurnId })
       : Effect.fail(
           processError("control", "codex_turn_inactive", "Codex has no active steerable turn."),
-        );
+        ),
+  );
 
   return {
     pid: child.pid,
@@ -520,7 +470,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
           const previousEpoch = assignmentEpoch;
           return supervisor.setAssignmentEpoch(epoch).pipe(
             Effect.mapError(supervisorError("start")),
-            Effect.andThen(requireThread()),
+            Effect.andThen(currentThread),
             Effect.tap(() =>
               Effect.sync(() => {
                 // Runtime notifications can race ahead of the correlated response.
@@ -555,7 +505,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
           );
         }),
       steer: (message: string) =>
-        requireActiveTurn().pipe(
+        activeTurn.pipe(
           Effect.flatMap(({ threadId: currentThreadId, turnId }) =>
             rpcResult(
               (id) => turnSteerRequest(id, currentThreadId, turnId, message),
@@ -572,87 +522,21 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             ),
           ),
         ),
-      interrupt: Effect.suspend(() =>
-        requireActiveTurn().pipe(
-          Effect.flatMap(({ threadId: currentThreadId, turnId }) =>
-            Effect.acquireUseRelease(
-              Effect.sync(() => {
-                if (pendingInterrupt)
-                  return {
-                    lifecycle: undefined,
-                    error: processError(
-                      "interrupt",
-                      "interrupt_not_sent",
-                      pendingInterrupt.abandoned
-                        ? "A previous Codex interrupt lifecycle is still unresolved; a second interrupt would be ambiguously correlated."
-                        : "Another Codex interrupt lifecycle is already pending.",
-                    ),
-                  } as const;
-                const lifecycle: PendingInterrupt = {
-                  turnId,
-                  assignmentEpoch,
-                  completion: Deferred.makeUnsafe<void, SubagentError>(),
-                  abandoned: false,
-                  completionSeen: false,
-                };
-                pendingInterrupt = lifecycle;
-                return { lifecycle } as const;
-              }),
-              (acquired) => {
-                if (!acquired.lifecycle) return Effect.fail(acquired.error);
-                const response = rpcResult(
-                  (id) => turnInterruptRequest(id, currentThreadId, turnId),
-                  EmptyObject,
-                  "turn/interrupt",
-                ).pipe(Effect.asVoid);
-                return Effect.all([response, Deferred.await(acquired.lifecycle.completion)], {
-                  concurrency: "unbounded",
-                  discard: true,
-                }).pipe(
-                  Effect.timeoutOrElse({
-                    duration: RPC_TIMEOUT,
-                    orElse: () =>
-                      Effect.fail(
-                        processError(
-                          "interrupt",
-                          "interrupt_outcome_uncertain",
-                          "Codex interrupt did not receive both its correlated JSON-RPC response and matching interrupted turn completion.",
-                        ),
-                      ),
-                  }),
-                );
-              },
-              (acquired, exit) =>
-                Effect.suspend(() => {
-                  if (!acquired.lifecycle || pendingInterrupt !== acquired.lifecycle)
-                    return Effect.void;
-                  // An uncertain or cancelled interrupt retains exact lifecycle
-                  // ownership so a late matching interrupted completion pauses
-                  // through run_settled. Definite outcomes release ownership.
-                  const ownership = classifyLocalCliInterruptOwnership(exit);
-                  if (ownership === "release") {
-                    pendingInterrupt = undefined;
-                    return Effect.void;
-                  }
-                  acquired.lifecycle.abandoned = true;
-                  // Native terminal evidence may have arrived before timeout while
-                  // only the JSON-RPC response was missing. Bridge it immediately;
-                  // otherwise no later event would remain to settle the pause.
-                  if (!acquired.lifecycle.completionSeen) return Effect.void;
-                  pendingInterrupt = undefined;
-                  return offer({
-                    type: "run_settled",
-                    assignmentEpoch: acquired.lifecycle.assignmentEpoch,
-                  });
-                }),
-            ),
-          ),
+      interrupt: activeTurn.pipe(
+        Effect.flatMap(({ threadId: currentThreadId, turnId }) =>
+          interrupts.run({
+            make: (base) => ({ ...base, turnId }),
+            respond: () =>
+              rpcResult(
+                (id) => turnInterruptRequest(id, currentThreadId, turnId),
+                EmptyObject,
+                "turn/interrupt",
+              ),
+            timeoutMessage:
+              "Codex interrupt did not receive both its correlated JSON-RPC response and matching interrupted turn completion.",
+          }),
         ),
       ),
-      renameDisplay: () => Effect.fail(unsupported("rename-display")),
-      reply: (requestId: string, message: string) =>
-        supervisor.reply(requestId, message).pipe(Effect.mapError(supervisorError("reply"))),
-      notifyPeers: () => Effect.fail(unsupported("peer-notice")),
     },
     acknowledge,
     terminate: child.terminate,
@@ -660,17 +544,9 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   };
 });
 
-export const makeLocalCodexBackendDriver = (
-  processes: LocalCliProcessContract,
-  supervisors: SupervisorChannelContract,
-): BackendDriver => ({
-  host: "local",
-  runtime: "codex",
-  capabilities: ["steer", "interrupt", "parent-contact"],
-  supportsContext: (context) => context === "fresh",
-  preflight: (request) => processes.preflight({ runtime: "codex", ...request }),
-  spawn: (request) =>
-    Effect.flatMap(startLocalCli("codex", request, processes, supervisors), (startup) =>
-      makeLocalCodexHandle(startup.launch, startup.child, startup.supervisor),
-    ),
-});
+export const makeLocalCodexBackendDriver = makeLocalCliBackendDriver(
+  "codex",
+  (capability) =>
+    `Local Codex app-server does not expose ${capability} in the hardened protocol subset.`,
+  makeLocalCodexHandle,
+);

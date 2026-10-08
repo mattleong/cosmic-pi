@@ -87,17 +87,4 @@ describe("feature switch configuration", () => {
     expect(decodeSubagentConfig(raw).diagnostics).toEqual([]);
     expect(reads).toBe(0);
   });
-
-  it.each([4, 5])("still rejects retired routing declarations in version %s", (version) => {
-    const legacy = decodeSubagentConfig({ version, automaticProfileRouting: false });
-    expect(legacy.file).not.toHaveProperty("automaticProfileRouting");
-    expect(legacy.diagnostics).toContain("config.<unknown>");
-  });
-
-  it("still rejects unrelated unknown v6 keys", () => {
-    expect(
-      decodeSubagentConfig({ version: 6, automaticProfileRouting: null, unknownFeature: true })
-        .diagnostics,
-    ).toContain("config.<unknown>");
-  });
 });

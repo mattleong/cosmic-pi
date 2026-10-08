@@ -5,8 +5,16 @@ import type {
   ToolDefinition,
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
+import { it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import { nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
+import {
+  clearCodePreviewSessionCapability,
+  installCodePreviewSessionCapability,
+} from "../../src/application/capability";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { CORE_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../../src/tools/names";
@@ -14,6 +22,7 @@ import {
   createBuiltinPreviewRenderers,
   registerWritePreviewTool,
 } from "../../src/tools/renderers/registration";
+import { getEnabledCodePreviewTools } from "../../src/tools/selection";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 
 const builtinSource: SourceInfo = {
@@ -57,17 +66,20 @@ function piFixture(options: Partial<ExtensionAPI> = {}): ExtensionAPI {
 function enableOnly(...tools: CodePreviewToolName[]): void {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: [...tools] });
 }
+/** The session the resolver publishes, enabling whatever the current settings enable. */
+const presentation = () => ({
+  cwd: "/project",
+  selfShell: true,
+  scheduleAnimation: () => () => undefined,
+  enabledTools: [...getEnabledCodePreviewTools()],
+});
 
 test("all enabled core presentations are renderer-only and only write installs an execution hook", () => {
   enableOnly(...CORE_CODE_PREVIEW_TOOLS);
   const installed: string[] = [];
   const pi = piFixture({ registerTool: (tool) => installed.push(tool.name) });
   for (const name of CORE_CODE_PREVIEW_TOOLS) {
-    const renderers = createBuiltinPreviewRenderers(name, {
-      cwd: "/project",
-      selfShell: true,
-      scheduleAnimation: () => () => undefined,
-    });
+    const renderers = createBuiltinPreviewRenderers(name, presentation());
     assert.ok(renderers);
     assert.equal("execute" in renderers, false);
     assert.equal("parameters" in renderers, false);
@@ -76,20 +88,47 @@ test("all enabled core presentations are renderer-only and only write installs a
   assert.deepEqual(installed, ["write"]);
 });
 
-test("disabled and unrelated names neither create presentations nor register write", () => {
+test("disabled names neither create presentations nor register write", () => {
   enableOnly("read");
   const pi = piFixture({ registerTool: () => assert.fail("unexpected hook") });
   registerWritePreviewTool(pi, "/project");
-  for (const name of ["write", "echo", "toString"])
-    assert.equal(
-      createBuiltinPreviewRenderers(name, {
-        cwd: "/project",
-        selfShell: true,
-        scheduleAnimation: () => () => undefined,
-      }),
-      undefined,
-    );
+  assert.equal(createBuiltinPreviewRenderers("write", presentation()), undefined);
 });
+
+it.effect.each([
+  ["without a preview session", "next", false],
+  ["for content it cannot preview", new TextEncoder().encode("next"), true],
+] as const)("an installed write hook writes natively %s", ([, content, session]) =>
+  Effect.gen(function* () {
+    enableOnly("write");
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-native-write-" });
+    const hooks: ToolDefinition<any, any, any>[] = [];
+    registerWritePreviewTool(piFixture({ registerTool: (tool) => hooks.push(tool) }), directory);
+    const [hook] = hooks;
+    assert.ok(hook);
+    // A session that refuses all work proves the hook never takes a snapshot of its own.
+    if (session)
+      installCodePreviewSessionCapability({
+        run: () => Promise.reject(new Error("no preview work expected")),
+        defer: () => () => undefined,
+        schedule: () => () => undefined,
+      });
+    yield* Effect.addFinalizer(() => Effect.sync(() => clearCodePreviewSessionCapability()));
+    const result = yield* Effect.tryPromise(() =>
+      hook.execute(
+        "native-write",
+        { path: "a.txt", content },
+        undefined,
+        undefined,
+        opaqueFixture({ cwd: directory }),
+      ),
+    );
+    assert.equal(yield* fs.readFileString(`${directory}/a.txt`), "next");
+    // Unobserved prior contents never support a new-file claim.
+    assert.equal(result.details, undefined);
+  }).pipe(provideBuiltLayer(nodeFilePlatformLayer)),
+);
 
 test.each([false, true])("write registration preserves active selection: %s", (active) => {
   enableOnly("write");

@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { SubagentRunObservation, SubagentServiceContract } from "../../../src/run/service.ts";
@@ -119,3 +120,28 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
       base.workspaceBindingStatus ?? (() => unexpected("workspaceBindingStatus")),
   };
 }
+
+/**
+ * Completes `entered` at the first await progress update, which a real service publishes only
+ * after the await holds its completion claim. `failures` records the await's typed failures.
+ */
+export const signalAwaitEntry = (
+  service: SubagentServiceContract,
+  entered: Deferred.Deferred<void>,
+  failures: Array<unknown> = [],
+): SubagentServiceContract => ({
+  ...service,
+  withAwaitTerminalObservations: (ids, until, update, use, coverage) =>
+    service
+      .withAwaitTerminalObservations(
+        ids,
+        until,
+        (runs, projection) => {
+          Deferred.doneUnsafe(entered, Effect.void);
+          update?.(runs, projection);
+        },
+        use,
+        coverage,
+      )
+      .pipe(Effect.tapError((error) => Effect.sync(() => void failures.push(error)))),
+});

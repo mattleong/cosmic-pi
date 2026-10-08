@@ -1,8 +1,8 @@
 import type * as Schema from "effect/Schema";
-import type { AgentToolResult, ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
@@ -21,6 +21,8 @@ import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
 } from "../src/application/tool-renderers";
+import { nativeCall as callRecord, nativeReceipt, scriptResult } from "./support/native-codemode";
+import { builtinToolInfo, inertScheduler } from "./support/renderer-host";
 
 /** Registered builtin renderers in one collapsed style. */
 function registered(style: "compact" | "preview") {
@@ -38,24 +40,8 @@ function registered(style: "compact" | "preview") {
     "list_mcp_resources",
     "list_mcp_resource_templates",
   ];
-  const metadata: ToolInfo[] = names.map((name) => {
-    const tool: ToolInfo = {
-      name,
-      description: name,
-      parameters: opaqueFixture({ type: "object" }),
-      exposure: "direct",
-      sourceInfo: {
-        source: "builtin",
-        path:
-          name.startsWith("mcp__") || name.endsWith("mcp_resource") || name.startsWith("list_mcp_")
-            ? "builtin:mcp"
-            : name === "tool_search"
-              ? "builtin:tool-search"
-              : `builtin:${name}`,
-        scope: "temporary",
-        origin: "top-level",
-      },
-    };
+  const metadata = names.map((name) => {
+    const tool = builtinToolInfo(name);
     if (isWebAccessTool(name))
       tool.sourceInfo = {
         source: "npm:pi-web-access@0.36.0",
@@ -68,10 +54,7 @@ function registered(style: "compact" | "preview") {
     return tool;
   });
   const owner = new CodePreviewPresentationOwner();
-  owner.publish("/project", new Set(ALL_CODE_PREVIEW_TOOLS), {
-    defer: () => () => undefined,
-    schedule: () => () => undefined,
-  });
+  owner.publish("/project", new Set(ALL_CODE_PREVIEW_TOOLS), inertScheduler);
   const captured = captureRegistrations((registration) => {
     const pi = extensionApiFixture({
       ...registration,
@@ -118,47 +101,32 @@ const text = <Details>(value: string, details?: Details): AgentToolResult<unknow
   content: [{ type: "text", text: value }],
   details: details ?? {},
 });
+const docsLookup = { server: "docs", tool: "lookup" };
 /** Live before-write evidence; replayed details carry only its size. */
 const writeBefore = (content: string | undefined) => ({
   codePreviewBeforeWrite: content === undefined ? undefined : { kind: "content", content },
 });
 const writeSource = "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n";
+const editArgs = {
+  path: "/project/src/a.ts",
+  edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
+};
 
-interface NativeGalleryDetails {
-  calls: unknown[];
-  fullOutputPath?: string;
-}
 const nativeResult = (
   status: "completed" | "failed",
   calls: unknown[] = [],
   output = "Script output",
   fullOutputPath?: string,
-): AgentToolResult<unknown> => {
-  const details: NativeGalleryDetails = { calls };
-  if (fullOutputPath) details.fullOutputPath = fullOutputPath;
-  return {
-    content: [
-      { type: "text", text: `Script ${status}\nWall time 0.1 seconds\nOutput:\n` },
-      { type: "text", text: output },
-    ],
-    details,
-  };
-};
-const nativeCall = (status: string, error?: string) => {
-  const call = { id: "private/1", name: "read", args: '{"path":"/project/source.ts"}', status };
-  return error ? { ...call, error } : call;
-};
-
-type NativeArgumentCallInput = Schema.JsonObject;
-const nativeArgumentCall = (name: string, args: NativeArgumentCallInput) => {
-  const json = JSON.stringify(args);
-  return {
-    ...nativeCall("ok"),
-    id: `private/${name}`,
-    name,
-    args: json.length > 200 ? `${json.slice(0, 197)}...` : json,
-  };
-};
+) =>
+  scriptResult(
+    status,
+    { calls, ...(fullOutputPath && { fullOutputPath }) },
+    { type: "text", text: output },
+  );
+const nativeCall = (status: string, error?: string) =>
+  callRecord({ args: '{"path":"/project/source.ts"}', status, ...(error && { error }) });
+const nativeArgumentCall = (name: string, args: Schema.JsonObject) =>
+  callRecord({ id: `private/${name}`, name, args: nativeReceipt(args) });
 
 const scenarios: ReadonlyArray<
   Omit<GalleryScenario, "args"> & {
@@ -612,10 +580,7 @@ const scenarios: ReadonlyArray<
     tool: "codemode",
     title: "native malformed historical details",
     args: { code: "return 'Historical output';" },
-    result: {
-      content: [{ type: "text", text: "Historical output" }],
-      details: { calls: [{ old: true }] },
-    },
+    result: text("Historical output", { calls: [{ old: true }] }),
   },
   {
     tool: "codemode",
@@ -662,90 +627,59 @@ const scenarios: ReadonlyArray<
     title: "MCP progress",
     args: { query: "Getting started" },
     phase: "running",
-    result: {
-      content: [{ type: "text", text: "Searching documentation" }],
-      details: { server: "docs", tool: "lookup" },
-    },
+    result: text("Searching documentation", docsLookup),
   },
   {
     tool: "mcp__docs__lookup",
     title: "MCP neutral returned output",
     args: { query: "Getting started" },
-    result: {
-      content: [{ type: "text", text: "Guide\nInstallation\nUsage" }],
-      details: { server: "docs", tool: "lookup" },
-    },
+    result: text("Guide\nInstallation\nUsage", docsLookup),
   },
   {
     tool: "mcp__docs__lookup",
     title: "MCP error and recovery",
     args: { query: "Getting started" },
     isError: true,
-    result: {
-      content: [
-        { type: "text", text: "Lookup failed\nRetry with another query; retained recovery detail" },
-      ],
-      details: { server: "docs", tool: "lookup" },
-    },
+    result: text("Lookup failed\nRetry with another query; retained recovery detail", docsLookup),
   },
   {
     tool: "mcp__docs__lookup",
     title: "MCP saved clipping",
     args: {},
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n\n[Full output: /tmp/mcp-output.txt (read it with offset/limit)]",
-        },
-      ],
-      details: { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-output.txt" },
-    },
+    result: text(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n\n[Full output: /tmp/mcp-output.txt (read it with offset/limit)]",
+      { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-output.txt" },
+    ),
   },
   {
     tool: "mcp__docs__lookup",
     title: "MCP unsaved clipping",
     args: {},
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n\n[Could not save the full output: ENOSPC]",
-        },
-      ],
-      details: { server: "docs", tool: "lookup" },
-    },
+    result: text(
+      "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nHEAD\nTAIL\n\n[Could not save the full output: ENOSPC]",
+      docsLookup,
+    ),
   },
   {
     tool: "mcp__docs__lookup",
     title: "MCP long error inside Pi's truncation envelope",
     args: { query: "Getting started" },
     isError: true,
-    result: {
-      content: [
-        {
-          type: "text",
-          text: `Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nIndex docs-main has no page for that query\n${"diagnostic\n".repeat(3)}…8000 tokens truncated…\n\n[Full output: /tmp/mcp-error.txt (read it with offset/limit)]`,
-        },
-      ],
-      details: { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-error.txt" },
-    },
+    result: text(
+      `Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nIndex docs-main has no page for that query\n${"diagnostic\n".repeat(3)}…8000 tokens truncated…\n\n[Full output: /tmp/mcp-error.txt (read it with offset/limit)]`,
+      { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-error.txt" },
+    ),
   },
   {
     tool: "mcp__docs__lookup",
     title: "MCP long single-line output",
     args: { query: "Getting started" },
-    result: {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            items: Array.from({ length: 80 }, (_, id) => ({ id, title: `Item ${id}` })),
-          }),
-        },
-      ],
-      details: { server: "docs", tool: "lookup" },
-    },
+    result: text(
+      JSON.stringify({
+        items: Array.from({ length: 80 }, (_, id) => ({ id, title: `Item ${id}` })),
+      }),
+      docsLookup,
+    ),
   },
   {
     tool: "mcp__docs__lookup",
@@ -765,44 +699,36 @@ const scenarios: ReadonlyArray<
         { type: "text", text: "Image retained by Pi" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
       ],
-      details: { server: "docs", tool: "lookup" },
+      details: docsLookup,
     },
   },
   {
     tool: "read_mcp_resource",
     title: "MCP read resource",
     args: { server: "docs", uri: "docs://guide" },
-    result: {
-      content: [{ type: "text", text: "Resource contents" }],
-      details: { server: "docs", tool: "read_mcp_resource" },
-    },
+    result: text("Resource contents", { server: "docs", tool: "read_mcp_resource" }),
   },
   {
     tool: "list_mcp_resources",
     title: "MCP resource pagination and partial server failure",
     args: {},
-    result: {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            resources: [{ server: "docs", uri: "docs://guide", name: "Guide" }],
-            nextCursor: "next",
-            errors: [{ server: "offline", error: "Connection unavailable\nDiagnostic evidence" }],
-          }),
-        },
-      ],
-      details: { server: "", tool: "list_mcp_resources" },
-    },
+    result: text(
+      JSON.stringify({
+        resources: [{ server: "docs", uri: "docs://guide", name: "Guide" }],
+        nextCursor: "next",
+        errors: [{ server: "offline", error: "Connection unavailable\nDiagnostic evidence" }],
+      }),
+      { server: "", tool: "list_mcp_resources" },
+    ),
   },
   {
     tool: "list_mcp_resource_templates",
     title: "MCP empty template listing",
     args: { server: "docs" },
-    result: {
-      content: [{ type: "text", text: '{"resourceTemplates":[]}' }],
-      details: { server: "docs", tool: "list_mcp_resource_templates" },
-    },
+    result: text('{"resourceTemplates":[]}', {
+      server: "docs",
+      tool: "list_mcp_resource_templates",
+    }),
   },
   {
     tool: "bash",
@@ -858,43 +784,28 @@ const scenarios: ReadonlyArray<
     tool: "grep",
     title: "grep match limit with agent notes",
     args: { pattern: "TODO", path: "/project/src", limit: 2 },
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "a.ts:3: // TODO fix the retry\nb.ts:9: // TODO remove after launch\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
-        },
-      ],
-      details: { matchLimitReached: 2 },
-    },
+    result: text(
+      "a.ts:3: // TODO fix the retry\nb.ts:9: // TODO remove after launch\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
+      { matchLimitReached: 2 },
+    ),
   },
   {
     tool: "bash",
     title: "bash truncated output with agent notes",
     args: { command: "cat build.log" },
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "step 49\nstep 50\n\n[Showing lines 49-50 of 50. Full output: /tmp/pi-bash-1.log]",
-        },
-      ],
-      details: { truncation: { truncated: true }, fullOutputPath: "/tmp/pi-bash-1.log" },
-    },
+    result: text(
+      "step 49\nstep 50\n\n[Showing lines 49-50 of 50. Full output: /tmp/pi-bash-1.log]",
+      { truncation: { truncated: true }, fullOutputPath: "/tmp/pi-bash-1.log" },
+    ),
   },
   {
     tool: "read",
     title: "read oversized first line",
     args: { path: "/project/dist/app.js", offset: 40 },
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "[Line 40 is 61.2KB, exceeds 50.0KB limit. Use bash: sed -n '40p' /project/dist/app.js | head -c 51200]",
-        },
-      ],
-      details: { truncation: { truncated: true, firstLineExceedsLimit: true } },
-    },
+    result: text(
+      "[Line 40 is 61.2KB, exceeds 50.0KB limit. Use bash: sed -n '40p' /project/dist/app.js | head -c 51200]",
+      { truncation: { truncated: true, firstLineExceedsLimit: true } },
+    ),
   },
   {
     tool: "bash",
@@ -932,6 +843,29 @@ const scenarios: ReadonlyArray<
     result: text(
       "Could not find the exact text in /project/src/a.ts. The old text must match exactly including all whitespace and newlines.",
     ),
+    isError: true,
+  },
+  {
+    tool: "edit",
+    title: "edit with empty text to replace",
+    args: { path: "/project/src/a.ts", edits: [{ oldText: "", newText: "b" }] },
+    result: text("edits[0].oldText must not be empty in /project/src/a.ts."),
+    isError: true,
+  },
+  {
+    tool: "edit",
+    title: "edit that changes nothing",
+    args: { path: "/project/src/a.ts", oldText: "a", newText: "a" },
+    result: text(
+      "No changes made to /project/src/a.ts. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.",
+    ),
+    isError: true,
+  },
+  {
+    tool: "edit",
+    title: "edit on a missing file",
+    args: { path: "/project/src/missing.ts", edits: [{ oldText: "a", newText: "b" }] },
+    result: text("Could not edit file: /project/src/missing.ts. Error code: ENOENT."),
     isError: true,
   },
   {
@@ -976,22 +910,11 @@ const scenarios: ReadonlyArray<
       writeBefore(writeSource.replaceAll("\n", "\r\n").replace(/\r\n$/u, "")),
     ),
   },
-  {
-    tool: "edit",
-    title: "edit proposal",
-    args: {
-      path: "/project/src/a.ts",
-      edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
-    },
-    phase: "pending",
-  },
+  { tool: "edit", title: "edit proposal", args: editArgs, phase: "pending" },
   {
     tool: "edit",
     title: "edit applied",
-    args: {
-      path: "/project/src/a.ts",
-      edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
-    },
+    args: editArgs,
     result: text("Successfully replaced text in /project/src/a.ts.", {
       diff: " 1 export const a = 1;\n-2 export const b = 2;\n+2 export const b = 20;\n 3 export const c = 3;",
     }),
@@ -999,10 +922,7 @@ const scenarios: ReadonlyArray<
   {
     tool: "edit",
     title: "edit without a diff",
-    args: {
-      path: "/project/src/a.ts",
-      edits: [{ oldText: "export const b = 2;", newText: "export const b = 20;" }],
-    },
+    args: editArgs,
     result: text("Successfully replaced text in /project/src/a.ts."),
   },
 ];

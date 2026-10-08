@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
+  type CodePreviewSettings,
   loadCodePreviewSettings,
   registerCodePreviewReplay,
 } from "pi-code-previews";
@@ -29,19 +30,16 @@ import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
-import type { BackendProxyRequest } from "../backend/model.ts";
-import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
 import {
   makeSubagentLayer,
   type SubagentApplication,
-  type SubagentLayerOptions,
   type SubagentRuntimeError,
 } from "../layer.ts";
 import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
-import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
+import { SubagentService } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { isPendingDeliveryError } from "../tools/outcome.ts";
@@ -61,7 +59,7 @@ import { registerUltracodeController } from "./ultracode.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import {
   IncompatibleProfileReloadHandoffError,
-  makeProfileReloadHandoff,
+  profileReloadHandoff,
   profileReloadSessionKey,
 } from "./profile-reload-handoff.ts";
 
@@ -76,8 +74,8 @@ export interface SubagentApplicationBoundaries {
     cwd: string,
     projectTrusted: boolean,
     signal?: AbortSignal,
-  ) => ReturnType<typeof loadCodePreviewSettings> | Promise<void>;
-  readonly getAgentDirectory?: (() => string) | undefined;
+  ) => PromiseLike<CodePreviewSettings | void>;
+  readonly getAgentDirectory: () => string;
 }
 
 const LIVE_APPLICATION_BOUNDARIES: SubagentApplicationBoundaries = {
@@ -85,15 +83,18 @@ const LIVE_APPLICATION_BOUNDARIES: SubagentApplicationBoundaries = {
   getAgentDirectory: getAgentDir,
 };
 
+/**
+ * What started an activation. A session start or reload publishes history replay and rebuilds
+ * session overrides from the reload handoff, if any; `/tree` keeps the in-memory overrides.
+ */
+type ActivationTrigger = "start" | "reload" | "tree";
+
 interface CapturedActivation {
   readonly ctx: ExtensionContext;
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly agentDirectory: string;
-  readonly preserveSessionOverrides: boolean;
-  readonly restoreReloadHandoff: boolean;
-  /** Only session_start may publish history replay; a /tree activation never wins it. */
-  readonly publishesReplay: boolean;
+  readonly trigger: ActivationTrigger;
   readonly sessionKey?: string | undefined;
 }
 
@@ -111,25 +112,20 @@ interface PreparedActivation {
  * Deactivates active Subagents tools, optionally only those in `only`, and returns the names it
  * removed. Pi drops its pending restore list (tools still registering after /reload, such as
  * MCP tools) whenever a call removes a tool, so nothing is set when nothing would be removed.
+ * A stale host cannot turn registration cleanup into an unhandled callback error.
  */
-function deactivateSubagentTools(
+const deactivateSubagentTools = (
   pi: ExtensionAPI,
-  only?: ReadonlySet<string>,
-): ReadonlyArray<string> {
-  try {
+  only?: ReadonlyArray<string>,
+): ReadonlyArray<string> =>
+  invokeHostCallback(() => {
     const active = pi.getActiveTools();
     const removed = active.filter(
-      (name) => SUBAGENT_TOOL_NAME_SET.has(name) && (only === undefined || only.has(name)),
+      (name) => SUBAGENT_TOOL_NAME_SET.has(name) && (only?.includes(name) ?? true),
     );
-    if (removed.length === 0) return [];
-    const removing = new Set(removed);
-    pi.setActiveTools(active.filter((name) => !removing.has(name)));
+    if (removed.length > 0) pi.setActiveTools(active.filter((name) => !removed.includes(name)));
     return removed;
-  } catch {
-    // A stale host cannot turn registration cleanup into an unhandled callback error.
-    return [];
-  }
-}
+  }, []);
 
 const activeSubagentTools = (pi: ExtensionAPI): ReadonlyArray<string> =>
   invokeHostCallback(
@@ -164,23 +160,31 @@ export function registerSubagentApplication(
   const workflowViews = makeWorkflowActivitySource();
   const notify = makeHostNotifier(pi);
   const ultracode = registerUltracodeController(pi);
+  const profileOverrideHandoff = makeProfileOverrideHandoff();
   let releaseActivity: (() => void) | undefined;
-  const revokeActivity = () => {
-    releaseActivity?.();
-    releaseActivity = undefined;
-  };
   let currentActivation: CapturedActivation | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
-  let profileGeneration = 0;
-  let activeProfileGeneration = -1;
-  const profileOverrideHandoff = makeProfileOverrideHandoff();
-  const profileReloadHandoff = makeProfileReloadHandoff();
   let hasRegisteredTools = false;
   let incompatibleReload = false;
   let retainingTools = false;
 
-  const rememberDisabledTools = (names: ReadonlyArray<string>): void => {
-    startupFailureTools = [...new Set([...startupFailureTools, ...names])];
+  /** Deactivates every Subagents tool, remembering what it removed for the next activation. */
+  const disableTools = (): void => {
+    startupFailureTools = [...new Set([...startupFailureTools, ...deactivateSubagentTools(pi)])];
+  };
+  /**
+   * Ends the current activation's host presence. `keepTools` leaves the tools active, because Pi
+   * drops its pending restore list whenever a tool is deactivated.
+   */
+  const detachActivation = (keepTools: boolean): void => {
+    receipts.deactivate();
+    releaseActivity?.();
+    releaseActivity = undefined;
+    ultracode.suspend();
+    if (!keepTools) disableTools();
+    currentActivation = undefined;
+    bridge.clear();
+    workflowViews.clear();
   };
   /**
    * Runs a slot transition whose synchronous deactivation of the outgoing runtime keeps the
@@ -206,10 +210,9 @@ export function registerSubagentApplication(
       PreparedActivation
     >({
       makeRuntime: (activation) => {
-        if (!activation.preserveSessionOverrides) profileOverrideHandoff.clear();
-        const generation = ++profileGeneration;
-        activeProfileGeneration = generation;
-        const restoreReload = activation.restoreReloadHandoff || incompatibleReload;
+        if (activation.trigger !== "tree") profileOverrideHandoff.clear();
+        const owner = profileOverrideHandoff.open();
+        const restoreReload = activation.trigger === "reload" || incompatibleReload;
         incompatibleReload = false;
         let restoredReload: SessionProfileOverrideSeed | undefined;
         try {
@@ -221,14 +224,10 @@ export function registerSubagentApplication(
           incompatibleReload = error instanceof IncompatibleProfileReloadHandoffError;
           throw error;
         }
-        if (restoredReload) profileOverrideHandoff.publish(generation, generation, restoredReload);
+        if (restoredReload) profileOverrideHandoff.publish(owner, restoredReload);
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
-        const sessionOverrides = restoredReload ?? profileOverrideHandoff.capture();
-        const layerOptions: SubagentLayerOptions = {
-          ...(activation.sessionKey && {
-            workspaceOwnerId: activation.sessionKey,
-            sessionKey: activation.sessionKey,
-          }),
+        const layer = makeSubagentLayer({
+          sessionKey: activation.sessionKey,
           isProjectTrusted: () => isProjectTrusted(activation.ctx),
           workflowActivity: workflowViews,
           workflowObserver: ultracode.observer(),
@@ -236,28 +235,23 @@ export function registerSubagentApplication(
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
           ...(sessionBaseConfig && { sessionBaseConfig }),
-          publishSessionBaseConfig: (config: ResolvedSubagentConfig) =>
-            profileOverrideHandoff.publishBaseConfig(generation, activeProfileGeneration, config),
-          initialSessionOverrides: sessionOverrides,
-          publishSessionOverrides: (seed: SessionProfileOverrideSeed) =>
-            profileOverrideHandoff.publish(generation, activeProfileGeneration, seed),
+          publishSessionBaseConfig: (config) =>
+            profileOverrideHandoff.publishBaseConfig(owner, config),
+          initialSessionOverrides: restoredReload ?? profileOverrideHandoff.capture(),
+          publishSessionOverrides: (seed) => profileOverrideHandoff.publish(owner, seed),
           publish: bridge.publish,
           notify,
-          questionnaireHandler: (request, owner) =>
+          questionnaireHandler: (request, questionnaireOwner) =>
             askParentQuestionnaire(
               pi.events,
               activation.ctx.sessionManager.getSessionId(),
               request,
-              owner,
+              questionnaireOwner,
             ),
-          proxyHandler: (
-            service: SubagentServiceContract,
-            callerRunId: string,
-            request: BackendProxyRequest,
-          ) => {
-            const input = decodeSubagentProxyRequest(request);
-            if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
-            return Effect.gen(function* () {
+          proxyHandler: (service, callerRunId, request) =>
+            Effect.gen(function* () {
+              const input = decodeSubagentProxyRequest(request);
+              if (input instanceof InvalidSubagentRequestError) return yield* input;
               const caller = (yield* service.visibleList(callerRunId)).find(
                 (run) => run.id === callerRunId,
               );
@@ -274,10 +268,9 @@ export function registerSubagentApplication(
                 activation.ctx,
                 callerRunId,
               ).pipe(Effect.provideService(SubagentService, service));
-            });
-          },
-        };
-        return makePiManagedRuntime(pi, makeSubagentLayer(layerOptions), {
+            }),
+        });
+        return makePiManagedRuntime(pi, layer, {
           agentDirectory: () => activation.agentDirectory,
           packageName: "pi-subagents",
         });
@@ -285,9 +278,7 @@ export function registerSubagentApplication(
       startup: (activation) =>
         Effect.gen(function* () {
           yield* bestEffortHostBootstrap("pi-subagents.preview-settings", (signal) =>
-            Promise.resolve(
-              boundaries.loadSettings(activation.cwd, activation.projectTrusted, signal),
-            ).then(() => undefined),
+            boundaries.loadSettings(activation.cwd, activation.projectTrusted, signal),
           );
           const projection = yield* SubagentService.use((service) => service.projection);
           const scheduler = yield* CodePreviewSchedulerService;
@@ -296,8 +287,9 @@ export function registerSubagentApplication(
           const profiles = yield* SubagentProfileService.use((service) => service.capture);
           // The inactive workflow tool's description lists saved workflows as the session found
           // them at start; the model sees them only while workflows are opted in.
-          const savedWorkflows = (yield* WorkflowStore.use((store) => store.list)).workflows;
-          const savedWorkflowLocations = yield* WorkflowStore.use((store) => store.locations);
+          const store = yield* WorkflowStore;
+          const savedWorkflows = (yield* store.list).workflows;
+          const savedWorkflowLocations = yield* store.locations;
           return {
             scheduler,
             projection,
@@ -310,7 +302,7 @@ export function registerSubagentApplication(
                 projectTrusted: activation.projectTrusted,
               },
               toolPresentation: bridge.bindToolPresentation(),
-              run: (effect, signal) => run(effect, signal),
+              run: slot.run,
             },
           };
         }),
@@ -335,39 +327,35 @@ export function registerSubagentApplication(
               savedWorkflows: prepared.savedWorkflows,
               savedWorkflowLocations: prepared.savedWorkflowLocations,
               scheduleAnimation,
-              run: (effect, signal) => run(effect, signal),
+              run: slot.run,
             },
             replay.shell,
           );
           // A first registration keeps what Pi activated. Later ones deactivate only tools Pi
           // activated that the session had not kept active.
-          const activatedByRegistration = activeSubagentTools(pi).filter(
-            (name) => !keptActive.has(name),
-          );
-          if (!hasRegisteredTools) rememberDisabledTools(activatedByRegistration);
-          else
+          if (hasRegisteredTools)
             deactivateSubagentTools(
               pi,
-              new Set(
-                activatedByRegistration.filter((name) => !startupFailureTools.includes(name)),
+              activeSubagentTools(pi).filter(
+                (name) => !keptActive.has(name) && !startupFailureTools.includes(name),
               ),
             );
           hasRegisteredTools = true;
         } catch {
-          rememberDisabledTools(deactivateSubagentTools(pi));
+          disableTools();
           if (!slot.isCurrent(token)) return;
           notifyActivationFailure(activation.ctx, "Subagents couldn't register their tools");
           if (slot.isCurrent(token)) void slot.shutdown();
           return;
         }
         if (!slot.isCurrent(token)) {
-          rememberDisabledTools(deactivateSubagentTools(pi));
+          disableTools();
           return;
         }
-        if (activation.publishesReplay) replay.publish();
+        if (activation.trigger !== "tree") replay.publish();
         bridge.publish(prepared.projection);
         currentActivation = activation;
-        if (activation.restoreReloadHandoff && activation.sessionKey)
+        if (activation.trigger === "reload" && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);
         bridge.setContext(activation.ctx);
         ultracode.activate(activation.ctx, prepared.ultracode);
@@ -377,6 +365,7 @@ export function registerSubagentApplication(
           startupFailureTools.filter((name) => name !== WORKFLOW_TOOL_NAME),
         );
         startupFailureTools = [];
+        const isCurrent = () => slot.isCurrent(token) && currentActivation === activation;
         if (activation.sessionKey && slot.isCurrent(token))
           releaseActivity = registerSubagentActivity({
             events: pi.events,
@@ -384,23 +373,23 @@ export function registerSubagentApplication(
             bridge,
             workflows: workflowViews,
             actWorkflow: (action, id, signal) =>
-              run(
+              slot.run(
                 WorkflowService.use((workflows) =>
                   action === "stop" ? workflows.stop(id).pipe(Effect.asVoid) : workflows.skip(id),
                 ),
                 signal,
               ),
-            isCurrent: () => slot.isCurrent(token) && currentActivation === activation,
+            isCurrent,
             input: (selected, action, signal) =>
-              run(promptSubagentActivityInput(activation.ctx, selected, action), signal),
+              slot.run(promptSubagentActivityInput(activation.ctx, selected, action), signal),
             act: (id, action, signal, input) =>
-              run(
+              slot.run(
                 SubagentService.use((service) => {
                   if (action === "message")
                     return service.send(id, input!).pipe(
                       Effect.catchIf(isPendingDeliveryError, () =>
                         Effect.sync(() => {
-                          if (slot.isCurrent(token) && currentActivation === activation)
+                          if (isCurrent())
                             notifyAtHostBoundary(
                               activation.ctx,
                               "Guidance delivery is still pending",
@@ -410,34 +399,19 @@ export function registerSubagentApplication(
                       ),
                       Effect.asVoid,
                     );
-                  if (action === "reply") return service.reply(id, input!).pipe(Effect.asVoid);
-                  if (action === "rename") return service.rename(id, input!).pipe(Effect.asVoid);
+                  if (action === "reply" || action === "rename")
+                    return service[action](id, input!).pipe(Effect.asVoid);
                   if (action === "resume") return service.resume(id, input).pipe(Effect.asVoid);
                   return service[action](id).pipe(Effect.asVoid);
                 }),
                 signal,
               ),
           });
-        if (!slot.isCurrent(token)) {
-          revokeActivity();
-          ultracode.suspend();
-          rememberDisabledTools(deactivateSubagentTools(pi));
-          currentActivation = undefined;
-          bridge.clear();
-          workflowViews.clear();
-        }
+        if (!slot.isCurrent(token)) detachActivation(false);
       },
-      onDeactivated: () => {
-        receipts.deactivate();
-        revokeActivity();
-        ultracode.suspend();
-        if (!retainingTools) rememberDisabledTools(deactivateSubagentTools(pi));
-        currentActivation = undefined;
-        bridge.clear();
-        workflowViews.clear();
-      },
+      onDeactivated: () => detachActivation(retainingTools),
       onStartFailure: (activation) => {
-        rememberDisabledTools(deactivateSubagentTools(pi));
+        disableTools();
         notifyActivationFailure(
           activation.ctx,
           incompatibleReload
@@ -447,44 +421,30 @@ export function registerSubagentApplication(
       },
     });
 
-  const run = <A, E>(
-    effect: Effect.Effect<A, E, SubagentApplication>,
-    signal?: AbortSignal,
-  ): Promise<A> => slot.run(effect, signal);
-
   registerApplicationCommands(pi, {
     bridge,
     ultracode,
-    run,
+    run: slot.run,
     current: () => currentActivation,
     isActive: () => slot.isActive(),
   });
 
-  const prepareActivation = (
-    ctx: ExtensionContext,
-    preserveSessionOverrides: boolean,
-    restoreReloadHandoff: boolean,
-    keepTools = false,
-  ): Promise<void> => {
-    receipts.deactivate();
-    revokeActivity();
-    ultracode.suspend();
-    // Runs the replaced activation leaves open are announced again, which reopens the window.
-    ultracode.reset();
-    currentActivation = undefined;
-    bridge.clear();
-    workflowViews.clear();
+  const prepareActivation = (ctx: ExtensionContext, trigger: ActivationTrigger): Promise<void> => {
+    const tree = trigger === "tree";
     // No registered Subagents tool may target the inactive slot while capture or replacement is
     // pending. Preserve only names that were active before deactivation. A replacement that
     // keeps the tools deactivates them only if it ends without an activation.
-    if (!keepTools) rememberDisabledTools(deactivateSubagentTools(pi));
+    detachActivation(tree);
+    // Runs the replaced activation leaves open are announced again, which reopens the window.
+    ultracode.reset();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown();
     const projectTrusted = isProjectTrusted(ctx);
-    let agentDirectory: string;
-    try {
-      agentDirectory = (boundaries.getAgentDirectory ?? getAgentDir)();
-    } catch {
+    const agentDirectory = invokeHostCallback<string | undefined>(
+      () => boundaries.getAgentDirectory(),
+      undefined,
+    );
+    if (agentDirectory === undefined) {
       const shutdown = slot.shutdown();
       notifyActivationFailure(ctx, "Subagents couldn't read this session's environment");
       return shutdown;
@@ -494,22 +454,19 @@ export function registerSubagentApplication(
       cwd: captured.cwd,
       projectTrusted,
       agentDirectory,
-      preserveSessionOverrides,
-      restoreReloadHandoff,
-      // Tree navigation alone preserves the session's overrides.
-      publishesReplay: !preserveSessionOverrides,
+      trigger,
       sessionKey: profileReloadSessionKey(ctx),
     };
     const start = () => slot.start(activation, captured.signal);
-    return (keepTools ? retainingToolsDuring(start) : start()).then(() => undefined);
+    return (tree ? retainingToolsDuring(start) : start()).then(() => undefined);
   };
 
   pi.on("session_start", (event, ctx) => {
     // Pi emits one session_start per factory load; history adopts only if this startup publishes.
     try {
-      const restoreReloadHandoff = event.reason === "reload";
-      if (!restoreReloadHandoff) profileReloadHandoff.clear();
-      return prepareActivation(ctx, false, restoreReloadHandoff).finally(replay.finishStartup);
+      const trigger = event.reason === "reload" ? "reload" : "start";
+      if (trigger === "start") profileReloadHandoff.clear();
+      return prepareActivation(ctx, trigger).finally(replay.finishStartup);
     } catch (error) {
       replay.finishStartup();
       throw error;
@@ -522,26 +479,20 @@ export function registerSubagentApplication(
   });
 
   // Pi restored the target branch's tool loadout just before this event.
-  pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, true, false, true));
+  pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, "tree"));
 
   pi.on("session_shutdown", (event, ctx) => {
+    const reload = event.reason === "reload";
     replay.retire();
-    receipts.deactivate();
-    revokeActivity();
-    ultracode.suspend();
-    ultracode.reset();
-    activeProfileGeneration = -1;
     const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;
-    currentActivation = undefined;
-    if (event.reason === "reload") {
+    detachActivation(reload);
+    ultracode.reset();
+    if (reload) {
       const authoritative = profileOverrideHandoff.captureAuthoritative();
       if (sessionKey && authoritative) profileReloadHandoff.publish(sessionKey, authoritative);
     } else profileReloadHandoff.clear();
+    // Clearing the handoff also retires the outgoing runtime's publication.
     profileOverrideHandoff.clear();
-    bridge.clear();
-    workflowViews.clear();
-    if (event.reason === "reload") return retainingToolsDuring(() => slot.shutdown());
-    rememberDisabledTools(deactivateSubagentTools(pi));
-    return slot.shutdown();
+    return reload ? retainingToolsDuring(() => slot.shutdown()) : slot.shutdown();
   });
 }

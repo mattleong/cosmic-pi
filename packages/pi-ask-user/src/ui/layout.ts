@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { SelectListTheme } from "@earendil-works/pi-tui";
+import type { EditorTheme } from "@earendil-works/pi-tui";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
@@ -18,17 +18,18 @@ export function appendWrapped(lines: string[], prefix: string, value: string, wi
   }
 }
 
-export const padLine = padListDetailRow;
-
 export const borderLine = (width: number, theme: Theme): string =>
   theme.fg("accent", "─".repeat(Math.max(1, width)));
 
-export const selectListTheme = (theme: Theme, marker = ""): SelectListTheme => ({
-  selectedPrefix: (text) => theme.fg("accent", text),
-  selectedText: (text) => marker + theme.fg("accent", text),
-  description: (text) => theme.fg("muted", text),
-  scrollInfo: (text) => theme.fg("dim", text),
-  noMatch: (text) => theme.fg("warning", text),
+export const editorTheme = (theme: Theme): EditorTheme => ({
+  borderColor: (text) => theme.fg("accent", text),
+  selectList: {
+    selectedPrefix: (text) => theme.fg("accent", text),
+    selectedText: (text) => theme.fg("accent", text),
+    description: (text) => theme.fg("muted", text),
+    scrollInfo: (text) => theme.fg("dim", text),
+    noMatch: (text) => theme.fg("warning", text),
+  },
 });
 
 export function joinColumns(
@@ -36,13 +37,12 @@ export function joinColumns(
   right: ReadonlyArray<string>,
   leftWidth: number,
   rightWidth: number,
-  gap = 2,
 ): string[] {
   const count = Math.max(left.length, right.length);
   const lines: string[] = [];
   for (let index = 0; index < count; index++) {
     lines.push(
-      `${padLine(left[index] ?? "", leftWidth)}${" ".repeat(gap)}${padLine(right[index] ?? "", rightWidth)}`,
+      `${padListDetailRow(left[index] ?? "", leftWidth)}  ${padListDetailRow(right[index] ?? "", rightWidth)}`,
     );
   }
   return lines;

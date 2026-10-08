@@ -35,7 +35,6 @@ const fakeLock = (outcomes: Array<LockOutcome> = []) => {
     },
   };
   const lock: CrossProcessLockContract = {
-    withLock: () => Effect.die("unused"),
     tryAcquire: () =>
       Effect.suspend(() => {
         calls.push("tryAcquire");

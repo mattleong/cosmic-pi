@@ -251,8 +251,19 @@ const workflowItem = (run: WorkflowRunView, phases: ReadonlyArray<ActivityPhase>
   });
 };
 
-const agentProfile = (profile: string | undefined) =>
-  profile === undefined ? undefined : { profile: line(profile, ACTIVITY_LIMITS.profile) };
+/** What every row of a workflow's agent shows: its reserved run id, label, place and profile. */
+const agentRow = (
+  agent: Pick<WorkflowAgentView, "runId" | "label" | "phase" | "profile">,
+  parent: Parent,
+  phases: ReadonlyArray<ActivityPhase>,
+) => ({
+  id: agent.runId,
+  kind: "agent" as const,
+  title: line(agent.label, ACTIVITY_LIMITS.title),
+  parent,
+  ...shownPhase(agent.phase, phases),
+  ...(agent.profile !== undefined && { profile: line(agent.profile, ACTIVITY_LIMITS.profile) }),
+});
 
 /** Skipping is final for the script, so it asks first like every other stop. */
 const skipActions = (confirmation: string): ActivityItem["actions"] =>
@@ -263,18 +274,13 @@ const queuedItem = (
   parent: Parent,
   phases: ReadonlyArray<ActivityPhase>,
 ): ActivityItem => {
-  const label = line(agent.label, ACTIVITY_LIMITS.title);
+  const row = agentRow(agent, parent, phases);
   return withActivityRevision({
-    id: agent.runId,
-    kind: "agent" as const,
-    title: label,
+    ...row,
     status: "pending" as const,
-    parent,
-    ...shownPhase(agent.phase, phases),
-    ...agentProfile(agent.profile),
     summary: line(workflowWaitingText(agent.waiting), ROW_SUMMARY_MAX_CHARS),
     actions: skipActions(
-      `Skip queued agent "${label}"? The workflow continues without its result.`,
+      `Skip queued agent "${row.title}"? The workflow continues without its result.`,
     ),
   });
 };
@@ -295,14 +301,9 @@ const settledItem = (
   phases: ReadonlyArray<ActivityPhase>,
 ): ActivityItem =>
   withActivityRevision({
-    id: agent.runId,
-    kind: "agent" as const,
-    title: line(agent.label, ACTIVITY_LIMITS.title),
+    ...agentRow(agent, parent, phases),
     status: agent.state === "failed" ? ("failed" as const) : ("cancelled" as const),
     ...(agent.state === "skipped" && { skipped: true }),
-    parent,
-    ...shownPhase(agent.phase, phases),
-    ...agentProfile(agent.profile),
     ...(agent.endedAt !== undefined && { endedAt: agent.endedAt, updatedAt: agent.endedAt }),
     ...(agent.reason !== undefined && { summary: activityReasonLine(agent.reason) }),
     actions: Object.freeze([]),
@@ -331,22 +332,17 @@ const plannedItem = (
       parent,
       phases,
     );
-  const label = line(agent.label, ACTIVITY_LIMITS.title);
+  const row = agentRow(agent, parent, phases);
   const ended = isWorkflowRunFinished(run.state);
   return withActivityRevision({
-    id: agent.runId,
-    kind: "agent" as const,
-    title: label,
+    ...row,
     status: ended ? ("cancelled" as const) : ("pending" as const),
     ...(ended && run.endedAt !== undefined && { endedAt: run.endedAt }),
     planned: true,
-    parent,
-    ...shownPhase(agent.phase, phases),
-    ...agentProfile(agent.profile),
     actions: ended
       ? Object.freeze([])
       : skipActions(
-          `Skip planned agent "${label}" before it starts? The workflow continues without its result.`,
+          `Skip planned agent "${row.title}" before it starts? The workflow continues without its result.`,
         ),
   });
 };

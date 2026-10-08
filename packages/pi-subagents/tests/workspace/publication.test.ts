@@ -109,39 +109,33 @@ describe("anchored workspace publication", () => {
         expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("editor");
       }),
   );
-  it.effect("never overwrites an editor save after capture", () =>
-    Effect.gen(function* () {
-      const r = setup();
-      fs.writeFileSync(join(r.directory, r.name), "before");
-      yield* Effect.void;
-      expect(hooked(r, `fs.writeFileSync('target','editor');`).status).toBe("conflict");
-      expect(fs.readFileSync(join(r.directory, r.name), "utf8")).toBe("editor");
-      expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("before");
-    }),
-  );
-  it.effect("an ancestor swap cannot redirect leaf operations", () =>
-    Effect.gen(function* () {
-      const root = setup();
-      const outside = join(root.directory, "outside");
-      const original = join(root.directory, "original");
-      fs.mkdirSync(outside);
-      fs.mkdirSync(original);
-      fs.writeFileSync(join(original, "target"), "before");
-      fs.writeFileSync(join(outside, "target"), "outside");
-      const stat = fs.statSync(original);
-      const r = { ...root, directory: original, directoryDev: stat.dev, directoryIno: stat.ino };
-      yield* Effect.void;
-      expect(
-        hooked(
-          r,
-          `fs.renameSync(${quote(original)},${quote(original + "-moved")});fs.symlinkSync(${quote(outside)},${quote(original)});`,
-          "anchored",
-        ).status,
-      ).toBe("success");
-      expect(fs.readFileSync(join(outside, "target"), "utf8")).toBe("outside");
-      expect(fs.readFileSync(join(original + "-moved", "target"), "utf8")).toBe("after");
-    }),
-  );
+  it("never overwrites an editor save after capture", () => {
+    const r = setup();
+    fs.writeFileSync(join(r.directory, r.name), "before");
+    expect(hooked(r, `fs.writeFileSync('target','editor');`).status).toBe("conflict");
+    expect(fs.readFileSync(join(r.directory, r.name), "utf8")).toBe("editor");
+    expect(fs.readFileSync(join(r.directory, r.backupName), "utf8")).toBe("before");
+  });
+  it("an ancestor swap cannot redirect leaf operations", () => {
+    const root = setup();
+    const outside = join(root.directory, "outside");
+    const original = join(root.directory, "original");
+    fs.mkdirSync(outside);
+    fs.mkdirSync(original);
+    fs.writeFileSync(join(original, "target"), "before");
+    fs.writeFileSync(join(outside, "target"), "outside");
+    const stat = fs.statSync(original);
+    const r = { ...root, directory: original, directoryDev: stat.dev, directoryIno: stat.ino };
+    expect(
+      hooked(
+        r,
+        `fs.renameSync(${quote(original)},${quote(original + "-moved")});fs.symlinkSync(${quote(outside)},${quote(original)});`,
+        "anchored",
+      ).status,
+    ).toBe("success");
+    expect(fs.readFileSync(join(outside, "target"), "utf8")).toBe("outside");
+    expect(fs.readFileSync(join(original + "-moved", "target"), "utf8")).toBe("after");
+  });
   it.effect("creates directories exclusively and checks the anchor identity", () =>
     Effect.gen(function* () {
       const r = setup();

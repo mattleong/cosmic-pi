@@ -1,4 +1,4 @@
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
 import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
 import { makeQuestionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Cause from "effect/Cause";
@@ -28,6 +28,7 @@ import {
 } from "./errors.ts";
 import { makeQueuedWriterCheck, makeRunAdmissionSignal } from "./admission-signal.ts";
 import { makeRunAssignment } from "./assignment.ts";
+import { completionNotificationKey, deliveredCompletionKeys } from "./completion.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
 import { makeRunPeerNotifier } from "./coordination.ts";
 import { makeRunControls } from "./control.ts";
@@ -40,7 +41,7 @@ import {
 } from "./notification-delivery.ts";
 import { makeRunOwnedRuns, type OwnedRunCoordinatorContract } from "./owned-runs.ts";
 import { makeRunProcessControls, makeRunProcessInitializer } from "./process-lifecycle.ts";
-import { makeRunRecordCleanup } from "./record-cleanup.ts";
+import { makeRunRecordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
 import { makeRunResume } from "./resume.ts";
 import { makeRunRetry, type SubagentRetryClaim } from "./retry.ts";
 import { makeRunSettlement } from "./settlement.ts";
@@ -70,16 +71,14 @@ import type { WriterWorkspaceMode } from "../config/schema.ts";
 let nextRuntimeNamespace = 1;
 const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
 
-export type SubagentNotificationCallback =
-  | ((notification: SubagentNotification) => SubagentNotificationDelivery | undefined)
-  | ((notification: SubagentNotification) => void);
-
 export interface SubagentServiceOptions {
   readonly writerWorkspaceMode?: WriterWorkspaceMode;
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;
-  readonly notify?: SubagentNotificationCallback;
+  readonly notify?: (
+    notification: SubagentNotification,
+  ) => SubagentNotificationDelivery | undefined | void;
   readonly questionnaireHandler?: (
     request: AskUserRequest,
     owner: QuestionnaireOwner,
@@ -226,22 +225,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
   const writerPools = new Map<string, WriterPoolEntry>();
-  // Each run view is already deeply frozen by snapshotView, so only the fresh
-  // top-level container and array need freezing before publication.
-  const frozenProjection = (revision: number): SubagentProjection => {
-    const tree = projectRunTree(records);
-    return Object.freeze({
-      revision,
-      root: tree.root,
-      runs: Object.freeze(sortRuns(tree.runs.map((view) => snapshotView(view)))),
-    });
-  };
+  // The tree's rows are already frozen, so only the container and array need freezing.
+  const frozenProjection = (revision: number): SubagentProjection =>
+    Object.freeze({ revision, runs: Object.freeze(sortRuns(projectRunTree(records))) });
   const projectionRef = yield* SubscriptionRef.make(frozenProjection(0));
   const runtimeNamespace = allocateRuntimeNamespace();
   let nextRunOrdinal = 1;
-  let nextClaimOrdinal = 1;
-  let nextRetryClaimOrdinal = 1;
-  let nextAssignmentAttemptOrdinal = 1;
   let closed = false;
   const questionnaires = makeQuestionnaireLifetimes(() => closed);
   const admission = makeRunAdmissionSignal(records, writerPools);
@@ -278,11 +267,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     if (admission && admission.count > 0) admission.drained = drained;
     else Deferred.doneUnsafe(drained, Effect.void);
   };
-  const allocateClaimToken = (): string => `completion-${runtimeNamespace}-${nextClaimOrdinal++}`;
-  const allocateRetryClaimToken = (): string =>
-    `retry-${runtimeNamespace}-${nextRetryClaimOrdinal++}`;
-  const allocateAssignmentAttemptToken = (): string =>
-    `assignment-${runtimeNamespace}-${nextAssignmentAttemptOrdinal++}`;
+  const ordinalTokens = (kind: string) => {
+    let next = 1;
+    return (): string => `${kind}-${runtimeNamespace}-${next++}`;
+  };
+  const allocateClaimToken = ordinalTokens("completion");
+  const allocateRetryClaimToken = ordinalTokens("retry");
+  const allocateAssignmentAttemptToken = ordinalTokens("assignment");
   const runIdPrefix = `agent-${runtimeNamespace}-`;
   const allocateRunIdentity = (requestedName: string, reservedId?: string) => {
     if (reservedId !== undefined)
@@ -316,9 +307,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 frozenProjection(current.revision + 1),
               ).pipe(
                 Effect.flatMap((projection) =>
-                  options.publish
-                    ? Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore)
-                    : Effect.void,
+                  Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore),
                 ),
               ),
         ),
@@ -347,14 +336,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const notifyRoot = (
     notification: SubagentNotification,
   ): SubagentNotificationDelivery | undefined => {
-    try {
-      const delivered = options.notify?.(notification);
-      return hasObjectRuntimeType(delivered) && delivered !== null ? delivered : undefined;
-    } catch {
-      return notification.type === "completed"
+    const delivered = invokeHostCallback<SubagentNotificationDelivery | undefined | void>(
+      () => options.notify?.(notification),
+      notification.type === "completed"
         ? { deliveredCompletionKeys: [] }
-        : { actionAccepted: false };
-    }
+        : { actionAccepted: false },
+    );
+    return hasObjectRuntimeType(delivered) && delivered !== null ? delivered : undefined;
   };
   const ancestorMessage = (notification: SubagentNotification): string => {
     if (notification.type === "question")
@@ -385,8 +373,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     Effect.suspend(() => {
       let parentRunId = records.get(sourceRunId)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       const candidates: RunRecord[] = [];
-      const visited = new Set<string>();
-      while (parentRunId !== SUBAGENT_ROOT_RUN_ID && visited.add(parentRunId)) {
+      while (parentRunId !== SUBAGENT_ROOT_RUN_ID) {
         const parent = records.get(parentRunId);
         if (!parent) break;
         if (parent.view.runtime === "pi" && canAcceptNotification(parent)) candidates.push(parent);
@@ -448,13 +435,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       (run) =>
         deliverToNearestAncestor(run.id, ancestorMessage({ type: "completed", runs: [run] })).pipe(
           Effect.map((delivered) => {
+            const key = completionNotificationKey(run.id, run.generation);
             // A completion sent to an ancestor may be outcome-uncertain; unlike an
             // unacknowledged question it must not replay the full report.
-            if (delivered) return `${run.id}:${run.generation}`;
-            const rootDelivery = notifyRoot({ type: "completed", runs: [run] });
-            return rootDelivery?.deliveredCompletionKeys?.includes(`${run.id}:${run.generation}`)
-              ? `${run.id}:${run.generation}`
-              : undefined;
+            if (delivered) return key;
+            const runs = [run];
+            const rootDelivery = notifyRoot({ type: "completed", runs });
+            return deliveredCompletionKeys(rootDelivery, runs).has(key) ? key : undefined;
           }),
         ),
       { concurrency: 4 },
@@ -473,7 +460,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ownerScope,
     withLock,
     publish,
-    recheckAdmission,
     records,
     writerPools,
     writerLeases,
@@ -507,16 +493,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const retry = makeRunRetry({ ...runContext, allocateClaimToken: allocateRetryClaimToken });
 
   const prepareWriterLeaseForSpawn = makeWriterPreparation(runContext);
-  const {
-    reclaimRecordRunState,
-    markCleanupPending,
-    retainCleanupQuarantine,
-    closeRecordScope: closeOwnedRecordScope,
-    closeExitedScope,
-  } = makeRunRecordCleanup(runContext);
-
-  const closeRecordScope: typeof closeOwnedRecordScope = (record, scope) =>
-    questionnaires.drain(record).pipe(Effect.andThen(closeOwnedRecordScope(record, scope)));
+  const ownedCleanup = makeRunRecordCleanup(runContext);
+  // Record-scope closure first joins the run's questionnaires; exited-scope closure does not.
+  const cleanup: RunRecordCleanup = {
+    ...ownedCleanup,
+    closeRecordScope: (record, scope) =>
+      questionnaires
+        .drain(record)
+        .pipe(Effect.andThen(ownedCleanup.closeRecordScope(record, scope))),
+  };
+  const { closeRecordScope } = cleanup;
 
   const settlement = makeRunSettlement({ ...runContext, delivery, closeRecordScope });
 
@@ -531,14 +517,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const controls = makeRunControls({
     ...runContext,
-    steerBackend: processControls.steer,
-    submitPrompt: assignment.submitPrompt,
-    retainUncertainAssignment: assignment.retainUncertainAssignment,
-    interruptBackend: processControls.interrupt,
+    processControls,
     admitTurnInput,
     releaseTurnInput,
     claimTurnInputDrain,
-    renameBackend: processControls.renameDisplay,
     closeRecordScope,
     settle: settlement.settle,
   });
@@ -653,15 +635,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const handleWireEvent = makeRunEventHandler({
-    mutateView: settlement.mutateEventView,
-    mergeLateUsage: settlement.mergeLateUsage,
-    mergeProcessUsage: settlement.mergeProcessUsage,
-    runStarted: settlement.runStartedFromBackend,
-    runSettled: settlement.runSettledFromBackend,
-    settle: settlement.settle,
-    acceptReport: settlement.acceptBackendReport,
+    settlement,
     queueQuestionLocked: delivery.queueActionNotificationLocked,
-    failRun: settlement.failRun,
     onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,
     onStructuredResult: makeRunStructuredResults({ withLock }),
@@ -672,8 +647,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     initialize: processControls.initialize,
     handleBackendEvent: handleWireEvent,
     prepareBackendSpawn: prepareWriterLeaseForSpawn,
-    markCleanupPending,
-    closeExitedScope,
+    markCleanupPending: cleanup.markCleanupPending,
+    closeExitedScope: cleanup.closeExitedScope,
     failRun: settlement.failRun,
   });
 
@@ -684,15 +659,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     delivery,
     isClosed: () => closed,
     allocateRunIdentity,
-    reclaimRecordRunState,
-    retainCleanupQuarantine,
-    markCleanupPending,
-    closeRecordScope,
+    cleanup,
     settle: settlement.settle,
     submitPrompt: assignment.submitPrompt,
     initializeProcess,
-    bindWorkspace: workspaces.bind,
-    heldLaunchSlots: workspaces.heldLaunchSlots,
+    workspaces,
   });
 
   const startWithWorkspace = (
@@ -721,13 +692,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...runContext,
     delivery,
     initializeProcess,
-    submitPrompt: assignment.submitPrompt,
-    settle: settlement.settle,
-    failRun: settlement.failRun,
+    assignment,
+    settlement,
     closeRecordScope,
-    retainUncertainAssignment: assignment.retainUncertainAssignment,
-    invalidateWorkspace: workspaces.invalidateForResume,
-    heldLaunchSlots: workspaces.heldLaunchSlots,
+    workspaces,
     currentChildLimit: rootChildLimit,
   });
 
@@ -741,7 +709,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           Effect.map((snapshot) => ({
             ...request,
             nestingPolicy: snapshot.effectiveConfig.nesting,
-            nestingPolicyRevision: snapshot.revision,
           })),
         );
   const ownedRuns = makeRunOwnedRuns({
@@ -780,9 +747,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     withLock(
       Effect.sync(() =>
         sortRuns(
-          projectRunTree(records)
-            .runs.filter((run) => isRunInSubtree(records, callerRunId, run.id))
-            .map((run) => snapshotView(run)),
+          projectRunTree(records).filter((run) => isRunInSubtree(records, callerRunId, run.id)),
         ),
       ),
     );
@@ -831,11 +796,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspaceDiscard: workspaces.workspaceDiscard,
     workspaceDiscardUnchanged: workspaces.workspaceDiscardUnchanged,
     // Bindings belong only to admitted writers, which can never have script origin.
-    workspaceRevise: workspaces.revise((request, handle) =>
-      runSessionOwned(ownerScope, Effect.void, () =>
-        workspaces.withLaunch(request, launch.start, { reuse: handle }),
-      ),
-    ),
+    workspaceRevise: workspaces.revise(launch.start),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
     startSessionOwnedFrom,
@@ -886,9 +847,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               ),
               Effect.flatMap((safeToReclaim) =>
                 safeToReclaim
-                  ? reclaimRecordRunState(record).pipe(
-                      Effect.catch(() => retainCleanupQuarantine(record, record.scope)),
-                    )
+                  ? cleanup
+                      .reclaimRecordRunState(record)
+                      .pipe(
+                        Effect.catch(() => cleanup.retainCleanupQuarantine(record, record.scope)),
+                      )
                   : Effect.void,
               ),
             );

@@ -69,17 +69,18 @@ it("keeps parent recovery visible when a live panel hides partial hierarchy", ()
       view({
         id: "target",
         state: "waiting_for_parent",
-        question: { requestId: "question", message: "grant the reviewed file", createdAt: 1 },
+        question: { requestId: "question", message: "grant the reviewed file" },
       }),
     ],
     awaitUntil: "all_finished",
     attentionRequired: true,
   });
-  const harness = createToolPresentationHarness(tool);
-  for (const expanded of [false, true, false, true]) {
-    harness.call({ runIds: ["target"], until: "all_finished" }, { expanded, isPartial: true });
-    harness.result({ content: [], details }, { expanded, isPartial: true });
-    const text = harness.render(100).join("\n");
+  const harness = createToolPresentationHarness(tool, { width: 100 });
+  for (const { expanded, text } of harness.cycle(
+    { runIds: ["target"], until: "all_finished" },
+    { content: [], details },
+    { overrides: () => ({ isPartial: true }) },
+  )) {
     // The question itself is the attention; the reply procedure is agent detail.
     expect(text).toContain("grant the reviewed file");
     expect(text.includes("subagent_reply")).toBe(expanded);
@@ -114,11 +115,8 @@ effectTest(
     const warning = summary.issues!.find((issue) => issue.severity === "warning")!;
     expect(warning.detail).toBeTruthy();
     const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
-    const harness = createToolPresentationHarness(tool);
-    for (const expanded of [false, true, false, true]) {
-      harness.call({ action: "list" }, { expanded });
-      harness.result(response, { expanded });
-      const text = harness.render(200).join("\n");
+    const harness = createToolPresentationHarness(tool, { width: 200 });
+    for (const { expanded, text } of harness.cycle({ action: "list" }, response)) {
       expect(text).toContain(warning.message);
       expect(text.includes(warning.detail!)).toBe(expanded);
       if (expanded) {
@@ -212,14 +210,12 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
     details,
   };
   const original = structuredClone(result);
-  const harness = createToolPresentationHarness(tool);
-  for (const expanded of [false, true, false, true]) {
-    harness.call(
-      { runIds: ["target"], message: "exact unique guidance input" },
-      { expanded, isError: true },
-    );
-    harness.result(result, { expanded, isError: true });
-    const text = harness.render(160).join("\n");
+  const harness = createToolPresentationHarness(tool, { width: 160 });
+  for (const { expanded, text } of harness.cycle(
+    { runIds: ["target"], message: "exact unique guidance input" },
+    result,
+    { overrides: () => ({ isError: true }) },
+  )) {
     // Uncertainty is never reported as a failure, and nothing was confirmed sent.
     expect(text).toContain("unconfirmed");
     expect(text).not.toMatch(/\bfail(?:ed|ure)?\b|\bsent\b/i);
@@ -377,13 +373,20 @@ it("draws each issue once and keeps IDs and agent procedures out of collapsed pr
   }
 });
 
-it("retains unique guidance input when expansion replaces the original call heading", () => {
-  const tool = registered().find((entry) => entry.name === "subagent_send")!;
-  const harness = createToolPresentationHarness(tool);
-  const details = makeCompactToolDetails({ action: "send", runs: [view({ id: "target" })] });
-  harness.call({ runIds: ["target"], message: "unique guidance evidence" }, { expanded: true });
-  harness.result({ content: [], details }, { expanded: true });
-  expect(harness.render(100).join("\n")).toContain("unique guidance evidence");
+it("counts a preview-style call's targets as execution reads them", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+  const tools = registered();
+  for (const [name, args] of [
+    ["subagent_status", {}],
+    ["subagent_send", { message: "guidance" }],
+    ["subagent_lifecycle", { action: "stop" }],
+  ] as const) {
+    const harness = createToolPresentationHarness(tools.find((tool) => tool.name === name)!);
+    harness.call({ ...args, runIds: ["agent-1", " agent-1 "] }, { expanded: false });
+    const text = harness.render(120).join("\n");
+    expect(text).toContain("1 subagent");
+    expect(text).not.toContain("2 subagents");
+  }
 });
 
 it("keeps agent recovery steps out of the collapsed preview style", () => {
@@ -394,7 +397,7 @@ it("keeps agent recovery steps out of the collapsed preview style", () => {
     [
       view({
         state: "waiting_for_parent",
-        question: { requestId: "q", message: "May I edit db/0007.sql?", createdAt: 1 },
+        question: { requestId: "q", message: "May I edit db/0007.sql?" },
       }),
       "May I edit db/0007.sql?",
     ],
@@ -405,11 +408,12 @@ it("keeps agent recovery steps out of the collapsed preview style", () => {
       awaitUntil: "all_finished",
       attentionRequired: true,
     });
-    const harness = createToolPresentationHarness(tool);
-    for (const expanded of [false, true, false]) {
-      harness.call({ runIds: [run.id], until: "all_finished" }, { expanded });
-      harness.result({ content: [], details }, { expanded });
-      const text = harness.render(120).join("\n");
+    const harness = createToolPresentationHarness(tool, { width: 120 });
+    const args = { runIds: [run.id], until: "all_finished" };
+    const result = { content: [], details };
+    for (const { expanded, text } of harness.cycle(args, result, {
+      states: [false, true, false],
+    })) {
       expect(text).toContain(human);
       // The procedure is agent detail: present only once expanded.
       expect(/subagent_\w+\(/u.test(text)).toBe(expanded);
@@ -435,11 +439,9 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
       cancelled: scenario.cancelled,
       cancellationCleanup: "unconfirmed",
     });
-    const harness = createToolPresentationHarness(tool);
-    for (const expanded of [false, true, false, true]) {
-      harness.call({ runIds: ["target"], until: "all_finished" }, { expanded });
-      harness.result({ content: [], details }, { expanded });
-      const text = harness.render(120).join("\n");
+    const harness = createToolPresentationHarness(tool, { width: 120 });
+    const args = { runIds: ["target"], until: "all_finished" };
+    for (const { expanded, text } of harness.cycle(args, { content: [], details })) {
       if (expanded) expect(text).toContain(scenario.evidence);
       else {
         expect(text).not.toContain("subagent_status");
@@ -490,13 +492,15 @@ it("keeps the sole await heading when the live panel owns the result", () => {
   for (const panelOwns of [false, true]) {
     const tool = registered(panelOwns).find((entry) => entry.name === "subagent_await")!;
     const harness = createToolPresentationHarness(tool, { width: 120 });
-    for (const expanded of [true, false, true]) {
-      const state = { expanded, executionStarted: true, isPartial: true };
-      harness.call({ runIds: ["target"], until: "all_finished" }, state);
-      harness.result({ content: [], details }, state);
-      const text = harness.render().join("\n");
-      expect(text.match(/subagent_await/g)).toHaveLength(1);
-    }
+    const frames = harness.cycle(
+      { runIds: ["target"], until: "all_finished" },
+      { content: [], details },
+      {
+        states: [true, false, true],
+        overrides: () => ({ executionStarted: true, isPartial: true }),
+      },
+    );
+    for (const { text } of frames) expect(text.match(/subagent_await/g)).toHaveLength(1);
   }
 });
 

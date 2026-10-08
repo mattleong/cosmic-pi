@@ -1,7 +1,7 @@
 // Raw lstat inspects symbolic links because Effect FileSystem.stat follows them.
 import assert from "node:assert/strict";
 import { layer } from "@effect/vitest";
-import { createWriteTool, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { createWriteTool } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as Data from "effect/Data";
@@ -11,13 +11,9 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { expectTypeOf, test } from "vitest";
-import {
-  type CodePreviewWriteDetails,
-  executeWriteWithPreviewEffect,
-  withCodePreviewBeforeWrite,
-} from "../../src/write/preview-execution";
+import { executeWriteWithPreviewEffect } from "../../src/write/preview-execution";
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
@@ -51,36 +47,6 @@ const writeOutcome = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     }),
   );
 
-test("before-write details replace undefined details and preserve object fields", () => {
-  const resultWithoutDetails: AgentToolResult<undefined> = { content: [], details: undefined };
-  return withCodePreviewBeforeWrite(resultWithoutDetails, {
-    kind: "content",
-    content: "before",
-  })
-    .then((enrichedWithoutDetails) => {
-      expectTypeOf(enrichedWithoutDetails.details).toEqualTypeOf<CodePreviewWriteDetails>();
-      assert.deepEqual(enrichedWithoutDetails.details, {
-        codePreviewBeforeWrite: { kind: "content", byteLength: 6 },
-      });
-
-      const resultWithDetails: AgentToolResult<{ readonly existing: "kept" }> = {
-        content: [],
-        details: { existing: "kept" },
-      };
-      return withCodePreviewBeforeWrite(resultWithDetails, undefined);
-    })
-    .then((enrichedWithDetails) => {
-      expectTypeOf(enrichedWithDetails.details.existing).toEqualTypeOf<"kept">();
-      expectTypeOf(enrichedWithDetails.details.codePreviewBeforeWrite).toEqualTypeOf<
-        CodePreviewWriteDetails["codePreviewBeforeWrite"]
-      >();
-      assert.deepEqual(enrichedWithDetails.details, {
-        existing: "kept",
-        codePreviewBeforeWrite: undefined,
-      });
-    });
-});
-
 const testLayer = Layer.mergeAll(
   CodePreviewWriteService.layer,
   NodeFileSystem.layer,
@@ -88,14 +54,17 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("session write service", (it) => {
-  it.effect("writes preserve an existing symlink and update its target", () =>
+  it.effect("reads the previous file Pi writes under a working directory with Unicode spaces", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-link-");
-      yield* fs.writeFileString(join(dir, "target.txt"), "before");
-      yield* fs.symlink("target.txt", join(dir, "link.txt"));
-      yield* executeWriteWithPreviewEffect("tool-link", "link.txt", "after", dir);
-      assert.equal(yield* fs.readFileString(join(dir, "target.txt")), "after");
-      assert.equal(yield* isSymlink(join(dir, "link.txt")), true);
+      const { fs, dir } = yield* fixture("pi-code-preview-unicode-");
+      // Pi normalizes Unicode spaces in the tool path, never in the working directory.
+      const cwd = join(dir, "project\u3000a");
+      yield* fs.makeDirectory(cwd);
+      yield* fs.writeFileString(join(cwd, "file.txt"), "before");
+      const result = yield* executeWriteWithPreviewEffect("tool-unicode", "file.txt", "after", cwd);
+      assert.deepEqual(lookupBeforeWrite("tool-unicode"), { kind: "content", content: "before" });
+      assert.deepEqual(result.details.codePreviewBeforeWrite, { kind: "content", byteLength: 6 });
+      assert.equal(yield* fs.readFileString(join(cwd, "file.txt")), "after");
     }),
   );
 
@@ -172,9 +141,7 @@ layer(testLayer)("session write service", (it) => {
       const error = yield* Effect.flip(
         executeWriteWithPreviewEffect("tool-dangling", "link.txt", "after", dir),
       );
-      assert.equal("operation" in error, true);
-      if (!("operation" in error)) return;
-      assert.equal(error.operation, "write");
+      assert.ok(Predicate.isTagged(error, "CodePreviewWriteError"));
       assert.equal(yield* isSymlink(link), true);
       assert.equal(yield* fs.exists(join(dir, "missing")), false);
     }),

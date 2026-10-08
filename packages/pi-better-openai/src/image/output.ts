@@ -9,7 +9,8 @@ import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
 import { isStrictlyInsidePathWith } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import { fail, failWith, type ExtractedImageResult, type ImageOutputFormat } from "./types.ts";
+import type { ImageOutputFormat } from "../config/schema.ts";
+import { fail, failWith, type ExtractedImageResult } from "./types.ts";
 
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const imageVerificationLostMessage =
@@ -83,8 +84,13 @@ export const makeImageOutput = (dependencies: {
         .pipe(Effect.mapError(failWith("save", "Unable to resolve protected output root.")));
       if (!isInside(protectedBase, requestedDirectory))
         return yield* fail("save", "Image output directory escapes its protected root.");
+      // `exists` is false only for a missing path; other probe failures must stay typed.
+      const exists = (candidate: string) =>
+        fs
+          .exists(candidate)
+          .pipe(Effect.mapError(failWith("save", "Unable to inspect image output path.")));
       let existingAncestor = path.resolve(requestedDirectory);
-      while (!(yield* fs.exists(existingAncestor))) {
+      while (!(yield* exists(existingAncestor))) {
         const parent = path.dirname(existingAncestor);
         if (parent === existingAncestor)
           return yield* fail("save", "Unable to resolve image output directory.");
@@ -199,18 +205,14 @@ export const makeImageOutput = (dependencies: {
               );
             // Linking is the commit point. Never remove the destination after this succeeds:
             // another process may replace it before verification observes the path.
-            const published = yield* fs.stat(destination).pipe(
-              Effect.option,
-              Effect.tap((published) =>
-                Option.isNone(published)
-                  ? Effect.logWarning(imageVerificationLostMessage)
-                  : Effect.void,
-              ),
-              Effect.catchCause(() =>
-                Effect.logWarning(imageVerificationLostMessage).pipe(Effect.as(Option.none())),
-              ),
-            );
-            if (Option.isSome(published) && !isOwned(published.value))
+            const published = yield* fs
+              .stat(destination)
+              .pipe(
+                Effect.catchCause(() =>
+                  Effect.logWarning(imageVerificationLostMessage).pipe(Effect.as(undefined)),
+                ),
+              );
+            if (published && !isOwned(published))
               return yield* fail("save", "Published image did not match the owned temporary file.");
           }).pipe(Effect.uninterruptible),
         () => removeOwnedTemporary,

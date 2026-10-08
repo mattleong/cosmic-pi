@@ -278,4 +278,23 @@ describe("background task lifecycle stress", () => {
         }
       }),
   );
+
+  it.effect("fails a start whose spawn is still pending when its runtime closes", () =>
+    Effect.gen(function* () {
+      const fixture = processFixture("force", true);
+      const { scope, service } = yield* openService([fixture]);
+      const starting = yield* service
+        .start({ command: "fixture 0", cwd: "." })
+        .pipe(Effect.flip, Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.await(fixture.entered);
+      const closing = yield* Scope.close(scope, Exit.void).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      // Shutdown gives up on the handle, then closes the monitor that is still spawning.
+      yield* TestClock.adjust("11 seconds");
+      yield* Fiber.join(closing);
+      expect(yield* Fiber.join(starting)).toMatchObject({ _tag: "BackgroundRuntimeClosedError" });
+      expect(fixture.counts().acquisitions).toBe(0);
+    }),
+  );
 });

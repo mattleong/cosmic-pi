@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import type { BackendDriver } from "../../src/backend/model.ts";
 import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../../src/backend/service.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
-import type { SubagentProjection } from "../../src/run/model.ts";
+import type { StartSubagentRequest, SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
@@ -22,6 +22,18 @@ import {
   serviceLayer,
   withService,
 } from "./fixtures/service-harness.ts";
+
+/** A local service whose writer-lease fake takes `leases`. */
+const leaseFixture = (
+  leases: Parameters<typeof fakeWriterLeaseLayer>[0],
+  fake = fakeChildLayer(),
+) => localServiceFixture({}, fake, profileLayerFor({}), fakeWriterLeaseLayer(leases));
+
+const writer = (name: string, overrides: Partial<StartSubagentRequest> = {}) =>
+  request({ name, writeIntent: "writer", ...overrides });
+
+const claimedWriter = (name: string, writes: ReadonlyArray<string>) =>
+  writer(name, { writes: [...writes] });
 
 describe("SubagentService", () => {
   it.effect(
@@ -104,9 +116,7 @@ describe("SubagentService", () => {
       fakeChildLayer(Effect.void, { releaseDefect: true }),
     );
     return withService(layer, function* (service) {
-      const run = yield* service.start(
-        request({ name: "await-failure-defect", writeIntent: "writer" }),
-      );
+      const run = yield* service.start(writer("await-failure-defect"));
       fake.controls[0]?.failExit("Fixture awaitExit failure.");
       yield* yieldUntil(
         () =>
@@ -120,9 +130,7 @@ describe("SubagentService", () => {
             ) === true,
       );
 
-      const conflict = yield* service
-        .start(request({ name: "blocked-writer", writeIntent: "writer" }))
-        .pipe(Effect.flip);
+      const conflict = yield* service.start(writer("blocked-writer")).pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
         activeId: run.id,
@@ -146,7 +154,7 @@ describe("SubagentService", () => {
       }).pipe(Layer.provide(fake.layer));
       return withService(layer, function* (service) {
         const starting = yield* service
-          .start(request({ name: "boundary-interrupted-writer", writeIntent: "writer" }))
+          .start(writer("boundary-interrupted-writer"))
           .pipe(Effect.forkScoped({ startImmediately: false }));
         interruptAtBoundary = () => starting.interruptUnsafe();
         const interrupted = yield* Fiber.await(starting);
@@ -154,9 +162,7 @@ describe("SubagentService", () => {
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
         expect(fake.controls).toHaveLength(0);
 
-        const replacement = yield* service.start(
-          request({ name: "after-boundary-interrupt", writeIntent: "writer" }),
-        );
+        const replacement = yield* service.start(writer("after-boundary-interrupt"));
         expect(replacement.state).toBe("running");
         expect(fake.controls).toHaveLength(1);
         yield* service.stop(replacement.id);
@@ -169,21 +175,15 @@ describe("SubagentService", () => {
       const acquireGate = yield* Deferred.make<void>();
       const acquireStarted = yield* Deferred.make<void>();
       const counts = leaseCounts();
-      const writerLeases = fakeWriterLeaseLayer({
+      const { fake, layer } = leaseFixture({
         acquireGate,
         counts,
         onAcquireStarted: () => Deferred.doneUnsafe(acquireStarted, Effect.void),
       });
-      const { fake, layer } = localServiceFixture(
-        {},
-        fakeChildLayer(),
-        profileLayerFor({}),
-        writerLeases,
-      );
 
       yield* withService(layer, function* (service) {
         yield* service
-          .startSessionOwned(request({ name: "shutdown-start-boundary", writeIntent: "writer" }))
+          .startSessionOwned(writer("shutdown-start-boundary"))
           .pipe(Effect.forkScoped({ startImmediately: true }));
         yield* Deferred.await(acquireStarted);
       });
@@ -198,22 +198,16 @@ describe("SubagentService", () => {
       const acquireGate = yield* Deferred.make<void>();
       const acquireStarted = yield* Deferred.make<void>();
       const counts = leaseCounts();
-      const writerLeases = fakeWriterLeaseLayer({
+      const { fake, projections, layer } = leaseFixture({
         acquireGate,
         acquireUninterruptible: true,
         counts,
         onAcquireStarted: () => Deferred.doneUnsafe(acquireStarted, Effect.void),
       });
-      const { fake, projections, layer } = localServiceFixture(
-        {},
-        fakeChildLayer(),
-        profileLayerFor({}),
-        writerLeases,
-      );
 
       yield* withService(layer, function* (service) {
         const starting = yield* service
-          .start(request({ name: "commit-interrupted-writer", writeIntent: "writer" }))
+          .start(writer("commit-interrupted-writer"))
           .pipe(Effect.forkScoped({ startImmediately: true }));
         yield* Deferred.await(acquireStarted);
         const interrupting = yield* Fiber.interrupt(starting).pipe(
@@ -232,14 +226,10 @@ describe("SubagentService", () => {
   it.effect("does not resume a completed writer while another writer owns the cwd", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const first = yield* service.start(
-        request({ name: "writer-one", writeIntent: "writer", task: "Implement auth" }),
-      );
+      const first = yield* service.start(writer("writer-one", { task: "Implement auth" }));
       fake.controls[0]?.settle();
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* service.start(
-        request({ name: "writer-two", writeIntent: "writer", task: "Implement tests" }),
-      );
+      yield* service.start(writer("writer-two", { task: "Implement tests" }));
 
       const conflict = yield* Effect.flip(service.resume(first.id, "Make another edit"));
       expect(conflict._tag).toBe("SubagentWriterConflictError");
@@ -256,9 +246,7 @@ describe("SubagentService", () => {
       }),
     );
     return withService(layer, function* (service) {
-      const run = yield* service.start(
-        request({ name: "uncertain-completed-writer", writeIntent: "writer" }),
-      );
+      const run = yield* service.start(writer("uncertain-completed-writer"));
       yield* completeLocalRun(service, fake.controls[0]!, run.id, "First writer turn complete.");
 
       const failure = yield* service.resume(run.id, "Continue writer work.").pipe(Effect.flip);
@@ -277,9 +265,7 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.controls[1]?.released() === 1);
       expect(fake.controls).toHaveLength(2);
 
-      const replacement = yield* service.start(
-        request({ name: "replacement-writer", writeIntent: "writer" }),
-      );
+      const replacement = yield* service.start(writer("replacement-writer"));
       expect(replacement.state).toBe("running");
       expect(fake.controls).toHaveLength(3);
     });
@@ -304,19 +290,11 @@ describe("SubagentService", () => {
   ] as const)
     it.effect(name, () => {
       const counts = leaseCounts();
-      const writerLeases = fakeWriterLeaseLayer({ ...leases, counts });
-      const { layer } = localServiceFixture(
-        {},
-        fakeChildLayer(),
-        profileLayerFor({}),
-        writerLeases,
-      );
+      const { layer } = leaseFixture({ ...leases, counts });
       return withService(layer, function* (service) {
-        const first = yield* service.start(
-          request({ name: "guarded-writer", writeIntent: "writer", cwd: cwds[0] }),
-        );
+        const first = yield* service.start(writer("guarded-writer", { cwd: cwds[0] }));
         const aliasConflict = yield* service
-          .start(request({ name: "alias-writer", writeIntent: "writer", cwd: cwds[1] }))
+          .start(writer("alias-writer", { cwd: cwds[1] }))
           .pipe(Effect.flip);
         expect(aliasConflict).toMatchObject({
           _tag: "SubagentWriterConflictError",
@@ -324,9 +302,7 @@ describe("SubagentService", () => {
         });
         expect(counts.acquire).toBe(1);
 
-        const other = yield* service.start(
-          request({ name: "other-cwd-writer", writeIntent: "writer", cwd: "/other-project" }),
-        );
+        const other = yield* service.start(writer("other-cwd-writer", { cwd: "/other-project" }));
         expect(other.state).toBe("running");
         expect(counts.acquire).toBe(2);
         yield* service.stop(first.id);
@@ -336,17 +312,9 @@ describe("SubagentService", () => {
 
   it.effect("rejects Windows writers before canonicalization, lease acquisition, or spawn", () => {
     const counts = leaseCounts();
-    const writerLeases = fakeWriterLeaseLayer({ platform: "win32", counts });
-    const { fake, layer } = localServiceFixture(
-      {},
-      fakeChildLayer(),
-      profileLayerFor({}),
-      writerLeases,
-    );
+    const { fake, layer } = leaseFixture({ platform: "win32", counts });
     return withService(layer, function* (service) {
-      const failure = yield* service
-        .start(request({ name: "windows-writer", writeIntent: "writer" }))
-        .pipe(Effect.flip);
+      const failure = yield* service.start(writer("windows-writer")).pipe(Effect.flip);
       expect(failure).toMatchObject({
         _tag: "UnsupportedSafeWriterOwnershipError",
         code: "unsupported_safe_writer_ownership",
@@ -368,12 +336,7 @@ describe("SubagentService", () => {
 
   it.effect("does not canonicalize or acquire a lease for read-only runs", () => {
     const counts = leaseCounts();
-    const { layer } = localServiceFixture(
-      {},
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer({ counts }),
-    );
+    const { layer } = leaseFixture({ counts });
     return withService(layer, function* (service) {
       const reader = yield* service.start(request({ name: "reader", writeIntent: "read-only" }));
       expect(reader.state).toBe("running");
@@ -384,13 +347,9 @@ describe("SubagentService", () => {
   });
 
   it.effect("fails typed writer canonicalization before reservation or backend spawn", () => {
-    const fake = fakeChildLayer();
-    const writerLeases = fakeWriterLeaseLayer({ failCanonicalization: true });
-    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
+    const { fake, layer } = leaseFixture({ failCanonicalization: true });
     return withService(layer, function* (service) {
-      const failure = yield* service
-        .start(request({ name: "bad-cwd-writer", writeIntent: "writer" }))
-        .pipe(Effect.flip);
+      const failure = yield* service.start(writer("bad-cwd-writer")).pipe(Effect.flip);
       expect(failure).toMatchObject({
         _tag: "InvalidSubagentRequestError",
         code: "writer_cwd_canonicalization_failed",
@@ -403,13 +362,9 @@ describe("SubagentService", () => {
   it.effect(
     "settles a failed cross-process reservation without spawning or retaining the slot",
     () => {
-      const fake = fakeChildLayer();
-      const writerLeases = fakeWriterLeaseLayer({ failAcquire: true });
-      const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
+      const { fake, layer } = leaseFixture({ failAcquire: true });
       return withService(layer, function* (service) {
-        const conflict = yield* service
-          .start(request({ name: "cross-process-conflict", writeIntent: "writer" }))
-          .pipe(Effect.flip);
+        const conflict = yield* service.start(writer("cross-process-conflict")).pipe(Effect.flip);
         expect(conflict).toMatchObject({
           _tag: "SubagentWriterConflictError",
           activeId: "unknown-cross-process-writer",
@@ -419,9 +374,7 @@ describe("SubagentService", () => {
           expect.objectContaining({ name: "cross-process-conflict", state: "failed" }),
         ]);
 
-        const admitted = yield* service.start(
-          request({ name: "after-cross-process-conflict", writeIntent: "writer" }),
-        );
+        const admitted = yield* service.start(writer("after-cross-process-conflict"));
         expect(admitted.state).toBe("running");
         expect(fake.controls).toHaveLength(1);
         yield* service.stop(admitted.id);
@@ -433,15 +386,10 @@ describe("SubagentService", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
       const counts = leaseCounts();
-      const { fake, projections, layer } = localServiceFixture(
-        {},
-        fakeChildLayer(),
-        profileLayerFor({}),
-        fakeWriterLeaseLayer({ acquireGate: gate, counts }),
-      );
+      const { fake, projections, layer } = leaseFixture({ acquireGate: gate, counts });
       yield* withService(layer, function* (service) {
         const starting = yield* service
-          .start(request({ name: "stopped-during-lease", writeIntent: "writer" }))
+          .start(writer("stopped-during-lease"))
           .pipe(Effect.exit, Effect.forkScoped);
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
         const id = projections.at(-1)?.runs[0]?.id;
@@ -459,24 +407,21 @@ describe("SubagentService", () => {
 
   it.effect("acquires before spawn and releases only after backend cleanup confirms", () => {
     const order: string[] = [];
-    const fake = fakeChildLayer(
-      Effect.sync(() => void order.push("spawn")),
+    const { layer } = leaseFixture(
       {
-        onRelease: () => void order.push("backend"),
+        onAcquire: () => void order.push("lease-acquire"),
+        onMark: () => void order.push("lease-spawn-started"),
+        onRelease: () => void order.push("lease-release"),
       },
+      fakeChildLayer(
+        Effect.sync(() => void order.push("spawn")),
+        { onRelease: () => void order.push("backend") },
+      ),
     );
-    const writerLeases = fakeWriterLeaseLayer({
-      onAcquire: () => void order.push("lease-acquire"),
-      onMark: () => void order.push("lease-spawn-started"),
-      onRelease: () => void order.push("lease-release"),
-    });
-    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return withService(layer, function* (service) {
-      const writer = yield* service.start(
-        request({ name: "ordered-writer", writeIntent: "writer" }),
-      );
+      const run = yield* service.start(writer("ordered-writer"));
       expect(order).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
-      yield* service.stop(writer.id);
+      yield* service.stop(run.id);
       expect(order).toEqual([
         "lease-acquire",
         "lease-spawn-started",
@@ -489,18 +434,17 @@ describe("SubagentService", () => {
 
   it.effect("does not spawn when the durable spawn-started mark fails", () => {
     const order: string[] = [];
-    const fake = fakeChildLayer(Effect.sync(() => void order.push("spawn")));
-    const writerLeases = fakeWriterLeaseLayer({
-      failMark: true,
-      onAcquire: () => void order.push("lease-acquire"),
-      onMark: () => void order.push("lease-mark-attempt"),
-      onRelease: () => void order.push("lease-release"),
-    });
-    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
+    const { fake, layer } = leaseFixture(
+      {
+        failMark: true,
+        onAcquire: () => void order.push("lease-acquire"),
+        onMark: () => void order.push("lease-mark-attempt"),
+        onRelease: () => void order.push("lease-release"),
+      },
+      fakeChildLayer(Effect.sync(() => void order.push("spawn"))),
+    );
     return withService(layer, function* (service) {
-      const failure = yield* service
-        .start(request({ name: "mark-failure-writer", writeIntent: "writer" }))
-        .pipe(Effect.flip);
+      const failure = yield* service.start(writer("mark-failure-writer")).pipe(Effect.flip);
       expect(failure).toMatchObject({
         _tag: "SubagentProcessError",
         code: "writer_lease_mark_failed",
@@ -515,47 +459,36 @@ describe("SubagentService", () => {
 
   it.effect("marks a fresh lease before every backend respawn", () => {
     const order: string[] = [];
-    const fake = fakeChildLayer(
-      Effect.sync(() => void order.push("spawn")),
+    const { fake, layer } = leaseFixture(
       {
-        onRelease: () => void order.push("backend-release"),
+        onAcquire: () => void order.push("lease-acquire"),
+        onMark: () => void order.push("lease-spawn-started"),
+        onRelease: () => void order.push("lease-release"),
       },
+      fakeChildLayer(
+        Effect.sync(() => void order.push("spawn")),
+        { onRelease: () => void order.push("backend-release") },
+      ),
     );
-    const writerLeases = fakeWriterLeaseLayer({
-      onAcquire: () => void order.push("lease-acquire"),
-      onMark: () => void order.push("lease-spawn-started"),
-      onRelease: () => void order.push("lease-release"),
-    });
-    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
     return withService(layer, function* (service) {
-      const writer = yield* service.start(
-        request({ name: "respawn-mark-writer", writeIntent: "writer" }),
-      );
+      const run = yield* service.start(writer("respawn-mark-writer"));
       expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
-      yield* completeLocalRun(service, fake.controls[0]!, writer.id);
+      yield* completeLocalRun(service, fake.controls[0]!, run.id);
       order.length = 0;
 
-      const resumed = yield* service.resume(writer.id, "Continue after respawn.");
+      const resumed = yield* service.resume(run.id, "Continue after respawn.");
       expect(resumed.state).toBe("running");
       expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
-      yield* service.stop(writer.id);
+      yield* service.stop(run.id);
     });
   });
 
   it.effect("quarantines the session and retains ownership when lease release fails", () => {
     const counts = leaseCounts();
-    const writerLeases = fakeWriterLeaseLayer({ failRelease: true, counts });
-    const { fake, layer } = localServiceFixture(
-      {},
-      fakeChildLayer(),
-      profileLayerFor({}),
-      writerLeases,
-    );
+    const { fake, layer } = leaseFixture({ failRelease: true, counts });
     return withService(layer, function* (service) {
-      const writer = yield* service.start(
-        request({ name: "release-failure-writer", writeIntent: "writer" }),
-      );
-      const stopped = yield* service.stop(writer.id);
+      const run = yield* service.start(writer("release-failure-writer"));
+      const stopped = yield* service.stop(run.id);
       expect(fake.controls[0]?.released()).toBe(1);
       expect(counts.release).toBe(1);
       expect(stopped).toMatchObject({
@@ -563,11 +496,11 @@ describe("SubagentService", () => {
         warning: expect.stringContaining("ownership remain quarantined"),
       });
       const conflict = yield* service
-        .start(request({ name: "blocked-after-release-failure", writeIntent: "writer" }))
+        .start(writer("blocked-after-release-failure"))
         .pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
-        activeId: writer.id,
+        activeId: run.id,
       });
       expect(fake.controls).toHaveLength(1);
     });
@@ -575,21 +508,16 @@ describe("SubagentService", () => {
 
   it.effect("closes every owned writer lease after backend cleanup on session shutdown", () => {
     const order: string[] = [];
-    const fake = fakeChildLayer(Effect.void, {
-      onRelease: (index) => void order.push(`backend-${index}`),
-    });
-    const writerLeases = fakeWriterLeaseLayer({
-      onRelease: (lease) => void order.push(`lease-${lease.runId}`),
-    });
-    const { layer } = localServiceFixture({}, fake, profileLayerFor({}), writerLeases);
+    const { layer } = leaseFixture(
+      { onRelease: (lease) => void order.push(`lease-${lease.runId}`) },
+      fakeChildLayer(Effect.void, {
+        onRelease: (index) => void order.push(`backend-${index}`),
+      }),
+    );
     return Effect.gen(function* () {
       const ids = yield* withService(layer, function* (service) {
-        const first = yield* service.start(
-          request({ name: "shutdown-one", writeIntent: "writer", cwd: "/project-one" }),
-        );
-        const second = yield* service.start(
-          request({ name: "shutdown-two", writeIntent: "writer", cwd: "/project-two" }),
-        );
+        const first = yield* service.start(writer("shutdown-one", { cwd: "/project-one" }));
+        const second = yield* service.start(writer("shutdown-two", { cwd: "/project-two" }));
         return [first.id, second.id] as const;
       });
       for (const [index, id] of ids.entries()) {
@@ -604,13 +532,9 @@ describe("SubagentService", () => {
   it.effect("releases shared-cwd writer ownership after scope cleanup succeeds", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const first = yield* service.start(
-        request({ name: "writer-one", writeIntent: "writer", task: "Implement auth" }),
-      );
+      const first = yield* service.start(writer("writer-one", { task: "Implement auth" }));
       const conflict = yield* Effect.flip(
-        service.start(
-          request({ name: "writer-two", writeIntent: "writer", task: "Implement tests" }),
-        ),
+        service.start(writer("writer-two", { task: "Implement tests" })),
       );
       expect(conflict._tag).toBe("SubagentWriterConflictError");
 
@@ -618,44 +542,28 @@ describe("SubagentService", () => {
       expect(stopped.state).toBe("stopped");
       expect(stopped.warning).toBeUndefined();
       expect(fake.controls[0]?.released()).toBe(1);
-      const second = yield* service.start(
-        request({ name: "writer-two", writeIntent: "writer", task: "Implement tests" }),
-      );
+      const second = yield* service.start(writer("writer-two", { task: "Implement tests" }));
       expect(second.state).toBe("running");
     });
   });
 
   it.effect(
-    "shares one cwd lease across disjoint exact-file writers until the last cleanup",
+    "shares one cwd lease across disjoint writers, resumes included, until the last",
     () => {
       const counts = leaseCounts();
-      const { fake, layer } = localServiceFixture(
-        {},
-        fakeChildLayer(),
-        profileLayerFor({}),
-        fakeWriterLeaseLayer({ counts }),
-      );
+      const { fake, layer } = leaseFixture({ counts });
       return withService(layer, function* (service) {
-        const first = yield* service.start(
-          request({
-            name: "claimed-writer-one",
-            writeIntent: "writer",
-            writes: ["packages/auth/src/token.ts"],
-          }),
-        );
-        const second = yield* service.start(
-          request({
-            name: "claimed-writer-two",
-            writeIntent: "writer",
-            writes: ["packages/auth/tests/token.test.ts"],
-          }),
-        );
-        expect(first.writeClaims).toEqual(["packages/auth/src/token.ts"]);
-        expect(second.writeClaims).toEqual(["packages/auth/tests/token.test.ts"]);
-        expect(fake.controls).toHaveLength(2);
+        const first = yield* service.start(claimedWriter("claimed-first", ["src/first.ts"]));
+        const second = yield* service.start(claimedWriter("claimed-peer", ["src/peer.ts"]));
+        expect(second.writeClaims).toEqual(["src/peer.ts"]);
+        yield* completeLocalRun(service, fake.controls[0]!, first.id);
+        expect(counts.release).toBe(0);
+
+        const resumed = yield* service.resume(first.id, "Continue on the first file.");
+        expect(resumed.state).toBe("running");
+        expect(fake.controls).toHaveLength(3);
         expect(counts.acquire).toBe(1);
         expect(counts.mark).toBe(1);
-
         yield* service.stop(first.id);
         expect(counts.release).toBe(0);
         yield* service.stop(second.id);
@@ -664,54 +572,14 @@ describe("SubagentService", () => {
     },
   );
 
-  it.effect("resumes a claimed writer in the existing pool while a disjoint peer remains", () => {
-    const counts = leaseCounts();
-    const { fake, layer } = localServiceFixture(
-      {},
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer({ counts }),
-    );
-    return withService(layer, function* (service) {
-      const first = yield* service.start(
-        request({ name: "claimed-first", writeIntent: "writer", writes: ["src/first.ts"] }),
-      );
-      const second = yield* service.start(
-        request({ name: "claimed-peer", writeIntent: "writer", writes: ["src/peer.ts"] }),
-      );
-      yield* completeLocalRun(service, fake.controls[0]!, first.id);
-      expect(counts.release).toBe(0);
-
-      const resumed = yield* service.resume(first.id, "Continue on the first file.");
-      expect(resumed.state).toBe("running");
-      expect(fake.controls).toHaveLength(3);
-      expect(counts.acquire).toBe(1);
-      expect(counts.mark).toBe(1);
-      yield* service.stop(first.id);
-      expect(counts.release).toBe(0);
-      yield* service.stop(second.id);
-      expect(counts.release).toBe(1);
-    });
-  });
-
   it.effect("rejects overlapping claimed writers while admitting another exact file", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const first = yield* service.start(
-        request({
-          name: "claim-owner",
-          writeIntent: "writer",
-          writes: ["packages/auth/src/token.ts"],
-        }),
+        claimedWriter("claim-owner", ["packages/auth/src/token.ts"]),
       );
       const conflict = yield* service
-        .start(
-          request({
-            name: "claim-collision",
-            writeIntent: "writer",
-            writes: ["packages/auth/src/TOKEN.ts"],
-          }),
-        )
+        .start(claimedWriter("claim-collision", ["packages/auth/src/TOKEN.ts"]))
         .pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
@@ -719,11 +587,7 @@ describe("SubagentService", () => {
         message: expect.stringContaining("already claims"),
       });
       const disjoint = yield* service.start(
-        request({
-          name: "claim-disjoint",
-          writeIntent: "writer",
-          writes: ["packages/auth/src/errors.ts"],
-        }),
+        claimedWriter("claim-disjoint", ["packages/auth/src/errors.ts"]),
       );
       expect(disjoint.state).toBe("running");
     });
@@ -736,26 +600,14 @@ describe("SubagentService", () => {
     );
     return withService(layer, function* (service) {
       const defective = yield* service.start(
-        request({
-          name: "defective-claimed-writer",
-          writeIntent: "writer",
-          writes: ["src/a.ts"],
-        }),
+        claimedWriter("defective-claimed-writer", ["src/a.ts"]),
       );
-      yield* service.start(
-        request({ name: "claimed-peer", writeIntent: "writer", writes: ["src/b.ts"] }),
-      );
+      yield* service.start(claimedWriter("claimed-peer", ["src/b.ts"]));
       const stopped = yield* service.stop(defective.id);
       expect(stopped.warning).toContain("ownership remain quarantined");
 
       const conflict = yield* service
-        .start(
-          request({
-            name: "disjoint-but-quarantined",
-            writeIntent: "writer",
-            writes: ["src/c.ts"],
-          }),
-        )
+        .start(claimedWriter("disjoint-but-quarantined", ["src/c.ts"]))
         .pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
@@ -771,9 +623,7 @@ describe("SubagentService", () => {
       fakeChildLayer(Effect.void, { releaseDefect: true }),
     );
     return withService(layer, function* (service) {
-      const first = yield* service.start(
-        request({ name: "defective-writer", writeIntent: "writer" }),
-      );
+      const first = yield* service.start(writer("defective-writer"));
       const stopped = yield* service.stop(first.id);
       expect(stopped).toMatchObject({
         state: "stopped",
@@ -781,9 +631,7 @@ describe("SubagentService", () => {
       });
       expect(fake.controls[0]?.released()).toBe(1);
 
-      const conflict = yield* service
-        .start(request({ name: "replacement-writer", writeIntent: "writer" }))
-        .pipe(Effect.flip);
+      const conflict = yield* service.start(writer("replacement-writer")).pipe(Effect.flip);
       expect(conflict).toMatchObject({
         _tag: "SubagentWriterConflictError",
         activeId: first.id,
@@ -796,19 +644,17 @@ describe("SubagentService", () => {
   it.effect("retains failed writer ownership until its child scope is released", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      yield* service.start(request({ name: "failed-writer", writeIntent: "writer" }));
+      yield* service.start(writer("failed-writer"));
       fake.controls[0]?.offer({ type: "tool_execution_start" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       expect(fake.controls[0]?.released()).toBe(0);
 
-      const conflict = yield* Effect.flip(
-        service.start(request({ name: "next-writer", writeIntent: "writer" })),
-      );
+      const conflict = yield* Effect.flip(service.start(writer("next-writer")));
       expect(conflict._tag).toBe("SubagentWriterConflictError");
 
       fake.controls[0]?.exit(1);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-      const next = yield* service.start(request({ name: "next-writer", writeIntent: "writer" }));
+      const next = yield* service.start(writer("next-writer"));
       expect(next.state).toBe("running");
     });
   });

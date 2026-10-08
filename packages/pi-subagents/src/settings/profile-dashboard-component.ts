@@ -5,7 +5,11 @@ import { isProjectTrusted } from "pi-cosmic-core";
 import type { FleetManagerActions } from "./controller.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { ProfileWorkspaceComponent, type ProfileWorkspaceOptions } from "./profile-workspace.ts";
-import type { ProfileSettingsInspection, ProfileWorkspaceTarget } from "./profile-route-editor.ts";
+import {
+  profileTargetKey as keyFor,
+  type ProfileSettingsInspection,
+  type ProfileWorkspaceTarget,
+} from "./profile-route-editor.ts";
 import { ProfileSetPickerComponent, type ProfileSetPickerAction } from "./profile-set-picker.ts";
 import { ProfileDashboardDialog } from "./profile-dashboard-dialogs.ts";
 import { runProfileSetAction, type ProfileSetSaveDestination } from "./profile-set-actions.ts";
@@ -14,11 +18,9 @@ import {
   renderProfileDashboard,
 } from "./ui/profile-dashboard-render.ts";
 import { profileSetPickerEntries } from "./ui/profile-set-picker-model.ts";
-import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
+import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 
 type Child = Component & { focused?: boolean; dispose?: () => void };
-const keyFor = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session" ? "session" : `${target.set.scope}:${target.set.name}`;
 
 export interface ProfileDashboardOptions {
   readonly workspace: ProfileWorkspaceOptions;
@@ -27,6 +29,7 @@ export interface ProfileDashboardOptions {
   readonly isCurrent: () => boolean;
   readonly onInspection: (inspection: ProfileSettingsInspection) => void;
   readonly awaitDialog: <T>(register: (finish: (value: T) => void) => () => void) => Promise<T>;
+  readonly onDispose?: (() => void) | undefined;
 }
 
 /** One host slot owns every editor, library page and transient dialog. */
@@ -35,9 +38,8 @@ export class ProfileDashboardComponent implements Component, Focusable {
   private inspection: ProfileSettingsInspection;
   private readonly visit: ProfileEditVisit;
   private readonly editors = new Map<string, ProfileWorkspaceComponent>();
-  private readonly targets = new Map<string, ProfileWorkspaceTarget>();
   private renaming: string | undefined;
-  private library: ProfileSetPickerComponent;
+  private readonly library: ProfileSetPickerComponent;
   private tab: "session" | "saved" = "session";
   private savedTarget: ProfileWorkspaceTarget | undefined;
   private overlay: Child | undefined;
@@ -53,7 +55,16 @@ export class ProfileDashboardComponent implements Component, Focusable {
     this.options = options;
     this.inspection = options.workspace.inspection;
     this.visit = new ProfileEditVisit(this.inspection);
-    this.library = this.makeLibrary();
+    this.library = new ProfileSetPickerComponent({
+      ...this.host(),
+      inspection: this.inspection,
+      projectTrusted: isProjectTrusted(options.ctx),
+      close: (action) => {
+        if (!this.current()) return;
+        if (!action) this.options.workspace.close();
+        else this.act(action);
+      },
+    });
     this.editor({ kind: "session" });
   }
   private current = (): boolean => {
@@ -73,18 +84,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
       requestRender: this.renderSoon,
     };
   }
-  private makeLibrary(): ProfileSetPickerComponent {
-    return new ProfileSetPickerComponent({
-      ...this.host(),
-      inspection: this.inspection,
-      projectTrusted: isProjectTrusted(this.options.ctx),
-      close: (action) => {
-        if (!this.current()) return;
-        if (!action) this.options.workspace.close();
-        else this.act(action);
-      },
-    });
-  }
   private publish(inspection: ProfileSettingsInspection): void {
     if (!this.current()) return;
     this.inspection = inspection;
@@ -101,7 +100,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
   }
   private reconcileTargets(): void {
     const entries = profileSetPickerEntries(this.inspection, isProjectTrusted(this.options.ctx));
-    for (const [key, target] of this.targets) {
+    for (const [key, { target }] of this.editors) {
       if (target.kind === "session" || key === this.renaming) continue;
       const entry = entries.find(
         (candidate) =>
@@ -111,11 +110,15 @@ export class ProfileDashboardComponent implements Component, Focusable {
       );
       if (entry?.kind === "set" && (!entry.invalid || entry.repairable)) continue;
       this.visit.deleteTarget(target);
-      this.editors.get(key)?.dispose();
-      this.editors.delete(key);
-      this.targets.delete(key);
-      if (this.savedTarget && keyFor(this.savedTarget) === key) this.savedTarget = undefined;
+      this.retire(target);
     }
+  }
+  /** Drops a target's cached editor; a saved selection follows it to `replacement` or clears. */
+  private retire(target: ProfileWorkspaceTarget, replacement?: ProfileWorkspaceTarget): void {
+    const key = keyFor(target);
+    this.editors.get(key)?.dispose();
+    this.editors.delete(key);
+    if (this.savedTarget && keyFor(this.savedTarget) === key) this.savedTarget = replacement;
   }
   private editor(
     target: ProfileWorkspaceTarget,
@@ -128,7 +131,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
       return existing;
     }
     this.visit.captureTarget(target, this.inspection);
-    const { onDispose: _onDispose, ...workspace } = this.host();
+    const workspace = this.host();
     const editor = new ProfileWorkspaceComponent({
       ...workspace,
       ...position,
@@ -151,7 +154,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
       saveSession: () => this.act({ action: "save-session" }),
     });
     this.editors.set(key, editor);
-    this.targets.set(key, target);
     return editor;
   }
   private editorClosed(target: ProfileWorkspaceTarget): void {
@@ -286,22 +288,13 @@ export class ProfileDashboardComponent implements Component, Focusable {
         renamed: (previous, next, inspection) => {
           this.visit.renameTarget(previous, next, inspection);
           // Fixed-target editors cannot be retargeted. Preserve their position when replacing the renamed cache entry.
-          const previousEditor = this.editors.get(keyFor(previous));
-          const position = previousEditor?.getPosition();
-          previousEditor?.dispose();
-          this.editors.delete(keyFor(previous));
-          this.targets.delete(keyFor(previous));
-          if (this.savedTarget && keyFor(this.savedTarget) === keyFor(previous))
-            this.savedTarget = next;
+          const position = this.editors.get(keyFor(previous))?.getPosition();
+          this.retire(previous, next);
           if (position) this.editor(next, position);
         },
         deleted: (target) => {
           this.visit.deleteTarget(target);
-          this.editors.get(keyFor(target))?.dispose();
-          this.editors.delete(keyFor(target));
-          this.targets.delete(keyFor(target));
-          if (this.savedTarget && keyFor(this.savedTarget) === keyFor(target))
-            this.savedTarget = undefined;
+          this.retire(target);
         },
       },
       action,
@@ -330,55 +323,35 @@ export class ProfileDashboardComponent implements Component, Focusable {
       });
     this.renderSoon();
   }
+  /** Dialogs, pickers, menus, and in-flight edits own their input. */
+  private ownsInput(child: Child): boolean {
+    if (child === this.overlay) return true;
+    if (child === this.library) return this.library.hasOverlay;
+    return child instanceof ProfileWorkspaceComponent && (child.hasOverlay || child.isBusy);
+  }
   handleInput(data: string): void {
     if (!this.current()) return;
-    if (this.overlay) {
-      this.overlay.handleInput?.(data);
-      return;
-    }
     const child = this.child();
-    const editor = child instanceof ProfileWorkspaceComponent ? child : undefined;
-    if (editor?.hasOverlay || (this.library === child && this.library.hasOverlay)) {
+    if (this.ownsInput(child)) {
       child.handleInput?.(data);
-      return;
-    }
-    if (editor?.isBusy) {
-      editor.handleInput(data);
       return;
     }
     if (this.busy) return;
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
-      matchesKeybinding: isWorkspaceNavigationKey(data)
-        ? undefined
-        : this.options.workspace.matchesKeybinding,
+      matchesKeybinding: withoutNavigationKeys(this.options.workspace.matchesKeybinding),
       reservedKeys: new Set(["s"]),
     });
     const action = resolution?._tag === "Action" ? resolution.action : undefined;
     if (this.blocked) {
-      this.handleBlocked(action);
+      if (action === "cancel" || action === "quit") this.options.workspace.close();
       return;
     }
-    this.handleChildNavigation(
-      child,
-      data,
-      action,
-      resolution?._tag === "Shortcut" ? resolution.key : undefined,
-    );
+    if (action === "next-pane" || action === "previous-pane") this.switchTab();
+    // Saving Current Session is not a library action.
+    else if (!(this.tab === "saved" && resolution?._tag === "Shortcut")) child.handleInput?.(data);
     this.focused = this._focused;
     this.renderSoon();
-  }
-  private handleBlocked(action: string | undefined): void {
-    if (action === "cancel" || action === "quit") this.options.workspace.close();
-  }
-  private handleChildNavigation(
-    child: Child,
-    data: string,
-    action: string | undefined,
-    shortcut: string | undefined,
-  ): void {
-    if (action === "next-pane" || action === "previous-pane") this.switchTab();
-    else if (!(this.tab === "saved" && shortcut === "s")) child.handleInput?.(data);
   }
   private switchTab(): void {
     this.reconcileTargets();
@@ -414,6 +387,6 @@ export class ProfileDashboardComponent implements Component, Focusable {
     this.cancelDialog?.();
     for (const editor of this.editors.values()) editor.dispose();
     this.library.dispose();
-    this.options.workspace.onDispose?.();
+    this.options.onDispose?.();
   }
 }

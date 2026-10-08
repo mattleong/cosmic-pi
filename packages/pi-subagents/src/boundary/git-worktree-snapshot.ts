@@ -13,6 +13,7 @@ import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
   git,
+  gitFields,
   oid,
   workspaceFailure,
   workspaceIO,
@@ -34,8 +35,6 @@ export interface WorkspaceSnapshot {
   readonly commit: string;
   readonly excludedPaths: ReadonlyArray<string>;
 }
-export const bytesEqual = (a: Uint8Array, b: Uint8Array) =>
-  a.length === b.length && a.every((byte, index) => byte === b[index]);
 
 export const inspectSource = (cwd: string) =>
   Effect.gen(function* () {
@@ -139,7 +138,7 @@ export const captureSnapshot = (
   requiredPaths: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
-    const stages = (yield* git(root, ["ls-files", "--stage", "-z"])).split("\0").filter(Boolean);
+    const stages = yield* gitFields(root, ["ls-files", "--stage", "-z"]);
     const tracked: string[] = [];
     const links = new Set<string>();
     for (const line of stages) {
@@ -152,15 +151,13 @@ export const captureSnapshot = (
       tracked.push(match[3]!);
       if (match[1] === "120000") links.add(match[3]!);
     }
-    const flags = (yield* git(root, ["ls-files", "-v", "-z"])).split("\0").filter(Boolean);
+    const flags = yield* gitFields(root, ["ls-files", "-v", "-z"]);
     if (flags.some((entry) => entry[0] !== "H"))
       return yield* workspaceFailure(
         "snapshot",
         "Sparse, assume-unchanged or unsupported index state.",
       );
-    const untracked = (yield* git(root, ["ls-files", "--others", "--exclude-standard", "-z"]))
-      .split("\0")
-      .filter(Boolean);
+    const untracked = yield* gitFields(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
     const candidates = [
       ...new Set([...requiredPaths, ...tracked, ...untracked.filter(eligibleUntrackedSource)]),
     ].sort();
@@ -219,7 +216,7 @@ export const captureSnapshot = (
       entries.push({ ...file, oid: hash });
     }
     const tree = yield* git(repository, ["write-tree"], { index }).pipe(Effect.flatMap(oid));
-    const nonce = yield* newWorkspaceId();
+    const nonce = yield* newWorkspaceId;
     const commit = yield* git(repository, [
       "commit-tree",
       tree,

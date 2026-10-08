@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compactStatus, type CompactSummaryProvider } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { askUserCompactSummary, asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
+import { hostile } from "./support/questionnaire.ts";
 
 const submitted = {
   outcome: "submitted",
@@ -323,17 +324,8 @@ describe("questionnaire compact outcome projection", () => {
       expect(summary?.outcome).toBe("error");
       expect(summary?.issues ?? []).toEqual([]);
     }
-    const hostile = Object.defineProperty({}, "outcome", {
-      get() {
-        throw new Error("untrusted replay getter");
-      },
-    });
-    expect(summarize(askUserCompactSummary, hostile)).toBeUndefined();
-    const hostileId = Object.defineProperty(row(), "requestId", {
-      get() {
-        throw new Error("untrusted replay ID");
-      },
-    });
+    expect(summarize(askUserCompactSummary, hostile({}, "outcome"))).toBeUndefined();
+    const hostileId = hostile(row(), "requestId");
     expect(summarize(asyncAskUserCompactSummary, hostileId)).toBeUndefined();
     expect(summarize(asyncAskUserCompactSummary, { requests: [hostileId] })).toBeUndefined();
   });

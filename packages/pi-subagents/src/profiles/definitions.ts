@@ -94,5 +94,3 @@ const builtinRoute = (id: ProfileId): ProfileRoute => {
 };
 export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> =
   mapProfileIds(builtinRoute);
-
-export const profileDefinition = (id: ProfileId): ProfileDefinition => PROFILE_DEFINITIONS[id];

@@ -1,23 +1,16 @@
 import * as Schema from "effect/Schema";
 
+/** Rejects the script's agent() promise: the call itself is invalid. */
+export class WorkflowAgentCallError extends Schema.TaggedError<WorkflowAgentCallError>()(
+  "WorkflowAgentCallError",
+  { message: Schema.String },
+) {}
+
 /** The run or agent a request names isn't one this session runs or remembers. */
 export class WorkflowNotFoundError extends Schema.TaggedError<WorkflowNotFoundError>()(
   "WorkflowNotFoundError",
   { message: Schema.String },
 ) {}
-
-/** Why a start request ran nothing. */
-export const WORKFLOW_REQUEST_CODES = [
-  "args_too_large",
-  "args_mismatch",
-  "resume_running",
-  "resume_running_elsewhere",
-  "resume_unrecorded",
-  "resume_unknown",
-  "resume_other_session",
-  "resume_unreadable",
-] as const;
-export type WorkflowRequestCode = (typeof WORKFLOW_REQUEST_CODES)[number];
 
 /** Where args don't match a workflow's `meta.args` schema, and what the schema wanted there. */
 export const WorkflowArgsProblem = Schema.Struct({ path: Schema.String, problem: Schema.String });
@@ -31,14 +24,24 @@ export type WorkflowArgsProblem = typeof WorkflowArgsProblem.Type;
 export class WorkflowRequestError extends Schema.TaggedError<WorkflowRequestError>()(
   "WorkflowRequestError",
   {
-    code: Schema.Literals(WORKFLOW_REQUEST_CODES),
+    /** Why the request ran nothing. */
+    code: Schema.Literals([
+      "args_too_large",
+      "args_mismatch",
+      "resume_running",
+      "resume_running_elsewhere",
+      "resume_unrecorded",
+      "resume_unknown",
+      "resume_other_session",
+      "resume_unreadable",
+    ]),
     message: Schema.String,
     argsProblems: Schema.optional(Schema.Array(WorkflowArgsProblem)),
   },
 ) {}
 
 export const workflowRequestError = (
-  code: WorkflowRequestCode,
+  code: WorkflowRequestError["code"],
   message: string,
   argsProblems?: ReadonlyArray<WorkflowArgsProblem>,
 ) => new WorkflowRequestError({ code, message, ...(argsProblems && { argsProblems }) });

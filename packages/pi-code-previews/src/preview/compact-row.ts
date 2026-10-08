@@ -1,4 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import {
+  managerActivityColor,
+  managerActivityGlyph,
+  managerNoticeGlyph,
+  type ManagerActivityKind,
+} from "pi-cosmic-ui/manager";
 import { escapeControlChars } from "../shared/terminal-text";
 import {
   compactStatus,
@@ -7,7 +13,6 @@ import {
   type CompactSummary,
 } from "../tools/compact-summary";
 import { layoutCompactHeader } from "./compact-header";
-import { compactStatusIcon } from "./compact-status";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
 
 /** Subjects and metadata are plain, single-line text. ANSI input is displayed inertly. */
@@ -15,7 +20,7 @@ export function compactSingleLine(value: string): string {
   return escapeControlChars(value).replace(/\s+/gu, " ").trim();
 }
 
-type CompactRowInput = {
+export type CompactRowInput = {
   name: string;
   phase: CompactPhase;
   summary: CompactSummary;
@@ -29,6 +34,29 @@ type CompactRowInput = {
   animationFrame?: number | undefined;
   expanded?: boolean;
 };
+
+const ACTIVITY_KINDS = {
+  pending: "pending",
+  running: "running",
+  success: "done",
+  error: "failed",
+  cancelled: "stopped",
+} as const satisfies Record<string, ManagerActivityKind>;
+
+/** ✓ ⚠ ✗ ⊘ for settled outcomes; ? when the outcome cannot be confirmed. */
+function compactStatusIcon(
+  status: CompactStatus,
+  theme: Theme,
+  animationFrame = 0,
+  returnedCheckmark = false,
+): string {
+  if (status === "returned")
+    return theme.fg("muted", returnedCheckmark ? managerActivityGlyph("done") : "•");
+  if (status === "uncertain") return theme.fg("warning", "?");
+  if (status === "warning") return theme.fg("warning", managerNoticeGlyph("warning"));
+  const kind = ACTIVITY_KINDS[status];
+  return theme.fg(managerActivityColor(kind), managerActivityGlyph(kind, animationFrame));
+}
 
 /** Shared semantic heading policy. Branch decoration is outside the row's width. */
 export function renderCompactRow(input: CompactRowInput, theme: Theme, width: number): string {
@@ -55,25 +83,20 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
     (summary.showShortTiming || input.elapsedMs >= TIMING_VISIBLE_MS)
       ? compactSingleLine(input.duration ?? "")
       : undefined;
-  const metadata =
-    summary.metadata
+  const timing = duration ? theme.fg("dim", duration) : undefined;
+  const muted = (values: readonly string[] | undefined) =>
+    values
       ?.map(compactSingleLine)
       .filter(Boolean)
       .map((text) => theme.fg("muted", text)) ?? [];
-  const counters = input.issueLabel
-    ? [input.issueLabel]
-    : (summary.counters
-        ?.map(compactSingleLine)
-        .filter(Boolean)
-        .map((text) => theme.fg("muted", text)) ?? []);
   const { row, counter } = layoutCompactHeader(
     prefix,
     subject,
-    counters,
-    [...metadata, !summary.showTiming && duration ? theme.fg("dim", duration) : undefined],
+    input.issueLabel ? [input.issueLabel] : muted(summary.counters),
+    [...muted(summary.metadata), summary.showTiming ? undefined : timing],
     width,
     theme.fg("dim", " · "),
-    summary.showTiming && duration ? theme.fg("dim", duration) : undefined,
+    summary.showTiming ? timing : undefined,
   );
   return { row, issueShown: input.issueLabel !== undefined && counter === input.issueLabel };
 }

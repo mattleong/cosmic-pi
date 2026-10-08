@@ -11,12 +11,12 @@ import {
   type BackendReport,
 } from "../backend/model.ts";
 import { canonicalResultJson, decodeResultText } from "../domain/result-contract.ts";
-import { type SubagentError, SubagentProcessError } from "./errors.ts";
+import { processError, type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
-  clearRunNativeActivity,
+  clearRunActivity,
   commitRunPauseLocked,
   isInactiveRunRecord,
-  type CompletionGenerationRecord,
+  type PendingInitializationSettlement,
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
@@ -40,7 +40,6 @@ export interface RunSettlementDependencies extends RunContext {
 
 export type AssignmentActivationReplay =
   | { readonly kind: "running"; readonly view: SubagentRunView }
-  | { readonly kind: "retained-report"; readonly view: SubagentRunView }
   | { readonly kind: "close-report"; readonly report: BackendReport }
   | {
       readonly kind: "settlement";
@@ -48,7 +47,7 @@ export type AssignmentActivationReplay =
       readonly terminal?: BackendAssistantTerminal | undefined;
     };
 
-type SettlementState = "completed" | "failed" | "stopped";
+type SettlementState = PendingInitializationSettlement["state"];
 
 const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => {
   switch (terminal?.stopReason) {
@@ -133,14 +132,14 @@ const reportFinalText = (record: RunRecord, text: string) => {
   return decodeResultText(contract, text).pipe(
     Effect.mapBoth({
       onFailure: (error) =>
-        new SubagentProcessError({
-          operation: "accept report from",
-          code: "backend_report_schema_invalid",
-          message: sanitizeDiagnosticText(
+        processError(
+          "accept report from",
+          "backend_report_schema_invalid",
+          sanitizeDiagnosticText(
             `Subagent ${record.view.id} reported a result that does not match its schema: ${error.message}`,
             MAX_ERROR_CHARS,
           ),
-        }),
+        ),
       onSuccess: canonicalResultJson,
     }),
   );
@@ -150,47 +149,27 @@ const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =
   isTerminalRunState(record.view.state) ||
   (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"));
 
-/** A completion outcome before assignment close allocates its generation and folds warnings. */
-type CompletionOutcome = Omit<CompletionGenerationRecord, "generation" | "warning">;
-
-const completionForSettlement = (
-  record: RunRecord,
-  state: "completed" | "failed",
-  error: string | undefined,
-): CompletionOutcome => ({
-  outcome: state,
-  ...(state === "completed" &&
-    record.latestAssistantText && { finalText: record.latestAssistantText }),
-  ...(state === "failed" && { error: error ?? "Run failed." }),
-  retained: false,
-});
-
 const viewForSettlement = (
   record: RunRecord,
   state: SettlementState,
   now: number,
+  finalText: string | undefined,
   error: string | undefined,
-): SubagentRunView => {
-  const base: SubagentRunView = {
-    ...record.view,
-    state,
-    endedAt: now,
-    lastActivityAt: now,
-    currentTool: undefined,
-    question: undefined,
-    ...(record.view.steeringDelivery === "pending" && {
-      steeringDelivery:
-        state === "completed" ? ("report-unconfirmed" as const) : ("unresolved" as const),
-    }),
-    ...(state === "completed" && { reportGeneration: record.completionGeneration }),
-  };
-  const completed =
-    state === "completed" && record.latestAssistantText
-      ? { ...base, finalText: record.latestAssistantText }
-      : base;
-  const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-  return settledError === undefined ? completed : { ...completed, error: settledError };
-};
+): SubagentRunView => ({
+  ...record.view,
+  state,
+  endedAt: now,
+  lastActivityAt: now,
+  currentTool: undefined,
+  question: undefined,
+  ...(record.view.steeringDelivery === "pending" && {
+    steeringDelivery:
+      state === "completed" ? ("report-unconfirmed" as const) : ("unresolved" as const),
+  }),
+  ...(state === "completed" && { reportGeneration: record.completionGeneration }),
+  ...(finalText && { finalText }),
+  ...(error !== undefined && { error }),
+});
 
 /**
  * Owns event-driven view mutation, pause commits, terminal settlement, backend
@@ -202,6 +181,13 @@ const viewForSettlement = (
 export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   const { ownerScope, withLock, publish, delivery, closeRecordScope, sendPeerNotices } =
     dependencies;
+
+  const mergeUsageLocked = (record: RunRecord, usage: SubagentUsage) => {
+    const merged = addUsage(record.view.usage, usage);
+    if (merged === record.view.usage) return Effect.void;
+    record.view = { ...record.view, usage: merged };
+    return publish;
+  };
 
   const mutateEventView = (
     record: RunRecord,
@@ -226,8 +212,8 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   /**
    * Merges exact-epoch usage that a backend reported only at its final native
    * result, after an accepted report already settled the run. Only the completed
-   * outcome of the same assignment may absorb it; idle retained, stopped,
-   * failed, and parent-stopped records ignore late assistant usage.
+   * outcome of the same assignment may absorb it; stopped, failed, and parent-stopped records
+   * ignore late assistant usage.
    */
   const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
     withLock(
@@ -238,10 +224,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           record.view.state !== "completed"
         )
           return;
-        const merged = addUsage(record.view.usage, usage);
-        if (merged === record.view.usage) return;
-        record.view = { ...record.view, usage: merged };
-        yield* publish;
+        yield* mergeUsageLocked(record, usage);
       }),
     );
   // Native session stats describe process/run work, including idle cache warming.
@@ -262,10 +245,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           record.view.state === "failed"
         )
           return;
-        const merged = addUsage(record.view.usage, usage);
-        if (merged === record.view.usage) return;
-        record.view = { ...record.view, usage: merged };
-        yield* publish;
+        yield* mergeUsageLocked(record, usage);
       }),
     );
 
@@ -289,27 +269,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         return view;
       }),
     );
-  /** Locked assignment close shared by settle and retained reports; returns the pause waiter. */
-  const closeAssignmentLocked = (record: RunRecord, outcome: CompletionOutcome | undefined) => {
-    const pauseOutcome = record.pauseOutcome;
-    record.pauseOutcome = undefined;
-    record.pauseRequested = false;
-    record.activeTools.clear();
-    clearRunNativeActivity(record);
-    if (outcome && record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS) {
-      const warning = foldRunWarnings(record.warningSlots);
-      delivery.insertCompletionLocked(record, {
-        ...outcome,
-        generation: ++record.completionGeneration,
-        ...(warning && { warning }),
-      });
-    }
-    record.notificationGeneration += 1;
-    delivery.discardQuestionLocked(record.view.id);
-    record.replyPendingRequestId = undefined;
-    return pauseOutcome;
-  };
-
   const settle = (record: RunRecord, state: SettlementState, error?: string) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -318,33 +277,40 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           if (settlementBlocked(record, state))
             return { transitioned: false as const, view: snapshotView(record.view) };
           if (record.initializationPending && state !== "stopped") {
-            record.pendingInitializationSettlement = {
-              state,
-              ...(error && { error }),
-            };
-            return {
-              transitioned: false as const,
-              deferredInitialization: true as const,
-              view: snapshotView(record.view),
-            };
+            record.pendingInitializationSettlement = { state, ...(error && { error }) };
+            return { transitioned: false as const, view: snapshotView(record.view) };
           }
           const completedScope =
             state === "completed" && record.process !== undefined ? record.scope : undefined;
           if (completedScope) record.cleanupPending = true;
-          const pauseOutcome = closeAssignmentLocked(
-            record,
-            state === "stopped" ? undefined : completionForSettlement(record, state, error),
-          );
+          const pauseOutcome = record.pauseOutcome;
+          record.pauseOutcome = undefined;
+          record.pauseRequested = false;
+          clearRunActivity(record);
+          const finalText = state === "completed" ? record.latestAssistantText : undefined;
+          const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+          if (
+            state !== "stopped" &&
+            record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS
+          ) {
+            const warning = foldRunWarnings(record.warningSlots);
+            delivery.insertCompletionLocked(record, {
+              outcome: state,
+              ...(finalText && { finalText }),
+              ...(state === "failed" && { error: settledError }),
+              generation: ++record.completionGeneration,
+              ...(warning && { warning }),
+            });
+          }
+          record.notificationGeneration += 1;
+          delivery.discardQuestionLocked(record.view.id);
+          record.replyPendingRequestId = undefined;
           if (state === "completed") record.assignment.phase = "reported";
-          record.view = viewForSettlement(record, state, now, error);
+          record.view = viewForSettlement(record, state, now, finalText, settledError);
           yield* publish;
           const view = snapshotView(record.view);
           if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
-          return {
-            transitioned: true as const,
-            view,
-            completedScope,
-          };
+          return { transitioned: true as const, view, completedScope };
         }),
       );
       const view = result.view;
@@ -363,18 +329,17 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     return withLock(
       Effect.sync(() => {
         if (isInactiveRunRecord(record)) return false;
-        record.cleanupPending = true;
-        record.backendFailure ??=
+        const failure =
           pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic });
+        record.cleanupPending = true;
+        record.backendFailure ??= failure;
         if (
           pendingError?._tag === "SubagentProcessError" &&
           pendingError.code === "steer_outcome_uncertain" &&
           !pendingError.pendingDelivery
         )
           record.view = { ...record.view, steeringDelivery: "unresolved" };
-        record.process?.cancelPending(
-          pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic }),
-        );
+        record.process?.cancelPending(failure);
         return true;
       }),
     ).pipe(
@@ -419,45 +384,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     return report.sequence <= watermark.sequence ? "invalid" : "new";
   };
 
-  const commitRetainedReportLocked = (
-    record: RunRecord,
-    report: BackendReport,
-    now: number,
-  ): SubagentRunView => {
-    const text = report.text;
-    const pauseOutcome = closeAssignmentLocked(record, {
-      outcome: "completed",
-      ...(text && { finalText: text }),
-      retained: true,
-    });
-    record.latestAssistantText = text;
-    record.lastBackendReport = {
-      assignmentEpoch: report.assignmentEpoch,
-      sequence: report.sequence,
-      deliveryId: report.deliveryId,
-    };
-    record.assignment.phase = "reported";
-    record.assignment.pendingReport = undefined;
-    record.assignment.pendingRunSettled = false;
-    record.view = {
-      ...record.view,
-      state: "reported",
-      reportGeneration: record.completionGeneration,
-      endedAt: now,
-      lastActivityAt: now,
-      currentTool: undefined,
-      question: undefined,
-      finalText: text,
-      error: undefined,
-    };
-    const view = snapshotView(record.view);
-    if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
-    return view;
-  };
-
-  const finishRetainedReport = (record: RunRecord, view: SubagentRunView) =>
-    sendPeerNotices(record.view.id).pipe(Effect.as(view));
-
   const acceptValidatedBackendReport = (record: RunRecord, report: BackendReport) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -494,14 +420,10 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
               `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
               now,
             );
-          if (record.view.closeOnReport !== false) return { kind: "close" as const, report };
-          const result = commitRetainedReportLocked(record, report, now);
-          yield* publish;
-          return { kind: "retained" as const, result };
+          return { kind: "close" as const, report };
         }),
       );
-      if (decision.kind === "unchanged" || decision.kind === "buffered") return decision.view;
-      if (decision.kind === "retained") return yield* finishRetainedReport(record, decision.result);
+      if (decision.kind !== "close") return decision.view;
 
       const prepared = yield* withLock(
         Effect.sync(() => {
@@ -533,34 +455,25 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
 
   const activateAssignmentLocked = (
     record: RunRecord,
-    now: number,
     runningView: SubagentRunView,
   ): Effect.Effect<AssignmentActivationReplay> =>
-    Effect.gen(function* () {
+    Effect.suspend(() => {
       const pendingReport = record.assignment.pendingReport;
       const pendingRunSettled = record.assignment.pendingRunSettled;
       record.assignment.phase = "running";
       record.assignment.pendingReport = undefined;
       record.assignment.pendingRunSettled = false;
-      const replay: AssignmentActivationReplay =
-        pendingReport && record.view.closeOnReport === false
+      record.view = runningView;
+      const replay: AssignmentActivationReplay = pendingReport
+        ? { kind: "close-report", report: pendingReport }
+        : pendingRunSettled
           ? {
-              kind: "retained-report",
-              view: commitRetainedReportLocked(record, pendingReport, now),
+              kind: "settlement",
+              assignmentEpoch: record.assignment.epoch,
+              terminal: pendingRunSettled.terminal,
             }
-          : (() => {
-              record.view = runningView;
-              if (pendingReport) return { kind: "close-report" as const, report: pendingReport };
-              if (pendingRunSettled)
-                return {
-                  kind: "settlement" as const,
-                  assignmentEpoch: record.assignment.epoch,
-                  terminal: pendingRunSettled.terminal,
-                };
-              return { kind: "running" as const, view: snapshotView(record.view) };
-            })();
-      yield* publish;
-      return replay;
+          : { kind: "running", view: snapshotView(record.view) };
+      return publish.pipe(Effect.as(replay));
     });
 
   const replayAssignmentActivation = (
@@ -568,8 +481,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     replay: AssignmentActivationReplay,
   ): Effect.Effect<SubagentRunView> => {
     switch (replay.kind) {
-      case "retained-report":
-        return finishRetainedReport(record, replay.view);
       case "close-report":
         return acceptValidatedBackendReport(record, replay.report);
       case "settlement":
@@ -596,18 +507,18 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         !rawReport.text?.trim() ||
         rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS
       )
-        return yield* new SubagentProcessError({
-          operation: "accept report from",
-          code: "backend_report_invalid",
-          message: `Subagent ${record.view.id} emitted an invalid bounded report event.`,
-        });
+        return yield* processError(
+          "accept report from",
+          "backend_report_invalid",
+          `Subagent ${record.view.id} emitted an invalid bounded report event.`,
+        );
       const text = yield* reportFinalText(record, rawReport.text);
       if (!text)
-        return yield* new SubagentProcessError({
-          operation: "accept report from",
-          code: "backend_report_empty",
-          message: `Subagent ${record.view.id} submitted an empty report.`,
-        });
+        return yield* processError(
+          "accept report from",
+          "backend_report_empty",
+          `Subagent ${record.view.id} submitted an empty report.`,
+        );
       return yield* acceptValidatedBackendReport(record, {
         ...rawReport,
         deliveryId: rawReport.deliveryId.trim(),
@@ -641,7 +552,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
             yield* publish;
             return undefined;
           }
-          return yield* activateAssignmentLocked(record, now, running);
+          return yield* activateAssignmentLocked(record, running);
         }),
       );
       if (replay) yield* replayAssignmentActivation(record, replay);
@@ -653,15 +564,13 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     terminal?: BackendAssistantTerminal,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (record.view.closeOnReport === false) return;
       const phase = yield* withLock(
         Effect.sync(() => settledAssignmentLocked(record, assignmentEpoch, terminal)),
       );
       if (phase !== "running") return;
       if (record.pauseRequested) {
         const now = yield* Clock.currentTimeMillis;
-        const paused = yield* pauseFromEvent(record, now, assignmentEpoch);
-        if (paused || record.stoppedByParent) return;
+        if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
       }
       if (record.stoppedByParent) return;
       // Settled text is decoded only when no value was accepted; it could not replace one.

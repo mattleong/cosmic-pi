@@ -11,7 +11,7 @@ import {
   firstLineMessage,
 } from "pi-cosmic-core";
 import { HerdrBtwError } from "../btw/errors.ts";
-import { herdrBtwParentMarkerArguments } from "../btw/marker.ts";
+import { BoundedId, BoundedPath, herdrBtwParentMarkerArguments } from "../btw/marker.ts";
 
 const HERDR_EXECUTABLE = "herdr";
 const COMMAND_TIMEOUT_MILLIS = 15_000;
@@ -19,8 +19,6 @@ const START_TIMEOUT_MILLIS = 70_000;
 const PROCESS_CLEANUP_MILLIS = 1_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
-const BoundedId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
-const BoundedPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4_096));
 const HerdrCliErrorEnvelopeSchema = Schema.Struct({
   error: Schema.Struct({
     code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
@@ -130,11 +128,6 @@ interface HerdrCommandRequest {
 
 export type HerdrProcessRunner = typeof runBoundedProcessNode;
 
-export interface HerdrClientOptions {
-  /** Test seam for deterministic process lifecycle and transport outcomes. */
-  readonly processRunner?: HerdrProcessRunner | undefined;
-}
-
 const operationCode = (operation: string, suffix: string): string =>
   `herdr_${operation
     .toLowerCase()
@@ -145,8 +138,10 @@ const herdrCommandExitFailure = (
   request: HerdrCommandRequest,
   diagnosticSource: string,
 ): HerdrBtwError => {
-  const sanitized = sanitizeDiagnosticContent(diagnosticSource, { maximumLength: 2_000 }).trim();
-  const reason = sanitized ? firstLineMessage(sanitized, "") : "";
+  const reason = firstLineMessage(
+    sanitizeDiagnosticContent(diagnosticSource, { maximumLength: 2_000 }),
+    "",
+  );
   const detail = reason ? `: ${reason}` : "";
   const herdrCode = decodeUnknownOrUndefined(
     Schema.fromJsonString(HerdrCliErrorEnvelopeSchema),
@@ -169,11 +164,10 @@ const herdrCommandExitFailure = (
         ? `Herdr may have finished trying to ${request.operation}, but couldn't confirm it${detail}`
         : `Herdr couldn't ${request.operation}${detail}`,
     outcome: uncertain ? "uncertain" : "confirmed",
-    herdrCode,
   });
 };
 
-export const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
+const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
   Object.freeze(
     Object.fromEntries(
       [
@@ -238,7 +232,7 @@ const decodeJson = <A>(
   source: string,
   request: HerdrCommandRequest,
 ): Effect.Effect<A, HerdrBtwError> =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
+  Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
     Effect.mapError(() => herdrDecodeFailure(request, "json")),
     Effect.flatMap((value) =>
       Schema.decodeUnknownEffect(schema)(value).pipe(
@@ -249,10 +243,10 @@ const decodeJson = <A>(
 
 export const makeHerdrClient = (
   sourceEnvironment: Readonly<NodeJS.ProcessEnv>,
-  options: HerdrClientOptions = {},
+  /** Test seam for deterministic process lifecycle and transport outcomes. */
+  { processRunner = runBoundedProcessNode }: { readonly processRunner?: HerdrProcessRunner } = {},
 ) => {
   const environment = selectHerdrEnvironment(sourceEnvironment);
-  const processRunner = options.processRunner ?? runBoundedProcessNode;
   const run = (request: HerdrCommandRequest): Effect.Effect<string, HerdrBtwError> =>
     processRunner({
       executable: HERDR_EXECUTABLE,

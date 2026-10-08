@@ -4,12 +4,10 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sha256Text } from "pi-cosmic-core";
 import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
-import { workflowAgentLabel, workflowPhaseTitle } from "./model.ts";
+import { WorkflowAgentCallError } from "./errors.ts";
+import { NonEmptyText, workflowAgentLabel, workflowPhaseTitle } from "./model.ts";
 
-export class WorkflowAgentOptionsError extends Schema.TaggedError<WorkflowAgentOptionsError>()(
-  "WorkflowAgentOptionsError",
-  { message: Schema.String },
-) {}
+const invalidOptions = (message: string) => new WorkflowAgentCallError({ message });
 
 /** The profile an agent() call without one runs with. */
 const DEFAULT_PROFILE: ProfileId = "generalist";
@@ -45,30 +43,26 @@ const workflowRouteOptionMessage = (option: WorkflowRouteOption, value: Schema.J
     : `agent() option \`agentType\` isn't supported: Pi runs profiles, not agent types. Pass profile: "${nearest}" instead of agentType: ${JSON.stringify(value)}.`;
 };
 
-const Text = (maximum: number) =>
-  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
-
-export const WorkflowAgentOptionsSchema = Schema.Struct({
+const WorkflowAgentOptionsSchema = Schema.Struct({
   // Presentation only: decoding clips long values and drops empty ones instead of rejecting.
   label: Schema.optional(Schema.String),
   phase: Schema.optional(Schema.String),
   schema: Schema.optional(Schema.Json),
-  profile: Schema.optional(Text(80)),
+  profile: Schema.optional(NonEmptyText(80)),
   isolation: Schema.optional(Schema.Literal("worktree")),
   writes: Schema.optional(
-    Schema.Array(Text(4_096)).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+    Schema.Array(NonEmptyText(4_096)).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
   ),
 });
 
 export type WorkflowAgentOptions = typeof WorkflowAgentOptionsSchema.Type;
 
-const SUPPORTED = ["label", "phase", "schema", "profile", "isolation", "writes"];
+const SUPPORTED = Object.keys(WorkflowAgentOptionsSchema.fields);
 const isRouteOption = Schema.is(Schema.Literals(ROUTE_OPTIONS));
 
 const decodeRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
-const decodeOptions = Schema.decodeUnknownEffect(WorkflowAgentOptionsSchema, {
-  onExcessProperty: "error",
-});
+// Options outside the schema are rejected by name before decoding.
+const decodeOptions = Schema.decodeUnknownEffect(WorkflowAgentOptionsSchema);
 
 /**
  * Decodes script-supplied agent() options strictly, naming the first route option, with the
@@ -77,33 +71,25 @@ const decodeOptions = Schema.decodeUnknownEffect(WorkflowAgentOptionsSchema, {
  */
 export const decodeWorkflowAgentOptions = (
   raw: Schema.Json,
-): Effect.Effect<WorkflowAgentOptions, WorkflowAgentOptionsError> =>
+): Effect.Effect<WorkflowAgentOptions, WorkflowAgentCallError> =>
   Effect.gen(function* () {
     const record = decodeRecord(raw);
-    if (Option.isNone(record))
-      return yield* new WorkflowAgentOptionsError({
-        message: "agent() options must be an object.",
-      });
+    if (Option.isNone(record)) return yield* invalidOptions("agent() options must be an object.");
     const keys = Object.keys(record.value);
     const route = keys.find(isRouteOption);
     if (route !== undefined)
-      return yield* new WorkflowAgentOptionsError({
-        message: workflowRouteOptionMessage(route, record.value[route] ?? null),
-      });
+      return yield* invalidOptions(workflowRouteOptionMessage(route, record.value[route] ?? null));
     const unknown = keys.find((key) => !SUPPORTED.includes(key));
     if (unknown !== undefined)
-      return yield* new WorkflowAgentOptionsError({
-        message: `Unknown agent() option \`${unknown}\`. Supported options: ${SUPPORTED.join(", ")}.`,
-      });
+      return yield* invalidOptions(
+        `Unknown agent() option \`${unknown}\`. Supported options: ${SUPPORTED.join(", ")}.`,
+      );
     // A null option counts as omitted, so scripts can pass nullable values straight through.
     const present = Object.fromEntries(
       Object.entries(record.value).filter(([, value]) => value !== null),
     );
     const { label, phase, profile, ...options } = yield* decodeOptions(present).pipe(
-      Effect.mapError(
-        (error) =>
-          new WorkflowAgentOptionsError({ message: `Invalid agent() options: ${error.message}` }),
-      ),
+      Effect.mapError((error) => invalidOptions(`Invalid agent() options: ${error.message}`)),
     );
     const shownLabel = label === undefined ? undefined : workflowAgentLabel(label);
     const shownPhase = phase === undefined ? undefined : workflowPhaseTitle(phase) || undefined;

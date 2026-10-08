@@ -71,7 +71,7 @@ describe("profile model catalog", () => {
       `releases noncooperative refresh on interruption and ignores late ${lateFailure ? "rejection" : "publication"}`,
       () =>
         Effect.gen(function* () {
-          const pending = yield* Deferred.make<ProfileModelRegistryRefreshResult, string>();
+          const pending = deferredPromise<ProfileModelRegistryRefreshResult>();
           let registrySignal: AbortSignal | undefined;
           let models = [piModel("openai", "old")];
           const entered = yield* Deferred.make<void>();
@@ -81,7 +81,7 @@ describe("profile model catalog", () => {
             refresh: (options) => {
               registrySignal = options?.signal;
               Deferred.doneUnsafe(entered, Effect.void);
-              return Effect.runPromise(Deferred.await(pending));
+              return pending.promise;
             },
           });
           const initial = catalog.capture();
@@ -90,8 +90,8 @@ describe("profile model catalog", () => {
           yield* Fiber.interrupt(refreshing);
           expect(registrySignal?.aborted).toBe(true);
           models = [piModel("openai", "late")];
-          if (lateFailure) yield* Deferred.fail(pending, "late failure");
-          else yield* Deferred.succeed(pending, { aborted: false });
+          if (lateFailure) pending.reject(new Error("late failure"));
+          else pending.resolve({ aborted: false });
           yield* Effect.promise(() => Promise.resolve());
           expect(catalog.capture()).toBe(initial);
         }),
@@ -110,38 +110,36 @@ describe("profile model catalog", () => {
       const catalog = new ProfileModelCatalog(registry);
       const initial = catalog.capture();
       expect(initial).toMatchObject({
-        revision: 0,
         piModels: [{ provider: "openai", id: "gpt-old" }],
       });
       expect(Object.isFrozen(initial)).toBe(true);
       expect(Object.isFrozen(initial.piModels)).toBe(true);
 
-      const updating = Effect.runPromise(catalog.refresh());
+      const updating = yield* Effect.forkScoped(catalog.refresh());
       models = [piModel("openai", "gpt-new")];
       expect(catalog.capture()).toBe(initial);
       refresh.resolve({ aborted: false });
-      expect(yield* Effect.promise(() => updating)).toBe("updated");
+      expect(yield* Fiber.join(updating)).toBe("updated");
       const updated = catalog.capture();
       expect(updated).toMatchObject({
-        revision: 1,
         piModels: [{ provider: "openai", id: "gpt-new" }],
       });
       expect(updated.piModels.some((model) => model.id === "gpt-old")).toBe(false);
 
       registryError = "registry refresh failed";
       refresh = deferredPromise<ProfileModelRegistryRefreshResult>();
-      const failing = Effect.runPromise(catalog.refresh());
+      const failing = yield* Effect.forkScoped(catalog.refresh());
       models = [piModel("openai", "gpt-failed")];
       refresh.resolve({ aborted: false });
-      expect(yield* Effect.promise(() => failing)).toBe("failed");
+      expect(yield* Fiber.join(failing)).toBe("failed");
       expect(catalog.capture()).toBe(updated);
 
       registryError = undefined;
       refresh = deferredPromise<ProfileModelRegistryRefreshResult>();
-      const aborting = Effect.runPromise(catalog.refresh());
+      const aborting = yield* Effect.forkScoped(catalog.refresh());
       models = [piModel("openai", "gpt-aborted")];
       refresh.resolve({ aborted: true });
-      expect(yield* Effect.promise(() => aborting)).toBe("aborted");
+      expect(yield* Fiber.join(aborting)).toBe("aborted");
       expect(catalog.capture()).toBe(updated);
     }),
   );

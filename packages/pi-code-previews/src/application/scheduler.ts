@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
+import { invokeHostCallback } from "pi-cosmic-core";
 
 export interface CodePreviewSchedulerServiceContract {
   readonly defer: (task: () => void) => () => void;
@@ -11,14 +12,13 @@ export interface CodePreviewSchedulerServiceContract {
 }
 
 const invokeCodePreviewCallback = (task: () => void): Effect.Effect<void> =>
-  Effect.try({ try: task, catch: () => undefined }).pipe(Effect.ignore);
+  Effect.sync(() => invokeHostCallback(task, undefined));
 
-/** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven. */
+/** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven; the first tick
+ * waits one interval because `Effect.schedule` steps the schedule before each run. */
 export const previewScheduleEffect = (interval: number, task: () => void) =>
-  Effect.sleep(Duration.millis(interval)).pipe(
-    Effect.andThen(
-      Effect.repeat(invokeCodePreviewCallback(task), Schedule.fixed(Duration.millis(interval))),
-    ),
+  invokeCodePreviewCallback(task).pipe(
+    Effect.schedule(Schedule.fixed(Duration.millis(interval))),
     Effect.asVoid,
   );
 

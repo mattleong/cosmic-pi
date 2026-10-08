@@ -36,15 +36,6 @@ export const workflowNotFound = (id: string): Effect.Effect<never, WorkflowNotFo
     }),
   );
 
-/** Controls of the runs whose fibers are live, keyed by workflow run id. */
-export interface WorkflowRunControls {
-  readonly get: (id: string) => WorkflowRunControl | undefined;
-  readonly add: (id: string, control: WorkflowRunControl) => void;
-  readonly remove: (id: string) => void;
-  /** The skip of a queued or running agent in any live run, by its subagent run id. */
-  readonly skipOf: (agentRunId: string) => Deferred.Deferred<void> | undefined;
-}
-
 /** How long a change waits for later ones before Activity republishes them together. */
 export const WORKFLOW_ACTIVITY_PUBLISH_MS = 75;
 
@@ -58,11 +49,6 @@ export interface WorkflowActivitySink {
   readonly publish: (runs: ReadonlyArray<WorkflowRunView>) => void;
 }
 
-/** A change to every run view, such as adding a run or evicting old ones. */
-export type WorkflowRunsChange = (
-  runs: ReadonlyArray<WorkflowRunView>,
-) => ReadonlyArray<WorkflowRunView>;
-
 /**
  * The session's run views and the controls of its live runs. Every change takes the views' lock
  * and then hands the latest views to one Activity bridge, which coalesces publishes.
@@ -71,10 +57,14 @@ export interface WorkflowRuns {
   readonly list: Effect.Effect<ReadonlyArray<WorkflowRunView>>;
   readonly find: (id: string) => Effect.Effect<WorkflowRunView | undefined>;
   readonly require: (id: string) => Effect.Effect<WorkflowRunView, WorkflowNotFoundError>;
-  readonly mutate: (change: WorkflowRunsChange) => Effect.Effect<void>;
+  /** A change to every run view, such as adding a run or evicting old ones. */
+  readonly mutate: (
+    change: (runs: ReadonlyArray<WorkflowRunView>) => ReadonlyArray<WorkflowRunView>,
+  ) => Effect.Effect<void>;
   /**
    * Atomically applies an effectful `change` to one run, under the views' lock, which also
-   * returns a value derived from the run as it was; undefined once the run is evicted.
+   * returns a value derived from the run as it was; undefined once the run is evicted. A change
+   * that returns the same run publishes nothing.
    */
   readonly modifyEffect: <A>(
     id: string,
@@ -92,24 +82,9 @@ export interface WorkflowRuns {
   ) => Effect.Effect<WorkflowRunView | undefined>;
   /** Applies a script or service event to one run, stamped with the current time. */
   readonly recordEvent: (id: string, event: WorkflowEvent) => Effect.Effect<void>;
-  readonly controls: WorkflowRunControls;
+  /** Controls of the runs whose fibers are live, keyed by workflow run id. */
+  readonly controls: Map<string, WorkflowRunControl>;
 }
-
-const makeControls = (): WorkflowRunControls => {
-  const controls = new Map<string, WorkflowRunControl>();
-  return {
-    get: (id) => controls.get(id),
-    add: (id, control) => void controls.set(id, control),
-    remove: (id) => void controls.delete(id),
-    skipOf: (agentRunId) => {
-      for (const control of controls.values()) {
-        const skip = control.skips.get(agentRunId);
-        if (skip) return skip;
-      }
-      return undefined;
-    },
-  };
-};
 
 /** Whether a change starts, ends, stops or evicts a run, which Activity shows at once. */
 const changesRunStates = (
@@ -204,9 +179,10 @@ export const makeWorkflowRuns = Effect.fnUntraced(function* (
         if (!current) return Effect.succeed([[undefined, undefined], runs]);
         // A changed run state, such as a start of stopping or a finish, publishes at once.
         return change(current).pipe(
-          Effect.map(
-            ([value, updated]) =>
-              [[value, current.state !== updated.state], runs.with(index, updated)] as const,
+          Effect.map(([value, updated]) =>
+            updated === current
+              ? [[value, undefined], runs]
+              : [[value, current.state !== updated.state], runs.with(index, updated)],
           ),
         );
       },
@@ -235,7 +211,7 @@ export const makeWorkflowRuns = Effect.fnUntraced(function* (
   const require: WorkflowRuns["require"] = (id) =>
     find(id).pipe(
       Effect.filterOrElse(
-        (run): run is WorkflowRunView => run !== undefined,
+        (run) => run !== undefined,
         () => workflowNotFound(id),
       ),
     );
@@ -255,6 +231,6 @@ export const makeWorkflowRuns = Effect.fnUntraced(function* (
     modify,
     update,
     recordEvent,
-    controls: makeControls(),
+    controls: new Map<string, WorkflowRunControl>(),
   } satisfies WorkflowRuns;
 });

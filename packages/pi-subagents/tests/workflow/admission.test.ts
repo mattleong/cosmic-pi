@@ -17,10 +17,10 @@ import {
   resultValue,
   runningTask,
   runWhere,
+  startScript,
   stateOfTask,
-  testHost,
-  withWorkflows,
-  workflowFixture,
+  workflowTest,
+  type WorkflowFixture,
 } from "./fixtures/workflow-harness.ts";
 
 const bump = (counts: Map<string, number>, task: string) =>
@@ -44,7 +44,7 @@ const countingStarts = () => {
 };
 
 /** The tasks whose agents have started, in the order they first ran. */
-const startOrder = (fixture: ReturnType<typeof workflowFixture>, tasks: ReadonlyArray<string>) => {
+const startOrder = (fixture: WorkflowFixture, tasks: ReadonlyArray<string>) => {
   const order: string[] = [];
   for (const projection of fixture.projections)
     for (const run of projection.runs)
@@ -53,25 +53,23 @@ const startOrder = (fixture: ReturnType<typeof workflowFixture>, tasks: Readonly
   return order;
 };
 
-/** A script that runs one agent per task in parallel and returns their results. */
+/** A script body that runs one agent per task in parallel and returns their results. */
 const fanOut = (tasks: ReadonlyArray<string>) =>
-  inline(
-    `return await parallel([${tasks.map((task) => `"${task}"`).join(", ")}].map((task) => () => agent(task)));`,
-  );
+  `return await parallel([${tasks.map((task) => `"${task}"`).join(", ")}].map((task) => () => agent(task)));`;
 
 describe("workflow agent admission", () => {
   it.live("leaves the main agent every subagent slot while a run fills its width", () => {
     const { refusals, decorate } = countingStarts();
     const tasks = ["w1", "w2", "w3", "w4"];
     const nestingPolicy = { maxDirectChildren: 4, maxDepth: 3 };
-    const fixture = workflowFixture({
-      concurrency: tasks.length,
-      profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
-      decorate,
-    });
-    return withWorkflows(fixture, (workflows, subagents) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start({ source: fanOut(tasks), args: null }, testHost());
+    return workflowTest(
+      {
+        concurrency: tasks.length,
+        profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
+        decorate,
+      },
+      function* ({ fixture, workflows, subagents }) {
+        const started = yield* startScript(workflows, fanOut(tasks));
         for (const task of tasks) yield* runningTask(fixture, task);
         // Workflow agents take none of the root's direct-child slots, so the main agent can
         // still start as many children as its limit allows, and no more.
@@ -83,71 +81,36 @@ describe("workflow agent admission", () => {
         const run = yield* finished(workflows, started.id);
         expect(resultValue(run)).toEqual(tasks.map((task) => `${task} done`));
         expect(refusals.size).toBe(0);
-      }),
-    );
-  });
-
-  it.live("runs a run's full width whatever the main agent's subagent limit", () => {
-    const tasks = ["t1", "t2", "t3", "t4"];
-    const nestingPolicy = { maxDirectChildren: 2, maxDepth: 3 };
-    const fixture = workflowFixture({
-      concurrency: 3,
-      profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
-    });
-    return withWorkflows(fixture, (workflows, subagents) =>
-      Effect.gen(function* () {
-        // The main agent's own children fill every direct-child slot.
-        yield* mainChildren(subagents, ["main-1", "main-2"], nestingPolicy);
-        const started = yield* workflows.start({ source: fanOut(tasks), args: null }, testHost());
-        const queued = yield* runWhere(
-          workflows,
-          started.id,
-          (run) =>
-            run.agents.filter((agent) => agent.state === "running").length === 3 &&
-            run.agents.some((agent) => agent.waiting?.kind === "slot"),
-        );
-        expect(queued.agents.map((agent) => agent.waiting?.kind)).toEqual([
-          undefined,
-          undefined,
-          undefined,
-          "slot",
-        ]);
-        for (const task of tasks) yield* reportTask(fixture, task, `${task} done`);
-        const run = yield* finished(workflows, started.id);
-        expect(resultValue(run)).toEqual(tasks.map((task) => `${task} done`));
-      }),
+      },
     );
   });
 
   it.live("starts a run's queued agents in call order with one start attempt each", () => {
     const { attempts, refusals, decorate } = countingStarts();
     const tasks = ["t1", "t2", "t3", "t4", "t5"];
-    const fixture = workflowFixture({ concurrency: 1, decorate });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start({ source: fanOut(tasks), args: null }, testHost());
-        const queued = yield* runWhere(
-          workflows,
-          started.id,
-          (run) =>
-            run.agents.length === tasks.length &&
-            run.agents.filter((agent) => agent.waiting !== undefined).length === 4,
-        );
-        expect(queued.agents.map((agent) => agent.waiting?.kind)).toEqual([
-          undefined,
-          "slot",
-          "slot",
-          "slot",
-          "slot",
-        ]);
-        for (const task of tasks) yield* reportTask(fixture, task, `${task} done`);
-        const run = yield* finished(workflows, started.id);
-        expect(resultValue(run)).toEqual(tasks.map((task) => `${task} done`));
-        expect(startOrder(fixture, tasks)).toEqual(tasks);
-        expect(tasks.map((task) => attempts.get(task))).toEqual(tasks.map(() => 1));
-        expect(refusals.size).toBe(0);
-      }),
-    );
+    return workflowTest({ concurrency: 1, decorate }, function* ({ fixture, workflows }) {
+      const started = yield* startScript(workflows, fanOut(tasks));
+      const queued = yield* runWhere(
+        workflows,
+        started.id,
+        (run) =>
+          run.agents.length === tasks.length &&
+          run.agents.filter((agent) => agent.waiting !== undefined).length === 4,
+      );
+      expect(queued.agents.map((agent) => agent.waiting?.kind)).toEqual([
+        undefined,
+        "slot",
+        "slot",
+        "slot",
+        "slot",
+      ]);
+      for (const task of tasks) yield* reportTask(fixture, task, `${task} done`);
+      const run = yield* finished(workflows, started.id);
+      expect(resultValue(run)).toEqual(tasks.map((task) => `${task} done`));
+      expect(startOrder(fixture, tasks)).toEqual(tasks);
+      expect(tasks.map((task) => attempts.get(task))).toEqual(tasks.map(() => 1));
+      expect(refusals.size).toBe(0);
+    });
   });
 
   it.live("gives each run its own width", () => {
@@ -156,16 +119,15 @@ describe("workflow agent admission", () => {
       ["b1", "b2", "b3"],
     ];
     const nestingPolicy = { maxDirectChildren: 2, maxDepth: 3 };
-    const fixture = workflowFixture({
-      concurrency: 2,
-      profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
-    });
-    return withWorkflows(fixture, (workflows, subagents) =>
-      Effect.gen(function* () {
+    return workflowTest(
+      {
+        concurrency: 2,
+        profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
+      },
+      function* ({ fixture, workflows, subagents }) {
         yield* mainChildren(subagents, ["main-1", "main-2"], nestingPolicy);
         const ids: string[] = [];
-        for (const tasks of runs)
-          ids.push((yield* workflows.start({ source: fanOut(tasks), args: null }, testHost())).id);
+        for (const tasks of runs) ids.push((yield* startScript(workflows, fanOut(tasks))).id);
         // Each run runs two agents at once, beside the other run's two and the main agent's
         // children, and its third waits for one of its own slots.
         for (const id of ids) {
@@ -187,36 +149,33 @@ describe("workflow agent admission", () => {
           expect(resultValue(yield* finished(workflows, id))).toEqual(
             runs[index]!.map((task) => `${task} done`),
           );
-      }),
+      },
     );
   });
 
   it.live("holds no direct-child slot for a workflow writer creating its worktree", () => {
     const nestingPolicy = { maxDirectChildren: 2, maxDepth: 3 };
-    const fixture = workflowFixture({
-      profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
-      worktrees: true,
-    });
-    return withWorkflows(fixture, (workflows, subagents) =>
-      Effect.gen(function* () {
+    return workflowTest(
+      {
+        profiles: profileLayerFor({ version: 6, nesting: nestingPolicy }),
+        worktrees: true,
+      },
+      function* ({ fixture, workflows, subagents }) {
         const creating = yield* fakeGate;
         fixture.createGates.set("workspace-1", creating);
-        const writing = yield* workflows.start(
-          {
-            source: inline(
-              'return await agent("writer", { profile: "worker", isolation: "worktree" });',
-              "writing",
-            ),
-            args: null,
-          },
-          testHost(),
+        const writing = yield* startScript(
+          workflows,
+          inline(
+            'return await agent("writer", { profile: "worker", isolation: "worktree" });',
+            "writing",
+          ),
         );
         yield* Deferred.await(creating.entered);
         // Meanwhile the main agent fills its slots, and another run's reader starts.
         yield* mainChildren(subagents, ["main-1", "main-2"], nestingPolicy);
-        const reading = yield* workflows.start(
-          { source: inline('return await agent("reader");', "reading"), args: null },
-          testHost(),
+        const reading = yield* startScript(
+          workflows,
+          inline('return await agent("reader");', "reading"),
         );
         yield* runningTask(fixture, "reader");
 
@@ -227,29 +186,26 @@ describe("workflow agent admission", () => {
         yield* reportTask(fixture, "reader", "read");
         expect((yield* finished(workflows, writing.id)).result?.text).toBe("written");
         expect((yield* finished(workflows, reading.id)).result?.text).toBe("read");
-      }),
+      },
     );
   });
 
   it.live("starts the next shared-checkout writer once the previous one has cleaned up", () => {
     const releaseGate = Deferred.makeUnsafe<void>();
     const { refusals, decorate } = countingStarts();
-    const fixture = workflowFixture({
-      backend: fakeNativeReportBackendLayer({ releaseGate }),
-      decorate,
-    });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline(`
+    return workflowTest(
+      {
+        backend: fakeNativeReportBackendLayer({ releaseGate }),
+        decorate,
+      },
+      function* ({ fixture, workflows }) {
+        const started = yield* startScript(
+          workflows,
+          `
               const results = [];
               for (const file of ["a.ts", "b.ts"])
                 results.push(await agent("Migrate " + file, { profile: "worker" }));
-              return results;`),
-            args: null,
-          },
-          testHost(),
+              return results;`,
         );
         yield* reportTask(fixture, "Migrate a.ts", "a.ts migrated");
         // The first writer's process is still cleaning up, so the second one waits behind it
@@ -271,88 +227,74 @@ describe("workflow agent admission", () => {
         expect(resultValue(run)).toEqual(["a.ts migrated", "b.ts migrated"]);
         expect(run.agents.map((agent) => agent.state)).toEqual(["completed", "completed"]);
         expect(refusals.size).toBe(0);
-      }),
+      },
     );
   });
 
-  it.live("keeps starting readers while a writer waits behind another writer", () => {
-    const fixture = workflowFixture({ concurrency: 2 });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline(`
+  it.live("keeps starting readers while a writer waits behind another writer", () =>
+    workflowTest({ concurrency: 2 }, function* ({ fixture, workflows }) {
+      const started = yield* startScript(
+        workflows,
+        `
               return await parallel([
                 () => agent("Edit x.ts", { profile: "worker" }),
                 () => agent("Edit y.ts", { profile: "worker" }),
                 () => agent("Review the plan"),
-              ]);`),
-            args: null,
-          },
-          testHost(),
+              ]);`,
+      );
+      const [first, second] = yield* eventually(() => {
+        const running = ["x.ts", "y.ts"].filter(
+          (file) => stateOfTask(fixture, `Edit ${file}`) === "running",
         );
-        const [first, second] = yield* eventually(() => {
-          const running = ["x.ts", "y.ts"].filter(
-            (file) => stateOfTask(fixture, `Edit ${file}`) === "running",
-          );
-          return running.length === 1
-            ? [running[0]!, running[0] === "x.ts" ? "y.ts" : "x.ts"]
-            : undefined;
-        }, "one running writer");
-        // The queued writer holds no slot, so the reader takes it.
-        const writerId = yield* runningTask(fixture, `Edit ${first}`);
-        yield* runningTask(fixture, "Review the plan");
-        expect(stateOfTask(fixture, `Edit ${second}`)).toBeUndefined();
-        // The wait is logged with the writer it is queued behind.
-        const queued = yield* runWhere(workflows, started.id, (run) =>
-          run.logs.some((entry) => entry.message.includes(writerId)),
-        );
-        expect(queued.logs.find((entry) => entry.message.includes(writerId))?.level).toBe("info");
+        return running.length === 1
+          ? [running[0]!, running[0] === "x.ts" ? "y.ts" : "x.ts"]
+          : undefined;
+      }, "one running writer");
+      // The queued writer holds no slot, so the reader takes it.
+      const writerId = yield* runningTask(fixture, `Edit ${first}`);
+      yield* runningTask(fixture, "Review the plan");
+      expect(stateOfTask(fixture, `Edit ${second}`)).toBeUndefined();
+      // The wait is logged with the writer it is queued behind.
+      const queued = yield* runWhere(workflows, started.id, (run) =>
+        run.logs.some((entry) => entry.message.includes(writerId)),
+      );
+      expect(queued.logs.find((entry) => entry.message.includes(writerId))?.level).toBe("info");
 
-        yield* reportTask(fixture, "Review the plan", "plan reviewed");
-        yield* reportTask(fixture, `Edit ${first}`, `${first} edited`);
-        yield* reportTask(fixture, `Edit ${second}`, `${second} edited`);
-        const run = yield* finished(workflows, started.id);
-        expect(resultValue(run)).toEqual(["x.ts edited", "y.ts edited", "plan reviewed"]);
-      }),
-    );
-  });
+      yield* reportTask(fixture, "Review the plan", "plan reviewed");
+      yield* reportTask(fixture, `Edit ${first}`, `${first} edited`);
+      yield* reportTask(fixture, `Edit ${second}`, `${second} edited`);
+      const run = yield* finished(workflows, started.id);
+      expect(resultValue(run)).toEqual(["x.ts edited", "y.ts edited", "plan reviewed"]);
+    }),
+  );
 
-  it.live("runs parallel shared-checkout writers one at a time instead of dropping them", () => {
-    const fixture = workflowFixture({ concurrency: 3 });
-    return withWorkflows(fixture, (workflows) =>
-      Effect.gen(function* () {
-        const started = yield* workflows.start(
-          {
-            source: inline(
-              'return await parallel(["x.ts", "y.ts", "z.ts"].map((file) => () => agent("Edit " + file, { profile: "worker" })));',
-            ),
-            args: null,
-          },
-          testHost(),
+  it.live("runs parallel shared-checkout writers one at a time instead of dropping them", () =>
+    workflowTest({ concurrency: 3 }, function* ({ fixture, workflows }) {
+      const started = yield* startScript(
+        workflows,
+        'return await parallel(["x.ts", "y.ts", "z.ts"].map((file) => () => agent("Edit " + file, { profile: "worker" })));',
+      );
+      for (let finishedWriters = 0; finishedWriters < 3; finishedWriters++) {
+        const view = yield* runWhere(
+          workflows,
+          started.id,
+          (run) => run.agents.filter((agent) => agent.state === "running").length === 1,
         );
-        for (let finishedWriters = 0; finishedWriters < 3; finishedWriters++) {
-          const view = yield* runWhere(
-            workflows,
-            started.id,
-            (run) => run.agents.filter((agent) => agent.state === "running").length === 1,
-          );
-          const running = view.agents.find((agent) => agent.state === "running")!;
-          const task = ["x.ts", "y.ts", "z.ts"].find(
-            (file) => stateOfTask(fixture, `Edit ${file}`) === "running",
-          )!;
-          expect(running).toBeDefined();
-          yield* reportTask(fixture, `Edit ${task}`, `${task} edited`);
-          yield* runWhere(
-            workflows,
-            started.id,
-            (run) =>
-              run.agents.filter((agent) => agent.state === "completed").length > finishedWriters,
-          );
-        }
-        const run = yield* finished(workflows, started.id);
-        expect(resultValue(run)).toEqual(["x.ts edited", "y.ts edited", "z.ts edited"]);
-      }),
-    );
-  });
+        const running = view.agents.find((agent) => agent.state === "running")!;
+        const task = ["x.ts", "y.ts", "z.ts"].find(
+          (file) => stateOfTask(fixture, `Edit ${file}`) === "running",
+        )!;
+        expect(running).toBeDefined();
+        yield* reportTask(fixture, `Edit ${task}`, `${task} edited`);
+        yield* runWhere(
+          workflows,
+          started.id,
+          (run) =>
+            run.agents.filter((agent) => agent.state === "completed").length > finishedWriters,
+        );
+      }
+      const run = yield* finished(workflows, started.id);
+      expect(resultValue(run)).toEqual(["x.ts edited", "y.ts edited", "z.ts edited"]);
+    }),
+  );
 });

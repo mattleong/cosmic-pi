@@ -40,9 +40,7 @@ export const isUncertainToolFailure = (failure: { readonly code?: string | undef
 
 /** Only the backend's explicit typed flag on its exact steering code reports pending delivery. */
 export const isPendingDeliveryError = (error: SubagentError): boolean =>
-  error._tag === "SubagentProcessError" &&
-  error.pendingDelivery === true &&
-  error.code === PENDING_DELIVERY_FAILURE_CODE;
+  error._tag === "SubagentProcessError" && actionFailureDisposition("send", error) === "pending";
 
 /**
  * `pending`: typed guidance delivery is still tracked by the backend (not a tool error).

@@ -17,16 +17,18 @@ import {
 } from "pi-cosmic-core";
 import { listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import { managerTone } from "pi-cosmic-ui/manager/style";
+import { composeToolComponent } from "pi-cosmic-ui/tool";
 import {
   hasSubagentCapability,
   isActiveRunState,
+  isAssignmentFinishedRunState,
   type SubagentRunState,
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
 import { steeringDeliveryEvidence } from "../tools/outcome.ts";
 import { aggregateUsage } from "./metrics.ts";
-import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
+import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import {
   clipToWidth,
   managerActivityLabel,
@@ -35,7 +37,7 @@ import {
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
 
-export interface SessionOutputRenderOptions {
+interface SessionOutputRenderOptions {
   readonly now?: number;
   readonly showTechnicalDetails?: boolean;
   /** Whether the fleet detail pane owns focus; it accents the heading. */
@@ -44,43 +46,36 @@ export interface SessionOutputRenderOptions {
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
 type NoticeEvent = Extract<SubagentSessionEvent, { readonly type: "notice" }>;
-/** Progress notices render as the live progress field; they never reach addNotice. */
-type VisibleNoticeEvent = Omit<NoticeEvent, "kind"> & {
-  readonly kind: "parent" | "question" | "warning";
-};
 type ActivityItem =
   | { readonly type: "tools"; readonly events: ReadonlyArray<ToolEvent> }
-  | { readonly type: "notice"; readonly event: VisibleNoticeEvent };
+  | { readonly type: "notice"; readonly event: NoticeEvent };
 
-class HangingText implements Component {
-  private readonly prefix: string;
-  private readonly text: string;
-  private readonly paddingX: number;
+const HANGING_PADDING = 2;
 
-  constructor(prefix: string, text: string, paddingX = 2) {
-    this.prefix = prefix;
-    this.text = text;
-    this.paddingX = paddingX;
-  }
-
-  render(width: number): string[] {
+/** Padded text whose wrapped rows hang under the first row's body, past its prefix. */
+const hangingText = (prefix: string, text: string): Component =>
+  composeToolComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const padding = Math.min(this.paddingX, Math.max(0, Math.floor((safeWidth - 1) / 2)));
+    const padding = Math.min(HANGING_PADDING, Math.max(0, Math.floor((safeWidth - 1) / 2)));
     const contentWidth = Math.max(1, safeWidth - padding * 2);
-    const prefix = clipToWidth(this.prefix, Math.max(0, contentWidth - 1), "");
-    const prefixWidth = visibleWidth(prefix);
-    const bodyWidth = Math.max(1, contentWidth - prefixWidth);
-    const rows = wrapTextWithAnsi(this.text, bodyWidth);
+    const shownPrefix = clipToWidth(prefix, Math.max(0, contentWidth - 1), "");
+    const prefixWidth = visibleWidth(shownPrefix);
+    const rows = wrapTextWithAnsi(text, Math.max(1, contentWidth - prefixWidth));
     const margin = " ".repeat(padding);
     const continuation = " ".repeat(prefixWidth);
-    return rows.map((row, index) => `${margin}${index === 0 ? prefix : continuation}${row}`);
-  }
+    return rows.map((row, index) => `${margin}${index === 0 ? shownPrefix : continuation}${row}`);
+  });
 
-  invalidate(): void {}
-}
+/** A titled or standalone block, a blank line below what precedes it. */
+const addBlock = (container: Container, text: string): void => {
+  container.addChild(new Spacer(1));
+  container.addChild(new Text(text, 0, 0));
+};
 
-const isVisibleNotice = (event: NoticeEvent): event is VisibleNoticeEvent =>
-  event.kind !== "progress";
+const markdownBlock = (text: string, theme: Theme): Markdown =>
+  new Markdown(sanitizeTerminalText(text), 2, 0, getMarkdownTheme(), {
+    color: (line) => theme.fg("toolOutput", line),
+  });
 
 const activityItems = (
   events: ReadonlyArray<SubagentSessionEvent>,
@@ -91,7 +86,7 @@ const activityItems = (
     if (event.type === "assistant") continue;
     if (event.type === "notice") {
       // Progress notices render as the live progress field instead.
-      if (isVisibleNotice(event)) {
+      if (event.kind !== "progress") {
         items.push({ type: "notice", event });
         openGroup = undefined;
       }
@@ -116,14 +111,8 @@ function addToolGroup(
 ): void {
   const first = events[0];
   if (!first) return;
-  const glyph =
-    first.state === "running"
-      ? animatedRunStateGlyph("running", frame)
-      : first.state === "failed"
-        ? runStateGlyph("failed")
-        : runStateGlyph("completed");
-  const color =
-    first.state === "running" ? "accent" : first.state === "failed" ? "error" : "success";
+  // A tool's state is also a run state, so it takes that state's glyph and color.
+  const glyph = theme.fg(runStateColor(first.state), runStateGlyph(first.state, frame));
   const count = events.length > 1 ? ` ×${events.length}` : "";
   const target =
     events.length === 1 && first.target ? `  ${sanitizeTerminalLine(first.target)}` : "";
@@ -134,7 +123,7 @@ function addToolGroup(
   );
   const elapsedLabel = elapsed > 0 ? formatDuration(elapsed) : "";
   const body = `${theme.fg("toolTitle", sanitizeTerminalLine(first.toolName))}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsedLabel ? theme.fg("dim", `  ${elapsedLabel}`) : ""}`;
-  container.addChild(new HangingText(`${theme.fg(color, glyph)} `, body));
+  container.addChild(hangingText(`${glyph} `, body));
   if (events.length > 1) {
     const targets = [
       ...new Set(
@@ -145,7 +134,7 @@ function addToolGroup(
       const shown = targets.slice(0, 3);
       const remaining = targets.length - shown.length;
       const summary = `${shown.join(" · ")}${remaining > 0 ? ` · +${remaining}` : ""}`;
-      container.addChild(new HangingText("  ", theme.fg("dim", summary)));
+      container.addChild(hangingText("  ", theme.fg("dim", summary)));
     }
   }
 }
@@ -164,7 +153,7 @@ const addStyledRow = (
   theme: Theme,
 ): void =>
   void container.addChild(
-    new HangingText(
+    hangingText(
       `${theme.fg(style.color, style.glyph)} `,
       theme.fg(style.color, sanitizeTerminalLine(text)),
     ),
@@ -232,62 +221,30 @@ const addLiveActivity = (
   for (const [covered, style, text] of liveFields) {
     if (!covered && text !== undefined) addStyledRow(container, style, text, theme);
   }
-  const showedLive =
-    items.length > 0 ||
-    run.question !== undefined ||
-    run.warning !== undefined ||
-    run.progress !== undefined;
-  if (!showedLive) container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
+  if (items.length === 0 && liveFields.every(([, , text]) => text === undefined))
+    container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
 };
 
+/** What a completed run without a report says about it; an available one isn't observed here. */
+const MISSING_REPORT_STATUS = {
+  available: "Final report availability unknown in this observation.",
+  missing: "No accepted final report for this assignment.",
+  claimed: "Final report claimed by another operation.",
+  delivered: "Final report already delivered.",
+} satisfies Readonly<Record<NonNullable<SubagentRunView["reportStatus"]>, string>>;
+
 const addAssistantConclusion = (container: Container, run: SubagentRunView, theme: Theme): void => {
-  const assistantOutput =
-    run.state === "reported" || !isActiveRunState(run.state) ? run.finalText : undefined;
-  if (assistantOutput !== undefined && assistantOutput.length > 0) {
-    container.addChild(new Spacer(1));
-    container.addChild(
-      new Text(
-        theme.fg(
-          "accent",
-          theme.bold(
-            run.state === "reported"
-              ? `Report generation ${run.reportGeneration} · backend retained`
-              : "Final report",
-          ),
-        ),
-        0,
-        0,
-      ),
-    );
-    container.addChild(
-      new Markdown(sanitizeTerminalText(assistantOutput), 2, 0, getMarkdownTheme(), {
-        color: (text) => theme.fg("toolOutput", text),
-      }),
-    );
+  const output = isAssignmentFinishedRunState(run.state) ? run.finalText : undefined;
+  if (output) {
+    addBlock(container, theme.fg("accent", theme.bold("Final report")));
+    container.addChild(markdownBlock(output, theme));
   }
-  if (run.state === "completed" && !assistantOutput && !run.error) {
-    container.addChild(new Spacer(1));
-    const reportStatus =
-      run.reportStatus === "missing"
-        ? "No accepted final report for this assignment."
-        : run.reportStatus === "claimed"
-          ? "Final report claimed by another operation."
-          : run.reportStatus === "delivered"
-            ? "Final report already delivered."
-            : "Final report availability unknown in this observation.";
-    container.addChild(new Text(theme.fg("dim", reportStatus), 0, 0));
-  }
-  if (run.error) {
-    container.addChild(new Spacer(1));
-    container.addChild(
-      new Text(theme.fg("error", `Error: ${sanitizeTerminalLine(run.error)}`), 0, 0),
-    );
-  }
+  if (run.state === "completed" && !output && !run.error)
+    addBlock(container, theme.fg("dim", MISSING_REPORT_STATUS[run.reportStatus ?? "available"]));
+  if (run.error)
+    addBlock(container, theme.fg("error", `Error: ${sanitizeTerminalLine(run.error)}`));
   const usage = aggregateUsage([run]);
-  if (usage) {
-    container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("dim", usage), 0, 0));
-  }
+  if (usage) addBlock(container, theme.fg("dim", usage));
 };
 
 /** One hanging technical-detail row; bodies arrive pre-sanitized where needed. */
@@ -297,11 +254,10 @@ const addDetailLine = (
   body: string,
   theme: Theme,
   color: "dim" | "warning" = "dim",
-): void => void container.addChild(new HangingText(theme.fg(color, prefix), theme.fg(color, body)));
+): void => void container.addChild(hangingText(theme.fg(color, prefix), theme.fg(color, body)));
 
 function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
-  container.addChild(new Spacer(1));
-  container.addChild(new Text(theme.fg("muted", theme.bold("Technical details")), 0, 0));
+  addBlock(container, theme.fg("muted", theme.bold("Technical details")));
   const process = [
     run.id,
     run.profile ? `profile ${run.profile}` : undefined,
@@ -363,12 +319,11 @@ export function renderSubagentSessionOutput(
   const container = new Container();
   const name = sanitizeTerminalLine(run.name);
   const active = isActiveRunState(run.state);
-  const end =
-    run.endedAt ??
-    (run.state === "paused" ? run.lastActivityAt : active ? now : run.lastActivityAt);
+  // A paused run's clock stops at its last activity.
+  const end = run.endedAt ?? (active && run.state !== "paused" ? now : run.lastActivityAt);
   const elapsed = formatElapsed(end - run.startedAt);
   const duration =
-    run.state === "paused" || run.state === "reported"
+    run.state === "paused"
       ? `${runStateLabel(run.state)} after ${elapsed}`
       : run.state === "waiting_for_parent"
         ? `waiting · ${elapsed}`
@@ -376,7 +331,7 @@ export function renderSubagentSessionOutput(
           ? `running for ${elapsed}`
           : elapsed;
   const age =
-    run.state === "completed" || run.state === "reported"
+    run.state === "completed"
       ? ` ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`
       : "";
   const heading = listDetailHeading(
@@ -404,15 +359,9 @@ export function renderSubagentSessionOutput(
     ),
   );
   container.addChild(new Text(subtitle, 0, 0));
-  container.addChild(new Spacer(1));
-  container.addChild(new Text(theme.fg("muted", theme.bold("Task")), 0, 0));
-  container.addChild(
-    new Markdown(sanitizeTerminalText(run.task), 2, 0, getMarkdownTheme(), {
-      color: (text) => theme.fg("toolOutput", text),
-    }),
-  );
-  container.addChild(new Spacer(1));
-  container.addChild(new Text(theme.fg("muted", theme.bold("Activity")), 0, 0));
+  addBlock(container, theme.fg("muted", theme.bold("Task")));
+  container.addChild(markdownBlock(run.task, theme));
+  addBlock(container, theme.fg("muted", theme.bold("Activity")));
   addSteeringDelivery(container, run, theme);
   addLiveActivity(container, run, theme, now);
   addAssistantConclusion(container, run, theme);

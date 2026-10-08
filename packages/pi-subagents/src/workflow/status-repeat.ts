@@ -58,21 +58,16 @@ const materialFacts = (status: WorkflowViewStatus): string | undefined => {
 };
 
 /** The main agent's status calls per run, which decide when a repeat gets the short answer. */
-export interface WorkflowStatusRepeats {
-  /**
-   * Notes the main agent's status call for a run this activation holds. Returns how long ago its
-   * previous call was when the run is live, nothing waits on a person and nothing material changed
-   * since that call, within {@link WORKFLOW_STATUS_REPEAT_MS}; undefined when the full status is due.
-   */
-  readonly note: (status: WorkflowViewStatus, now: number) => number | undefined;
-  /** Drops what was noted about a run once it has ended. */
-  readonly forget: (runId: string) => void;
-}
-
-export const makeWorkflowStatusRepeats = (): WorkflowStatusRepeats => {
+export const makeWorkflowStatusRepeats = () => {
   const sightings = new Map<string, StatusSighting>();
   return {
-    note: (status, now) => {
+    /**
+     * Notes the main agent's status call for a run this activation holds. Returns how long ago
+     * its previous call was when the run is live, nothing waits on a person and nothing material
+     * changed since that call, within {@link WORKFLOW_STATUS_REPEAT_MS}; undefined when the full
+     * status is due.
+     */
+    note: (status: WorkflowViewStatus, now: number): number | undefined => {
       const id = status.run.id;
       if (isWorkflowRunFinished(status.run.state)) {
         sightings.delete(id);
@@ -90,7 +85,8 @@ export const makeWorkflowStatusRepeats = (): WorkflowStatusRepeats => {
       const since = now - previous.at;
       return since >= 0 && since < WORKFLOW_STATUS_REPEAT_MS ? since : undefined;
     },
-    forget: (runId) => {
+    /** Drops what was noted about a run once it has ended. */
+    forget: (runId: string) => {
       sightings.delete(runId);
     },
   };

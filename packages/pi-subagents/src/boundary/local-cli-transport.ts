@@ -2,9 +2,7 @@
 // Claude/Codex adapters.
 // process-transport.ts owns shared spawn, bounded queues, writes, and process-tree release.
 // This boundary owns no harness state and never imports the LocalCliProcess service.
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Queue from "effect/Queue";
 import type {
   CodexInitializedNotification,
   CodexRequest,
@@ -17,18 +15,14 @@ import { processCauseError, SubagentProcessError } from "../run/errors.ts";
 import {
   acquireProcessTransport,
   MAX_PROCESS_LINE_BYTES,
+  type ProcessTransportHandle,
   type ProcessTransportRuntime,
   type ProcessWireEvent,
 } from "./process-transport.ts";
 
-/** Outbound frames are locally constructed protocol values serialized as one pure JSONL line. */
-const encodeOutboundFrame = (value: LocalCliOutboundFrame): string => `${JSON.stringify(value)}\n`;
+type LocalCliMessage = { readonly type: "message"; readonly value: unknown };
 
-export type LocalCliWireEvent = ProcessWireEvent<{
-  readonly type: "message";
-  readonly value: unknown;
-  readonly bytes?: number;
-}>;
+export type LocalCliWireEvent = ProcessWireEvent<LocalCliMessage>;
 
 export type LocalCliOutboundFrame =
   | ClaudeUserFrame
@@ -36,26 +30,13 @@ export type LocalCliOutboundFrame =
   | CodexRequest
   | CodexInitializedNotification;
 
-export interface LocalCliHandle {
-  readonly pid: number;
-  readonly events: Queue.Dequeue<LocalCliWireEvent, Cause.Done>;
-  readonly awaitExit: Effect.Effect<
-    Extract<LocalCliWireEvent, { readonly type: "exit" }>,
-    SubagentProcessError
-  >;
-  readonly send: (value: LocalCliOutboundFrame) => Effect.Effect<void, SubagentProcessError>;
-  readonly acknowledge: (event: LocalCliWireEvent) => void;
-  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
-}
+export type LocalCliHandle = ProcessTransportHandle<LocalCliMessage, LocalCliOutboundFrame>;
 
 export interface LocalCliTransportRequest {
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly cwd: string;
-  readonly maxLineBytes?: number | undefined;
-  /** Defaults to "defect". */
-  readonly synchronousWriteFailure?: "not_sent" | "defect" | undefined;
   /** Package-test seam only. */
   readonly platform?: NodeJS.Platform | undefined;
 }
@@ -91,15 +72,14 @@ export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(f
           error,
           code ?? (operation === "spawn" ? "local_cli_spawn_failed" : undefined),
         ),
-      message: (value, bytes): LocalCliWireEvent => ({ type: "message", value, bytes }),
-      encode: encodeOutboundFrame,
+      message: (value): LocalCliWireEvent => ({ type: "message", value }),
       maxOutboundBytes: MAX_PROCESS_LINE_BYTES,
-      maxLineBytes: request.maxLineBytes,
       terminateOnParserOverflow: true,
-      synchronousWriteFailure: request.synchronousWriteFailure ?? "defect",
-      attach: () => ({ value: undefined, detach: () => {} }),
+      synchronousWriteFailure: "defect",
+      attach: () => ({ detach: () => {} }),
     },
     runtime,
   );
-  return transport;
+  const handle: LocalCliHandle = transport;
+  return handle;
 });

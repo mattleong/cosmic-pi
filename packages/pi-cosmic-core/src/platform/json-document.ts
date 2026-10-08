@@ -5,7 +5,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { JsonDocumentError } from "./errors.ts";
 import { withProcessLock } from "./process-coordinator.ts";
 
@@ -30,41 +29,14 @@ export interface JsonDocumentModification<A, AfterCommitR = never> {
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
 export const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema, { space: 2 });
 
-/** Raw UTF-8 read limit. Mutations also bound the serialized replacement before committing. */
-export interface JsonDocumentReadOptions {
-  /** Positive integer, at most 64 MiB. */
-  readonly maxBytes?: number | undefined;
-}
-
-const ReadOptionsSchema = Schema.Struct({
-  maxBytes: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 })),
-  ),
-});
-const readLimitError = (path: string) =>
-  new JsonDocumentError({ operation: "read", path, message: "JSON document exceeds read limits." });
-
-/** Shared with the in-memory store so option validation also applies to missing documents. */
-export const validateJsonDocumentReadOptions = (path: string, options?: JsonDocumentReadOptions) =>
-  options === undefined
-    ? Effect.void
-    : Schema.decodeUnknownEffect(ReadOptionsSchema)(options).pipe(
-        Effect.mapError(
-          () =>
-            new JsonDocumentError({
-              operation: "read",
-              path,
-              message: "Invalid JSON document read limits.",
-            }),
-        ),
-      );
+const documentError = (operation: string, path: string, message: string) =>
+  new JsonDocumentError({ operation, path, message });
+const failAs = (operation: string, path: string, message: string) =>
+  Effect.mapError(() => documentError(operation, path, message));
 
 export interface JsonDocumentStoreContract {
   readonly exists: (path: string) => Effect.Effect<boolean, JsonDocumentError>;
-  readonly readObject: (
-    path: string,
-    options?: JsonDocumentReadOptions,
-  ) => Effect.Effect<JsonObject | undefined, JsonDocumentError>;
+  readonly readObject: (path: string) => Effect.Effect<JsonObject | undefined, JsonDocumentError>;
   readonly writeObject: (
     path: string,
     document: JsonObject,
@@ -75,7 +47,6 @@ export interface JsonDocumentStoreContract {
     modify: (
       document: JsonObject,
     ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
-    options?: JsonDocumentReadOptions,
   ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
 }
 
@@ -89,60 +60,24 @@ export class JsonDocumentStore extends Context.Service<
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
 
-      const mapError = (operation: string, path: string, message: string) => () =>
-        new JsonDocumentError({ operation, path, message });
-
       const exists = Effect.fn("JsonDocumentStore.exists")((path: string) =>
-        fs
-          .exists(path)
-          .pipe(Effect.mapError(mapError("exists", path, "Unable to inspect JSON document path."))),
+        fs.exists(path).pipe(failAs("exists", path, "Unable to inspect JSON document path.")),
       );
 
-      const readObject = Effect.fn("JsonDocumentStore.readObject")(function* (
-        path: string,
-        options?: JsonDocumentReadOptions,
-      ) {
-        const limits = yield* validateJsonDocumentReadOptions(path, options);
-        const maxBytes = limits?.maxBytes;
-        const readSource =
-          maxBytes === undefined
-            ? fs.readFileString(path)
-            : fs
-                .stream(path, {
-                  bytesToRead: maxBytes + 1,
-                  chunkSize: Math.min(64 * 1024, maxBytes + 1),
-                })
-                .pipe(
-                  Stream.runCollect,
-                  Effect.flatMap((chunks) => {
-                    if (chunks.reduce((total, chunk) => total + chunk.byteLength, 0) > maxBytes)
-                      return Effect.fail(readLimitError(path));
-                    const decoder = new TextDecoder();
-                    return Effect.succeed(
-                      chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") +
-                        decoder.decode(),
-                    );
-                  }),
-                );
-        const source = yield* readSource.pipe(
-          Effect.catch((error) =>
-            error._tag === "JsonDocumentError"
-              ? Effect.fail(error)
-              : error.reason._tag === "NotFound"
-                ? Effect.succeed(undefined)
-                : Effect.fail(mapError("read", path, "Unable to read JSON document.")()),
+      const readObject = Effect.fn("JsonDocumentStore.readObject")(function* (path: string) {
+        const source = yield* fs.readFileString(path).pipe(
+          Effect.catchReason(
+            "PlatformError",
+            "NotFound",
+            () => Effect.succeed(undefined),
+            () => Effect.fail(documentError("read", path, "Unable to read JSON document.")),
           ),
         );
         if (source === undefined) return undefined;
-        return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source).pipe(
-          Effect.mapError(mapError("decode", path, "JSON document must contain an object.")),
+        return yield* Schema.decodeEffect(JsonObjectFromString)(source).pipe(
+          failAs("decode", path, "JSON document must contain an object."),
         );
       });
-
-      const encodeObject = (path: string, document: JsonObject) =>
-        Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
-          Effect.mapError(mapError("encode", path, "Unable to encode JSON document.")),
-        );
 
       const writeObjectUnlocked = Effect.fn("JsonDocumentStore.writeObjectUnlocked")(function* <
         AfterCommitR,
@@ -150,24 +85,14 @@ export class JsonDocumentStore extends Context.Service<
         path: string,
         document: JsonObject,
         afterCommit?: Effect.Effect<void, never, AfterCommitR>,
-        options?: JsonDocumentReadOptions,
       ) {
-        const source = yield* encodeObject(path, document);
-        if (
-          options?.maxBytes !== undefined &&
-          new TextEncoder().encode(`${source}\n`).byteLength > options.maxBytes
-        )
-          return yield* new JsonDocumentError({
-            operation: "write",
-            path,
-            message: "JSON document replacement exceeds its byte limit.",
-          });
+        const source = yield* Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
+          failAs("encode", path, "Unable to encode JSON document."),
+        );
         const directory = pathService.dirname(path);
         yield* fs
           .makeDirectory(directory, { recursive: true, mode: 0o700 })
-          .pipe(
-            Effect.mapError(mapError("mkdir", path, "Unable to create JSON document directory.")),
-          );
+          .pipe(failAs("mkdir", path, "Unable to create JSON document directory."));
         yield* Effect.scoped(
           Effect.gen(function* () {
             const temporaryPath = yield* Effect.acquireRelease(
@@ -177,11 +102,7 @@ export class JsonDocumentStore extends Context.Service<
                   prefix: `.${pathService.basename(path)}.`,
                   suffix: ".tmp",
                 })
-                .pipe(
-                  Effect.mapError(
-                    mapError("write", path, "Unable to create temporary JSON document."),
-                  ),
-                ),
+                .pipe(failAs("write", path, "Unable to create temporary JSON document.")),
               (ownedPath) =>
                 fs
                   .remove(pathService.dirname(ownedPath), { recursive: true })
@@ -189,25 +110,15 @@ export class JsonDocumentStore extends Context.Service<
             );
             yield* fs
               .writeFileString(temporaryPath, `${source}\n`, { mode: 0o600 })
-              .pipe(
-                Effect.mapError(
-                  mapError("write", path, "Unable to write temporary JSON document."),
-                ),
-              );
+              .pipe(failAs("write", path, "Unable to write temporary JSON document."));
             yield* fs
               .chmod(temporaryPath, 0o600)
-              .pipe(
-                Effect.mapError(
-                  mapError("chmod", path, "Unable to protect temporary JSON document."),
-                ),
-              );
+              .pipe(failAs("chmod", path, "Unable to protect temporary JSON document."));
             yield* fs
               .rename(temporaryPath, path)
               .pipe(
                 Effect.andThen(afterCommit ?? Effect.void),
-                Effect.mapError(
-                  mapError("rename", path, "Unable to replace JSON document atomically."),
-                ),
+                failAs("rename", path, "Unable to replace JSON document atomically."),
                 Effect.uninterruptible,
               );
           }),
@@ -229,20 +140,14 @@ export class JsonDocumentStore extends Context.Service<
         modify: (
           document: JsonObject,
         ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
-        options?: JsonDocumentReadOptions,
       ) {
         return yield* withProcessLock(
           pathService.resolve(path),
           Effect.gen(function* () {
-            const current = (yield* readObject(path, options)) ?? {};
+            const current = (yield* readObject(path)) ?? {};
             const modification = yield* modify(current);
             if (modification.write !== false)
-              yield* writeObjectUnlocked(
-                path,
-                modification.document,
-                modification.afterCommit,
-                options,
-              );
+              yield* writeObjectUnlocked(path, modification.document, modification.afterCommit);
             return modification.value;
           }),
         );

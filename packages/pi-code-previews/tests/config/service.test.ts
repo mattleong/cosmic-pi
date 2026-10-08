@@ -12,6 +12,7 @@ import {
   JsonDocumentStore,
   provideBuiltLayer,
   type JsonDocumentStoreContract,
+  type JsonValue,
 } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
@@ -45,6 +46,12 @@ function settingsLayer(documents: JsonDocumentStoreContract) {
   );
   return CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
 }
+
+/** Runs `use` against a settings service built over `documents`. */
+const usingSettings = <A, E, R>(
+  documents: JsonDocumentStoreContract,
+  use: (service: CodePreviewSettingsServiceContract) => Effect.Effect<A, E, R>,
+) => CodePreviewSettingsService.use(use).pipe(provideBuiltLayer(settingsLayer(documents)));
 
 /** Holds the first document read until `release` completes; later reads pass through. */
 const gateFirstRead = (fake: InMemoryDocuments, onRead: (read: number) => void = () => undefined) =>
@@ -149,15 +156,9 @@ it.effect("building the settings Layer does not publish its defaults", () => {
 it.effect("settings operations serialize across separately built Layers", () =>
   Effect.gen(function* () {
     const gate = yield* gateFirstRead(makeInMemoryDocuments());
-    const first = yield* CodePreviewSettingsService.use((service) => loadSettings(service)).pipe(
-      provideBuiltLayer(settingsLayer(gate.documents)),
-      Effect.forkScoped,
-    );
+    const first = yield* usingSettings(gate.documents, loadSettings).pipe(Effect.forkScoped);
     yield* Deferred.await(gate.started);
-    const second = yield* CodePreviewSettingsService.use((service) => loadSettings(service)).pipe(
-      provideBuiltLayer(settingsLayer(gate.documents)),
-      Effect.forkScoped,
-    );
+    const second = yield* usingSettings(gate.documents, loadSettings).pipe(Effect.forkScoped);
     yield* Effect.yieldNow;
     assert.equal(gate.reads(), 1);
 
@@ -177,13 +178,13 @@ it.effect("a cancelled newer load does not suppress an older successful publicat
     );
     const olderAdmission = makeSettingsAdmission();
     const newerAdmission = makeSettingsAdmission();
-    const older = yield* CodePreviewSettingsService.use((service) =>
+    const older = yield* usingSettings(gate.documents, (service) =>
       service.load(olderAdmission),
-    ).pipe(provideBuiltLayer(settingsLayer(gate.documents)), Effect.forkScoped);
+    ).pipe(Effect.forkScoped);
     yield* Deferred.await(gate.started);
-    const newer = yield* CodePreviewSettingsService.use((service) =>
+    const newer = yield* usingSettings(gate.documents, (service) =>
       service.load(newerAdmission),
-    ).pipe(provideBuiltLayer(settingsLayer(gate.documents)), Effect.forkScoped);
+    ).pipe(Effect.forkScoped);
     yield* Effect.yieldNow;
     assert.equal(gate.reads(), 1);
     yield* Fiber.interrupt(newer);
@@ -207,7 +208,7 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
           .modifyObject(path, modify)
           .pipe(Effect.tap(() => Effect.sync(() => events.push("save")))),
     });
-    yield* CodePreviewSettingsService.use((service) =>
+    yield* usingSettings(documents, (service) =>
       Effect.gen(function* () {
         const load = yield* service.load(makeSettingsAdmission()).pipe(Effect.forkScoped);
         yield* Deferred.await(gate.started);
@@ -220,7 +221,7 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
         yield* Fiber.join(load);
         yield* Fiber.join(save);
       }),
-    ).pipe(provideBuiltLayer(settingsLayer(documents)));
+    );
 
     assert.deepEqual(events, ["read-1", "read-2", "save"]);
     assert.equal(fake.documents.get("/agent/code-previews.json")?.readCollapsedLines, 42);
@@ -230,7 +231,7 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
 
 it.effect("a stale save returns before document modification", () => {
   const fake = makeInMemoryDocuments();
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const stale = makeSettingsAdmission();
       yield* service.load(makeSettingsAdmission());
@@ -239,7 +240,7 @@ it.effect("a stale save returns before document modification", () => {
       assert.equal(fake.updateCount, 0);
       assert.equal(codePreviewSettings, published);
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
 });
 
 it.effect("flush in another Layer waits for one-shot rehydrate and save", () =>
@@ -250,18 +251,17 @@ it.effect("flush in another Layer waits for one-shot rehydrate and save", () =>
     const fake = makeInMemoryDocuments();
     fake.blockNextUpdateBeforeCommit(saveStarted, releaseSave);
     setCodePreviewSettings({ ...defaultCodePreviewSettings, readCollapsedLines: 17 });
-    const save = yield* CodePreviewSettingsService.use((service) =>
+    const save = yield* usingSettings(fake.service, (service) =>
       service.save(
         { ...defaultCodePreviewSettings, readCollapsedLines: 42 },
         makeSettingsAdmission(),
         { rehydrate: {} },
       ),
-    ).pipe(provideBuiltLayer(settingsLayer(fake.service)), Effect.forkScoped);
+    ).pipe(Effect.forkScoped);
     yield* Deferred.await(saveStarted);
     assert.equal(codePreviewSettings.readCollapsedLines, 17);
 
-    const flush = yield* CodePreviewSettingsService.use((service) => service.flush).pipe(
-      provideBuiltLayer(settingsLayer(fake.service)),
+    const flush = yield* usingSettings(fake.service, (service) => service.flush).pipe(
       Effect.ensuring(Effect.sync(() => (flushCompleted = true))),
       Effect.forkScoped,
     );
@@ -283,9 +283,10 @@ it.effect("save persists the flat document and publishes the committed settings"
       readCollapsedLines: 17,
     },
   });
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
+      assert.equal(Object.hasOwn(loaded, "owner"), false);
       yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
       // A legacy nested block is an unknown root field: preserved verbatim, never migrated.
       assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
@@ -296,7 +297,7 @@ it.effect("save persists the flat document and publishes the committed settings"
       assert.equal(codePreviewSettings.readCollapsedLines, 42);
       assert.equal(Object.isFrozen(codePreviewSettings), true);
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
 });
 
 it.effect("save preserves concurrently changed known fields that the caller did not edit", () => {
@@ -307,7 +308,7 @@ it.effect("save preserves concurrently changed known fields that the caller did 
       readCollapsedLines: 17,
     },
   });
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
       fake.documents.set("/agent/code-previews.json", {
@@ -324,7 +325,7 @@ it.effect("save preserves concurrently changed known fields that the caller did 
         readCollapsedLines: 42,
       });
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
 });
 
 it.effect("failed persistence leaves the published settings unchanged", () => {
@@ -346,7 +347,7 @@ it.effect("failed persistence leaves the published settings unchanged", () => {
         ),
       ),
   });
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(documents, (service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
       const published = codePreviewSettings;
@@ -357,12 +358,12 @@ it.effect("failed persistence leaves the published settings unchanged", () => {
       assert.equal(codePreviewSettings, published);
       assert.equal(codePreviewSettings.readCollapsedLines, loaded.readCollapsedLines);
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(documents)));
+  );
 });
 
 it.effect("runtime-invalid settings fail before document modification or publication", () => {
   const fake = makeInMemoryDocuments();
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
       const published = codePreviewSettings;
@@ -375,7 +376,7 @@ it.effect("runtime-invalid settings fail before document modification or publica
       assert.equal(fake.updateCount, 0);
       assert.equal(codePreviewSettings, published);
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
 });
 
 it.effect("flush waits for an earlier save and interruption cannot lose that save", () =>
@@ -384,7 +385,7 @@ it.effect("flush waits for an earlier save and interruption cannot lose that sav
     const release = yield* Deferred.make<void>();
     const fake = makeInMemoryDocuments();
     fake.blockNextUpdateBeforeCommit(started, release);
-    yield* CodePreviewSettingsService.use((service) =>
+    yield* usingSettings(fake.service, (service) =>
       Effect.gen(function* () {
         const loaded = yield* loadSettings(service);
         const saveFiber = yield* service
@@ -405,7 +406,7 @@ it.effect("flush waits for an earlier save and interruption cannot lose that sav
         assert.equal(fake.documents.get("/agent/code-previews.json")?.readCollapsedLines, 42);
         assert.equal(codePreviewSettings.readCollapsedLines, 42);
       }),
-    ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+    );
   }).pipe(Effect.scoped),
 );
 
@@ -421,7 +422,7 @@ it.effect("post-rename publication completes before save interruption becomes vi
       },
     });
     fake.blockNextUpdateAtCommit(renamed, releaseAfterRename);
-    yield* CodePreviewSettingsService.use((service) =>
+    yield* usingSettings(fake.service, (service) =>
       Effect.gen(function* () {
         const loaded = yield* loadSettings(service);
         const saveFiber = yield* service
@@ -443,7 +444,7 @@ it.effect("post-rename publication completes before save interruption becomes vi
         assert.equal(codePreviewSettings.readCollapsedLines, 42);
         assert.equal(Object.isFrozen(codePreviewSettings), true);
       }),
-    ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+    );
   }).pipe(Effect.scoped),
 );
 
@@ -461,10 +462,7 @@ it.effect("interrupted loads do not publish a partial settings document", () =>
           Effect.ensuring(Effect.sync(() => interrupted++)),
         ),
     });
-    const fiber = yield* CodePreviewSettingsService.use((service) => loadSettings(service)).pipe(
-      provideBuiltLayer(settingsLayer(documents)),
-      Effect.forkScoped,
-    );
+    const fiber = yield* usingSettings(documents, loadSettings).pipe(Effect.forkScoped);
     yield* Deferred.await(started);
     assert.equal(codePreviewSettings.readCollapsedLines, 17);
     yield* Fiber.interrupt(fiber);
@@ -478,7 +476,7 @@ it.effect("choosing the project's value writes a global override instead of dele
     "/project/.pi/settings.json": { codePreview: { shikiTheme: "nord" } },
     "/agent/code-previews.json": { shikiTheme: "github-dark" },
   });
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const project = { projectCwd: "/project", projectTrusted: true };
       const loaded = yield* service.load(makeSettingsAdmission(), project);
@@ -487,7 +485,7 @@ it.effect("choosing the project's value writes a global override instead of dele
       // Deleting the override would leave other projects on the built-in theme.
       assert.equal((yield* loadSettings(service)).shikiTheme, "nord");
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
 });
 
 it.effect("restoring defaults removes overrides so settings.json values apply again", () => {
@@ -499,7 +497,7 @@ it.effect("restoring defaults removes overrides so settings.json values apply ag
       readCollapsedLines: 40,
     },
   });
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       assert.equal((yield* loadSettings(service)).shikiTheme, "github-dark");
       yield* service.reset(makeSettingsAdmission());
@@ -510,18 +508,64 @@ it.effect("restoring defaults removes overrides so settings.json values apply ag
         defaultCodePreviewSettings.readCollapsedLines,
       );
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
+});
+
+it.effect("saves and resets that another process already wrote still apply here", () => {
+  const fake = makeInMemoryDocuments();
+  return usingSettings(fake.service, (service) =>
+    Effect.gen(function* () {
+      const loaded = yield* loadSettings(service);
+      fake.documents.set("/agent/code-previews.json", { readCollapsedLines: 42 });
+      yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
+      assert.equal(codePreviewSettings.readCollapsedLines, 42);
+      fake.documents.set("/agent/code-previews.json", {});
+      yield* service.reset(makeSettingsAdmission());
+      assert.equal(
+        codePreviewSettings.readCollapsedLines,
+        defaultCodePreviewSettings.readCollapsedLines,
+      );
+    }),
+  );
 });
 
 it.effect("saving unchanged settings writes nothing", () => {
   const fake = makeInMemoryDocuments();
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       yield* saveSettings(service, yield* loadSettings(service));
       assert.equal(fake.documents.has("/agent/code-previews.json"), false);
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
+  );
 });
+
+const nestedSettingsCases: ReadonlyArray<readonly [string, JsonValue, number]> = [
+  ["object", { readCollapsedLines: 21, futureSetting: { enabled: true } }, 21],
+  ["null", null, defaultCodePreviewSettings.readCollapsedLines],
+  ["array", [{ readCollapsedLines: 21 }], defaultCodePreviewSettings.readCollapsedLines],
+  ["string", "21", defaultCodePreviewSettings.readCollapsedLines],
+  ["number", 21, defaultCodePreviewSettings.readCollapsedLines],
+  ["boolean", true, defaultCodePreviewSettings.readCollapsedLines],
+];
+
+it.effect.each(nestedSettingsCases)(
+  "settings.json contributes only a nested JSON object: %s",
+  ([, nested, expected]) => {
+    const fake = makeInMemoryDocuments({
+      "/agent/settings.json": { codePreview: nested },
+      "/agent/code-previews.json": { shikiTheme: "nord" },
+    });
+    return usingSettings(fake.service, (service) =>
+      Effect.gen(function* () {
+        const loaded = yield* loadSettings(service);
+        assert.equal(loaded.readCollapsedLines, expected);
+        assert.equal(loaded.shikiTheme, "nord");
+        // A non-object block is ignored silently, never reported as an unreadable file.
+        assert.deepEqual(codePreviewSettingsProblems, []);
+      }),
+    );
+  },
+);
 
 it.effect("loads publish which files were ignored and which fields were invalid", () => {
   const fake = makeInMemoryDocuments({
@@ -529,12 +573,12 @@ it.effect("loads publish which files were ignored and which fields were invalid"
   });
   const documents = JsonDocumentStore.of({
     ...fake.service,
-    readObject: (path, options) =>
+    readObject: (path) =>
       path === "/agent/settings.json"
         ? Effect.fail(new JsonDocumentError({ operation: "read", path, message: "Invalid JSON." }))
-        : fake.service.readObject(path, options),
+        : fake.service.readObject(path),
   });
-  return CodePreviewSettingsService.use((service) =>
+  return usingSettings(documents, (service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
       assert.equal(loaded.shikiTheme, "github-dark");
@@ -543,5 +587,5 @@ it.effect("loads publish which files were ignored and which fields were invalid"
         { path: "/agent/code-previews.json", fields: ["readCollapsedLines"] },
       ]);
     }),
-  ).pipe(provideBuiltLayer(settingsLayer(documents)));
+  );
 });

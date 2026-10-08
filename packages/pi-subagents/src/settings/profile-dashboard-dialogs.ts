@@ -11,7 +11,7 @@ import { FullScreenKeymap, pageSteps } from "pi-cosmic-ui/manager/keymap";
 import { isListMotion, nextListMotionIndex } from "pi-cosmic-ui/manager/list-navigation";
 import { normalizeProfileSetName } from "../config/schema.ts";
 import type { ProfileSetSaveDestination } from "./profile-set-actions.ts";
-import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
+import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
@@ -49,8 +49,7 @@ export class ProfileDashboardDialog implements Component, Focusable {
   constructor(options: DialogOptions) {
     this.options = {
       ...options,
-      matchesKeybinding: (data, id) =>
-        !isWorkspaceNavigationKey(data) && (options.matchesKeybinding?.(data, id) ?? false),
+      matchesKeybinding: withoutNavigationKeys(options.matchesKeybinding),
     };
     this.scope =
       options.kind === "name" && options.destination?.projectTrusted ? "project" : "global";

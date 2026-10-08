@@ -1,12 +1,18 @@
-import { ordinalChoices, defaultQuestion } from "./support/questionnaire.ts";
-import { makeTuiHost as hostFixture, openPresentation } from "./support/host.ts";
-import type { Component } from "@earendil-works/pi-tui";
+import { routeRequest as request } from "./support/questionnaire.ts";
+import {
+  eventually,
+  foreign,
+  makeTuiHost as hostFixture,
+  openPresentation,
+  waitMounted,
+} from "./support/host.ts";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { makeQuestionnaireQueue } from "../src/questionnaire/queue.ts";
 import { expect, vi } from "vitest";
@@ -14,24 +20,10 @@ import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
-import type { AskUserRequest } from "../src/questionnaire/schema.ts";
+import type { QuestionnairePresence } from "../src/questionnaire/service.ts";
 
-const request: AskUserRequest = {
-  questions: [
-    {
-      ...defaultQuestion,
-      key: "k",
-      title: "Title",
-      prompt: "Choose",
-      choices: ordinalChoices,
-    },
-  ],
-};
-const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
-const open = (
-  h: ReturnType<typeof hostFixture>,
-  opened?: Deferred.Deferred<void, AskUserHostError>,
-) => openPresentation(h, (bridge) => makeAskUserHost(h.ctx, bridge)(request, opened));
+const open = (h: ReturnType<typeof hostFixture>, presence?: QuestionnairePresence) =>
+  openPresentation(h, (bridge) => makeAskUserHost(h.ctx, bridge)(request, presence));
 
 it.effect(
   "docks the questionnaire without painting over the editor and retains hidden drafts",
@@ -62,14 +54,20 @@ it.effect(
     }),
 );
 
-it.effect("the opening handshake waits for mounting, not just the custom factory", () =>
+it.effect("the opening handshake waits for mounting and reports each hide and resume", () =>
   Effect.gen(function* () {
     const h = hostFixture();
-    const opened = yield* Deferred.make<void, AskUserHostError>();
-    const { controller, pending } = yield* open(h, opened);
-    expect(yield* Deferred.isDone(opened)).toBe(false);
+    const presence = {
+      opened: yield* Deferred.make<void, AskUserHostError>(),
+      visibility: yield* Queue.unbounded<"open" | "hidden">(),
+    };
+    const { bridge, controller, pending } = yield* open(h, presence);
+    expect(yield* Deferred.isDone(presence.opened)).toBe(false);
     h.mount!();
-    expect(yield* Deferred.isDone(opened)).toBe(true);
+    expect(yield* Deferred.isDone(presence.opened)).toBe(true);
+    h.component!.handleInput?.("b");
+    expect(bridge.resume()).toBe(true);
+    expect(yield* Queue.clear(presence.visibility)).toEqual(["open", "hidden", "open"]);
     controller.abort();
     yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
     expect(h.stack).toEqual([]);
@@ -148,7 +146,7 @@ for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) 
           ),
         )
         .pipe(Effect.ensuring(second.close), Effect.forkChild);
-      yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+      yield* waitMounted(h);
       h.mount!();
       const oldComponent = h.component!;
       h.showOverlay(foreign);
@@ -185,7 +183,7 @@ for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) 
         // Never synthesize this in the boundary: a coalesced foreign prompt may own it.
         gate.ended();
       }
-      yield* Effect.promise(() => vi.waitFor(() => expect(h.customCalls).toBe(2)));
+      yield* eventually(() => expect(h.customCalls).toBe(2));
       h.mount!();
       h.component!.handleInput?.("1");
       h.component!.handleInput?.("\r");
@@ -205,7 +203,7 @@ for (const fail of [false, true]) {
         h.ctx,
         makeAskUserDialogBridge(),
       )(request).pipe(Effect.exit, Effect.forkChild);
-      yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+      yield* waitMounted(h);
       h.showOverlay(foreign);
       h.component!.handleInput?.("1");
       h.component!.handleInput?.("\r");
@@ -283,7 +281,7 @@ for (const lateResult of ["success", "rejection"] as const) {
           const secondFiber = yield* second
             .run(host(request))
             .pipe(Effect.ensuring(second.close), Effect.forkChild);
-          yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+          yield* waitMounted(h);
           h.mount!();
           const oldComponent = h.component!;
           oldComponent.handleInput?.("n");
@@ -295,18 +293,16 @@ for (const lateResult of ["success", "rejection"] as const) {
             throw new Error("finish failure");
           });
           expect(() => oldComponent.handleInput?.("\r")).not.toThrow();
-          yield* Effect.promise(() => vi.waitFor(() => expect(editorSignal?.aborted).toBe(true)));
+          yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
           expect(bridge.resume()).toBe(false);
           expect(h.customCalls).toBe(1);
           yield* Deferred.succeed(terminated, undefined);
-          yield* Effect.promise(() =>
-            vi.waitFor(() => expect(cleanup).toEqual(["process", "file"])),
-          );
+          yield* eventually(() => expect(cleanup).toEqual(["process", "file"]));
           expect(h.customCalls).toBe(1);
           yield* Deferred.succeed(restored, undefined);
           expect(Exit.isFailure(yield* Fiber.join(firstFiber))).toBe(true);
           expect(cleanup).toEqual(["process", "file", "tui"]);
-          yield* Effect.promise(() => vi.waitFor(() => expect(h.customCalls).toBe(2)));
+          yield* eventually(() => expect(h.customCalls).toBe(2));
           oldComponent.handleInput?.("h");
           oldComponent.handleInput?.("n");
           oldComponent.handleInput?.("external");
@@ -351,10 +347,9 @@ it.effect(
       const h = hostFixture();
       const gate = makeAskUserPromptGate();
       h.showOverlay(foreign);
-      const opened = yield* Deferred.make<void, AskUserHostError>();
       expect(gate.canOpen()).toBe(true);
       const pending = Effect.runPromise(
-        makeAskUserHost(h.ctx, makeAskUserDialogBridge(), gate)(request, opened),
+        makeAskUserHost(h.ctx, makeAskUserDialogBridge(), gate)(request),
       );
       gate.started();
       yield* Effect.promise(() =>

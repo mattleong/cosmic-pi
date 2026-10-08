@@ -1,9 +1,11 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type { WriterLeaseConflictError } from "../boundary/writer-lease.ts";
 import {
-  InvalidSubagentRequestError,
+  invalidRequest,
   type SubagentError,
   SubagentProcessError,
   SubagentWriterConflictError,
@@ -36,58 +38,50 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
         }),
       );
     const cancelled = () =>
-      new InvalidSubagentRequestError({
-        code: "start_cancelled",
-        message: `Subagent ${record.view.id} lost writer-pool membership during startup.`,
-      });
-    const stillAttached = withLock(
-      Effect.sync(
-        () =>
-          record.writerPool === pool && pool.members.has(record.view.id) && !record.stoppedByParent,
-      ),
-    );
+      invalidRequest(
+        "start_cancelled",
+        `Subagent ${record.view.id} lost writer-pool membership during startup.`,
+      );
+    const attachedLocked = () =>
+      record.writerPool === pool && pool.members.has(record.view.id) && !record.stoppedByParent;
+    const stillAttached = withLock(Effect.sync(attachedLocked));
     // The preparing state owns the shared latch. Keep that claim masked until
     // ensuring is installed, even if the lock yields while returning ownership.
     return Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const role = yield* withLock(
-          Effect.sync(() => {
+          Effect.suspend((): Effect.Effect<"owner" | "wait" | "ready", SubagentError> => {
             if (
-              record.writerPool !== pool ||
-              !pool.members.has(record.view.id) ||
-              record.stoppedByParent ||
+              !attachedLocked() ||
               record.view.state === "stopping" ||
               record.view.state === "stopped"
             )
-              return { kind: "cancelled" as const };
+              return Effect.fail(cancelled());
             switch (pool.state) {
               case "pending":
                 pool.state = "preparing";
-                return { kind: "owner" as const };
+                return Effect.succeed("owner");
               case "preparing":
-                return { kind: "wait" as const };
+                return Effect.succeed("wait");
               case "held":
-                return { kind: "ready" as const };
+                return Effect.succeed("ready");
               case "failed":
-                return { kind: "failed" as const, error: pool.preparationError ?? cancelled() };
+                return Effect.fail(pool.preparationError ?? cancelled());
               case "releasing":
               case "paused":
               case "quarantined":
-                return { kind: "cancelled" as const };
+                return Effect.fail(cancelled());
             }
           }),
         );
-        if (role.kind === "cancelled") return yield* cancelled();
-        if (role.kind === "failed") return yield* role.error;
-        if (role.kind === "wait") {
+        if (role === "wait") {
           yield* restore(Deferred.await(pool.preparationSettled));
           if (!(yield* restore(stillAttached))) return yield* cancelled();
           return;
         }
-        if (role.kind === "ready") return;
+        if (role === "ready") return;
 
         let handedOff = false;
-        let preparationError: SubagentError | undefined;
         const prepareOwner = Effect.gen(function* () {
           // acquireRelease masks the lease handoff to its finalizer; acquire keeps
           // only its pre-ownership checks interruptible.
@@ -138,16 +132,11 @@ export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
           if (!(yield* stillAttached)) return yield* cancelled();
         });
         yield* restore(prepareOwner).pipe(
-          Effect.tapError((error) =>
-            Effect.sync(() => {
-              preparationError = error;
-            }),
-          ),
-          Effect.ensuring(
+          Effect.onExit((exit) =>
             withLock(
               Effect.sync(() => {
                 if (pool.state !== "preparing") return;
-                const error = preparationError ?? cancelled();
+                const error = Option.getOrElse(Exit.findErrorOption(exit), cancelled);
                 pool.state = "failed";
                 pool.preparationError = error;
                 Deferred.doneUnsafe(pool.preparationSettled, Effect.fail(error));

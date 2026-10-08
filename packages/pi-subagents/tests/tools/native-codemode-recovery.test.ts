@@ -5,7 +5,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   acknowledgeCompletions,
   localServiceFixture,
@@ -13,6 +12,7 @@ import {
   withService,
 } from "../run/fixtures/service-harness.ts";
 import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
+import { signalAwaitEntry } from "./fixtures/subagent-service-double.ts";
 
 const MARKER = "RECOVERY_MARKER ";
 const report = Schema.Struct({ status: Schema.String, text: Schema.optional(Schema.String) });
@@ -52,24 +52,9 @@ describe("native scripted report recovery", () => {
         const missingRunId = `${run.id}-never-started`;
         const awaitOwnsReport = yield* Deferred.make<void>();
         const awaitFailures: unknown[] = [];
-        const observed: SubagentServiceContract = {
-          ...service,
-          withAwaitTerminalObservations: (ids, until, update, use, coverage) =>
-            service
-              .withAwaitTerminalObservations(
-                ids,
-                until,
-                (runs, projection) => {
-                  // Updates start only after the await holds the completion claim.
-                  Deferred.doneUnsafe(awaitOwnsReport, Effect.void);
-                  update?.(runs, projection);
-                },
-                use,
-                coverage,
-              )
-              .pipe(Effect.tapError((error) => Effect.sync(() => void awaitFailures.push(error)))),
-        };
-        const h = yield* nativeCodemodeSession(observed);
+        const h = yield* nativeCodemodeSession(
+          signalAwaitEntry(service, awaitOwnsReport, awaitFailures),
+        );
         const script = yield* h
           .run(`
         const awaited = await tools.subagent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});

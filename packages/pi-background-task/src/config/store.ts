@@ -8,7 +8,6 @@ import {
   AgentDirectory,
   JsonDocumentStore,
   decodeTolerantFields,
-  makeConfigDocumentErrorFactory,
   makeScopedConfigStore,
   type JsonObject,
 } from "pi-cosmic-core";
@@ -39,7 +38,7 @@ const decodeConfig = (value: JsonObject): Partial<BackgroundTaskConfig> =>
 
 // No default document, so resolution never writes; untrusted projects are never probed.
 const store = makeScopedConfigStore({
-  errorFactory: makeConfigDocumentErrorFactory(BackgroundTaskConfigError, "Background Tasks"),
+  error: BackgroundTaskConfigError,
   label: "Background Tasks",
   spanPrefix: "BackgroundTaskConfig",
   projectConfigDirectory: CONFIG_DIR_NAME,

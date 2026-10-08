@@ -2,9 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { countLabel } from "pi-cosmic-core";
 import { managerActivityGlyph, clipToWidth, spinnerFrameAt } from "../manager/chrome.ts";
-import { activityPlanned, compactNotices } from "./attention.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
-import { activityPath, needsYou } from "./tree.ts";
+import { activityPlanned, compactNotices, needsYou } from "./attention.ts";
+import { activityPath, isFinished, type ActivityRow } from "./model.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import {
   activeWorkLabels,
@@ -20,7 +19,6 @@ import {
   type ActivityWidgetSection,
   type WidgetOptions,
 } from "./widget-projection.ts";
-export { activityWidgetSections } from "./widget-projection.ts";
 import { groupedMemberLine } from "./row-line.ts";
 import { workflowRowLine } from "./workflow-row.ts";
 
@@ -32,14 +30,15 @@ export const activityStartupGlyph = (
   starting > 0 && !rows.some((row) => !isFinished(row) && !activityPlanned(row))
     ? managerActivityGlyph("pending", spinnerFrameAt(now))
     : "";
+/** A row's ownership path, dropping leading owners until it fits `width`. */
 export function activityOwnerLabel(
   rows: readonly ActivityRow[],
   row: ActivityRow,
-  width?: number,
+  width: number,
 ): string {
   const parts = activityPath(rows, row.key).map((item) => item.title);
   const full = parts.join(" › ");
-  if (width === undefined || visibleWidth(full) <= width) return full;
+  if (visibleWidth(full) <= width) return full;
   while (parts.length > 1) {
     parts.shift();
     const suffix = `… › ${parts.join(" › ")}`;
@@ -50,11 +49,11 @@ export function activityOwnerLabel(
 
 /** Reserve space for attention and omitted evidence before routine progress or long names. */
 const widgetGroupLine = (
-  title: string,
   summary: GroupSummary,
   width: number,
-  omissions: readonly string[] = [],
+  omissions: readonly string[],
 ): string => {
+  const title = "…";
   const omitted = omissions.join(" · ");
   const notices = [...compactNotices(summary.attention), ...omissions];
   const full = [
@@ -151,14 +150,12 @@ export function renderActivityWidget(
     const total = sections
       .map(({ heading }) => heading.summary)
       .reduce(addGroupSummaries, emptyGroupSummary);
-    const hidden = (type: GroupedActivityRow["type"]) =>
-      sections.reduce(
-        (sum, section) => sum + section.entries.filter((entry) => entry.type === type).length,
-        0,
-      );
     const sum = (count: (section: ActivityWidgetSection) => number) =>
       sections.reduce((total, section) => total + count(section), 0);
-    const shownPlanned = sum((section) => section.entries.filter(isPlannedEntry).length);
+    const shown = (matches: (entry: GroupedActivityRow) => boolean) =>
+      sum((section) => section.entries.filter(matches).length);
+    const hidden = (type: GroupedActivityRow["type"]) => shown((entry) => entry.type === type);
+    const shownPlanned = shown(isPlannedEntry);
     // Capped failures that would have had a count line are hidden here too.
     const countedFailures = sum((section) =>
       [...section.failureOverflow.values()].reduce((total, count) => total + count, 0),
@@ -166,7 +163,6 @@ export function renderActivityWidget(
     return [
       style(
         widgetGroupLine(
-          "…",
           total,
           width,
           omissionLabels({
@@ -197,9 +193,7 @@ export function renderActivityWidget(
         lines.push(hiddenFailuresLine(entry, failures, width, continues, options.theme));
     }
     if (section.omittedRows)
-      lines.push(
-        style(widgetGroupLine("…", section.heading.summary, width, omissionLabels(section))),
-      );
+      lines.push(style(widgetGroupLine(section.heading.summary, width, omissionLabels(section))));
   }
   if (!lines.length && (options.starting ?? 0) > 0)
     lines.push(style(`Subagents ${activityStartupGlyph(rows, options.starting!, options.now)}`));

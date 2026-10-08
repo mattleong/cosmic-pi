@@ -9,20 +9,10 @@ import {
 import { stripAnsi } from "../support/render";
 
 test("terminal text escapes C0, DEL, and C1 control characters", () => {
-  const escaped = escapeControlChars("safe\x00\x1b\x7f\x80\x9btext\t\n");
-
-  assert.equal(escaped, "safe�␛���text\t\n");
-  const leftoverControlCode = [...escaped].some((char) => {
-    const code = char.charCodeAt(0);
-    return (
-      code <= 0x08 ||
-      code === 0x0b ||
-      code === 0x0c ||
-      (code >= 0x0e && code <= 0x1f) ||
-      (code >= 0x7f && code <= 0x9f)
-    );
-  });
-  assert.equal(leftoverControlCode, false);
+  assert.equal(
+    escapeControlChars("safe\x00\x0b\x1f\x1b\r\x7f\x80\x9b\ud800text\t\n"),
+    "safe���␛␍���\ud800text\t\n",
+  );
 });
 
 test("visible-range injection preserves SGR foreground resets", () => {

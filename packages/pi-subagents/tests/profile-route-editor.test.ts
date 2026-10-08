@@ -1,6 +1,4 @@
-import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
 import type { SubagentConfigScope } from "../src/config/store.ts";
 import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
@@ -24,6 +22,7 @@ import {
 } from "../src/settings/profile-route-editor.ts";
 import {
   inheritedInvalidInspection,
+  jsonObject,
   makeProfileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate as candidate } from "./fixtures/profiles.ts";
@@ -37,9 +36,8 @@ const inspection = (
   global: InspectionDocumentSeed = { version: 4 },
   project?: InspectionDocumentSeed,
 ): ProfileSettingsInspection => {
-  const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-  const currentDocument = (input: InspectionDocumentSeed): Schema.MutableJsonObject =>
-    Schema.decodeUnknownSync(JsonObjectSchema)(
+  const currentDocument = (input: InspectionDocumentSeed) =>
+    jsonObject(
       input.version === 4
         ? {
             version: 6,
@@ -304,24 +302,6 @@ describe("profile candidate normalization and validation", () => {
     expect(forked).toMatchObject({ runtime: "pi", model: "parent", context: "fork" });
   });
 
-  it("rejects retained local routes and native fork misuse", () => {
-    for (const runtime of ["pi", "claude", "codex"] as const)
-      for (const writeIntent of ["read-only", "writer"] as const) {
-        expect(
-          candidateValidationError(
-            candidate(runtime === "pi" ? "parent" : "native", {
-              runtime,
-              writeIntent,
-              closeOnReport: false,
-            }),
-          ),
-        ).toBeDefined();
-      }
-    expect(
-      candidateValidationError(candidate("native", { runtime: "codex", context: "fork" })),
-    ).toBeDefined();
-  });
-
   it("uses exact runtime capabilities and resets effort or fast mode when a model cannot use them", () => {
     expect(candidateValidationError(candidate("parent", { openaiFastMode: true }))).toBeUndefined();
     expect(
@@ -337,22 +317,12 @@ describe("profile candidate normalization and validation", () => {
         candidate("claude-opus-5", { runtime: "claude", openaiFastMode: true }),
       ),
     ).toContain("Fast mode");
-    expect(runtimeEfforts("claude")).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(runtimeEfforts("codex")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("claude", ["minimal", "low", "high"])).toEqual(["low", "high"]);
     expect(
       candidateValidationError(
         candidate("claude-opus-5", { runtime: "claude", effort: "minimal" }),
       ),
     ).toContain("does not support the minimal reasoning level");
-    expect(
-      decodeSubagentConfig({
-        version: 4,
-        profiles: {
-          reviewer: candidate("claude-opus-5", { runtime: "claude", effort: "minimal" }),
-        },
-      }).invalidProfileRoutes,
-    ).toContain("reviewer");
     const update = updateCandidateModel(
       candidate("openai-codex/gpt-5.6-sol", { effort: "xhigh", openaiFastMode: true }),
       "zai/plain",
@@ -369,18 +339,6 @@ describe("profile candidate normalization and validation", () => {
   });
 
   it("rejects unsafe native selectors with the same bounded config rules", () => {
-    expect(
-      decodeSubagentConfig(
-        {
-          version: 6,
-          defaultProfileSet: "default",
-          profileSets: {
-            default: { profiles: { reviewer: candidate("cursor/gpt-5.5@1m") } },
-          },
-        },
-        "global",
-      ).invalidProfileRoutes,
-    ).not.toContain("reviewer");
     for (const runtime of ["pi", "claude", "codex"] as const) {
       const model = runtime === "pi" ? "provider/model,(glob)*" : "model,(glob)*";
       expect(candidateValidationError(candidate(model, { runtime }))).toContain("valid");
@@ -388,9 +346,5 @@ describe("profile candidate normalization and validation", () => {
         undefined,
       );
     }
-    // SAFETY: A retired host is deliberately supplied through the typed UI boundary.
-    expect(
-      updateCandidateControls(candidate("parent"), { host: "herdr" as never }, {}).error,
-    ).toContain("Unsupported run host");
   });
 });

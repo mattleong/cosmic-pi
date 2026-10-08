@@ -1,4 +1,6 @@
 import type { ExtensionCommandContext as ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text, type Component, type SettingsList } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import {
   captureHostSignal,
@@ -10,10 +12,20 @@ import {
   type ExtensionSubcommand,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core";
-import { hasCustomSurface, type OwnedSurfaceOutcome } from "./host-surface.ts";
+import {
+  createSettingsListSurface,
+  managerSettingsTheme,
+  type SettingsSurfaceItem,
+} from "../manager/settings-surface.ts";
+import {
+  hasCustomSurface,
+  openOwnedSurfacePromise,
+  type OwnedSurfaceHost,
+  type OwnedSurfaceOutcome,
+} from "./host-surface.ts";
 
 /** One settings scope, such as `global` or `project`; the first listed is the default. */
-export interface SettingsCommandScope {
+interface SettingsCommandScope {
   readonly name: string;
   readonly description: string;
 }
@@ -73,36 +85,105 @@ export interface SettingsCommandOptions<Config> {
     Result.Result<unknown, { readonly message: string; readonly stale?: boolean | undefined }>
   >;
   /**
-   * Shows the value a scope now holds after an apply; defaults to the effective value. Code
-   * Mode shows the scope's own value, which may be `inherit`.
+   * Shows the value a scope now holds after an apply; defaults to the effective value. Background
+   * Task and Subagents show the scope's own committed value.
    */
   readonly displayValue?:
     | ((ctx: ExtensionContext, id: string, scope: string | undefined) => string | undefined)
     | undefined;
   /** Runs after each successful apply, such as a footer refresh or an availability notice. */
-  readonly afterApply: (ctx: ExtensionContext, id: string, scope: string | undefined) => void;
-  /**
-   * Opens the provider's picker, reporting `Blocked` when it has no config. The session's
-   * `apply` shows the committed or restored value through `show`, or else notifies `id = value`.
-   * `show` returns false when a newer choice has replaced this one; a stale failure is silent.
-   */
+  readonly afterApply?: (ctx: ExtensionContext, id: string, scope: string | undefined) => void;
+  /** Opens the provider's picker, reporting `Blocked` when it has no config. */
   readonly open: (
     ctx: ExtensionContext,
-    session: {
-      readonly config: () => Config | undefined;
-      readonly apply: (
-        id: string,
-        value: string,
-        show?: (value: string) => boolean | void,
-        scope?: string,
-      ) => Promise<void>;
-    },
+    session: SettingsSession<Config>,
   ) => Promise<OwnedSurfaceOutcome<unknown>>;
 }
 
+export interface SettingsSession<Config> {
+  readonly config: () => Config | undefined;
+  /**
+   * Shows the committed or restored value through `show`, or else notifies `id = value`. `show`
+   * returns false when a newer choice has replaced this one; a stale failure is silent.
+   */
+  readonly apply: (
+    id: string,
+    value: string,
+    show?: (value: string) => boolean | void,
+    scope?: string,
+  ) => Promise<void>;
+  /**
+   * The `<title> settings` list over `items`, at most `maxHeight` rows tall. Each change shows
+   * optimistically and settles through `apply`; a `<scope>:<id>` row applies to that scope.
+   */
+  readonly picker: (
+    items: SettingsSurfaceItem[],
+    maxHeight?: number,
+  ) => Promise<OwnedSurfaceOutcome<undefined>>;
+}
+
+/** A settings list's content; the shell supplies its theme, keys, and guarded host callbacks. */
+interface SettingsListContent {
+  /** A title styled as the list's heading, or the caller's own header. */
+  readonly header: string | Component;
+  readonly items: SettingsSurfaceItem[];
+  readonly height: number;
+  readonly onChange: (id: string, value: string, list: SettingsList) => void;
+  /** Defaults to closing the list. */
+  readonly onCancel?: (() => void) | undefined;
+  readonly afterInput?: (() => void) | undefined;
+  /** Receives the list once it exists, for callers that update rows from elsewhere. */
+  readonly onList?: ((list: SettingsList) => void) | undefined;
+}
+
+/** Opens a settings list inline, containing every host callback it threads through. */
+export const openSettingsList = (
+  ctx: ExtensionContext,
+  content: (host: OwnedSurfaceHost<undefined>) => SettingsListContent,
+): Promise<OwnedSurfaceOutcome<undefined>> =>
+  openOwnedSurfacePromise<undefined>(ctx, {
+    placement: "inline",
+    closedValue: undefined,
+    create: (host) => {
+      const { tui, theme, keybindings, finish } = host;
+      const { header, onCancel, afterInput, onList, ...list } = content(host);
+      const created = createSettingsListSurface({
+        ...list,
+        header: Predicate.isString(header)
+          ? new Text(theme.fg("accent", theme.bold(header)), 1, 1)
+          : header,
+        listTheme: managerSettingsTheme(theme),
+        onCancel: onCancel ?? (() => finish(undefined)),
+        matchesKeybinding: invokeHostCallback(
+          () => Predicate.isFunction(keybindings?.matches),
+          false,
+        )
+          ? (data, id) => invokeHostCallback(() => keybindings.matches(data, id), false)
+          : undefined,
+        requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),
+        dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
+        bridge: { invoke: invokeHostCallback, afterInput },
+      });
+      onList?.(created.list);
+      return created.surface;
+    },
+  });
+
+/**
+ * Builds the subcommand again for each invocation with the authority `capture` returns then,
+ * since the shell binds `isCurrent` when it is built.
+ */
+export const withInvocationAuthority = (
+  capture: (() => () => boolean) | undefined,
+  create: (isCurrent: () => boolean) => ExtensionSubcommand,
+): ExtensionSubcommand => ({
+  ...create(() => true),
+  handler: (args, ctx) => create(capture?.() ?? (() => true)).handler(args, ctx),
+});
+
 /**
  * An extension's `settings` subcommand, for `/<extension> settings`: completions, help, status,
- * validation messages, and the scripted and interactive apply. Pickers stay with the provider.
+ * validation messages, and the scripted and interactive apply.
  */
 export function settingsSubcommand<Config>(
   options: SettingsCommandOptions<Config>,
@@ -176,7 +257,7 @@ export function settingsSubcommand<Config>(
         if (show) display(current);
         else
           notify(ctx, `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`, "info");
-        if (isCurrent()) invokeHostCallback(() => options.afterApply(ctx, id, scope), undefined);
+        if (isCurrent()) invokeHostCallback(() => options.afterApply?.(ctx, id, scope), undefined);
       },
       () => {
         const current = display(persisted() ?? before);
@@ -185,27 +266,56 @@ export function settingsSubcommand<Config>(
     );
   };
 
+  /** Picker rows name a scope as `<scope>:<id>`; any other row applies to the default scope. */
+  const rowSetting = (row: string): readonly [scope: string | undefined, id: string] => {
+    const scope = scopeNames.find((name) => row.startsWith(`${name}:`));
+    return scope === undefined ? [undefined, row] : [scope, row.slice(scope.length + 1)];
+  };
+
   const openInteractive = (ctx: ExtensionContext) => {
     const captured = captureSignal(ctx);
     if (captured._tag === "Unavailable") return notify(ctx, unavailable, "warning");
-    return options
-      .open(ctx, {
-        config: () => readConfig(ctx),
-        // The picker can outlive the signal it opened with.
-        apply: (id, value, show, scope) =>
-          applySetting(
-            ctx,
+    const apply: SettingsSession<Config>["apply"] = (id, value, show, scope) =>
+      // The picker can outlive the signal it opened with.
+      applySetting(
+        ctx,
+        id,
+        value,
+        optionalSignal ? currentSignal(ctx) : captured.signal,
+        show,
+        scope,
+      );
+    const picker: SettingsSession<Config>["picker"] = (items, maxHeight = 12) => {
+      // Each row's newest change; an older apply settling later never overwrites it.
+      const latest = new Map<string, object>();
+      return openSettingsList(ctx, ({ tui }) => ({
+        header: `${title} settings`,
+        items,
+        height: Math.min(maxHeight, items.length + 2),
+        onChange: (row, value, list) => {
+          const [scope, id] = rowSetting(row);
+          const change = {};
+          latest.set(row, change);
+          void apply(
             id,
             value,
-            optionalSignal ? currentSignal(ctx) : captured.signal,
-            show,
+            (shown) => {
+              if (latest.get(row) !== change) return false;
+              invokeHostCallback(() => {
+                list.updateValue(row, shown);
+                tui.requestRender();
+              }, undefined);
+              return true;
+            },
             scope,
-          ),
-      })
-      .then((outcome) => {
-        if (outcome._tag === "Blocked") notify(ctx, unavailable, "warning");
-        if (outcome._tag === "Failed") notify(ctx, `Couldn't open ${title} settings`, "warning");
-      });
+          );
+        },
+      }));
+    };
+    return options.open(ctx, { config: () => readConfig(ctx), apply, picker }).then((outcome) => {
+      if (outcome._tag === "Blocked") notify(ctx, unavailable, "warning");
+      if (outcome._tag === "Failed") notify(ctx, `Couldn't open ${title} settings`, "warning");
+    });
   };
 
   const scopeToken = scopes.length > 0 ? `[${scopeNames.join("|")}] ` : "";
@@ -270,7 +380,7 @@ export function settingsSubcommand<Config>(
           dispatch.value,
           captured.signal,
           undefined,
-          dispatch.scope ?? scopeNames[0],
+          dispatch.scope,
         );
       }
     }

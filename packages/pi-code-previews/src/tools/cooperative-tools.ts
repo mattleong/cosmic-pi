@@ -9,16 +9,23 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { getFallbackResultText } from "./data/results";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
+import { createCodePreviewToolShell } from "../preview/tool-shell";
 import { escapeControlChars } from "../shared/terminal-text";
-import {
-  createCodePreviewToolDefinition,
-  createCodePreviewRenderers,
-  type CodePreviewToolRenderers,
-  type CodePreviewRendererCallbacks,
-  type AdaptableToolRenderers,
-} from "./renderer-adapter";
 import type { CompactAnimationScheduler, CompactSummaryProvider } from "./compact-summary";
-import type { ToolRenderContext } from "./renderers/shared/types";
+import type { PreviewRenderers, ToolRenderContext } from "./renderers/shared/types";
+
+export type AdaptableToolRenderers = {
+  readonly name: string;
+  readonly label?: string;
+  readonly renderShell?: "default" | "self";
+  readonly renderCall?: (...args: any[]) => Component;
+  readonly renderResult?: (...args: any[]) => Component;
+};
+
+export type AdaptableToolDefinition = AdaptableToolRenderers & {
+  readonly label: string;
+  readonly execute: (...args: any[]) => Promise<any>;
+};
 
 export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TState = unknown> {
   /**
@@ -95,32 +102,15 @@ export function withCodePreviewShell<
     Parameters<NonNullable<TTool["renderCall"]>>[2]["state"]
   > = {},
 ): TTool {
-  const mode = options.mode ?? codePreviewSettings.toolCallBackground;
-  const preserveSelfShell = options.preserveSelfShell ?? true;
-  if (
-    preserveSelfShell &&
-    tool.renderShell === "self" &&
-    (options.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) !== "compact"
-  )
-    return tool;
-
-  return createCodePreviewToolDefinition<TTool>(tool, {
-    mode,
-    collapsedStyle: options.collapsedStyle,
-    selfShell: options.selfShell,
-    compactSummary: options.compactSummary,
-    scheduleAnimation: options.scheduleAnimation,
-    animateProgress: options.animateProgress,
-    showShortTiming: options.showShortTiming,
-    displayName: options.displayName,
-    // SAFETY: Both callback sets derive their args/details/state from this same tool definition.
-    expandedContent: options.expandedContent as CodePreviewToolRenderers<TTool>["expandedContent"],
-    renderCall: tool.renderCall ?? ((_args, theme) => renderFallbackToolCall(tool, theme)),
-    renderResult: tool.renderResult ?? renderFallbackToolResult,
-  });
+  const renderers = withCodePreviewRenderers(tool, tool, options);
+  // SAFETY: Rendering changes preserve the definition's schema and execution signature.
+  return renderers === tool ? tool : ({ ...tool, ...renderers } as TTool);
 }
 
-/** Compose presentation for Pi's renderer resolver without creating or replacing a tool. */
+/**
+ * Compose presentation for Pi's renderer resolver without creating or replacing a tool. Shell mode
+ * and collapsed style are captured here; callbacks are invoked unbound.
+ */
 export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = any>(
   identity: { readonly name: string; readonly label?: string },
   renderers: Pick<AdaptableToolRenderers, "renderShell" | "renderCall" | "renderResult">,
@@ -133,17 +123,42 @@ export function withCodePreviewRenderers<TArgs = any, TDetails = any, TState = a
   )
     // SAFETY: The original callback types are specializations of Pi's rendering contract.
     return renderers as ToolRenderers;
-  // SAFETY: Pi's renderer contract supplies the same args, details and state to both slots.
-  const expandedContent =
-    options.expandedContent as CodePreviewRendererCallbacks["expandedContent"];
-  return createCodePreviewRenderers(identity, {
-    ...options,
-    // SAFETY: The summary receives the same Pi args/details/state as these specialized callbacks.
-    compactSummary: options.compactSummary as CompactSummaryProvider<any, any, any> | undefined,
-    expandedContent,
-    renderCall: renderers.renderCall ?? ((_args, theme) => renderFallbackToolCall(identity, theme)),
-    renderResult: renderers.renderResult ?? renderFallbackToolResult,
-  });
+  const shell = createCodePreviewToolShell(
+    options.mode,
+    {
+      name: options.displayName || identity.name,
+      animateProgress: options.animateProgress,
+      showShortTiming: options.showShortTiming,
+      scheduleAnimation: options.scheduleAnimation,
+      compactSummary: options.compactSummary ?? (() => undefined),
+    },
+    options.selfShell,
+    options.collapsedStyle,
+  );
+  const renderCall: PreviewRenderers["renderCall"] =
+    renderers.renderCall ?? ((_args, theme) => renderFallbackToolCall(identity, theme));
+  const renderResult: PreviewRenderers["renderResult"] =
+    renderers.renderResult ?? renderFallbackToolResult;
+  const { renderCall: expandedCall, renderResult: expandedResult } = options.expandedContent ?? {};
+  return {
+    renderShell: shell.renderShell,
+    renderCall(args, theme, context) {
+      const call = (render: PreviewRenderers["renderCall"]) => (current: ToolRenderContext) =>
+        render(args, theme, current);
+      return shell.renderCall(context, theme, call(renderCall), expandedCall && call(expandedCall));
+    },
+    renderResult(result, resultOptions, theme, context) {
+      const call = (render: PreviewRenderers["renderResult"]) => (current: ToolRenderContext) =>
+        render(result, resultOptions, theme, current);
+      return shell.renderResult(
+        context,
+        theme,
+        call(renderResult),
+        result,
+        expandedResult && call(expandedResult),
+      );
+    },
+  };
 }
 
 function renderFallbackToolCall(

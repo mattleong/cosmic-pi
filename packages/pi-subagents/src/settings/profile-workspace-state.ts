@@ -12,13 +12,13 @@ import {
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
+  type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import type { ProfileWorkspaceOptions } from "./profile-workspace.ts";
 import type { makeProfileModelPickerPage } from "./ui/model-picker.ts";
-import type { ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
-import { profileWorkspaceRows } from "./ui/profile-workspace-rows.ts";
+import { profileWorkspaceRows, type ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
-import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
+import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 
 type Selection = {
   control: ProfileWorkspaceField | undefined;
@@ -78,8 +78,7 @@ export abstract class ProfileWorkspaceState {
   constructor(options: ProfileWorkspaceOptions) {
     this.options = {
       ...options,
-      matchesKeybinding: (data, id) =>
-        !isWorkspaceNavigationKey(data) && (options.matchesKeybinding?.(data, id) ?? false),
+      matchesKeybinding: withoutNavigationKeys(options.matchesKeybinding),
     };
     this.inspection = options.inspection;
     this.editVisit = options.editVisit ?? new ProfileEditVisit(options.inspection);
@@ -109,6 +108,9 @@ export abstract class ProfileWorkspaceState {
     this._focused = value;
     if (this.modelPicker) this.modelPicker.focused = value;
     if (this.selectPage) this.selectPage.focused = value;
+  }
+  get target(): ProfileWorkspaceTarget {
+    return this.options.target;
   }
   get isBusy(): boolean {
     return this.busy;
@@ -215,6 +217,10 @@ export abstract class ProfileWorkspaceState {
   }
   protected setMessage(kind: WorkspaceMessage["kind"], text: string): void {
     this.message = { kind, text };
+  }
+  protected notice(kind: WorkspaceMessage["kind"], text: string): void {
+    this.setMessage(kind, text);
+    this.renderSoon();
   }
   protected rememberSelection(): void {
     const row = this.rows()[this.fieldIndex];

@@ -12,8 +12,7 @@ const writeCounts = new WeakMap<
   {
     content: string;
     previous: unknown;
-    maxBytes: number;
-    maxCells: number;
+    policy: typeof codePreviewPerformanceConfig;
     detail: string | undefined;
   }
 >();
@@ -58,17 +57,12 @@ export function writeResultDetail<Before>(before: Before, content: string): stri
   if (!Predicate.isObject(before)) return undefined;
   const cached = writeCounts.get(before);
   const previous = getObjectValue(before, "content");
-  const maxBytes = codePreviewPerformanceConfig.maxWriteDiffBytes;
-  const maxCells = codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
-  if (
-    cached?.content === content &&
-    cached.previous === previous &&
-    cached.maxBytes === maxBytes &&
-    cached.maxCells === maxCells
-  )
+  // Published performance configs are frozen and replaced, never mutated in place.
+  const policy = codePreviewPerformanceConfig;
+  if (cached?.content === content && cached.previous === previous && cached.policy === policy)
     return cached.detail;
-  const detail = projectWriteResultDetail(before, content, codePreviewPerformanceConfig);
-  writeCounts.set(before, { content, previous, maxBytes, maxCells, detail });
+  const detail = projectWriteResultDetail(before, content, policy);
+  writeCounts.set(before, { content, previous, policy, detail });
   return detail;
 }
 
@@ -76,31 +70,21 @@ export function writeResultDetail<Before>(before: Before, content: string): stri
 export function projectWriteResultDetail<Before>(
   before: Before,
   content: string,
-  policy: {
-    maxWriteDiffBytes: number;
-    maxWriteDiffChangedLineCells: number;
-  },
+  policy: { maxWriteDiffBytes: number; maxWriteDiffChangedLineCells: number },
 ): string | undefined {
   if (!Predicate.isObject(before) || getObjectValue(before, "kind") !== "content") return undefined;
   const previous = getObjectValue(before, "content");
-  if (!Predicate.isString(previous)) return undefined;
-  let detail: string | undefined;
   if (
-    previous.length <= 64_000 &&
-    content.length <= 64_000 &&
-    !exceedsWriteDiffBytes([previous, content], policy.maxWriteDiffBytes) &&
-    !shouldSkipWriteDiffComplexity(previous, content, policy.maxWriteDiffChangedLineCells)
-  ) {
-    const changes = diffLines(previous, content, { maxEditLength: 256 });
-    if (changes) {
-      let added = 0;
-      let removed = 0;
-      for (const change of changes) {
-        if (change.added) added += change.count ?? 0;
-        if (change.removed) removed += change.count ?? 0;
-      }
-      detail = `+${added} −${removed}`;
-    }
-  }
-  return detail;
+    !Predicate.isString(previous) ||
+    previous.length > 64_000 ||
+    content.length > 64_000 ||
+    exceedsWriteDiffBytes([previous, content], policy.maxWriteDiffBytes) ||
+    shouldSkipWriteDiffComplexity(previous, content, policy.maxWriteDiffChangedLineCells)
+  )
+    return undefined;
+  const changes = diffLines(previous, content, { maxEditLength: 256 });
+  if (!changes) return undefined;
+  const count = (side: "added" | "removed") =>
+    changes.reduce((total, change) => total + (change[side] ? (change.count ?? 0) : 0), 0);
+  return `+${count("added")} −${count("removed")}`;
 }

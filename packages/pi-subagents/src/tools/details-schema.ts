@@ -16,6 +16,7 @@ import {
   PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
+  PROFILE_ROUTE_SOURCES,
   profileCandidateValidationIssues,
   type ProfileCandidate,
 } from "../profiles/model.ts";
@@ -35,6 +36,8 @@ import {
   STEERING_DELIVERY_STATES,
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
+import { WriterWorkspaceModeSchema } from "../config/schema.ts";
+import { AWAIT_UNTIL } from "./schema.ts";
 
 export const SUBAGENT_CARD_DETAILS_VERSION = 2;
 export const MAX_CARD_MODEL_CHARS = 512;
@@ -42,35 +45,37 @@ export const MAX_CARD_PROVENANCE_CHARS = 1_024;
 export const MAX_CARD_QUESTION_CHARS = 2_048;
 export const MAX_CARD_SKIPS = 8;
 
-const MAX_PROFILE_DESCRIPTION_CHARS = 512;
-const MAX_PROFILE_CANDIDATE_REASON_CHARS = 1_024;
+export const MAX_PROFILE_DESCRIPTION_CHARS = 512;
+export const MAX_PROFILE_CANDIDATE_REASON_CHARS = 1_024;
 export const MAX_PROFILE_CHARS = 64;
 export const MAX_ACTION_FAILURE_ID_CHARS = 128;
 export const MAX_ACTION_FAILURE_CODE_CHARS = 64;
 export const MAX_ACTION_FAILURE_MESSAGE_CHARS = 256;
 export const MAX_FAILURE_CODE_CHARS = 128;
 export const MAX_FAILURE_MESSAGE_CHARS = 512;
-const MAX_CURRENT_TOOL_CHARS = 256;
-const MAX_PROGRESS_CHARS = 512;
-const MAX_WARNING_CHARS = 512;
-const MAX_SAFE_NUMBER = Number.MAX_SAFE_INTEGER;
+export const MAX_CURRENT_TOOL_CHARS = 256;
+export const MAX_PROGRESS_CHARS = 512;
+export const MAX_WARNING_CHARS = 512;
 
-const boundedString = (maximum: number, minimum = 0) =>
-  Schema.String.check(Schema.isMinLength(minimum), Schema.isMaxLength(maximum));
+/** Text of 1 to `maximum` characters. */
+export const NonEmptyText = (maximum: number) =>
+  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 const nonNegativeNumber = Schema.Number.check(
   Schema.isFinite(),
   Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(MAX_SAFE_NUMBER),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
 );
 const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
+const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
+  Schema.Array(schema).check(Schema.isMaxLength(maximum));
 
 const MAX_WORKSPACE_WARNINGS = 3;
 const MAX_WORKSPACE_WARNING_DETAIL_CHARS = 4_096;
 /** A problem an operation left for the parent, already worded by its producer. */
 const WorkspaceWarningSchema = Schema.Struct({
-  code: boundedString(MAX_FAILURE_CODE_CHARS, 1),
-  message: boundedString(MAX_WARNING_CHARS, 1),
-  detail: boundedString(MAX_WORKSPACE_WARNING_DETAIL_CHARS, 1),
+  code: NonEmptyText(MAX_FAILURE_CODE_CHARS),
+  message: NonEmptyText(MAX_WARNING_CHARS),
+  detail: NonEmptyText(MAX_WORKSPACE_WARNING_DETAIL_CHARS),
 });
 export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
 
@@ -79,9 +84,9 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literal("workspace"),
   operation: Schema.Literals(["list", "review", "prepare", "integrate", "discard", "revise"]),
-  workspaceId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
-  revisionId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
-  preparationId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
+  revisionId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
+  preparationId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   offset: Schema.optionalKey(nonNegativeInteger),
   totalChars: Schema.optionalKey(nonNegativeInteger),
   nextOffset: Schema.optionalKey(nonNegativeInteger),
@@ -89,12 +94,10 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   workspaceCount: Schema.optionalKey(nonNegativeInteger),
   unavailableCount: Schema.optionalKey(nonNegativeInteger),
   listedCount: Schema.optionalKey(nonNegativeInteger),
-  preparedCwd: Schema.optionalKey(boundedString(1_024, 1)),
-  successorRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  preparedCwd: Schema.optionalKey(NonEmptyText(1_024)),
+  successorRunId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   /** Problems a committed integration left behind, such as a kept worker tree. */
-  warnings: Schema.optionalKey(
-    Schema.Array(WorkspaceWarningSchema).check(Schema.isMaxLength(MAX_WORKSPACE_WARNINGS)),
-  ),
+  warnings: Schema.optionalKey(boundedArray(WorkspaceWarningSchema, MAX_WORKSPACE_WARNINGS)),
   /** Producer-computed UTF-16 span of list metadata or the immutable diff, never parsed. */
   displayContent: Schema.optionalKey(
     Schema.Struct({
@@ -104,8 +107,6 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   ),
 });
 export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
-const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
-  Schema.Array(schema).check(Schema.isMaxLength(maximum));
 
 const HostSchema = Schema.Literals(PROFILE_CANDIDATE_HOSTS);
 const RuntimeSchema = Schema.Literals(PROFILE_CANDIDATE_RUNTIMES);
@@ -114,14 +115,7 @@ const CandidateEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
 const ContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
 const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
 const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
-const ProfileSourceSchema = Schema.Literals([
-  "session",
-  "project",
-  "project-invalid",
-  "global",
-  "global-invalid",
-  "builtin",
-] as const);
+const ProfileSourceSchema = Schema.Literals(PROFILE_ROUTE_SOURCES);
 
 const UsageSchema = Schema.Struct({
   input: nonNegativeNumber,
@@ -133,45 +127,42 @@ const UsageSchema = Schema.Struct({
 });
 
 const SkippedCandidateSchema = Schema.Struct({
-  candidate: boundedString(MAX_CARD_PROVENANCE_CHARS, 1),
-  code: boundedString(MAX_FAILURE_CODE_CHARS, 1),
-  reason: boundedString(MAX_CARD_PROVENANCE_CHARS, 1),
+  candidate: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
+  code: NonEmptyText(MAX_FAILURE_CODE_CHARS),
+  reason: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
 });
 
 const SelectionSchema = Schema.Struct({
   source: Schema.Literals(["profile-candidate", "profile-parent-candidate"] as const),
   candidateIndex: Schema.optionalKey(nonNegativeInteger),
-  reason: boundedString(MAX_CARD_PROVENANCE_CHARS, 1),
+  reason: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
   skippedCandidates: boundedArray(SkippedCandidateSchema, MAX_CARD_SKIPS),
-  warning: Schema.optionalKey(boundedString(MAX_CARD_PROVENANCE_CHARS, 1)),
+  warning: Schema.optionalKey(NonEmptyText(MAX_CARD_PROVENANCE_CHARS)),
 });
 
 const WriteClaimViolationSchema = Schema.Struct({
-  path: boundedString(MAX_WRITE_CLAIM_CHARS, 1),
-  toolName: boundedString(200, 1),
+  path: NonEmptyText(MAX_WRITE_CLAIM_CHARS),
+  toolName: NonEmptyText(200),
   observedAt: nonNegativeNumber,
 });
 
 const WriteAuditSchema = Schema.Struct({
-  observedFileWrites: boundedArray(
-    boundedString(MAX_WRITE_CLAIM_CHARS, 1),
-    MAX_OBSERVED_WRITE_PATHS,
-  ),
+  observedFileWrites: boundedArray(NonEmptyText(MAX_WRITE_CLAIM_CHARS), MAX_OBSERVED_WRITE_PATHS),
   violations: boundedArray(WriteClaimViolationSchema, MAX_WRITE_CLAIM_VIOLATIONS),
   bashWriteHints: nonNegativeInteger,
 });
 
 const WorkspaceCardFields = {
-  writerWorkspaceMode: Schema.optionalKey(Schema.Literals(["worktree", "shared-checkout"])),
-  workspaceId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
-  cwd: Schema.optionalKey(boundedString(1_024, 1)),
-  sourceCwd: Schema.optionalKey(boundedString(1_024, 1)),
+  writerWorkspaceMode: Schema.optionalKey(WriterWorkspaceModeSchema),
+  workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
+  cwd: Schema.optionalKey(NonEmptyText(1_024)),
+  sourceCwd: Schema.optionalKey(NonEmptyText(1_024)),
 };
 
 export const SubagentRunCardSchema = Schema.Struct({
   ...WorkspaceCardFields,
-  id: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
-  name: boundedString(MAX_NAME_CHARS, 1),
+  id: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
+  name: NonEmptyText(MAX_NAME_CHARS),
   state: Schema.Literals(SUBAGENT_RUN_STATES),
   steeringDelivery: Schema.optionalKey(Schema.Literals(STEERING_DELIVERY_STATES)),
   profile: Schema.optionalKey(ProfileIdSchema),
@@ -182,7 +173,7 @@ export const SubagentRunCardSchema = Schema.Struct({
   reportStatus: Schema.optionalKey(
     Schema.Literals(["available", "claimed", "delivered", "missing"]),
   ),
-  parentRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  parentRunId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   depth: Schema.optionalKey(nonNegativeInteger),
   directChildCount: Schema.optionalKey(nonNegativeInteger),
   descendantCount: Schema.optionalKey(nonNegativeInteger),
@@ -192,8 +183,8 @@ export const SubagentRunCardSchema = Schema.Struct({
       total: nonNegativeInteger,
       latest: Schema.optionalKey(
         Schema.Struct({
-          id: Schema.optionalKey(boundedString(256, 1)),
-          kind: boundedString(128, 1),
+          id: Schema.optionalKey(NonEmptyText(256)),
+          kind: NonEmptyText(128),
           state: Schema.Literals([
             "running",
             "activity",
@@ -206,13 +197,13 @@ export const SubagentRunCardSchema = Schema.Struct({
       ),
     }),
   ),
-  model: boundedString(MAX_CARD_MODEL_CHARS, 1),
+  model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: EffortSchema,
   openaiFastMode: Schema.Boolean,
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
   writeClaims: Schema.optionalKey(
-    boundedArray(boundedString(MAX_WRITE_CLAIM_CHARS, 1), MAX_WRITE_CLAIMS).check(
+    boundedArray(NonEmptyText(MAX_WRITE_CLAIM_CHARS), MAX_WRITE_CLAIMS).check(
       Schema.isMinLength(1),
     ),
   ),
@@ -229,36 +220,34 @@ export const SubagentRunCardSchema = Schema.Struct({
   lastActivityAt: nonNegativeNumber,
   usage: UsageSchema,
   selection: SelectionSchema,
-  currentTool: Schema.optionalKey(boundedString(MAX_CURRENT_TOOL_CHARS, 1)),
-  progress: Schema.optionalKey(boundedString(MAX_PROGRESS_CHARS, 1)),
-  warning: Schema.optionalKey(boundedString(MAX_WARNING_CHARS, 1)),
+  currentTool: Schema.optionalKey(NonEmptyText(MAX_CURRENT_TOOL_CHARS)),
+  progress: Schema.optionalKey(NonEmptyText(MAX_PROGRESS_CHARS)),
+  warning: Schema.optionalKey(NonEmptyText(MAX_WARNING_CHARS)),
   warningSource: Schema.optionalKey(Schema.Literals(["child", "system"])),
-  systemWarning: Schema.optionalKey(boundedString(MAX_WARNING_CHARS, 1)),
+  systemWarning: Schema.optionalKey(NonEmptyText(MAX_WARNING_CHARS)),
   endedAt: Schema.optionalKey(nonNegativeNumber),
-  finalText: Schema.optionalKey(boundedString(MAX_FINAL_TEXT_CHARS, 1)),
-  error: Schema.optionalKey(boundedString(MAX_ERROR_CHARS, 1)),
+  finalText: Schema.optionalKey(NonEmptyText(MAX_FINAL_TEXT_CHARS)),
+  error: Schema.optionalKey(NonEmptyText(MAX_ERROR_CHARS)),
   finalTextTruncated: Schema.optionalKey(Schema.Literal(true)),
   errorTruncated: Schema.optionalKey(Schema.Literal(true)),
-  question: Schema.optionalKey(
-    Schema.Struct({ message: boundedString(MAX_CARD_QUESTION_CHARS, 1) }),
-  ),
+  question: Schema.optionalKey(Schema.Struct({ message: NonEmptyText(MAX_CARD_QUESTION_CHARS) })),
 });
 
 const StartEntryIdentityFields = {
   index: nonNegativeInteger,
-  name: boundedString(MAX_NAME_CHARS, 1),
-  profile: boundedString(MAX_PROFILE_CHARS, 1),
+  name: NonEmptyText(MAX_NAME_CHARS),
+  profile: NonEmptyText(MAX_PROFILE_CHARS),
 };
 const SelectedStartEntryFields = {
   ...WorkspaceCardFields,
   routeStatus: Schema.Literal("selected"),
   host: HostSchema,
   runtime: RuntimeSchema,
-  model: boundedString(MAX_CARD_MODEL_CHARS, 1),
+  model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: EffortSchema,
   openaiFastMode: Schema.Boolean,
   candidateIndex: Schema.optionalKey(nonNegativeInteger),
-  warning: Schema.optionalKey(boundedString(MAX_CARD_PROVENANCE_CHARS, 1)),
+  warning: Schema.optionalKey(NonEmptyText(MAX_CARD_PROVENANCE_CHARS)),
 };
 const PendingStartEntrySchema = Schema.Struct({
   ...StartEntryIdentityFields,
@@ -269,7 +258,7 @@ const StartedStartEntrySchema = Schema.Struct({
   ...StartEntryIdentityFields,
   status: Schema.Literal("started"),
   ...SelectedStartEntryFields,
-  runId: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
+  runId: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
 });
 const FailedSelectedStartEntrySchema = Schema.Struct({
   ...StartEntryIdentityFields,
@@ -289,7 +278,7 @@ export const SubagentStartEntrySchema = Schema.Union([
 ]);
 
 const FailedStartRecoverySchema = Schema.Struct({
-  runId: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
+  runId: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
   cleanupDisposition: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
   retryDisposition: Schema.Literals(FAILED_START_RETRY_DISPOSITIONS),
   remainingCandidateCount: nonNegativeInteger,
@@ -298,9 +287,9 @@ const FailedStartRecoverySchema = Schema.Struct({
 
 export const SubagentCardFailureSchema = Schema.Struct({
   index: nonNegativeInteger,
-  name: Schema.optionalKey(boundedString(MAX_NAME_CHARS, 1)),
-  message: boundedString(MAX_FAILURE_MESSAGE_CHARS, 1),
-  code: Schema.optionalKey(boundedString(MAX_FAILURE_CODE_CHARS, 1)),
+  name: Schema.optionalKey(NonEmptyText(MAX_NAME_CHARS)),
+  message: NonEmptyText(MAX_FAILURE_MESSAGE_CHARS),
+  code: Schema.optionalKey(NonEmptyText(MAX_FAILURE_CODE_CHARS)),
   admittedRun: Schema.optionalKey(FailedStartRecoverySchema),
 });
 
@@ -312,18 +301,18 @@ const hasValidProfileCandidatePolicy = Schema.makeFilter((candidate: ProfileCand
 const ProfileCandidateCardSchema = Schema.Struct({
   host: HostSchema,
   runtime: RuntimeSchema,
-  model: boundedString(MAX_PROFILE_MODEL_SELECTOR_CHARS, 1),
+  model: NonEmptyText(MAX_PROFILE_MODEL_SELECTOR_CHARS),
   effort: CandidateEffortSchema,
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
   openaiFastMode: Schema.Boolean,
   closeOnReport: Schema.Boolean,
   status: Schema.Literals(["eligible", "skipped"] as const),
-  reason: boundedString(MAX_PROFILE_CANDIDATE_REASON_CHARS, 1),
+  reason: NonEmptyText(MAX_PROFILE_CANDIDATE_REASON_CHARS),
 }).check(hasValidProfileCandidatePolicy);
 export const SubagentProfileRouteCardSchema = Schema.Struct({
   id: ProfileIdSchema,
-  description: boundedString(MAX_PROFILE_DESCRIPTION_CHARS, 1),
+  description: NonEmptyText(MAX_PROFILE_DESCRIPTION_CHARS),
   source: ProfileSourceSchema,
   isDefault: Schema.Boolean,
   defaultContext: ContextSchema,
@@ -336,9 +325,9 @@ export const SubagentProfileRouteCardSchema = Schema.Struct({
 export const PENDING_DELIVERY_FAILURE_CODE = "steer_outcome_uncertain";
 
 export const CompactToolActionFailureSchema = Schema.Struct({
-  id: boundedString(MAX_ACTION_FAILURE_ID_CHARS, 1),
-  code: Schema.optionalKey(boundedString(MAX_ACTION_FAILURE_CODE_CHARS, 1)),
-  message: boundedString(MAX_ACTION_FAILURE_MESSAGE_CHARS, 1),
+  id: NonEmptyText(MAX_ACTION_FAILURE_ID_CHARS),
+  code: Schema.optionalKey(NonEmptyText(MAX_ACTION_FAILURE_CODE_CHARS)),
+  message: NonEmptyText(MAX_ACTION_FAILURE_MESSAGE_CHARS),
   /**
    * Additive version-2 backend evidence. Structural only: `actionFailureDisposition` decides
    * whether it means pending delivery, so a wrong action/code keeps its error semantics.
@@ -360,10 +349,9 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   action: Schema.Literal("await"),
   cards: boundedArray(SubagentRunCardSchema, MAX_TARGET_RUNS),
   awaitedRunIds: Schema.optionalKey(
-    boundedArray(boundedString(MAX_PROTOCOL_ID_CHARS, 1), MAX_TARGET_RUNS),
+    boundedArray(NonEmptyText(MAX_PROTOCOL_ID_CHARS), MAX_TARGET_RUNS),
   ),
-  awaitUntil: Schema.Literals(["all_finished", "any_finished"] as const),
-  timedOut: Schema.optionalKey(Schema.Literal(true)),
+  awaitUntil: Schema.Literals(AWAIT_UNTIL),
   attentionRequired: Schema.optionalKey(Schema.Literal(true)),
   cancelled: Schema.optionalKey(Schema.Literal(true)),
   cancellationCleanup: Schema.optionalKey(Schema.Literal("unconfirmed")),
@@ -413,20 +401,16 @@ export const SubagentStartAwaitCardDetailsSchema = Schema.Union([
   SubagentStartDetailsSchema,
   SubagentAwaitDetailsSchema,
 ]);
-export type SubagentRunCard = Schema.Schema.Type<typeof SubagentRunCardSchema>;
-export type SubagentStartEntry = Schema.Schema.Type<typeof SubagentStartEntrySchema>;
-export type SubagentCardFailure = Schema.Schema.Type<typeof SubagentCardFailureSchema>;
-export type SubagentProfileCandidateCard = Schema.Schema.Type<typeof ProfileCandidateCardSchema>;
-export type SubagentProfileRouteCard = Schema.Schema.Type<typeof SubagentProfileRouteCardSchema>;
-export type CompactToolActionFailure = Schema.Schema.Type<typeof CompactToolActionFailureSchema>;
-export type SubagentStartDetails = Schema.Schema.Type<typeof SubagentStartDetailsSchema>;
-export type SubagentAwaitDetails = Schema.Schema.Type<typeof SubagentAwaitDetailsSchema>;
-export type SubagentStartAwaitCardDetails = Schema.Schema.Type<
-  typeof SubagentStartAwaitCardDetailsSchema
->;
-export type CompactSubagentToolDetails = Schema.Schema.Type<
-  typeof CompactSubagentToolDetailsSchema
->;
+export type SubagentRunCard = typeof SubagentRunCardSchema.Type;
+export type SubagentStartEntry = typeof SubagentStartEntrySchema.Type;
+export type SubagentCardFailure = typeof SubagentCardFailureSchema.Type;
+export type SubagentProfileCandidateCard = typeof ProfileCandidateCardSchema.Type;
+export type SubagentProfileRouteCard = typeof SubagentProfileRouteCardSchema.Type;
+export type CompactToolActionFailure = typeof CompactToolActionFailureSchema.Type;
+export type SubagentStartDetails = typeof SubagentStartDetailsSchema.Type;
+export type SubagentAwaitDetails = typeof SubagentAwaitDetailsSchema.Type;
+export type SubagentStartAwaitCardDetails = typeof SubagentStartAwaitCardDetailsSchema.Type;
+export type CompactSubagentToolDetails = typeof CompactSubagentToolDetailsSchema.Type;
 export const DETAILS_PARSE_OPTIONS = {
   errors: "first",
   onExcessProperty: "ignore",
@@ -447,8 +431,7 @@ const recordOf = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefin
   // decodes every field before it enters a persisted details type.
   return value as ValueInput & Readonly<JsonObject>;
 };
-const hasOwn = (record: Readonly<JsonObject>, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(record, key);
+const hasOwn = (record: Readonly<JsonObject>, key: string): boolean => Object.hasOwn(record, key);
 const readKnown = (record: Readonly<JsonObject>, key: string): JsonValue | undefined => record[key];
 
 const rootKeysAllowed = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean => {
@@ -652,8 +635,7 @@ const safeDecode = <S extends Schema.ConstraintDecoder<unknown>, ValueInput>(
     if (!preflight(value)) return undefined;
     const decoded = Schema.decodeUnknownSync(schema, DETAILS_PARSE_OPTIONS)(value);
     if (validate && !validate(decoded)) return undefined;
-    const serialized = JSON.stringify(decoded);
-    if (serialized.length > MAX_TOOL_OUTPUT_CHARS) return undefined;
+    if (JSON.stringify(decoded).length > MAX_TOOL_OUTPUT_CHARS) return undefined;
     return freezeSnapshot(decoded);
   } catch {
     return undefined;

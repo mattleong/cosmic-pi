@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 
 /** Installs a Vitest spy for the current scope and restores it when the scope closes. */
-export const scopedSpy = <Spy extends { readonly mockRestore: () => void }>(make: () => Spy) =>
+const scopedSpy = <Spy extends { readonly mockRestore: () => void }>(make: () => Spy) =>
   Effect.acquireRelease(Effect.sync(make), (spy) => Effect.sync(() => spy.mockRestore()));
 
 /** Silences console output for the current scope and reports how many calls reached it. */

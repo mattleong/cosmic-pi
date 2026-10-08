@@ -2,15 +2,12 @@ import type { AddedDiffLine, RemovedDiffLine } from "../parse";
 import { expandPreviewTabs } from "../../shared/helpers";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { wordEmphasisTokens, type WordEmphasisToken } from "./tokens";
-import { requiredAt } from "./types";
 
 export type IndexedChangedLine<T extends AddedDiffLine | RemovedDiffLine> = {
   index: number;
   line: T;
   normalizedContent?: string;
   tokens?: WordEmphasisToken[];
-  similarityTokenValues?: string[];
-  similarityFeatureValues?: string[];
 };
 
 export function normalizedChangedContent(
@@ -25,11 +22,4 @@ export function changedLineTokens(
   line: IndexedChangedLine<AddedDiffLine | RemovedDiffLine>,
 ): WordEmphasisToken[] {
   return (line.tokens ??= wordEmphasisTokens(normalizedChangedContent(line)));
-}
-
-export function changedLineAt<T extends AddedDiffLine | RemovedDiffLine>(
-  lines: Array<IndexedChangedLine<T>>,
-  index: number,
-): IndexedChangedLine<T> {
-  return requiredAt(lines, index, "changed line");
 }

@@ -1,15 +1,15 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 import type * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   notifyAtHostBoundary,
   registerExtensionCommand,
   synchronousNow,
   type ExtensionSubcommand,
+  type JsonObject,
 } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import {
   makeAdaptiveHostRefreshTicker,
@@ -28,23 +28,22 @@ import type {
   SubagentFeatureTogglePatch,
   SubagentNestingPatch,
   SubagentProfilePatch,
+  SubagentProfileRestorePatch,
   SubagentRenameProfileSetPatch,
 } from "../config/store.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
-import {
-  type SessionFeaturePatch,
-  type SessionNestingPatch,
-  type SessionProfilePatch,
-  type SessionProfileSetPatch,
+import type {
+  SessionFeaturePatch,
+  SessionNestingPatch,
+  SessionProfilePatch,
+  SessionProfileSetPatch,
+  SessionProfileSnapshot,
 } from "../profiles/session-overrides.ts";
 import { SubagentFleetComponent, type FleetMessageDelivery } from "../ui/fleet.ts";
 import { subagentUiRefreshCadence } from "../ui/refresh.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { openProfileDashboard } from "./profile-dashboard.ts";
 import { subagentSettingsSubcommand } from "./subagent-settings.ts";
-import type { JsonObject } from "pi-cosmic-core";
-import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
-import type { SubagentProfileRestorePatch } from "../config/store.ts";
 
 export interface SessionProfileSetSnapshotWrite extends Omit<
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -100,7 +99,7 @@ function openFleetManager(
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): Promise<void> {
-  if (ctx.mode !== "tui" || !Predicate.isFunction(ctx.ui.custom)) {
+  if (!hasCustomSurface(ctx)) {
     if (ctx.hasUI)
       notifyAtHostBoundary(ctx, "Open Pi in an interactive terminal to use /subagents", "warning");
     return Promise.resolve();
@@ -113,9 +112,8 @@ function openFleetManager(
     );
     return Promise.resolve();
   }
-  return openOwnedSurfacePromise<undefined>(ctx, {
+  return openCommandSurface(ctx, {
     placement: "screen",
-    closedValue: undefined,
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
       let unsubscribe = () => {};
       let refreshTicker: AdaptiveHostRefreshTicker | undefined;
@@ -155,9 +153,6 @@ function openFleetManager(
       });
       return manager;
     },
-  }).then((outcome) => {
-    // A failed opening rejects the command, as Pi's own custom Promise does.
-    if (outcome._tag === "Failed") throw outcome.cause;
   });
 }
 

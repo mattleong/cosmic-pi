@@ -7,6 +7,8 @@ export const MAX_WRITE_CLAIM_VIOLATIONS = 16;
 const MAX_NATIVE_CHANGE_PATHS = 256;
 
 const FILE_WRITE_TOOL_NAMES = new Set(["edit", "write", "notebookedit", "applypatch"]);
+const PATH_KEYS = ["path", "file_path", "filePath"] as const;
+const MOVE_PATH_KEYS = ["move_path", "movePath"] as const;
 
 export const asObject = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
   if (value === null || !hasObjectRuntimeType(value) || Array.isArray(value)) return undefined;
@@ -22,34 +24,27 @@ export const stringField = (
   return Predicate.isString(field) && field.trim() ? field.trim() : undefined;
 };
 
+/** The named fields of `keys` that hold paths, in key order. */
+const pathFields = (value: Readonly<JsonObject> | undefined, keys: ReadonlyArray<string>) =>
+  keys.flatMap((key) => stringField(value, key) ?? []);
+
 const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> => {
   const input = asObject(args);
   if (!input) return [];
-  const direct = [
-    stringField(input, "path"),
-    stringField(input, "file_path"),
-    stringField(input, "filePath"),
-  ].filter((value): value is string => value !== undefined);
-  const changes = input.changes;
-  if (!Array.isArray(changes)) return [...new Set(direct)];
-  const overflowPath =
-    changes.length > MAX_NATIVE_CHANGE_PATHS
-      ? ["/<native-file-change-set-exceeded-observation-bound>"]
-      : [];
+  const changes = Array.isArray(input.changes) ? input.changes : [];
   return [
     ...new Set([
-      ...direct,
+      ...pathFields(input, PATH_KEYS),
       ...changes.slice(0, MAX_NATIVE_CHANGE_PATHS).flatMap((change) => {
         const item = asObject(change);
-        const path =
-          stringField(item, "path") ??
-          stringField(item, "file_path") ??
-          stringField(item, "filePath");
-        const kind = asObject(item?.kind);
-        const movePath = stringField(kind, "move_path") ?? stringField(kind, "movePath");
-        return [path, movePath].filter((value): value is string => value !== undefined);
+        return [
+          ...pathFields(item, PATH_KEYS).slice(0, 1),
+          ...pathFields(asObject(item?.kind), MOVE_PATH_KEYS).slice(0, 1),
+        ];
       }),
-      ...overflowPath,
+      ...(changes.length > MAX_NATIVE_CHANGE_PATHS
+        ? ["/<native-file-change-set-exceeded-observation-bound>"]
+        : []),
     ]),
   ];
 };
@@ -82,20 +77,13 @@ export const workspaceRelativeObservedPath = (
   canonicalCwd: string,
   observedPath: string,
 ): string | undefined => {
-  const cwd =
-    canonicalCwd === "/"
-      ? ""
-      : canonicalCwd.endsWith("/")
-        ? canonicalCwd.slice(0, -1)
-        : canonicalCwd;
+  const cwd = canonicalCwd.replace(/\/$/, "");
   const candidate = observedPath.trim().normalize("NFC");
-  const relative = candidate.startsWith("/")
-    ? cwd === ""
-      ? candidate.slice(1)
-      : candidate.startsWith(`${cwd}/`)
-        ? candidate.slice(cwd.length + 1)
-        : undefined
-    : candidate;
+  const relative = !candidate.startsWith("/")
+    ? candidate
+    : candidate.startsWith(`${cwd}/`)
+      ? candidate.slice(cwd.length + 1)
+      : undefined;
   if (relative === undefined) return undefined;
   const normalized = normalizeWriteClaim(relative);
   return normalized.ok ? normalized.claims[0] : undefined;

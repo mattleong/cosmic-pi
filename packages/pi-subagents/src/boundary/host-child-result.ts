@@ -1,6 +1,5 @@
 // The child-only result tool is Promise-shaped because Pi tool execution is.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -23,6 +22,7 @@ import {
   resultExpandedContent,
   resultToolRenderers,
 } from "../tools/result-presentation.ts";
+import { makeParentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import { ParentContactError } from "./local-pi-ipc.ts";
 
 /** Reminders a child gets for stopping without a result, before it settles and fails. */
@@ -130,7 +130,7 @@ export function registerChildResults(
     description: "Private result contract file for this subagent",
     type: "string",
   });
-  const pending = new Map<string, Deferred.Deferred<void, ParentContactError>>();
+  const pending = makeParentCorrelations<void>();
   let contract: LocalPiResultContractDocument | undefined;
   let accepted = false;
   let reminders = 0;
@@ -173,23 +173,12 @@ export function registerChildResults(
     if (!transport.isCurrent())
       return Promise.reject(new Error("Result delivery is unavailable for this session."));
     const requestId = `result-${process.pid}-${nextRequest++}`;
-    const delivery = Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const waiter = Deferred.makeUnsafe<void, ParentContactError>();
-        pending.set(requestId, waiter);
-        return waiter;
-      }),
-      (waiter) =>
-        transport
-          .send({ channel: "pi-subagents", type: "structured_result", requestId, valueJson })
-          .pipe(Effect.andThen(Deferred.await(waiter))),
-      (waiter) =>
-        Effect.sync(() => {
-          if (pending.get(requestId) === waiter) pending.delete(requestId);
-        }),
+    const delivery = pending.await(
+      requestId,
+      transport.send({ channel: "pi-subagents", type: "structured_result", requestId, valueJson }),
     );
     return transport.run(delivery, signal).catch((error) => {
-      throw error instanceof ParentContactError ? new Error(error.message) : error;
+      throw parentContactRejection(error);
     });
   };
 
@@ -205,25 +194,15 @@ export function registerChildResults(
       ),
     );
 
-  const acknowledge = (ack: StructuredResultAck): void => {
-    const waiter = pending.get(ack.requestId);
-    if (!waiter) return;
-    pending.delete(ack.requestId);
-    Deferred.doneUnsafe(
-      waiter,
+  const acknowledge = (ack: StructuredResultAck): void =>
+    void pending.settle(
+      ack.requestId,
       ack.ok
         ? Effect.void
         : Effect.fail(
             new ParentContactError({ message: ack.message ?? "The result was rejected." }),
           ),
     );
-  };
 
-  const rejectPending = (message: string): void => {
-    for (const waiter of pending.values())
-      Deferred.doneUnsafe(waiter, Effect.fail(new ParentContactError({ message })));
-    pending.clear();
-  };
-
-  return { load, register, acknowledge, rejectPending };
+  return { load, register, acknowledge, rejectPending: pending.rejectAll };
 }

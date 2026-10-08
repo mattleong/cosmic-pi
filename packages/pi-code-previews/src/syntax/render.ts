@@ -1,10 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { bundledThemesInfo } from "shiki";
 import type { ShikiHighlighter } from "../boundary/shiki";
-import { hashString } from "../shared/helpers";
-import { codePreviewPerformanceConfig } from "../config/state";
-import { codePreviewSettings } from "../config/state";
-import { expandPreviewTabs } from "../shared/helpers";
+import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";
+import { expandPreviewTabs, hashString } from "../shared/helpers";
 import {
   escapeControlChars,
   escapeLineControlChars,
@@ -18,8 +16,6 @@ import {
   type ShikiStatus,
 } from "./projection";
 
-export type { ShikiStatus } from "./projection";
-
 type RenderCacheEntry = {
   readonly source: string;
   readonly value: string[];
@@ -31,7 +27,6 @@ type RenderCacheOwner = {
 };
 
 const renderCache = new Map<string, RenderCacheEntry>();
-const ansiCache = new Map<string, string>();
 let renderCacheChars = 0;
 let renderCacheOwner: RenderCacheOwner | undefined;
 
@@ -50,7 +45,6 @@ function claimRenderCache(highlighter: ShikiHighlighter, theme: string): void {
 export function discardShikiRenderCache(highlighter: ShikiHighlighter): void {
   if (renderCacheOwner?.highlighter !== highlighter) return;
   clearRenderCache();
-  ansiCache.clear();
   renderCacheOwner = undefined;
 }
 
@@ -81,8 +75,8 @@ export function renderWithShiki(
   }
   const language = normalizePreviewLanguageAlias(lang);
   if (snapshot.failedLanguages.includes(language)) return undefined;
-  claimRenderCache(snapshot.highlighter, snapshot.theme);
-  const key = `${snapshot.theme}\0${language}\0${code.length}\0${hashString(code)}`;
+  claimRenderCache(snapshot.highlighter, theme);
+  const key = `${theme}\0${language}\0${code.length}\0${hashString(code)}`;
   const cached = renderCache.get(key);
   if (cached && cached.source === code) {
     renderCache.delete(key);
@@ -94,23 +88,23 @@ export function renderWithShiki(
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     const tokens = snapshot.highlighter.codeToTokensBase(code, {
       lang: language as never,
-      theme: snapshot.theme as never,
+      theme: theme as never,
     });
     const rendered = tokens.map((line) =>
-      normalizeContrast(line.map((token) => ansiFromToken(token)).join(""), snapshot.theme!),
+      normalizeContrast(line.map((token) => ansiFromToken(token)).join(""), theme),
     );
     const size = rendered.reduce((total, line) => total + line.length, 0);
     renderCache.set(key, { source: code, value: rendered, size });
     renderCacheChars += size;
-    while (
-      renderCache.size > codePreviewPerformanceConfig.cacheLimit ||
-      renderCacheChars > codePreviewPerformanceConfig.cacheCharLimit
-    ) {
-      const oldest = renderCache.keys().next().value;
-      if (oldest === undefined) break;
-      const removed = renderCache.get(oldest);
+    // Map order is recency order: evict from the oldest until both budgets hold.
+    for (const [oldest, entry] of renderCache) {
+      if (
+        renderCache.size <= codePreviewPerformanceConfig.cacheLimit &&
+        renderCacheChars <= codePreviewPerformanceConfig.cacheCharLimit
+      )
+        break;
       renderCache.delete(oldest);
-      renderCacheChars -= removed?.size ?? 0;
+      renderCacheChars -= entry.size;
     }
     return rendered;
   } catch {
@@ -185,17 +179,13 @@ function ansiFromToken(token: { content: string; color?: string; fontStyle?: num
   return open + escapeControlChars(token.content) + close;
 }
 function ansiFg(hex: string): string {
-  const cached = ansiCache.get(hex);
-  if (cached !== undefined) return cached;
   const value = Number.parseInt(hex.replace(/^#/, "").slice(0, 6), 16);
-  const ansi = Number.isFinite(value)
+  return Number.isFinite(value)
     ? `\x1b[38;2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}m`
     : "";
-  ansiCache.set(hex, ansi);
-  return ansi;
 }
 
-export function plainHighlightedText(text: string, theme: Theme): string[] {
+function plainHighlightedText(text: string, theme: Theme): string[] {
   return expandPreviewTabs(text)
     .split("\n")
     .map((line) => theme.fg("toolOutput", escapeLineControlChars(line)));

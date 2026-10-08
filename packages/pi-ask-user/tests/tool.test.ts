@@ -1,10 +1,10 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
+import { captureRegistrations, createToolPresentationHarness } from "pi-code-previews/testing";
 import { describe, expect, it, vi } from "vitest";
 import { opaqueFixture } from "pi-cosmic-core/testing";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
-import { AskUserParameters, type AskUserRequest } from "../src/questionnaire/schema.ts";
+import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
+import { hostileContent, malformedNoteAnswers } from "./support/questionnaire.ts";
 
 const request: AskUserRequest = {
   questions: [
@@ -21,18 +21,10 @@ const request: AskUserRequest = {
   ],
 };
 
-type AskUserTool = ToolDefinition<typeof AskUserParameters, AskUserOutcome>;
-
 const captureTool = (
   ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
-) => {
-  const tools: AskUserTool[] = [];
-  registerAskUserTool(
-    opaqueFixture({ registerTool: (tool: AskUserTool) => tools.push(tool) }),
-    ask,
-  );
-  return tools[0]!;
-};
+) => captureRegistrations((pi) => registerAskUserTool(pi, ask)).tools[0]!;
+type AskUserTool = ReturnType<typeof captureTool>;
 
 // Renders the registered, shell-wrapped call, or a settled result under the default request's
 // call, under default preview settings.
@@ -88,22 +80,12 @@ describe("ask_user tool", () => {
     const answerLine = lines.findIndex((line) => line.includes("Scenic"));
     expect(answerLine).toBeGreaterThanOrEqual(0);
     expect(lines[answerLine + 1]).toMatch(/^\s+.*Avoid tolls/);
-    const hostileNote = Object.defineProperty({}, "note", {
-      get() {
-        throw new Error("hostile note");
-      },
-    });
-    for (const note of [{ note: 123 }, hostileNote]) {
-      const malformed = Object.defineProperties(
-        { key: "route", kind: "custom", text: "Scenic" },
-        Object.getOwnPropertyDescriptors(note),
-      );
+    for (const malformed of malformedNoteAnswers())
       expect(
         resultOutput(tool, { outcome: "submitted", answers: [malformed] }, [
           { type: "text", text: "raw fallback" },
         ]),
       ).toContain("raw fallback");
-    }
     expect(resultOutput(tool, null, "string fallback")).not.toContain("string fallback");
   });
 
@@ -142,34 +124,7 @@ describe("ask_user tool", () => {
     });
   });
 
-  it("ignores malformed and throwing parts and sanitizes fallback text", () => {
-    const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
-    const hostile = Object.defineProperty({ type: "text" }, "text", {
-      get() {
-        throw new Error("hostile text");
-      },
-    });
-    const rendered = resultOutput(
-      tool,
-      { outcome: "submitted", answers: [{ key: "missing-text", kind: "custom" }] },
-      [
-        { type: "text", text: "safe \u001b[31mred\u001b[0m" },
-        { type: "text", text: 123 },
-        { type: "image", data: "private" },
-        null,
-        hostile,
-        { type: "text", text: "second" },
-      ],
-    );
-
-    expect(rendered).toContain("safe red");
-    expect(rendered).toContain("second");
-    expect(rendered).not.toContain("123");
-    expect(rendered).not.toContain("private");
-    expect(rendered).not.toContain("\u001b");
-  });
-
-  it("renders six questions and answers but uses neutral or text fallbacks beyond them", () => {
+  it("renders six questions and answers but uses neutral or sanitized text fallbacks beyond them", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
     const questions = Array.from({ length: 7 }, (_, index) => ({ title: `private-${index + 1}` }));
     const answers = Array.from({ length: 7 }, (_, index) => ({
@@ -185,11 +140,15 @@ describe("ask_user tool", () => {
     ).toContain("value-6");
     expect(() => render(tool, "call", { questions: "invalid" })).not.toThrow();
     expect(render(tool, "call", { questions })).not.toContain("private-1");
-    expect(
-      resultOutput(tool, { outcome: "submitted", answers }, [
-        { type: "text", text: "answer fallback" },
-      ]),
-    ).toContain("answer fallback");
+    const fallback = resultOutput(
+      tool,
+      { outcome: "submitted", answers },
+      hostileContent("answer"),
+    );
+    expect(fallback).toContain("answer fallback");
+    expect(fallback).toContain("after");
+    expect(fallback).not.toContain("secret");
+    expect(fallback).not.toContain("\u001b");
     expect(
       resultOutput(
         tool,

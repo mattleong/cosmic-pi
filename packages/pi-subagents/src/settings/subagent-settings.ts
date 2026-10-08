@@ -3,52 +3,48 @@
  * switches and nesting limits for the session, global, or trusted-project scope.
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Text, type SettingItem } from "@earendil-works/pi-tui";
-import * as Predicate from "effect/Predicate";
+import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Result from "effect/Result";
-import {
-  failureMessage,
-  invokeHostCallback,
-  isProjectTrusted,
-  type ExtensionSubcommand,
-} from "pi-cosmic-core";
+import * as Schema from "effect/Schema";
+import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-cosmic-core";
 import {
   settingsSubcommand,
-  type SettingsCommandOptions,
+  type SettingsSession,
 } from "pi-cosmic-ui/boundary/host-settings-command";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import {
-  createSettingsListSurface,
-  managerSettingsTheme,
-  settingsRowGenerations,
-} from "pi-cosmic-ui/manager/settings-surface";
-import {
+  DEFAULT_SUBAGENT_NESTING_POLICY,
   MAX_DIRECT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
   MIN_DIRECT_CHILDREN,
   MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
+  WriterWorkspaceModeSchema,
   isSubagentFeatureToggle,
+  type SubagentFeatureToggle,
   type SubagentNestingPolicy,
-  type WriterWorkspaceMode,
 } from "../config/schema.ts";
 import type { WriterWorkspaceBlockCode } from "../run/workspace-control.ts";
 import type { FleetManagerActions } from "./controller.ts";
 import {
-  applyFeatureToggle,
+  FEATURE_VALUES,
+  INHERIT,
   featureToggleDescriptors,
   featureToggleItems,
   featureToggleStatusLines,
-  type FeatureScope,
-  type SettingsResult,
 } from "./feature-settings.ts";
-import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
+import {
+  SCOPE_LABELS,
+  type ProfileSettingsInspection,
+  type ProfileSettingsScope,
+} from "./profile-route-editor.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
 
-type NestingScope = FeatureScope;
+type SettingsResult = Result.Result<
+  undefined,
+  { readonly message: string; readonly stale?: boolean }
+>;
 type NestingField = keyof SubagentNestingPolicy;
 
-const INHERIT = "inherit";
 const WORKSPACE = "writerWorkspace";
 
 interface NestingFieldInfo {
@@ -96,27 +92,30 @@ const WORKSPACE_BLOCKS = {
     "Can't change the writer workspace until an earlier writer's changes are integrated or discarded",
 } satisfies Record<WriterWorkspaceBlockCode, string>;
 
-const WORKSPACE_LABELS = {
-  worktree: "worktree",
-  "shared-checkout": "shared-checkout",
-} satisfies Record<WriterWorkspaceMode, string>;
+const isWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
 
-const isWorkspaceMode = (value: string): value is WriterWorkspaceMode =>
-  WRITER_WORKSPACE_MODES.some((mode) => mode === value);
+const settingScope = (scope: string | undefined): ProfileSettingsScope =>
+  scope === "global" || scope === "project" ? scope : "session";
+
+const editableScopes = (trusted: boolean): readonly ProfileSettingsScope[] =>
+  trusted ? ["session", "global", "project"] : ["session", "global"];
 
 /** The limits a scope sets itself, or undefined when it inherits them. */
 const scopeNesting = (
   inspection: ProfileSettingsInspection,
-  scope: NestingScope,
+  scope: ProfileSettingsScope,
 ): SubagentNestingPolicy | undefined =>
-  scope === "session"
-    ? inspection.session.nesting
-    : scope === "project"
-      ? inspection.project?.file.nesting
-      : inspection.global.file.nesting;
+  scope === "session" ? inspection.session.nesting : inspection[scope]?.file.nesting;
 
-const effectiveNesting = (inspection: ProfileSettingsInspection): SubagentNestingPolicy =>
-  inspection.session.nesting ?? inspection.session.effectiveConfig.nesting;
+/** What a scope without its own limits inherits: the next scope's, as its rows describe. */
+const inheritedNesting = (
+  inspection: ProfileSettingsInspection,
+  scope: ProfileSettingsScope,
+): SubagentNestingPolicy =>
+  scope === "session"
+    ? inspection.session.baseConfig.nesting
+    : ((scope === "project" ? inspection.global.file.nesting : undefined) ??
+      DEFAULT_SUBAGENT_NESTING_POLICY);
 
 const parseLimit = (field: NestingField, value: string): number | undefined => {
   const { minimum, maximum } = NESTING_FIELDS[field];
@@ -128,6 +127,13 @@ const parseLimit = (field: NestingField, value: string): number | undefined => {
 
 const failed = (message: string): SettingsResult => Result.fail({ message });
 const succeeded: SettingsResult = Result.succeed(undefined);
+
+const saveFailure =
+  (what: string) =>
+  (error: Error | string): SettingsResult =>
+    failed(
+      `Couldn't ${what}: ${failureMessage(error instanceof Error ? error.message : "", "unknown error")}`,
+    );
 
 export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
   /**
@@ -145,6 +151,42 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
     );
   };
 
+  /**
+   * Writes one scope's payload against the state it inspected: the session's revision, or the
+   * document a saved scope holds. The shell refuses an untrusted Project before applying; trust
+   * is rechecked right before a project write, since it may change while inspecting.
+   */
+  const saveToScope = <Payload extends object>(
+    ctx: ExtensionCommandContext,
+    scope: ProfileSettingsScope,
+    what: string,
+    payload: (inspection: ProfileSettingsInspection) => Payload,
+    write: {
+      readonly session: (patch: Payload & { readonly expectedRevision: number }) => Promise<void>;
+      readonly saved: (patch: Payload & ReturnType<typeof profileSetPatchBase>) => Promise<void>;
+    },
+  ): Promise<SettingsResult> =>
+    current((isCurrent) =>
+      actions
+        .inspectProfiles(isProjectTrusted(ctx))
+        .then((inspection): SettingsResult | Promise<SettingsResult> => {
+          if (!isCurrent()) return succeeded;
+          const projectTrusted = isProjectTrusted(ctx);
+          if (scope === "project" && !projectTrusted) return failed(UNTRUSTED);
+          return (
+            scope === "session"
+              ? write.session({
+                  ...payload(inspection),
+                  expectedRevision: inspection.session.revision,
+                })
+              : write.saved({
+                  ...profileSetPatchBase(inspection, scope, projectTrusted),
+                  ...payload(inspection),
+                })
+          ).then(() => succeeded, saveFailure(what));
+        }),
+    );
+
   const applyWorkspace = (value: string): Promise<SettingsResult> =>
     current((isCurrent) =>
       actions
@@ -159,24 +201,32 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
                 : "Can't change the writer workspace right now",
             );
           if (snapshot.mode === value || !isCurrent()) return succeeded;
-          return actions.setWriterWorkspaceMode(value).then(
-            () => succeeded,
-            (error) =>
-              failed(
-                `Couldn't change the writer workspace: ${failureMessage(
-                  error instanceof Error ? error.message : "",
-                  "unknown error",
-                )}`,
-              ),
-          );
+          return actions
+            .setWriterWorkspaceMode(value)
+            .then(() => succeeded, saveFailure("change the writer workspace"));
         }),
     );
+
+  const applyFeatureToggle = (
+    ctx: ExtensionCommandContext,
+    toggle: SubagentFeatureToggle,
+    value: string,
+    scope: ProfileSettingsScope,
+  ): Promise<SettingsResult> => {
+    if (!FEATURE_VALUES.includes(value))
+      return Promise.resolve(failed(`${toggle} must be true, false, or ${INHERIT}`));
+    const enabled = value === INHERIT ? {} : { enabled: value === "true" };
+    return saveToScope(ctx, scope, `save ${toggle}`, () => ({ toggle, ...enabled }), {
+      session: actions.patchSessionFeatureToggle,
+      saved: actions.patchFeatureToggle,
+    });
+  };
 
   const applyNesting = (
     ctx: ExtensionCommandContext,
     field: NestingField,
     value: string,
-    scope: NestingScope,
+    scope: ProfileSettingsScope,
   ): Promise<SettingsResult> => {
     const limit = value === INHERIT ? undefined : parseLimit(field, value);
     if (value !== INHERIT && limit === undefined) {
@@ -185,83 +235,61 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
         failed(`${field} must be a whole number from ${minimum} to ${maximum}`),
       );
     }
-    const trusted = isProjectTrusted(ctx);
-    if (scope === "project" && !trusted) return Promise.resolve(failed(UNTRUSTED));
-    return current((isCurrent) =>
-      actions
-        .inspectProfiles(trusted)
-        .then((inspection): SettingsResult | Promise<SettingsResult> => {
-          if (!isCurrent()) return succeeded;
-          const base = scopeNesting(inspection, scope) ?? effectiveNesting(inspection);
-          const nesting = limit === undefined ? undefined : { ...base, [field]: limit };
-          const patch = nesting ? { nesting } : {};
-          // Trust is rechecked right before a project write: it may change while inspecting.
-          if (scope === "project" && !isProjectTrusted(ctx)) return failed(UNTRUSTED);
-          const save =
-            scope === "session"
-              ? actions.patchSessionNesting({
-                  expectedRevision: inspection.session.revision,
-                  ...patch,
-                })
-              : actions.patchNesting({
-                  ...profileSetPatchBase(inspection, scope, isProjectTrusted(ctx)),
-                  ...patch,
-                });
-          return save.then(
-            () => succeeded,
-            (error) =>
-              failed(
-                `Couldn't save the nesting limits: ${failureMessage(
-                  error instanceof Error ? error.message : "",
-                  "unknown error",
-                )}`,
-              ),
-          );
-        }),
+    return saveToScope(
+      ctx,
+      scope,
+      "save the nesting limits",
+      (inspection) =>
+        limit === undefined
+          ? {}
+          : {
+              nesting: {
+                ...(scopeNesting(inspection, scope) ?? inheritedNesting(inspection, scope)),
+                [field]: limit,
+              },
+            },
+      { session: actions.patchSessionNesting, saved: actions.patchNesting },
     );
   };
 
-  const statusText = (ctx: ExtensionCommandContext): Promise<string> =>
-    !actions.isAvailable()
-      ? Promise.reject(new Error("Subagents are not active"))
-      : Promise.all([
-          actions.inspectWriterWorkspace(),
-          actions.inspectProfiles(isProjectTrusted(ctx)),
-        ]).then(([workspace, inspection]) => {
-          const trusted = isProjectTrusted(ctx);
-          const scopeLine = (scope: NestingScope) => {
-            const own = scopeNesting(inspection, scope);
-            return own
-              ? `  ${scope}: maxDirectChildren = ${own.maxDirectChildren}, maxDepth = ${own.maxDepth}`
-              : `  ${scope}: ${INHERIT}`;
-          };
-          const effective = effectiveNesting(inspection);
-          return [
-            "Subagents settings",
-            `  ${WORKSPACE} = ${WORKSPACE_LABELS[workspace.mode]}${workspace.blockedCode ? ` (${WORKSPACE_BLOCKS[workspace.blockedCode]})` : ""}`,
-            `  maxDirectChildren = ${effective.maxDirectChildren}, maxDepth = ${effective.maxDepth} (in effect)`,
-            "Nesting limits by scope:",
-            scopeLine("session"),
-            scopeLine("global"),
-            ...(trusted ? [scopeLine("project")] : []),
-            ...featureToggleStatusLines(
-              inspection,
-              trusted ? ["session", "global", "project"] : ["session", "global"],
-            ),
-          ].join("\n");
-        });
+  const statusText = (ctx: ExtensionCommandContext): Promise<string> => {
+    if (!actions.isAvailable()) return Promise.reject(new Error("Subagents are not active"));
+    // One trust read decides both what is inspected and which scopes are reported.
+    const trusted = isProjectTrusted(ctx);
+    return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
+      ([workspace, inspection]) => {
+        const scopes = editableScopes(trusted);
+        const scopeLine = (scope: ProfileSettingsScope) => {
+          const own = scopeNesting(inspection, scope);
+          return own
+            ? `  ${scope}: maxDirectChildren = ${own.maxDirectChildren}, maxDepth = ${own.maxDepth}`
+            : `  ${scope}: ${INHERIT}`;
+        };
+        const effective = inspection.session.effectiveConfig.nesting;
+        return [
+          "Subagents settings",
+          `  ${WORKSPACE} = ${workspace.mode}${workspace.blockedCode ? ` (${WORKSPACE_BLOCKS[workspace.blockedCode]})` : ""}`,
+          `  maxDirectChildren = ${effective.maxDirectChildren}, maxDepth = ${effective.maxDepth} (in effect)`,
+          "Nesting limits by scope:",
+          ...scopes.map(scopeLine),
+          ...featureToggleStatusLines(inspection, scopes),
+        ].join("\n");
+      },
+    );
+  };
 
-  const open = (
-    ctx: ExtensionCommandContext,
-    session: Parameters<SettingsCommandOptions<undefined>["open"]>[1],
-  ) => {
+  // SettingsList shows a cycled value before it is saved, so a failed or stale apply restores
+  // the row's last committed value.
+  const committed = new Map<string, string>();
+  const rowId = (id: string, scope: string | undefined) =>
+    id === WORKSPACE ? id : `${settingScope(scope)}:${id}`;
+
+  const open = (ctx: ExtensionCommandContext, session: SettingsSession<undefined>) => {
     if (!actions.isAvailable()) return Promise.resolve({ _tag: "Blocked" as const });
     const trusted = isProjectTrusted(ctx);
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
-        const scopes: readonly NestingScope[] = trusted
-          ? ["session", "global", "project"]
-          : ["session", "global"];
+        const scopes = editableScopes(trusted);
         const withCurrent = (values: readonly string[], currentValue: string) =>
           values.includes(currentValue) ? [...values] : [currentValue, ...values];
         const items: SettingItem[] = [
@@ -269,8 +297,8 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
             id: WORKSPACE,
             label: "Writer workspace",
             description: `Where writer subagents make changes. Saved for new sessions.${workspace.blockedCode ? ` ${WORKSPACE_BLOCKS[workspace.blockedCode]}.` : ""}`,
-            currentValue: WORKSPACE_LABELS[workspace.mode],
-            values: Object.values(WORKSPACE_LABELS),
+            currentValue: workspace.mode,
+            values: [...WRITER_WORKSPACE_MODES],
           },
           ...featureToggleItems(inspection, scopes),
           ...scopes.flatMap((scope) =>
@@ -279,7 +307,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
               const currentValue = own ? String(own[field]) : INHERIT;
               return {
                 id: `${scope}:${field}`,
-                label: `${scope[0]!.toUpperCase()}${scope.slice(1)} · ${NESTING_FIELDS[field].label}`,
+                label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[field].label}`,
                 description: `${NESTING_FIELDS[field].description} ${INHERIT} uses the next scope's limits.${scope === "session" ? "" : " Takes effect after /reload."}`,
                 currentValue,
                 values: withCurrent([...NESTING_FIELDS[field].presets, INHERIT], currentValue),
@@ -287,48 +315,22 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
             }),
           ),
         ];
-        const generations = settingsRowGenerations();
-        return openOwnedSurfacePromise<undefined>(ctx, {
-          placement: "inline",
-          closedValue: undefined,
-          create: ({ tui, theme, keybindings, finish }) =>
-            createSettingsListSurface({
-              header: new Text(theme.fg("accent", theme.bold("Subagents settings")), 1, 1),
-              items,
-              height: Math.min(12, items.length + 2),
-              listTheme: managerSettingsTheme(theme),
-              onChange: (id, value, list) => {
-                const [scope, field] = id.includes(":") ? id.split(":") : [undefined, id];
-                const generation = generations.begin(id);
-                void session.apply(
-                  field ?? id,
-                  value,
-                  (shown) => {
-                    if (!generations.isCurrent(id, generation)) return false;
-                    invokeHostCallback(() => {
-                      list.updateValue(id, shown);
-                      tui.requestRender();
-                    }, undefined);
-                    return true;
-                  },
-                  scope,
-                );
-              },
-              onCancel: () => finish(undefined),
-              matchesKeybinding: invokeHostCallback(
-                () => Predicate.isFunction(keybindings?.matches),
-                false,
-              )
-                ? (data, bindingId) =>
-                    invokeHostCallback(() => keybindings.matches(data, bindingId), false)
-                : undefined,
-              requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),
-              dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
-              bridge: { invoke: invokeHostCallback },
-            }).surface,
-        });
+        for (const item of items) committed.set(item.id, item.currentValue);
+        return session.picker(items);
       },
     );
+  };
+
+  const apply = (
+    ctx: ExtensionCommandContext,
+    id: string,
+    value: string,
+    scope: ProfileSettingsScope,
+  ): Promise<SettingsResult> => {
+    if (id === WORKSPACE) return applyWorkspace(value);
+    if (isSubagentFeatureToggle(id)) return applyFeatureToggle(ctx, id, value, scope);
+    if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));
+    return applyNesting(ctx, id, value, scope);
   };
 
   return settingsSubcommand<undefined>({
@@ -339,7 +341,7 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
       {
         id: WORKSPACE,
         description: "Where writer subagents make changes. Saved for new sessions.",
-        values: Object.values(WORKSPACE_LABELS),
+        values: [...WRITER_WORKSPACE_MODES],
         currentValue: () => "",
       },
       ...featureToggleDescriptors,
@@ -369,21 +371,12 @@ export function subagentSettingsSubcommand(actions: FleetManagerActions): Extens
       scope === "project" && !isProjectTrusted(ctx) ? UNTRUSTED : undefined,
     config: () => undefined,
     status: statusText,
-    apply: (ctx, id, value, _signal, scope) => {
-      if (id === WORKSPACE) return applyWorkspace(value);
-      if (isSubagentFeatureToggle(id))
-        return applyFeatureToggle(
-          { actions, current, untrusted: UNTRUSTED },
-          ctx,
-          id,
-          value,
-          scope,
-        );
-      if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));
-      const target: NestingScope = scope === "global" || scope === "project" ? scope : "session";
-      return applyNesting(ctx, id, value, target);
-    },
-    afterApply: () => undefined,
+    apply: (ctx, id, value, _signal, scope) =>
+      apply(ctx, id, value, settingScope(scope)).then((result) => {
+        if (Result.isSuccess(result)) committed.set(rowId(id, scope), value);
+        return result;
+      }),
+    displayValue: (_ctx, id, scope) => committed.get(rowId(id, scope)),
     open,
   });
 }

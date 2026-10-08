@@ -1,7 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type { CanonicalWriterCwd } from "../boundary/writer-lease.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
 import { writerConflictError, writerConflictHoldings } from "./admission.ts";
 import { SubagentRuntimeClosedError, type SubagentWriterConflictError } from "./errors.ts";
@@ -48,46 +47,12 @@ export function makeRunAdmissionSignal(
 
   const current = Effect.sync(() => revision);
 
+  // Closing fails the final `changed` and never replaces it, so later waits fail the same way.
   const waitForChange = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
-    Effect.suspend(() =>
-      revision > after
-        ? Effect.void
-        : closed
-          ? Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." }))
-          : Deferred.await(changed),
-    );
+    Effect.suspend(() => (revision > after ? Effect.void : Deferred.await(changed)));
 
   return { observe, close, current, waitForChange };
 }
-
-export type QueuedWriterCheckDependencies = Pick<
-  RunContext,
-  "records" | "writerPools" | "writerLeases" | "withLock"
->;
-
-/** What a shared-checkout writer's start is checked against for conflicts. */
-interface SharedWriterTarget {
-  readonly cwd: CanonicalWriterCwd;
-  /** Normalized claims; absent for an exclusive writer. */
-  readonly claims: ReadonlyArray<string> | undefined;
-}
-
-/** The target of a shared-checkout writer, or none for other starts. */
-const sharedWriterTarget = (
-  dependencies: QueuedWriterCheckDependencies,
-  request: StartSubagentRequest,
-): Effect.Effect<Option.Option<SharedWriterTarget>> => {
-  // A worktree writer works in a cwd of its own, so the source's writers can't block it.
-  if (request.writeIntent !== "writer" || request.writerWorkspaceModeOverride === "worktree")
-    return Effect.succeedNone;
-  const claims = request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
-  // A request the full start would reject isn't blocked; the retry reports why.
-  if (claims?.ok === false) return Effect.succeedNone;
-  return dependencies.writerLeases.canonicalize(request.cwd).pipe(
-    Effect.map((cwd) => Option.some({ cwd, claims: claims?.claims })),
-    Effect.orElseSucceed(() => Option.none()),
-  );
-};
 
 /**
  * The cheap check for a queued workflow writer, without validation, backend resolution or
@@ -97,23 +62,22 @@ const sharedWriterTarget = (
  * that advances the admission revision.
  */
 export const makeQueuedWriterCheck =
-  (dependencies: QueuedWriterCheckDependencies) =>
+  ({ records, writerPools, writerLeases, withLock }: RunContext) =>
   (request: StartSubagentRequest): Effect.Effect<SubagentWriterConflictError | undefined> =>
-    sharedWriterTarget(dependencies, request).pipe(
-      Effect.flatMap((writer) =>
-        Option.isNone(writer)
-          ? Effect.succeed(undefined)
-          : dependencies.withLock(
-              Effect.sync(() => {
-                const { cwd, claims } = writer.value;
-                const conflict = writerConflictError(
-                  dependencies.records,
-                  dependencies.writerPools,
-                  cwd,
-                  claims,
-                );
-                return conflict?.transient === true ? conflict : undefined;
-              }),
-            ),
-      ),
-    );
+    Effect.gen(function* () {
+      // A worktree writer works in a cwd of its own, so the source's writers can't block it.
+      if (request.writeIntent !== "writer" || request.writerWorkspaceModeOverride === "worktree")
+        return undefined;
+      const claims =
+        request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
+      // A request the full start would reject isn't blocked; the retry reports why.
+      if (claims?.ok === false) return undefined;
+      const cwd = yield* writerLeases.canonicalize(request.cwd).pipe(Effect.option);
+      if (Option.isNone(cwd)) return undefined;
+      return yield* withLock(
+        Effect.sync(() => {
+          const conflict = writerConflictError(records, writerPools, cwd.value, claims?.claims);
+          return conflict?.transient === true ? conflict : undefined;
+        }),
+      );
+    });

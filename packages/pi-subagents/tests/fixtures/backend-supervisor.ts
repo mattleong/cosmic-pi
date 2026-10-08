@@ -44,10 +44,7 @@ export const supervisorMetadata = (
 export const backendSupervisor = (
   metadata: SupervisorConnectionMetadata,
   events: SupervisorChannelHandle["events"],
-  behavior: Pick<
-    SupervisorChannelHandle,
-    "hasAcceptedReport" | "acceptedReportForEpoch" | "close"
-  > &
+  behavior: Pick<SupervisorChannelHandle, "hasAcceptedReport" | "acceptedReportForEpoch"> &
     Partial<Pick<SupervisorChannelHandle, "setAssignmentEpoch">>,
 ): SupervisorChannelHandle => ({
   metadata,
@@ -64,7 +61,6 @@ export const backendLaunch = (
 ): BackendLaunchRequest => ({
   runId: "agent-fixture",
   name: "fixture",
-  closeOnReport: true,
   cwd: process.cwd(),
   context: "fresh",
   writeIntent: "read-only",

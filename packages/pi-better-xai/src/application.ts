@@ -34,17 +34,11 @@ import {
   synchronizeProjectionContext,
 } from "./usage/projection.ts";
 
-export interface BetterXaiExtensionDependencies {
-  readonly startupEffect: () => Effect.Effect<void, never, XaiUsageService>;
-}
-
-const defaultDependencies: BetterXaiExtensionDependencies = {
-  startupEffect: () => XaiUsageService.use(() => Effect.void),
-};
-
 export function registerBetterXaiApplication(
   pi: ExtensionAPI,
-  dependencies: BetterXaiExtensionDependencies = defaultDependencies,
+  /** Startup lifecycle test seam; Pi always uses the default. */
+  startupEffect: () => Effect.Effect<void, never, XaiUsageService> = () =>
+    XaiUsageService.use(() => Effect.void),
 ): void {
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
@@ -55,6 +49,8 @@ export function registerBetterXaiApplication(
       owner === undefined ? currentPublicationOwner === undefined : MutableRef.get(owner);
   };
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-xai");
+  const warnStartFailure = (ctx: ExtensionContext) =>
+    notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
 
   const config = () => MutableRef.get(projection).config;
   const setStatus = makeSetStatusSafely("better-xai");
@@ -100,7 +96,7 @@ export function registerBetterXaiApplication(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-xai" },
       ),
-    startup: () => dependencies.startupEffect(),
+    startup: startupEffect,
     onActivated: ({ ctx, context, publicationOwner }) => {
       currentContext = context;
       currentPublicationOwner = publicationOwner;
@@ -119,9 +115,7 @@ export function registerBetterXaiApplication(
       cosmicUi.shutdown();
       resetProjection(projection);
     },
-    onStartFailure: ({ ctx }) => {
-      notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
-    },
+    onStartFailure: ({ ctx }) => warnStartFailure(ctx),
   });
 
   const command = registerExtensionCommand(pi, {
@@ -161,19 +155,16 @@ export function registerBetterXaiApplication(
   pi.on("session_start", (_event, ctx) => {
     const capturedHost = captureSessionHost(ctx);
     if (capturedHost._tag === "Unavailable") {
-      notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
+      warnStartFailure(ctx);
       return slot.shutdown().then(() => undefined);
     }
-    const context = MutableRef.make(ctx);
-    if (capturedHost.aborted) {
-      notifyAtHostBoundary(ctx, "Better xAI couldn't start", "warning");
-    }
+    if (capturedHost.aborted) warnStartFailure(ctx);
     return slot
       .start(
         {
           ctx,
           cwd: capturedHost.cwd,
-          context,
+          context: MutableRef.make(ctx),
           projectTrusted: isProjectTrusted(ctx),
           publicationOwner: MutableRef.make(true),
         },

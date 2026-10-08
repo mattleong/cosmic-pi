@@ -1,12 +1,9 @@
-import { afterEach, describe, expect, test } from "vitest";
-import type { ToolRenderers, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { beforeEach, describe, expect, test } from "vitest";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createToolPresentationHarness } from "../../testing";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
-import { createBuiltinPreviewRenderers } from "../../src/tools/renderers/registration";
-import { ALL_CODE_PREVIEW_TOOLS } from "../../src/tools/names";
-import { previewBodiesDisabled, stripAnsi } from "../support/render";
+import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
+import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
+import { builtinRenderers, previewBodiesDisabled, stripAnsi } from "../support/render";
 
 const cases = [
   {
@@ -54,28 +51,16 @@ const cases = [
   { name: "ls", args: { path: "/project" }, output: "first.ts\nlast.ts", retained: "last.ts" },
 ] as const;
 
-function registered(
+/** An actual registered builtin renderer, captured with this background and collapsed style. */
+function builtin(
+  name: BuiltinCompactTool,
   mode: "off" | "on" | "border" = "off",
   style: "compact" | "preview" = "compact",
+  options?: Parameters<typeof createToolPresentationHarness>[1],
 ) {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    tools: [...ALL_CODE_PREVIEW_TOOLS],
-    toolCallBackground: mode,
-    toolCallCollapsedStyle: style,
-    toolCallTiming: false,
-    ...previewBodiesDisabled,
-  });
-  const tools = new Map<string, ToolRenderers>();
-  for (const name of ALL_CODE_PREVIEW_TOOLS) {
-    const renderers = createBuiltinPreviewRenderers(name, {
-      cwd: "/project",
-      selfShell: true,
-      scheduleAnimation: () => () => undefined,
-    });
-    if (renderers) tools.set(name, renderers);
-  }
-  return tools;
+  applyPresentationSettings({ toolCallBackground: mode, toolCallCollapsedStyle: style });
+  const renderers = builtinRenderers(name, true);
+  return createToolPresentationHarness(renderers!, options);
 }
 function result(...texts: string[]): AgentToolResult<unknown> {
   return { content: texts.map((text) => ({ type: "text" as const, text })), details: {} };
@@ -83,7 +68,7 @@ function result(...texts: string[]): AgentToolResult<unknown> {
 function plain(lines: string[]) {
   return stripAnsi(lines.join("\n"));
 }
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+beforeEach(() => applyPresentationSettings({ toolCallTiming: false, ...previewBodiesDisabled }));
 
 /** Call source that expansion must keep, including when the call fails. */
 const sourceMarkers = (name: string): string[] =>
@@ -100,8 +85,7 @@ describe("registered builtin presentation", () => {
   for (const fixture of cases) {
     test(`${fixture.name} retains expanded content across toggles and narrow widths`, () => {
       for (const mode of ["off", "on", "border"] as const) {
-        const tool = registered(mode).get(fixture.name)!;
-        const harness = createToolPresentationHarness(tool);
+        const harness = builtin(fixture.name, mode);
         harness.call(fixture.args);
         harness.result(result(fixture.output), { isPartial: true });
         expect(plain(harness.render(100)).includes(fixture.retained)).toBe(false);
@@ -121,7 +105,7 @@ describe("registered builtin presentation", () => {
     });
     test(`${fixture.name} explains unknown errors by their first line and keeps failure call source`, () => {
       for (const mode of ["off", "on", "border"] as const) {
-        const harness = createToolPresentationHarness(registered(mode).get(fixture.name)!);
+        const harness = builtin(fixture.name, mode);
         const failure = result("UNCLASSIFIED_FAILURE", "Inspect destination before retrying.");
         for (const expanded of [false, true, false, true]) {
           harness.call(fixture.args, { expanded });
@@ -138,14 +122,14 @@ describe("registered builtin presentation", () => {
       }
     });
     test(`${fixture.name} tolerates malformed arguments and cancellation`, () => {
-      const harness = createToolPresentationHarness(registered().get(fixture.name)!);
+      const harness = builtin(fixture.name);
       harness.call({ path: 17, command: false, edits: [null] }, { expanded: true });
       harness.result(result("Operation aborted"), { expanded: true, isError: true });
       expect(() => harness.render(20)).not.toThrow();
     });
   }
   test("write diff retains independent raw-result instructions", () => {
-    const harness = createToolPresentationHarness(registered().get("write")!, {
+    const harness = builtin("write", "off", "compact", {
       state: { codePreviewWriteBeforeSnapshot: { content: "OLD_SOURCE" } },
     });
     harness.call({ path: "source.ts", content: "NEW_SOURCE" }, { expanded: true });
@@ -159,7 +143,7 @@ describe("registered builtin presentation", () => {
     expect(text).toContain("Verify the remote copy before retrying.");
   });
   test("unverified write size evidence retains attention and raw result on expansion", () => {
-    const harness = createToolPresentationHarness(registered().get("write")!);
+    const harness = builtin("write");
     const args = { path: "source.ts", content: "NEW_SOURCE" };
     const output = result("WRITE_RECEIPT\nVerify destination before retrying.");
     output.details = {
@@ -187,7 +171,7 @@ describe("registered builtin presentation", () => {
   test("preview style shows the same issue line above builtin bodies", () => {
     for (const name of ["read", "write", "edit", "grep", "find", "ls"] as const) {
       const fixture = cases.find((entry) => entry.name === name)!;
-      const harness = createToolPresentationHarness(registered("off", "preview").get(name)!);
+      const harness = builtin(name, "off", "preview");
       const failure = result("UNCLASSIFIED_FAILURE", "Inspect destination before retrying.");
       for (const expanded of [false, true, false]) {
         harness.call(fixture.args, { expanded });
@@ -197,13 +181,13 @@ describe("registered builtin presentation", () => {
         expect(text.includes("Inspect destination before retrying")).toBe(expanded);
       }
     }
-    const bash = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    const bash = builtin("bash", "off", "preview");
     bash.call({ command: "rm -rf build" });
     bash.result(result("done"));
     expect(plain(bash.render(160))).toMatch(/Deletes files recursively/u);
   });
   test("preview-style write and edit put issues under the heading, above their call content", () => {
-    const write = createToolPresentationHarness(registered("off", "preview").get("write")!);
+    const write = builtin("write", "off", "preview");
     const content = "SECRET_LINE -----BEGIN PRIVATE KEY-----";
     write.call({ path: "/project/key.pem", content }, { expanded: true });
     write.result(result("Successfully wrote"), { expanded: true });
@@ -212,7 +196,7 @@ describe("registered builtin presentation", () => {
     expect(warning).toBeGreaterThan(text.indexOf("key.pem"));
     expect(warning).toBeLessThan(text.indexOf("SECRET_LINE"));
     expect(count(text, "May contain a private key")).toBe(1);
-    const edit = createToolPresentationHarness(registered("off", "preview").get("edit")!);
+    const edit = builtin("edit", "off", "preview");
     edit.call(
       { path: "/project/a.ts", edits: [{ oldText: "a", newText: "b" }] },
       {
@@ -225,7 +209,7 @@ describe("registered builtin presentation", () => {
   });
 
   test("preview style states a failed command's closing status once, keeping its output", () => {
-    const bash = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    const bash = builtin("bash", "off", "preview");
     const failure = result("OUTPUT_LINE\n\nCommand exited with code 127");
     const before = structuredClone(failure);
     for (const expanded of [false, true]) {
@@ -237,27 +221,27 @@ describe("registered builtin presentation", () => {
     }
     expect(failure).toEqual(before);
     // Only Pi's status on a failed call is folded into the issue; ordinary output stays.
-    const printed = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    const printed = builtin("bash", "off", "preview");
     printed.call({ command: "cat status.txt" });
     printed.result(result("Command exited with code 3"));
     expect(plain(printed.render(160))).toContain("code 3");
   });
 
   test("preview style flags risky commands and secrets before any result exists", () => {
-    const bash = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    const bash = builtin("bash", "off", "preview");
     bash.call({ command: "sudo rm -rf /tmp/x" });
     expect(plain(bash.render(160))).toMatch(/Deletes files recursively/u);
-    const write = createToolPresentationHarness(registered("off", "preview").get("write")!);
+    const write = builtin("write", "off", "preview");
     write.call({ path: "/project/k.pem", content: "-----BEGIN PRIVATE KEY-----" });
     expect(plain(write.render(160))).toMatch(/May contain a private key/u);
   });
 
   test("preview style names cancellation and truncation even without a classified summary", () => {
-    const read = createToolPresentationHarness(registered("off", "preview").get("read")!);
+    const read = builtin("read", "off", "preview");
     read.call({ path: "/project/a.ts" });
     read.result(result("Operation aborted"), { isError: true });
     expect(plain(read.render(160))).toMatch(/Cancelled/u);
-    const bash = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    const bash = builtin("bash", "off", "preview");
     const parts: AgentToolResult<unknown> = {
       content: Array.from({ length: 129 }, () => ({ type: "text" as const, text: "line" })),
       details: { truncation: { truncated: true } },
@@ -268,9 +252,12 @@ describe("registered builtin presentation", () => {
   });
 
   test("expansion keeps exact arguments the heading cannot show exactly", () => {
-    const tools = registered();
-    const expanded = (name: string, args: Readonly<Record<string, string>>, output = "ok") => {
-      const harness = createToolPresentationHarness(tools.get(name)!);
+    const expanded = (
+      name: BuiltinCompactTool,
+      args: Readonly<Record<string, string>>,
+      output = "ok",
+    ) => {
+      const harness = builtin(name);
       harness.call(args, { expanded: true });
       harness.result(result(output), { expanded: true });
       return plain(harness.render(200));
@@ -286,9 +273,8 @@ describe("registered builtin presentation", () => {
   });
 
   test("expanded bash repeats the command only when the heading cannot show it", () => {
-    const tool = registered().get("bash")!;
     const lines = (command: string) => {
-      const harness = createToolPresentationHarness(tool);
+      const harness = builtin("bash");
       harness.call({ command }, { expanded: true });
       harness.result(result("ok"), { expanded: true });
       return plain(harness.render(100));
@@ -303,7 +289,7 @@ describe("registered builtin presentation", () => {
 
   test("read leaves image bytes native and retains companion text in both styles", () => {
     for (const style of ["compact", "preview"] as const) {
-      const harness = createToolPresentationHarness(registered("off", style).get("read")!);
+      const harness = builtin("read", "off", style);
       const image = { type: "image" as const, data: "NATIVE_IMAGE_BYTES", mimeType: "image/png" };
       const value = {
         content: [{ type: "text" as const, text: "image companion" }, image],

@@ -1,15 +1,6 @@
 // Public Pi reload boundary: reconstruct the actual retained host row before session_start.
 import assert from "node:assert/strict";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  initTheme,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-  ToolExecutionComponent,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { beforeAll, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -21,9 +12,11 @@ import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
 } from "../../src/application/tool-renderers";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
 import { step } from "../support/effect-test";
+import { offlineModels, scopedSession } from "../support/sdk-session";
+import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import { setPlainPreviewSettings } from "../support/renderer-host";
+import { drawToolRow, hostToolRow } from "../../testing";
 
 beforeAll(() => initTheme("dark", false));
 for (const foreign of [false, true])
@@ -33,28 +26,8 @@ for (const foreign of [false, true])
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "owned-replay-sdk-" });
-        setCodePreviewSettings({
-          ...defaultCodePreviewSettings,
-          toolCallCollapsedStyle: "compact",
-          toolCallTiming: false,
-          syntaxHighlighting: false,
-        });
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => setCodePreviewSettings(defaultCodePreviewSettings)),
-        );
-        const settings = SettingsManager.inMemory({
-          compaction: { enabled: false },
-          retry: { enabled: false },
-        });
-        const models = yield* step(() =>
-          ModelRuntime.create({
-            authPath: `${directory}/auth.json`,
-            modelsPath: null,
-            modelsStorePath: `${directory}/models.json`,
-            refreshOnCreate: false,
-            allowModelNetwork: false,
-          }),
-        );
+        const settings = quietSettings();
+        const models = yield* offlineModels(directory);
         let executions = 0;
         const tool: ToolDefinition<any, any, any> = {
           name: "owned_replay",
@@ -74,14 +47,10 @@ for (const foreign of [false, true])
               0,
             ),
         };
-        const loader = new DefaultResourceLoader({
+        const loader = yield* quietLoader({
           cwd: directory,
           agentDir: directory,
           settingsManager: settings,
-          noSkills: true,
-          noPromptTemplates: true,
-          noThemes: true,
-          noContextFiles: true,
           extensionFactories: [
             ...(foreign
               ? [
@@ -134,41 +103,20 @@ for (const foreign of [false, true])
             },
           ],
         });
-        yield* step(() => loader.reload());
-        const { session } = yield* step(() =>
-          createAgentSession({
-            cwd: directory,
-            agentDir: directory,
-            modelRuntime: models,
-            settingsManager: settings,
-            sessionManager: SessionManager.inMemory(directory),
-            resourceLoader: loader,
-          }),
-        );
-        yield* Effect.addFinalizer(() =>
-          step(() =>
-            session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-          ).pipe(Effect.ensuring(Effect.sync(() => session.dispose()))),
-        );
+        const session = yield* scopedSession({ cwd: directory, models, settings, loader });
+        // Startup wraps owned tools in this appearance; the session scope restores the defaults.
+        setPlainPreviewSettings({ toolCallCollapsedStyle: "compact" });
         const historyRow = () => {
           const renderers = session.extensionRunner.resolveToolRenderers(tool.name, () =>
             session.getToolDefinition(tool.name),
           );
-          const row = new ToolExecutionComponent(
-            tool.name,
-            "past-call",
-            { input: "FULL_INPUT" },
-            { showImages: false },
-            renderers,
-            opaqueFixture({ requestRender() {} }),
-            directory,
-          );
-          row.updateResult({
-            content: [{ type: "text", text: "FULL_OUTPUT recovery /tmp/receipt.txt" }],
-            details: undefined,
-            isError: false,
+          return hostToolRow(tool.name, { input: "FULL_INPUT" }, renderers, {
+            cwd: directory,
+            result: {
+              content: [{ type: "text", text: "FULL_OUTPUT recovery /tmp/receipt.txt" }],
+              isError: false,
+            },
           });
-          return row;
         };
         // New/resumed sessions also render before bindExtensions starts their runtime.
         let retained = historyRow();
@@ -193,15 +141,13 @@ for (const foreign of [false, true])
           }),
         );
         assert.ok(retained.render(160).join("\n").includes(expected));
-        const frames = [true, false, true].map((expanded) => {
-          retained.setExpanded(expanded);
-          retained.invalidate();
-          return { expanded, text: retained.render(160).join("\n") };
-        });
-        for (const { text } of frames.filter((frame) => frame.expanded))
+        const [expanded, , reexpanded] = [true, false, true].map((state) =>
+          drawToolRow(retained, state, 160),
+        );
+        for (const text of [expanded!, reexpanded!]) {
           assert.ok(text.includes("FULL_OUTPUT recovery /tmp/receipt.txt"));
-        for (const { text } of frames.filter((frame) => frame.expanded && !foreign))
-          assert.ok(text.includes("FULL_INPUT"));
+          if (!foreign) assert.ok(text.includes("FULL_INPUT"));
+        }
         assert.deepEqual(session.getActiveToolNames(), active);
         assert.deepEqual(session.getCallableToolNames(), callable);
         const registered = session.getAllTools().filter((entry) => entry.name === tool.name);

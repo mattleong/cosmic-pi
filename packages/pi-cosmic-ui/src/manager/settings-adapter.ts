@@ -13,23 +13,12 @@ import { clipToWidth } from "./chrome.ts";
  * SettingsList has a single page motion, so `C-u/d` and `PgUp/PgDn` are advertised together
  * rather than as a fake half/full-page distinction.
  */
-export const fullScreenSettingsHint = (context: {
-  readonly searching: boolean;
-  readonly helpExpanded?: boolean | undefined;
-  /** Configured key labels; Pi's defaults are shown without it. */
-  readonly keybindingLabel?:
-    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
-    | undefined;
-}): string => {
-  const key = (id: FullScreenSelectionKeybindingId, fallback: string) =>
-    context.keybindingLabel?.(id, fallback) || fallback;
-  const enter = key("tui.select.confirm", "Enter");
-  const escape = key("tui.select.cancel", "Esc");
-  if (context.searching) return `Type to filter · ${enter} Select · ${escape} Done`;
-  return context.helpExpanded
-    ? `j/k or ${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")} Move · gg/G Ends · C-u/d/PgUp/PgDn Page · / Filter · ${enter}/l Select · h/q/${escape} Back · ? Less`
-    : `j/k Move · ${enter}/l Select · h/q Back · / Filter · ? More`;
-};
+export const fullScreenSettingsHint = (searching: boolean, helpExpanded?: boolean): string =>
+  searching
+    ? "Type to filter · Enter Select · Esc Done"
+    : helpExpanded
+      ? "j/k or ↑/↓ Move · gg/G Ends · C-u/d/PgUp/PgDn Page · / Filter · Enter/l Select · h/q/Esc Back · ? Less"
+      : "j/k Move · Enter/l Select · h/q Back · / Filter · ? More";
 
 export interface VimSettingsAdapterOptions {
   readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
@@ -41,30 +30,27 @@ export interface VimSettingsAdapterOptions {
 
 /** Raw SettingsList input and configured selection id each full-screen action forwards as. */
 const SETTINGS_ACTION_INPUT = {
-  up: { input: "\u001b[A", id: "tui.select.up" },
-  down: { input: "\u001b[B", id: "tui.select.down" },
-  "half-page-up": { input: "\u001b[5~", id: undefined },
-  "full-page-up": { input: "\u001b[5~", id: "tui.select.pageUp" },
-  "half-page-down": { input: "\u001b[6~", id: undefined },
-  "full-page-down": { input: "\u001b[6~", id: "tui.select.pageDown" },
-  first: { input: "\u001b[H", id: undefined },
-  last: { input: "\u001b[F", id: undefined },
-  confirm: { input: "\r", id: "tui.select.confirm" },
-  forward: { input: "\r", id: undefined },
-  cancel: { input: "\u001b", id: "tui.select.cancel" },
-  back: { input: "\u001b", id: undefined },
-  quit: { input: "\u001b", id: undefined },
-  help: { input: undefined, id: undefined },
-  "next-pane": { input: undefined, id: undefined },
-  "pending-first": { input: undefined, id: undefined },
-  "previous-pane": { input: undefined, id: undefined },
-  search: { input: undefined, id: undefined },
+  up: ["\u001b[A", "tui.select.up"],
+  down: ["\u001b[B", "tui.select.down"],
+  "half-page-up": ["\u001b[5~"],
+  "full-page-up": ["\u001b[5~", "tui.select.pageUp"],
+  "half-page-down": ["\u001b[6~"],
+  "full-page-down": ["\u001b[6~", "tui.select.pageDown"],
+  first: ["\u001b[H"],
+  last: ["\u001b[F"],
+  confirm: ["\r", "tui.select.confirm"],
+  forward: ["\r"],
+  cancel: ["\u001b", "tui.select.cancel"],
+  back: ["\u001b"],
+  quit: ["\u001b"],
+  help: [],
+  "next-pane": [],
+  "pending-first": [],
+  "previous-pane": [],
+  search: [],
 } satisfies Record<
   FullScreenAction,
-  {
-    readonly input: string | undefined;
-    readonly id: FullScreenSelectionKeybindingId | undefined;
-  }
+  readonly [input?: string, id?: FullScreenSelectionKeybindingId]
 >;
 
 /**
@@ -116,7 +102,7 @@ export class VimSettingsAdapter implements Component, Focusable {
   }
 
   private forwardSelection(data: string, action: FullScreenAction): string | undefined {
-    const { input, id } = SETTINGS_ACTION_INPUT[action];
+    const [input, id] = SETTINGS_ACTION_INPUT[action];
     return id && this.options.matchesKeybinding?.(data, id) ? data : input;
   }
 
@@ -125,49 +111,32 @@ export class VimSettingsAdapter implements Component, Focusable {
       mode: this.mode,
       matchesKeybinding: this.options.matchesKeybinding,
     });
+    const action = resolution?._tag === "Action" ? resolution.action : undefined;
     if (this.mode === "search") {
-      if (resolution?._tag === "Action" && resolution.action === "cancel") {
+      if (action === "cancel") {
         // Esc leaves search without forwarding a close to the child; the typed filter is
         // cleared and re-applied so it cannot keep filtering the list invisibly.
         this.mode = "navigation";
         this.keymap.resetChord();
         this.child.searchInput?.setValue("");
         this.child.applyFilter?.("");
-      } else if (resolution?._tag === "Action") {
-        this.child.handleInput?.(this.forwardSelection(data, resolution.action) ?? data);
-        if (resolution.action === "confirm") {
+      } else {
+        this.child.handleInput?.((action && this.forwardSelection(data, action)) ?? data);
+        if (action === "confirm") {
           this.mode = "navigation";
           this.keymap.resetChord();
         }
-      } else this.child.handleInput?.(data);
-      this.syncChildFocus();
-      this.options.requestRender?.();
-      return;
-    }
-
-    if (resolution?._tag !== "Action") {
-      if (decodeFullScreenPrintable(data) === " ") {
-        this.child.handleInput?.(" ");
-        this.syncChildFocus();
-        this.options.requestRender?.();
       }
-      return;
-    }
-    if (resolution.action === "help") {
-      this.helpExpanded = !this.helpExpanded;
-      this.options.requestRender?.();
-      return;
-    }
-    if (resolution.action === "search") {
+    } else if (action === "help") this.helpExpanded = !this.helpExpanded;
+    else if (action === "search") {
       this.mode = "search";
       this.helpExpanded = false;
       this.keymap.resetChord();
-      this.syncChildFocus();
-      this.options.requestRender?.();
-      return;
-    }
-    const translated = this.forwardSelection(data, resolution.action);
-    if (translated !== undefined) this.child.handleInput?.(translated);
+    } else if (action !== undefined) {
+      const translated = this.forwardSelection(data, action);
+      if (translated !== undefined) this.child.handleInput?.(translated);
+    } else if (decodeFullScreenPrintable(data) === " ") this.child.handleInput?.(" ");
+    else return;
     this.syncChildFocus();
     this.options.requestRender?.();
   }

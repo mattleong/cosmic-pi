@@ -12,6 +12,7 @@ import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
   git,
+  gitFields,
   oid,
   workspaceFailure,
   workspaceIO,
@@ -40,6 +41,12 @@ const treeOf = (repository: string, revision: string) =>
   git(repository, ["rev-parse", `${revision}^{tree}`]).pipe(Effect.flatMap(oid));
 const subdirectory = (record: WorkspaceRecord) =>
   path.relative(record.handle.sourceRoot, record.handle.sourceCwd);
+
+interface CreateWorkspaceInput {
+  readonly sourceCwd: string;
+  readonly ownerId: string;
+  readonly onAcquired?: WorkspaceAcquired | undefined;
+}
 
 const requiredLeaseDirectories = (record: WorkspaceRecord) =>
   Effect.gen(function* () {
@@ -76,15 +83,13 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
     const capture = (record: WorkspaceRecord, root: string, reference: string) =>
       Effect.gen(function* () {
         const requiredPaths = record.baseline
-          ? (yield* git(repository(record), [
+          ? yield* gitFields(repository(record), [
               "ls-tree",
               "-r",
               "--name-only",
               "-z",
               record.baseline,
-            ]))
-              .split("\0")
-              .filter(Boolean)
+            ])
           : [];
         if (record.revision) requiredPaths.push(...record.revision.changedPaths);
         return yield* captureSnapshot(
@@ -95,12 +100,13 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           requiredPaths,
         );
       });
-    const checked = (target: WorkspaceTarget, recovery = false) =>
+    /** `requireLiveOwner: false` is only for read-only inspection from another session. */
+    const checked = (target: WorkspaceTarget, requireLiveOwner = true) =>
       Effect.gen(function* () {
         const record = yield* readWorkspaceRecord(registry, target.workspaceId);
         if (
           record.handle.ownerId !== target.ownerId ||
-          (!recovery && !owned.has(target.workspaceId))
+          (requireLiveOwner && !owned.has(target.workspaceId))
         )
           return yield* workspaceFailure(
             "authorization",
@@ -131,14 +137,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
     const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       withWorkspaceStoreLock(registry, effect);
 
-    const createInternal = (
-      input: {
-        sourceCwd: string;
-        ownerId: string;
-        onAcquired?: WorkspaceAcquired | undefined;
-      },
-      predecessor?: WorkspaceRecord,
-    ) =>
+    const createInternal = (input: CreateWorkspaceInput, predecessor?: WorkspaceRecord) =>
       Effect.gen(function* () {
         const source = predecessor
           ? {
@@ -155,7 +154,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             "create",
             "Private workspaces must be outside the source checkout.",
           );
-        const workspaceId = yield* newWorkspaceId();
+        const workspaceId = yield* newWorkspaceId;
         const dir = workspaceDirectory(registry, workspaceId);
         const handle: WorkspaceHandle = {
           workspaceId,
@@ -227,276 +226,253 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             baseline.commit,
           ]);
           yield* checkDirectory(handle.cwd);
-          record = { ...record, status: "active" };
-          yield* saveWorkspaceRecord(registry, record);
-          owned.add(workspaceId);
-          input.onAcquired?.(handle);
+          // Ownership and the launch's report commit with the active record, so an interruption
+          // that arrives during the commit cannot leave a committed workspace unowned.
+          yield* saveWorkspaceRecord(registry, { ...record, status: "active" }, () => {
+            owned.add(workspaceId);
+            input.onAcquired?.(handle);
+          });
           return handle;
         }).pipe(
-          Effect.catch((error) => {
-            // Expected pre-spawn rejection with confirmed Git cleanup owns no live writer.
-            // Interrupted or uncertain acquisition keeps its creating recovery record.
-            if (error.cleanupUnconfirmed || predecessor) return Effect.fail(error);
-            return workspaceIO("create-cleanup", () =>
-              fs.rm(dir, { recursive: true, force: true }),
-            ).pipe(Effect.andThen(Effect.fail(error)));
-          }),
+          // Expected pre-spawn rejection with confirmed Git cleanup owns no live writer.
+          // Interrupted or uncertain acquisition keeps its creating recovery record.
+          Effect.catchIf(
+            (error) => !error.cleanupUnconfirmed && !predecessor,
+            (error) =>
+              workspaceIO("create-cleanup", () =>
+                fs.rm(dir, { recursive: true, force: true }),
+              ).pipe(Effect.andThen(Effect.fail(error))),
+          ),
         );
       });
 
-    const create = (input: {
-      sourceCwd: string;
-      ownerId: string;
-      onAcquired?: WorkspaceAcquired | undefined;
-    }) =>
-      Effect.gen(function* () {
-        yield* initializeWorkspaceStore(registry);
-        return yield* locked(createInternal(input));
+    const create = Effect.fn("GitWorkspaceEngine.create")(function* (input: CreateWorkspaceInput) {
+      yield* initializeWorkspaceStore(registry);
+      return yield* locked(createInternal(input));
+    });
+    const freeze = Effect.fn("GitWorkspaceEngine.freeze")(function* (
+      target: WorkspaceSettledTarget,
+    ) {
+      yield* settled(target);
+      const record = yield* checked(target);
+      if (record.status !== "active")
+        return yield* workspaceFailure(
+          "freeze",
+          "Only active workspaces may be frozen; revise explicitly first.",
+        );
+      const snapshot = yield* capture(record, worker(record), "revision");
+      const diff = yield* git(repository(record), [
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        record.baseline,
+        snapshot.commit,
+        "--",
+      ]);
+      const changedPaths = yield* gitFields(repository(record), [
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        record.baseline,
+        snapshot.commit,
+        "--",
+      ]);
+      const baselineLinks = (yield* gitFields(repository(record), [
+        "ls-tree",
+        "-r",
+        "-z",
+        record.baseline,
+      ]))
+        .filter((entry) => entry.startsWith("120000 "))
+        .map((entry) => entry.slice(entry.indexOf("\t") + 1));
+      const linkPaths = new Set([
+        ...baselineLinks,
+        ...snapshot.entries.filter((entry) => entry.mode === "120000").map((entry) => entry.path),
+      ]);
+      if (changedPaths.some((name) => linkPaths.has(name)))
+        return yield* workspaceFailure(
+          "freeze",
+          "Creating, removing or changing symlinks is unsupported. Existing internal links must remain unchanged.",
+        );
+      const result = { revisionId: snapshot.commit, diff, changedPaths };
+      yield* saveWorkspaceRecord(registry, { ...record, status: "frozen", revision: result });
+      return result;
+    }, locked);
+
+    const prepare = Effect.fn("GitWorkspaceEngine.prepare")(function* (
+      target: WorkspaceRevisionTarget,
+    ) {
+      const record = yield* checked(target);
+      yield* revision(record, target.revisionId);
+      if (record.status !== "frozen" && record.status !== "prepared")
+        return yield* workspaceFailure("prepare", "Workspace is not awaiting integration.");
+      const workerTree = yield* capture(record, worker(record), "verify-worker");
+      const reviewedTree = yield* treeOf(repository(record), target.revisionId);
+      if (workerTree.tree !== reviewedTree)
+        return yield* workspaceFailure(
+          "prepare",
+          "Worker changed after review; freeze a new revision.",
+        );
+      const identity = yield* sourceIdentity(record.handle.sourceRoot);
+      const parent = yield* capture(record, record.handle.sourceRoot, "parent");
+      if (
+        parent.entries.some(
+          (entry) => entry.mode === "120000" && record.revision!.changedPaths.includes(entry.path),
+        )
+      )
+        return yield* workspaceFailure(
+          "prepare",
+          "A changed path is now a source symlink; integration refused.",
+        );
+      const preparationId = yield* newWorkspaceId;
+      const preparedRoot = path.join(directory(record), `prepare-${preparationId}`);
+      yield* git(repository(record), ["worktree", "add", "--detach", preparedRoot, parent.commit]);
+      if (record.revision!.diff.length > 0) {
+        const stdin = new TextEncoder().encode(record.revision!.diff);
+        yield* git(preparedRoot, ["apply", "--check", "--binary", "--whitespace=nowarn", "-"], {
+          stdin,
+        });
+        yield* git(preparedRoot, ["apply", "--binary", "--whitespace=nowarn", "-"], { stdin });
+      }
+      const combined = yield* capture(record, preparedRoot, `prepared-${preparationId}`);
+      const leaseDirectories = yield* requiredLeaseDirectories(record);
+      const result = {
+        preparationId,
+        revisionId: target.revisionId,
+        cwd: path.join(preparedRoot, subdirectory(record)),
+        leaseDirectories,
+      };
+      yield* checkDirectory(result.cwd);
+      yield* saveWorkspaceRecord(registry, {
+        ...record,
+        status: "prepared",
+        preparation: result,
+        parentTree: parent.tree,
+        preparedTree: combined.tree,
+        sourceHead: identity.head,
+        sourceIndex: identity.index,
       });
-    const freeze = (target: WorkspaceSettledTarget) =>
-      locked(
-        Effect.gen(function* () {
-          yield* settled(target);
-          const record = yield* checked(target);
-          if (record.status !== "active")
-            return yield* workspaceFailure(
-              "freeze",
-              "Only active workspaces may be frozen; revise explicitly first.",
-            );
-          const snapshot = yield* capture(record, worker(record), "revision");
-          const diff = yield* git(repository(record), [
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            record.baseline,
-            snapshot.commit,
-            "--",
-          ]);
-          const changedPaths = (yield* git(repository(record), [
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            record.baseline,
-            snapshot.commit,
-            "--",
-          ]))
-            .split("\0")
-            .filter(Boolean);
-          const baselineLinks = (yield* git(repository(record), [
-            "ls-tree",
-            "-r",
-            "-z",
-            record.baseline,
-          ]))
-            .split("\0")
-            .filter((entry) => entry.startsWith("120000 "))
-            .map((entry) => entry.slice(entry.indexOf("\t") + 1));
-          const linkPaths = new Set([
-            ...baselineLinks,
-            ...snapshot.entries
-              .filter((entry) => entry.mode === "120000")
-              .map((entry) => entry.path),
-          ]);
-          if (changedPaths.some((name) => linkPaths.has(name)))
-            return yield* workspaceFailure(
-              "freeze",
-              "Creating, removing or changing symlinks is unsupported. Existing internal links must remain unchanged.",
-            );
-          const result = { revisionId: snapshot.commit, diff, changedPaths };
-          yield* saveWorkspaceRecord(registry, { ...record, status: "frozen", revision: result });
-          return result;
-        }),
-      );
+      return result;
+    }, locked);
 
-    const prepare = (target: WorkspaceRevisionTarget) =>
-      locked(
-        Effect.gen(function* () {
-          const record = yield* checked(target);
-          yield* revision(record, target.revisionId);
-          if (record.status !== "frozen" && record.status !== "prepared")
-            return yield* workspaceFailure("prepare", "Workspace is not awaiting integration.");
-          const workerTree = yield* capture(record, worker(record), "verify-worker");
-          const reviewedTree = yield* treeOf(repository(record), target.revisionId);
-          if (workerTree.tree !== reviewedTree)
-            return yield* workspaceFailure(
-              "prepare",
-              "Worker changed after review; freeze a new revision.",
-            );
-          const identity = yield* sourceIdentity(record.handle.sourceRoot);
-          const parent = yield* capture(record, record.handle.sourceRoot, "parent");
-          if (
-            parent.entries.some(
-              (entry) =>
-                entry.mode === "120000" && record.revision!.changedPaths.includes(entry.path),
-            )
-          )
-            return yield* workspaceFailure(
-              "prepare",
-              "A changed path is now a source symlink; integration refused.",
-            );
-          const preparationId = yield* newWorkspaceId();
-          const preparedRoot = path.join(directory(record), `prepare-${preparationId}`);
-          yield* git(repository(record), [
-            "worktree",
-            "add",
-            "--detach",
-            preparedRoot,
-            parent.commit,
-          ]);
-          if (record.revision!.diff.length > 0) {
-            const stdin = new TextEncoder().encode(record.revision!.diff);
-            yield* git(preparedRoot, ["apply", "--check", "--binary", "--whitespace=nowarn", "-"], {
-              stdin,
-            });
-            yield* git(preparedRoot, ["apply", "--binary", "--whitespace=nowarn", "-"], { stdin });
-          }
-          const combined = yield* capture(record, preparedRoot, `prepared-${preparationId}`);
-          const leaseDirectories = yield* requiredLeaseDirectories(record);
-          const result = {
-            preparationId,
-            revisionId: target.revisionId,
-            cwd: path.join(preparedRoot, subdirectory(record)),
-            leaseDirectories,
-          };
-          yield* checkDirectory(result.cwd);
-          yield* saveWorkspaceRecord(registry, {
-            ...record,
-            status: "prepared",
-            preparation: result,
-            parentTree: parent.tree,
-            preparedTree: combined.tree,
-            sourceHead: identity.head,
-            sourceIndex: identity.index,
-          });
-          return result;
-        }),
-      );
-
-    const integrate = (target: WorkspaceIntegrationTarget) =>
-      locked(
-        Effect.gen(function* () {
-          yield* settled(target);
-          const record = yield* checked(target);
-          yield* revision(record, target.revisionId);
-          if (
-            record.status !== "prepared" ||
-            record.preparation?.preparationId !== target.preparationId ||
-            !validWorkspaceId(target.preparationId)
-          )
-            return yield* workspaceFailure("integrate", "Tested preparation is stale or unknown.");
-          const reviewedTree = yield* treeOf(repository(record), target.revisionId);
-          const workerTree = yield* capture(record, worker(record), "verify-worker");
-          const preparedRoot = path.join(directory(record), `prepare-${target.preparationId}`);
-          const prepared = yield* capture(record, preparedRoot, "verify-prepared");
-          const before = yield* capture(record, record.handle.sourceRoot, "verify-parent");
-          const identity = yield* sourceIdentity(record.handle.sourceRoot);
-          if (
-            workerTree.tree !== reviewedTree ||
-            prepared.tree !== record.preparedTree ||
-            before.tree !== record.parentTree ||
-            identity.head !== record.sourceHead ||
-            identity.index !== record.sourceIndex
-          )
-            return yield* workspaceFailure(
-              "integrate",
-              "Worker, test tree, source, branch or index changed; review and test again.",
-            );
-          // Empty directories are absent from Git trees. Recheck under the
-          // coordinator's source leases before any journal or source publication.
-          const required = yield* requiredLeaseDirectories(record);
-          if (
-            required.some((directory) => !record.preparation!.leaseDirectories.includes(directory))
-          )
-            return yield* workspaceFailure(
-              "integrate",
-              "Changed-file ancestors changed; prepare and test again before integration.",
-            );
-          const result = yield* publishWorkspace(registry, record, before, prepared);
-          const after = yield* sourceIdentity(record.handle.sourceRoot);
-          if (after.head !== identity.head || after.index !== identity.index)
-            return yield* workspaceFailure(
-              "integrate",
-              "Concurrent source branch/index mutation detected; inspect the retained publication journal.",
-            );
-          const integrated: WorkspaceRecord = { ...result, status: "integrated" };
-          yield* saveWorkspaceRecord(registry, integrated);
-          // The snapshot leaves out ineligible and excluded files. The worker was checked out
-          // from the baseline snapshot, which never holds a path the source left out, so every
-          // such path in the worker was written there by a writer, even where the source has its
-          // own file of that name. It is not integrated work, and removing the worker would
-          // delete its only copy. Ignored files are disposable build output, as for
-          // `git worktree remove`.
-          const uncapturedPaths = workerTree.excludedPaths;
-          // The committed record keeps the private commits; the test trees are spent.
-          const treeRemovalFailed = target.retainTrees
-            ? false
-            : yield* removeWorkspaceTrees(registry, integrated, uncapturedPaths.length > 0).pipe(
-                Effect.as(false),
-                Effect.catchTag("WorkspaceError", (error) =>
-                  Effect.logWarning(
-                    `Integrated workspace trees remain on disk: ${error.message}`,
-                  ).pipe(Effect.annotateLogs("workspaceId", target.workspaceId), Effect.as(true)),
-                ),
-              );
-          return {
-            record: integrated,
-            workerRoot: worker(record),
-            uncapturedPaths,
-            treeRemovalFailed,
-          };
-        }),
-      );
-
-    const revise = (target: WorkspaceSettledTarget & { readonly revisionId?: string }) =>
-      locked(
-        Effect.gen(function* () {
-          yield* settled(target);
-          const record = yield* checked(target);
-          if (target.revisionId) yield* revision(record, target.revisionId);
-          if (!["active", "frozen", "prepared"].includes(record.status))
-            return yield* workspaceFailure(
-              "revise",
-              "Workspace cannot be reopened in its current state.",
-            );
-          const next: WorkspaceRecord = {
-            version: 1,
-            handle: record.handle,
-            baseline: record.baseline,
-            predecessorWorkspaceId: record.predecessorWorkspaceId,
-            excludedPaths: record.excludedPaths,
-            status: "active",
-          };
-          yield* saveWorkspaceRecord(registry, next);
-          return next.handle;
-        }),
-      );
-    const fork = (
-      target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
-    ) =>
-      locked(
-        Effect.gen(function* () {
-          yield* settled(target);
-          const record = yield* checked(target);
-          if (!record.baseline || record.status === "discarded")
-            return yield* workspaceFailure("fork", "Original baseline is unavailable.");
-          return yield* createInternal(
-            {
-              sourceCwd: record.handle.sourceCwd,
-              ownerId: record.handle.ownerId,
-              onAcquired: target.onAcquired,
-            },
-            record,
+    const integrate = Effect.fn("GitWorkspaceEngine.integrate")(function* (
+      target: WorkspaceIntegrationTarget,
+    ) {
+      yield* settled(target);
+      const record = yield* checked(target);
+      yield* revision(record, target.revisionId);
+      if (
+        record.status !== "prepared" ||
+        record.preparation?.preparationId !== target.preparationId ||
+        !validWorkspaceId(target.preparationId)
+      )
+        return yield* workspaceFailure("integrate", "Tested preparation is stale or unknown.");
+      const reviewedTree = yield* treeOf(repository(record), target.revisionId);
+      const workerTree = yield* capture(record, worker(record), "verify-worker");
+      const preparedRoot = path.join(directory(record), `prepare-${target.preparationId}`);
+      const prepared = yield* capture(record, preparedRoot, "verify-prepared");
+      const before = yield* capture(record, record.handle.sourceRoot, "verify-parent");
+      const identity = yield* sourceIdentity(record.handle.sourceRoot);
+      if (
+        workerTree.tree !== reviewedTree ||
+        prepared.tree !== record.preparedTree ||
+        before.tree !== record.parentTree ||
+        identity.head !== record.sourceHead ||
+        identity.index !== record.sourceIndex
+      )
+        return yield* workspaceFailure(
+          "integrate",
+          "Worker, test tree, source, branch or index changed; review and test again.",
+        );
+      // Empty directories are absent from Git trees. Recheck under the
+      // coordinator's source leases before any journal or source publication.
+      const required = yield* requiredLeaseDirectories(record);
+      if (required.some((directory) => !record.preparation!.leaseDirectories.includes(directory)))
+        return yield* workspaceFailure(
+          "integrate",
+          "Changed-file ancestors changed; prepare and test again before integration.",
+        );
+      const result = yield* publishWorkspace(registry, record, before, prepared);
+      const after = yield* sourceIdentity(record.handle.sourceRoot);
+      if (after.head !== identity.head || after.index !== identity.index)
+        return yield* workspaceFailure(
+          "integrate",
+          "Concurrent source branch/index mutation detected; inspect the retained publication journal.",
+        );
+      const integrated: WorkspaceRecord = { ...result, status: "integrated" };
+      yield* saveWorkspaceRecord(registry, integrated);
+      // The snapshot leaves out ineligible and excluded files. The worker was checked out
+      // from the baseline snapshot, which never holds a path the source left out, so every
+      // such path in the worker was written there by a writer, even where the source has its
+      // own file of that name. It is not integrated work, and removing the worker would
+      // delete its only copy. Ignored files are disposable build output, as for
+      // `git worktree remove`.
+      const uncapturedPaths = workerTree.excludedPaths;
+      // The committed record keeps the private commits; the test trees are spent.
+      const treeRemovalFailed = target.retainTrees
+        ? false
+        : yield* removeWorkspaceTrees(registry, integrated, uncapturedPaths.length > 0).pipe(
+            Effect.as(false),
+            Effect.catchTag("WorkspaceError", (error) =>
+              Effect.logWarning(`Integrated workspace trees remain on disk: ${error.message}`).pipe(
+                Effect.annotateLogs("workspaceId", target.workspaceId),
+                Effect.as(true),
+              ),
+            ),
           );
-        }),
+      return {
+        record: integrated,
+        workerRoot: worker(record),
+        uncapturedPaths,
+        treeRemovalFailed,
+      };
+    }, locked);
+
+    const revise = Effect.fn("GitWorkspaceEngine.revise")(function* (
+      target: WorkspaceSettledTarget,
+    ) {
+      yield* settled(target);
+      const record = yield* checked(target);
+      if (!["active", "frozen", "prepared"].includes(record.status))
+        return yield* workspaceFailure(
+          "revise",
+          "Workspace cannot be reopened in its current state.",
+        );
+      const next: WorkspaceRecord = {
+        version: 1,
+        handle: record.handle,
+        baseline: record.baseline,
+        predecessorWorkspaceId: record.predecessorWorkspaceId,
+        excludedPaths: record.excludedPaths,
+        status: "active",
+      };
+      yield* saveWorkspaceRecord(registry, next);
+      return next.handle;
+    }, locked);
+    const fork = Effect.fn("GitWorkspaceEngine.fork")(function* (
+      target: WorkspaceSettledTarget & { readonly onAcquired?: WorkspaceAcquired | undefined },
+    ) {
+      yield* settled(target);
+      const record = yield* checked(target);
+      if (!record.baseline || record.status === "discarded")
+        return yield* workspaceFailure("fork", "Original baseline is unavailable.");
+      return yield* createInternal(
+        {
+          sourceCwd: record.handle.sourceCwd,
+          ownerId: record.handle.ownerId,
+          onAcquired: target.onAcquired,
+        },
+        record,
       );
-    const discardInternal = (target: WorkspaceSettledTarget, recovery: boolean) =>
+    }, locked);
+    const discardInternal = (target: WorkspaceSettledTarget) =>
       Effect.gen(function* () {
         yield* settled(target);
-        const record = yield* checked(target, recovery);
+        const record = yield* checked(target);
         if (record.status === "integrating")
           return yield* workspaceFailure(
             "discard",
@@ -507,7 +483,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         owned.delete(target.workspaceId);
       });
-    const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target, false));
+    const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target));
     /**
      * Checks and discards under one lock, so nothing can land in the worker between the two.
      * `confirm` gets the discard of a worker found unchanged, still under that lock, and runs it
@@ -526,26 +502,13 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           const snapshot = yield* capture(record, worker(record), "verify-worker");
           const baseline = yield* treeOf(repository(record), record.baseline);
           if (!(yield* workerMatchesBaseline(worker(record), snapshot, baseline))) return false;
-          return yield* confirm(discardInternal(target, false));
+          return yield* confirm(discardInternal(target));
         }),
       );
-    const recoverDiscard = (
-      target: WorkspaceSettledTarget & { readonly recoveryRiskAccepted: true },
-    ) =>
-      locked(
-        Effect.gen(function* () {
-          if (target.recoveryRiskAccepted !== true)
-            return yield* workspaceFailure(
-              "recovery",
-              "Explicit recovery risk acceptance is required.",
-            );
-          yield* discardInternal(target, true);
-        }),
-      );
-    const inspect = (target: WorkspaceTarget) => checked(target, true);
-    const listAll = () => listWorkspaceRecords(registry);
+    const inspect = (target: WorkspaceTarget) => checked(target, false);
+    const listAll = listWorkspaceRecords(registry);
     const list = (input: { readonly ownerId: string }) =>
-      listAll().pipe(
+      listAll.pipe(
         Effect.map(({ records }) =>
           records.filter((record) => record.handle.ownerId === input.ownerId),
         ),
@@ -559,7 +522,6 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
       fork,
       discard,
       discardUnchanged,
-      recoverDiscard,
       inspect,
       list,
       listAll,

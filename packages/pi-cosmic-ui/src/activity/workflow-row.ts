@@ -6,27 +6,26 @@ import {
   type ManagerStatusColor,
 } from "../manager/chrome.ts";
 import { activityStatus, compactNotices } from "./attention.ts";
-import type { GroupedActivityRow, PhaseState } from "./grouped-tree.ts";
+import type { GroupedActivityRow } from "./grouped-tree.ts";
 import {
   activeWorkLabels,
   finishedWork,
   phaseCountLabels,
   plannedLabels,
   workflowMemberSpan,
+  type PhaseState,
 } from "./group-summary.ts";
 import {
-  activityColor,
   activityElapsed,
-  activityGlyph,
+  activityMark,
   activityType,
   elapsedLabel,
-  managerTypeColors,
-  widgetTypeColors,
   type RowPaint,
 } from "./row-line.ts";
 import { renderActivityRow, STATUS_DROP, type ActivityStatusPart } from "./row-render.ts";
 
-const phaseLabels = {
+/** Only a done phase is finished, matching the workflow's finished-phase count. */
+export const phaseLabels = {
   pending: "not started",
   running: "running",
   done: "finished",
@@ -95,7 +94,7 @@ function phaseRowLine(
     {
       kind: "PHASE",
       title: entry.title,
-      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
+      continuations: entry.continuations,
       children: entry.children,
       expanded: entry.expanded,
       glyph: attention ? managerNoticeGlyph("warning") : phaseGlyph(entry.state, options.now ?? 0),
@@ -129,7 +128,6 @@ export function workflowRowLine(
   if (entry.type === "phase")
     return phaseRowLine(entry, width, options, presentation, focusedStyle);
   const row = entry.row;
-  const interactive = presentation === "manager";
   const notices = compactNotices(entry.summary.attention);
   const phases = row.phases?.length ?? 0;
   // The workflow's own failure keeps its glyph; member attention overlays a live or ended run.
@@ -138,16 +136,17 @@ export function workflowRowLine(
   // A stopped workflow's own state word already says its unfinished phases stopped.
   const phaseCounts =
     row.status === "cancelled" ? { ...entry.phaseCounts, stopped: 0 } : entry.phaseCounts;
+  const mark = activityMark(row, options.now);
   return renderActivityRow(
     {
       kind: activityType(row),
       title: row.title,
-      continuations: presentation === "widget" ? entry.continuations.slice(1) : entry.continuations,
+      continuations: entry.continuations,
       children: entry.children,
       expanded: entry.expanded,
-      glyph: overlay ? managerNoticeGlyph("warning") : activityGlyph(row, options.now),
-      color: overlay ? "warning" : activityColor(row, interactive),
-      typeColor: (interactive ? managerTypeColors : widgetTypeColors).workflow,
+      glyph: overlay ? managerNoticeGlyph("warning") : mark.glyph,
+      color: overlay ? "warning" : mark.color,
+      typeColor: managerTone.identity,
       status: [
         ...parts(notices),
         ...(ended ? parts([activityStatus(row)], STATUS_DROP.state) : []),

@@ -6,7 +6,7 @@ import type { SubagentRunView } from "./model.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
-import { emptyRunWarningSlots, recordRunWarning } from "./warnings.ts";
+import { recordRunWarning } from "./warnings.ts";
 
 export interface RunAssignmentDependencies extends RunContext {
   readonly startPrompt: RunProcessControls["startPrompt"];
@@ -30,7 +30,7 @@ export const beginNextAssignmentLocked = (
 ): void => {
   record.pausedAssignmentEpoch = undefined;
   record.latestAssistantText = undefined;
-  record.warningSlots = emptyRunWarningSlots();
+  record.warningSlots = {};
   record.assignment = {
     epoch: record.nextAssignmentEpoch++,
     phase: "issuing",
@@ -65,7 +65,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
           if (!isCurrentIssuingAssignment(record, attemptToken))
             return { kind: "unchanged" as const, view: snapshotView(record.view) };
           record.assignment.outcomeUncertain = false;
-          return yield* activateAssignmentLocked(record, now, {
+          return yield* activateAssignmentLocked(record, {
             ...record.view,
             state: "running",
             endedAt: undefined,
@@ -87,31 +87,29 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
     attemptToken: string,
   ) =>
     startPrompt(record, message, record.assignment.epoch).pipe(
-      Effect.tapError((error) =>
-        error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
-          ? withLock(
-              Effect.sync(() => {
-                if (isCurrentIssuingAssignment(record, attemptToken))
-                  record.assignment.outcomeUncertain = true;
-              }),
-            )
-          : Effect.void,
-      ),
-      Effect.mapError((error) => {
-        const outcomeUncertain = error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
-        if (!outcomeUncertain || (operation === "start" && record.view.writeIntent !== "writer"))
-          return error;
-        return operation === "start"
-          ? new SubagentProcessError({
-              operation,
-              code: "start_outcome_uncertain",
-              message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and subagent status before starting another writer. (${error.message})`,
-            })
-          : new SubagentProcessError({
-              operation,
-              code: "resume_outcome_uncertain",
-              message: `The resume prompt may already have applied. Inspect subagent status before retrying. (${error.message})`,
-            });
+      Effect.catch((error) => {
+        if (error._tag !== "SubagentProcessError" || !isOutcomeUncertain(error))
+          return Effect.fail(error);
+        const reported =
+          operation === "resume"
+            ? new SubagentProcessError({
+                operation,
+                code: "resume_outcome_uncertain",
+                message: `The resume prompt may already have applied. Inspect subagent status before retrying. (${error.message})`,
+              })
+            : record.view.writeIntent === "writer"
+              ? new SubagentProcessError({
+                  operation,
+                  code: "start_outcome_uncertain",
+                  message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and subagent status before starting another writer. (${error.message})`,
+                })
+              : error;
+        return withLock(
+          Effect.sync(() => {
+            if (isCurrentIssuingAssignment(record, attemptToken))
+              record.assignment.outcomeUncertain = true;
+          }),
+        ).pipe(Effect.andThen(Effect.fail(reported)));
       }),
       Effect.andThen(confirmIssuedAssignment(record, attemptToken)),
     );
@@ -132,7 +130,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
             yield* publish;
             return undefined;
           }
-          return yield* activateAssignmentLocked(record, now, {
+          return yield* activateAssignmentLocked(record, {
             ...record.view,
             state: "running",
             endedAt: undefined,

@@ -1,4 +1,3 @@
-import type * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -7,6 +6,7 @@ import { subagentErrorCode, type SubagentError } from "../run/errors.ts";
 import { emptyUsage, type SubagentProjection } from "../run/model.ts";
 import type { OwnedRunOutcome } from "../run/owned-runs.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
+import type { WorkflowAgentRun } from "./agent.ts";
 import { WORKFLOW_BUDGET_REASON } from "./budget.ts";
 import type { WorkflowAgentSpend, WorkflowAgentView } from "./model.ts";
 import type { WorkflowResultLine } from "./results.ts";
@@ -71,6 +71,10 @@ export const nullSettlement = (
   spend?: WorkflowAgentSpend,
 ): WorkflowSettlement => ({ state, result: null, reason, ...(spend !== undefined && { spend }) });
 
+/** A call whose start the root won't admit, or whose launch didn't resolve. */
+export const couldntStart = (error: { readonly message: string }): WorkflowSettlement =>
+  nullSettlement("failed", `couldn't start: ${error.message}`);
+
 /** A queued call the budget refused, with the message of the error it throws. */
 export const overBudgetSettlement = (refusal: string): WorkflowSettlement => ({
   ...nullSettlement("skipped", WORKFLOW_BUDGET_REASON),
@@ -108,10 +112,7 @@ const keptWorktreeWarning = (label: string, workspaceId: string, error: Subagent
  */
 export const discardUnchangedWorktree = (
   subagents: Pick<SubagentServiceContract, "workspaceDiscardUnchanged">,
-  run: {
-    readonly log: (level: "info" | "warning", message: string) => Effect.Effect<void>;
-    readonly stopRequested: Deferred.Deferred<void>;
-  },
+  run: Pick<WorkflowAgentRun, "log" | "stopRequested">,
   label: string,
   settlement: WorkflowSettlement,
 ): Effect.Effect<WorkflowSettlement> => {
@@ -154,35 +155,27 @@ export const observedRun = (projection: SubagentProjection, runId: string): Work
 
 /** The warning a live call that resolved null logs. */
 export const settlementWarning = (label: string, settlement: WorkflowSettlement): string => {
-  const reason = settlement.reason ? `: ${settlement.reason}` : "";
-  switch (settlement.state) {
-    case "skipped":
-      return `agent "${label}" was skipped${reason}`;
-    case "stopped":
-      return `agent "${label}" was stopped${reason}`;
-    default:
-      return `agent "${label}" failed${reason}`;
-  }
+  const { state, reason } = settlement;
+  const ended = state === "skipped" || state === "stopped" ? `was ${state}` : "failed";
+  return `agent "${label}" ${ended}${reason ? `: ${reason}` : ""}`;
 };
 
 /**
- * A live call's results journal line, with the profile it ran with rather than a planned one. A
- * completed call's line carries its resume key, so a later Pi process can replay it. A writer's
- * line names its worktree even when it was skipped or stopped while it ran, so a later Pi process
- * can still list that worktree for recovery.
+ * A live call's results journal line, with the profile it ran with, which its view carries,
+ * rather than a planned one. A completed call's line carries its resume key, so a later Pi
+ * process can replay it. A writer's line names its worktree even when it was skipped or stopped
+ * while it ran, so a later Pi process can still list that worktree for recovery.
  */
 export const settledResultLine = (
-  callId: number,
   agent: WorkflowAgentView,
-  profile: string | undefined,
   key: string,
   settlement: WorkflowSettlement,
   accounted: WorkflowAccounted,
 ): WorkflowResultLine => ({
-  callId,
+  callId: agent.callId,
   label: agent.label,
   phase: agent.phase,
-  profile,
+  profile: agent.profile,
   state: settlement.state,
   reason: settlement.reason,
   runId: agent.runId,

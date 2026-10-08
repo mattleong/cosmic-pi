@@ -1,14 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
-  COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_HOST_STATE,
   COSMIC_UI_PROTOCOL_VERSION,
   type CosmicFooterContribution,
-  type CosmicFooterInvalidateEvent,
   type CosmicFooterRemoveEvent,
   type CosmicFooterUpsertEvent,
   type CosmicUiHostQuery,
@@ -16,7 +14,7 @@ import {
   normalizeCosmicUiHostStateEvent,
 } from "../protocol/protocol.ts";
 
-export interface CosmicFooterClient {
+interface CosmicFooterClient {
   /** Whether a compatible Cosmic UI host answered the latest query. */
   readonly installed: boolean;
   /** Whether that host currently owns the custom-footer slot. */
@@ -25,107 +23,73 @@ export interface CosmicFooterClient {
   readonly query: () => boolean;
   readonly onHostStateChange: (listener: (state: CosmicUiHostState) => void) => () => void;
   readonly upsert: (contribution: CosmicFooterContribution) => void;
-  readonly remove: (id?: string) => void;
-  readonly invalidate: (id?: string) => void;
+  readonly remove: (id: string) => void;
   readonly shutdown: () => void;
 }
+
+const noop = () => undefined;
 
 /** Plain-data event-bus client. No Effect value or runtime crosses this boundary. */
 export function createCosmicFooterClient(
   events: ExtensionAPI["events"] | undefined,
   owner: string,
 ): CosmicFooterClient {
-  let installed = false;
-  let active = false;
-  let hidden: readonly string[] = [];
-  let ready = false;
+  /** The latest valid host state; undefined until a compatible host answers. */
+  let host: CosmicUiHostState | undefined;
   const emit = (
     name: string,
-    value:
-      | CosmicUiHostQuery
-      | CosmicFooterUpsertEvent
-      | CosmicFooterRemoveEvent
-      | CosmicFooterInvalidateEvent,
-  ) => {
-    try {
-      events?.emit(name, value);
-    } catch {
-      return;
-    }
-  };
+    value: CosmicUiHostQuery | CosmicFooterUpsertEvent | CosmicFooterRemoveEvent,
+  ) => invokeHostCallback(() => events?.emit(name, value), undefined);
+  const active = () => host?.active ?? false;
   return {
     get installed() {
-      return installed;
+      return host !== undefined;
     },
     get active() {
-      return active;
+      return active();
     },
-    isVisible(id) {
-      return (!installed || ready) && !hidden.includes(id);
-    },
+    isVisible: (id) => (host?.ready ?? true) && !(host?.hidden.includes(id) ?? false),
     query() {
-      installed = false;
-      active = false;
-      hidden = [];
+      host = undefined;
       emit(COSMIC_UI_HOST_QUERY, {
         version: COSMIC_UI_PROTOCOL_VERSION,
         respond: (state) => {
-          const parsed = normalizeCosmicUiHostStateEvent({
-            version: COSMIC_UI_PROTOCOL_VERSION,
-            ...state,
-          });
-          if (!parsed) return;
-          installed = true;
-          active = parsed.active;
-          ready = parsed.ready;
-          hidden = parsed.hidden;
+          host =
+            normalizeCosmicUiHostStateEvent({ version: COSMIC_UI_PROTOCOL_VERSION, ...state }) ??
+            host;
         },
       });
-      return active;
+      return active();
     },
-    onHostStateChange(listener) {
-      try {
-        return (
+    onHostStateChange: (listener) =>
+      invokeHostCallback(
+        () =>
           events?.on(COSMIC_UI_HOST_STATE, (data) => {
             const event = normalizeCosmicUiHostStateEvent(data);
             if (!event) return;
-            installed = true;
-            active = event.active;
-            hidden = event.hidden;
-            ready = event.ready;
+            host = event;
+            const { active, ready, hidden } = event;
             invokeHostCallback(() => listener(Object.freeze({ active, ready, hidden })), undefined);
-          }) ?? (() => undefined)
-        );
-      } catch {
-        return () => undefined;
-      }
-    },
+          }) ?? noop,
+        noop,
+      ),
     upsert(contribution) {
-      if (installed)
+      if (host)
         emit(COSMIC_UI_FOOTER_UPSERT, { version: COSMIC_UI_PROTOCOL_VERSION, owner, contribution });
     },
     remove(id) {
-      if (!installed) return;
-      const event: CosmicFooterRemoveEvent = { version: COSMIC_UI_PROTOCOL_VERSION, owner };
-      emit(COSMIC_UI_FOOTER_REMOVE, id === undefined ? event : { ...event, id });
-    },
-    invalidate(id) {
-      if (!installed) return;
-      const event: CosmicFooterInvalidateEvent = { version: COSMIC_UI_PROTOCOL_VERSION, owner };
-      emit(COSMIC_UI_FOOTER_INVALIDATE, id === undefined ? event : { ...event, id });
+      if (host) emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner, id });
     },
     shutdown() {
-      const removeOwner = installed;
-      installed = false;
-      active = false;
-      hidden = [];
+      const removeOwner = host !== undefined;
+      host = undefined;
       if (removeOwner)
         emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner });
     },
   };
 }
 
-export interface HostStateWatch {
+interface HostStateWatch {
   readonly start: () => void;
   readonly stop: () => void;
 }

@@ -1,7 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import { writeResultDetail } from "./builtin-result-detail";
-import { codePreviewSettings } from "../config/state";
-import { codePreviewPerformanceConfig } from "../config/state";
+import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";
 import { getObjectValue } from "../shared/helpers";
 import { getCodePreviewBeforeWrite, isKnownNewWrite } from "../write/preview-execution";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
@@ -32,18 +31,16 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   let beforeWrite: BuiltinBeforeWrite = { kind: "unknown" };
   if (tool === "write" && phase === "settled" && result && !context.isError) {
     const before = getCodePreviewBeforeWrite(context.toolCallId, result.details);
-    beforeWrite = isKnownNewWrite(before, result.details)
-      ? { kind: "new" }
-      : before === undefined
-        ? { kind: "unknown" }
-        : { kind: "snapshot", value: before };
-  }
-  const content = getObjectValue(args, "content");
-  if (beforeWrite.kind === "snapshot" && Predicate.isString(content)) {
-    beforeWrite = {
-      ...beforeWrite,
-      counts: { detail: writeResultDetail(beforeWrite.value, content) },
-    };
+    const content = getObjectValue(args, "content");
+    if (isKnownNewWrite(before, result.details)) beforeWrite = { kind: "new" };
+    else if (before !== undefined)
+      beforeWrite = {
+        kind: "snapshot",
+        value: before,
+        ...(Predicate.isString(content) && {
+          counts: { detail: writeResultDetail(before, content) },
+        }),
+      };
   }
   const projected = projectBuiltinCompactSummary(tool, {
     ...captureBuiltinCompactPolicy(),

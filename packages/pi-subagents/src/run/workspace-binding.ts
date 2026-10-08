@@ -7,7 +7,6 @@ import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { isActiveRunState, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
 
 /**
  * One worktree launch's hold on a direct-child slot, from its capacity check until admission
@@ -20,7 +19,7 @@ export interface LaunchSlot {
 }
 
 /** A revision holding its binding from its reservation until its successor's launch settles. */
-export interface WorkspaceRevision {
+export interface RevisionHold {
   /** What the successor launches with; the binding's request once the successor is admitted. */
   readonly successor: StartSubagentRequest;
   /** The successor's launch took over this hold. Until then the revise call releases it. */
@@ -37,8 +36,8 @@ export interface WorkspaceBinding {
   request: StartSubagentRequest;
   record?: RunRecord;
   preparing: boolean;
-  /** The operation holding this binding outside the run lock: a resume, or a root operation. */
-  busy?: number | undefined;
+  /** The root operation holding this binding outside the run lock. */
+  busy?: symbol | undefined;
   /**
    * A later assignment, a resume or a revision successor, invalidated the reviewed revision and
    * preparation that the engine record still holds. The next review reopens the record before
@@ -57,11 +56,10 @@ export interface WorkspaceBinding {
   /** The slot of the worktree launch now admitting a writer into this workspace. */
   slot?: LaunchSlot | undefined;
   /** The revision holding this binding, with `preparing`, while its successor launches. */
-  revision?: WorkspaceRevision | undefined;
+  revision?: RevisionHold | undefined;
 }
 
-export type WorkspaceControlDependencies = Omit<RunContext, "writerPools"> & {
-  readonly writerPools: ReadonlyMap<string, WriterPoolEntry>;
+export type WorkspaceControlDependencies = RunContext & {
   readonly engine: WorkspaceServiceContract | undefined;
   readonly initialMode: WriterWorkspaceMode;
   readonly ownerId: string;
@@ -70,7 +68,7 @@ export type WorkspaceControlDependencies = Omit<RunContext, "writerPools"> & {
 };
 
 /** Coordinator state shared by launch, review and integration; mutated under the run lock. */
-export interface WorkspaceControlState {
+interface WorkspaceControlState {
   mode: WriterWorkspaceMode;
   /** Writer launches between mode selection and admission. */
   reservations: number;
@@ -97,8 +95,6 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
    * outside the run lock, so the next root operation waits here rather than being refused.
    */
   readonly operations: Semaphore.Semaphore;
-  /** A fresh token for `WorkspaceBinding.busy`. */
-  readonly nextOperation: () => number;
 }
 
 export const mapWorkspaceError = (error: { readonly message: string }) =>
@@ -148,17 +144,6 @@ export const workspaceBusyError = () =>
  */
 export type WorkspaceBindingStatus = "pending" | "integrated" | "closed" | "unbound";
 
-/** Under the run lock: the status of `workspaceId` as this coordinator's binding records it. */
-export const workspaceBindingStatusLocked = (
-  state: WorkspaceControlState,
-  workspaceId: string,
-): WorkspaceBindingStatus => {
-  const binding = state.bindings.get(workspaceId);
-  if (!binding) return "unbound";
-  if (!binding.finished) return "pending";
-  return binding.integrated ? "integrated" : "closed";
-};
-
 export function makeWorkspaceControlContext(
   dependencies: WorkspaceControlDependencies,
 ): WorkspaceControlContext {
@@ -203,7 +188,6 @@ export function makeWorkspaceControlContext(
         );
       return binding;
     });
-  let operationTokens = 0;
   return {
     ...dependencies,
     state,
@@ -211,6 +195,5 @@ export function makeWorkspaceControlContext(
     requireEngine,
     requireBinding,
     operations: Semaphore.makeUnsafe(1),
-    nextOperation: () => ++operationTokens,
   };
 }

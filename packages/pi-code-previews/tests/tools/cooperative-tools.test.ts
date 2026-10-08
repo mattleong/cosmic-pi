@@ -11,29 +11,30 @@ import {
   type Component,
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
-import {
-  applyPresentationSettings,
-  createToolPresentationHarness,
-  renderContextFixture,
-} from "../../testing";
+import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { beforeEach, test } from "vitest";
 import { createCodePreviewToolShell } from "../../src/preview/tool-shell";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { plainTheme as theme, renderComponent, textResult } from "../support/render";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 
 const compactProvider = () => ({ subject: "compact-subject", outcome: "success" as const });
+const previewShellOptions = { name: "read", compactSummary: () => undefined };
 
 type ReadDefinition = ReturnType<typeof createReadToolDefinition>;
 type ReadRenderCall = NonNullable<ReadDefinition["renderCall"]>;
 type ReadRenderResult = NonNullable<ReadDefinition["renderResult"]>;
 type ReadResult = Parameters<ReadRenderResult>[0];
 
-beforeEach(() => applyPresentationSettings({}));
+/** Defaults without timing plus each test's overrides, so no test inherits another's settings. */
+const settings = (overrides: Partial<CodePreviewSettings> = {}) =>
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false, ...overrides });
+
+beforeEach(() => settings());
 
 test("cooperative adapter forwards renderer values and preserves tool identity fields", () => {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false });
   const args: ReadToolInput = { path: "src/example.ts" };
   const state = {};
   const callLast = new Text("old call", 0, 0);
@@ -42,9 +43,9 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   const resultOptions: ToolRenderResultOptions = { expanded: true, isPartial: false };
   const execute = () => Promise.resolve(resultValue);
   const parameters = createReadToolDefinition("/project").parameters;
+  const prepareArguments: NonNullable<ReadDefinition["prepareArguments"]> = () => args;
   const promptGuidelines = ["Keep this metadata reference."];
   const constrainedSampling = { type: "json_schema", strict: "prefer" } as const;
-  const prepareArguments: NonNullable<ReadDefinition["prepareArguments"]> = () => args;
   let observedCall: readonly unknown[] | undefined;
   let observedResult: readonly unknown[] | undefined;
   const callComponent = new Text("call", 0, 0);
@@ -76,9 +77,9 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
     name: "characterized",
     description: "characterized description",
     parameters,
+    prepareArguments,
     promptGuidelines,
     constrainedSampling,
-    prepareArguments,
     execute,
     renderCall,
     renderResult,
@@ -103,10 +104,10 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   assert.equal(renderedResult, resultComponent);
   assert.equal(wrapped.execute, execute);
   assert.equal(wrapped.parameters, parameters);
+  assert.equal(wrapped.prepareArguments, prepareArguments);
+  // Model-facing prompt metadata is optional on the definition, so TypeScript cannot prove it kept.
   assert.equal(wrapped.promptGuidelines, promptGuidelines);
   assert.equal(wrapped.constrainedSampling, constrainedSampling);
-  assert.equal(wrapped.prepareArguments, prepareArguments);
-  assert.equal(wrapped.prepareArguments({ legacyPath: "src/example.ts" }), args);
   assert.equal(wrapped.description, tool.description);
 });
 
@@ -124,24 +125,24 @@ test("cooperative wrapper keeps self shells by identity unless override is reque
 });
 
 test("cooperative wrapper captures mode and shell modes match on, off, and border", () => {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallBackground: "off" });
+  settings({ toolCallBackground: "off" });
   const captured = withCodePreviewShell(createReadToolDefinition("/project"));
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallBackground: "on" });
+  settings({ toolCallBackground: "on" });
   assert.equal(captured.renderShell, "self");
 
   for (const [mode, expectedShell] of [
     ["on", "default"],
     ["off", "self"],
     ["border", "self"],
-  ] as const) {
-    const shell = createCodePreviewToolShell(mode);
-    assert.equal(shell.renderShell, expectedShell);
-  }
+  ] as const)
+    assert.equal(
+      createCodePreviewToolShell(mode, previewShellOptions, false, "preview").renderShell,
+      expectedShell,
+    );
 });
 
 test("border shell keeps independent last components for call and result slots", () => {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false });
-  const shell = createCodePreviewToolShell("border");
+  const shell = createCodePreviewToolShell("border", previewShellOptions, false, "preview");
   const args: ReadToolInput = { path: "README.md" };
   const state = {};
   const unrelated = new Text("unrelated", 0, 0);
@@ -155,25 +156,34 @@ test("border shell keeps independent last components for call and result slots",
     callLast.push(context.lastComponent);
     return firstCallSlot;
   });
-  shell.renderResult(slotContext(false), theme, (context) => {
-    resultLast.push(context.lastComponent);
-    return firstResultSlot;
-  });
+  shell.renderResult(
+    slotContext(false),
+    theme,
+    (context) => {
+      resultLast.push(context.lastComponent);
+      return firstResultSlot;
+    },
+    textResult(""),
+  );
   shell.renderCall(slotContext(true), theme, (context) => {
     callLast.push(context.lastComponent);
     return new Text("second call", 0, 0);
   });
-  shell.renderResult(slotContext(false), theme, (context) => {
-    resultLast.push(context.lastComponent);
-    return new Text("second result", 0, 0);
-  });
+  shell.renderResult(
+    slotContext(false),
+    theme,
+    (context) => {
+      resultLast.push(context.lastComponent);
+      return new Text("second result", 0, 0);
+    },
+    textResult(""),
+  );
 
   assert.deepEqual(callLast, [undefined, firstCallSlot]);
   assert.deepEqual(resultLast, [undefined, firstResultSlot]);
 });
 
 test("fallback result rendering sanitizes terminal controls", () => {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false });
   const base = createReadToolDefinition("/project");
   const { renderCall: _renderCall, renderResult: _renderResult, ...withoutRenderers } = base;
   // SAFETY: The omitted optional renderers leave a valid Pi read definition for fallback testing.
@@ -194,7 +204,7 @@ test("fallback result rendering sanitizes terminal controls", () => {
 });
 
 test("preview shell does not hide semantic updates during timing invalidation", () => {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: true });
+  settings({ toolCallTiming: true });
   const args: ReadToolInput = { path: "README.md" };
   for (const mode of ["off", "border"] as const) {
     const state = {};
@@ -239,11 +249,7 @@ test("preview shell does not hide semantic updates during timing invalidation", 
 });
 
 test("tools without providers stay compact and retain domain failure output on expansion", () => {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: "compact",
-    toolCallTiming: false,
-  });
+  settings({ toolCallCollapsedStyle: "compact" });
   const tool = {
     ...createReadToolDefinition("/project"),
     renderResult: ((_value, _options, _theme, _context) =>
@@ -273,17 +279,8 @@ test("tools without providers stay compact and retain domain failure output on e
 
 test("compact style is captured and wraps self shells without changing execution", () => {
   const base = createReadToolDefinition("/project");
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: "preview",
-    toolCallTiming: false,
-  });
   const preview = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: "compact",
-    toolCallTiming: false,
-  });
+  settings({ toolCallCollapsedStyle: "compact" });
   const compact = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
   const self = { ...base, renderShell: "self" as const };
   const wrappedSelf = withCodePreviewShell(self, { compactSummary: compactProvider });
@@ -293,11 +290,7 @@ test("compact style is captured and wraps self shells without changing execution
   assert.equal(compact.renderShell, "self");
   assert.equal(compact.execute, base.execute);
   assert.equal(compact.parameters, base.parameters);
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: "preview",
-    toolCallTiming: false,
-  });
+  settings({ toolCallCollapsedStyle: "preview" });
   const context = renderContextFixture({ args: { path: "file" } });
   const component = compact.renderCall?.(context.args, theme, context);
   assert.ok(component);
@@ -343,7 +336,7 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
     const args = { path: "file" };
     const value = textResult("output");
     for (const timing of [true, false, true]) {
-      setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: timing });
+      settings({ toolCallTiming: timing });
       const call = h.call(args, { isPartial: false });
       const output = h.result(value);
       assert.ok(call && output);
@@ -382,11 +375,7 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
 });
 
 test("a display name heads compact rows without changing the registered tool name", () => {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: "compact",
-    toolCallTiming: false,
-  });
+  settings({ toolCallCollapsedStyle: "compact" });
   const base = { ...createReadToolDefinition("/project"), name: "registered_model_name" };
   const tool = withCodePreviewShell(base, {
     mode: "off",
@@ -407,11 +396,7 @@ test("fallback rendering preserves attachment evidence without taking native ima
   const caps = getCapabilities();
   try {
     for (const style of ["preview", "compact"] as const) {
-      setCodePreviewSettings({
-        ...defaultCodePreviewSettings,
-        toolCallCollapsedStyle: style,
-        toolCallTiming: false,
-      });
+      settings({ toolCallCollapsedStyle: style });
       const {
         renderCall: _call,
         renderResult: _result,

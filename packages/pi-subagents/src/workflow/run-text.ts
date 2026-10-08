@@ -31,16 +31,16 @@ import { WORKFLOW_BUDGET_ERROR } from "./prelude.ts";
 // status text and the Activity detail. Each view orders and bounds them itself.
 
 /** Marks a warning among a run's log lines, in every view. */
-export const WORKFLOW_WARNING_MARKER = "warning: ";
+const WORKFLOW_WARNING_MARKER = "warning: ";
 
 /** Worktree proposals the notification and status list by id; the rest are counted. */
 export const WORKFLOW_WORKSPACE_LINES = 40;
 /** Each log line the notification and status repeat is shortened to this. */
 export const WORKFLOW_LOG_LINE_MAX_CHARS = 400;
 /** A failed script's error message, as the notification and status show it. */
-export const WORKFLOW_FAILURE_MESSAGE_MAX_CHARS = 4 * 1024;
+const WORKFLOW_FAILURE_MESSAGE_MAX_CHARS = 4 * 1024;
 /** A failed script's stack, as the notification and status show it. */
-export const WORKFLOW_STACK_MAX_CHARS = 8 * 1024;
+const WORKFLOW_STACK_MAX_CHARS = 8 * 1024;
 
 /** Heads a finished run's worktree proposals in its completion notification. */
 export const WORKFLOW_WORKSPACES_TITLE =
@@ -264,10 +264,8 @@ export const workflowWarningsSection = (
   limit: number,
   line: (entry: WorkflowLogEntry) => string,
 ): string | undefined => {
-  const warnings = (run.warnings ?? run.logs.filter((entry) => entry.level === "warning")).slice(
-    -limit,
-  );
-  const hidden = (run.warningCount ?? warnings.length) - warnings.length;
+  const warnings = (run.warnings ?? []).slice(-limit);
+  const hidden = (run.warningCount ?? 0) - warnings.length;
   if (warnings.length === 0) return undefined;
   return [
     "Warnings:",
@@ -289,17 +287,12 @@ export const workflowWorkspaceLines = <Workspace>(
   ];
 };
 
-/** How a view names a worktree writer's state: the run's own words by default. */
-type WorkspaceStateText = (state: WorkflowWorkspace["state"]) => string;
-
 /** How many worktree writers left no changes, whose worktrees were discarded; undefined for none. */
 const unchangedWorkspacesLine = (run: WorkflowRunView): string | undefined => {
   const count = workflowUnchangedWorkspaces(run);
   if (count === 0) return undefined;
-  const writers = countLabel(count, "worktree writer");
-  return count === 1
-    ? `${writers} made no changes, so its worktree was discarded.`
-    : `${writers} made no changes, so their worktrees were discarded.`;
+  const discarded = count === 1 ? "its worktree was" : "their worktrees were";
+  return `${countLabel(count, "worktree writer")} made no changes, so ${discarded} discarded.`;
 };
 
 /**
@@ -311,7 +304,7 @@ export const workflowWorkspacesSection = (
   run: WorkflowRunView,
   title: string,
   limit?: number,
-  stateText: WorkspaceStateText = String,
+  stateText: (state: WorkflowWorkspace["state"]) => string = String,
 ): string | undefined => {
   const workspaces = workflowWorkspaces(run);
   const unchanged = unchangedWorkspacesLine(run);
@@ -328,21 +321,16 @@ export const workflowWorkspacesSection = (
 export const workflowJournalLine = (path: string): string =>
   `Results journal: ${path} has one JSON line per finished agent() call (label, phase, state, reason, usage, result); Read it to check what each agent actually returned.`;
 
-/** The file a fix edits and the start argument that runs it again. */
-export interface WorkflowRestart {
-  readonly file: string;
-  readonly argument: string;
-}
-
 /**
- * Where a run's script is fixed and started again: a saved workflow's or script file's own path,
- * so the fix outlives the run, and only an inline script's private copy. Undefined for an inline
- * script whose copy couldn't be saved.
+ * Where a run's script is fixed and started again, as the file a fix edits and the start argument
+ * that runs it: a saved workflow's or script file's own path, so the fix outlives the run, and
+ * only an inline script's private copy. Undefined for an inline script whose copy couldn't be
+ * saved.
  */
 export const workflowRestart = (
   source: WorkflowSource,
   scriptPath: string | undefined,
-): WorkflowRestart | undefined => {
+): { readonly file: string; readonly argument: string } | undefined => {
   switch (source.kind) {
     case "saved":
       return { file: source.path, argument: `name: ${JSON.stringify(source.name)}` };
@@ -392,7 +380,7 @@ export const isWorkflowBudgetFailure = (failure: WorkflowFailure | undefined): b
  * When an uncaught budget error failed the run, it says first that a resumed run gets a new
  * budget, since the limit the user set is already spent.
  */
-export const workflowRetryLine = (run: WorkflowRunView): string => {
+const workflowRetryLine = (run: WorkflowRunView): string => {
   const restart = workflowRestart(run.source, run.scriptPath);
   const resume = `resumeFromRunId: "${run.id}" to reuse the results of agents that already finished`;
   const target = restart === undefined ? "" : `${restart.argument} and `;

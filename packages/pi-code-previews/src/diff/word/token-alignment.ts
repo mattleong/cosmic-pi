@@ -1,10 +1,10 @@
 import { requiredAt, type WordChangeConfidence } from "./types";
 import { tokenAt, wordEmphasisTokenWeight, type WordEmphasisToken } from "./tokens";
 import { suffixAlignedPairs } from "./alignment";
-import type { TokenGroup } from "./ranges";
 
 const WORD_EMPHASIS_EXACT_LCS_MAX_CELLS = 262_144;
 
+export type TokenGroup = { start: number; end: number };
 export type ChangedTokenGap = { removed: TokenGroup; added: TokenGroup };
 
 export function changedTokenGaps(before: WordEmphasisToken[], after: WordEmphasisToken[]) {
@@ -130,9 +130,8 @@ export function changedTokenGaps(before: WordEmphasisToken[], after: WordEmphasi
     }
     const candidates: Array<{ beforeIndex: number; afterIndex: number }> = [];
     for (let index = beforeStart; index < beforeEnd; index++) {
-      const value = tokenAt(before, index).value;
-      if (beforeCounts.get(value) !== 1 || afterCounts.get(value) !== 1) continue;
-      const afterIndex = afterUniqueIndexes.get(value);
+      // Only values unique on both sides were indexed.
+      const afterIndex = afterUniqueIndexes.get(tokenAt(before, index).value);
       if (afterIndex !== undefined) candidates.push({ beforeIndex: index, afterIndex });
     }
     return longestIncreasingAfterIndexes(candidates);

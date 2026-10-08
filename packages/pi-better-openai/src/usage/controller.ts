@@ -6,6 +6,7 @@ import * as MutableRef from "effect/MutableRef";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
+  commitPreferredScope,
   type JsonObject,
   InvalidSettingError,
   makeUsageRefreshController,
@@ -41,6 +42,8 @@ export class OpenAIBoundaryError extends Schema.TaggedError<OpenAIBoundaryError>
   "OpenAIBoundaryError",
   { operation: Schema.String, message: Schema.String },
 ) {}
+export const sessionNotStarted = (operation = "runtime") =>
+  new OpenAIBoundaryError({ operation, message: "Better OpenAI session has not started." });
 interface OpenAIUsageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;
@@ -77,7 +80,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         projectTrusted: options.projectTrusted,
         initialProjection,
         hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
-        missingCredentialsMessage: () => "Sign in with /login openai-codex",
+        missingCredentialsMessage: "Sign in with /login openai-codex",
         clearAuthPatch: { authFound: false, accountId: undefined },
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate: prepareSettingUpdate,
@@ -117,52 +120,46 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         formatStatusText: formatUsageDetails,
         dependencies: Context.empty(),
       });
-      const persistFastWithRequirements = Effect.fn("OpenAIUsage.persistFast")(function* (
-        active: boolean,
-        desiredActive: boolean,
-        afterCommit: Effect.Effect<void>,
-      ) {
-        yield* controller.withSettingsPermit(
-          Effect.gen(function* () {
-            const freshConfig = yield* resolveConfig(cwd, controller.agentDir, projectTrusted);
-            if (!freshConfig.persistState) {
-              yield* Effect.uninterruptible(afterCommit);
-              return;
-            }
-            const globalFallback = yield* controller.readGlobalFallback(freshConfig);
-            yield* modifyConfig(freshConfig.configPath, (raw) => {
-              const committed = { ...raw, active, desiredActive };
-              const nextConfig = resolveCommittedConfig(freshConfig, committed, globalFallback);
-              const clearUsage = usageConfigChanged(freshConfig, nextConfig);
-              return {
-                value: nextConfig,
-                document: committed,
-                // Fast-only writes do not pulse usage polling; changed usage settings do.
-                afterCommit: controller
-                  .installConfig(nextConfig, clearUsage, clearUsage)
-                  .pipe(Effect.andThen(afterCommit)),
-              };
-            });
-          }),
-        );
-      });
-      const persistFast = (
-        active: boolean,
-        desiredActive: boolean,
-        afterCommit?: Effect.Effect<void>,
-      ) =>
-        controller.provideDependencies(
-          persistFastWithRequirements(active, desiredActive, afterCommit ?? Effect.void),
-        );
-      // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-      const readConfigDocument = () =>
-        controller.getState.pipe(
-          Effect.flatMap((current) =>
-            current.config
-              ? controller.provideDependencies(readRawConfig(current.config.configPath))
-              : Effect.succeed({} as JsonObject),
-          ),
-        );
+      const persistFast = Effect.fn("OpenAIUsage.persistFast")(
+        function* (active: boolean, desiredActive: boolean, afterCommit: Effect.Effect<void>) {
+          yield* controller.withSettingsPermit(
+            Effect.gen(function* () {
+              const freshConfig = yield* resolveConfig(cwd, controller.agentDir, projectTrusted);
+              if (!freshConfig.persistState) {
+                yield* Effect.uninterruptible(afterCommit);
+                return;
+              }
+              yield* commitPreferredScope(
+                { readRawConfig, modifyConfig, resolveCommittedConfig },
+                freshConfig,
+                (raw) => ({ ...raw, active, desiredActive }),
+                (nextConfig) =>
+                  // Changed usage settings invalidate pending results and wake polling. A
+                  // fast-only write leaves both alone: an in-flight usage result is still current,
+                  // though eligibility follows any usage settings changed outside this session.
+                  (usageConfigChanged(freshConfig, nextConfig)
+                    ? controller.installConfig(nextConfig)
+                    : controller.updateState((current) =>
+                        synchronizedProjection(
+                          { ...current, config: nextConfig },
+                          MutableRef.get(options.context),
+                          false,
+                        ),
+                      )
+                  ).pipe(Effect.andThen(afterCommit)),
+              );
+            }),
+          );
+        },
+        (effect) => controller.provideDependencies(effect),
+      );
+      const readConfigDocument = controller.getState.pipe(
+        Effect.flatMap((current) =>
+          current.config
+            ? controller.provideDependencies(readRawConfig(current.config.configPath))
+            : Effect.succeed<JsonObject>({}),
+        ),
+      );
       return {
         refresh: controller.refresh,
         contextChanged: controller.contextChanged,

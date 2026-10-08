@@ -1,14 +1,15 @@
-// Actual Pi agent loop and native QuickJS, with owned service/classifier boundaries only.
+// Actual Pi agent loop and native QuickJS, with owned service boundaries only.
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import type * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { SubagentNotFoundError } from "../../src/run/errors.ts";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   acknowledgeCompletions,
   localServiceFixture,
@@ -18,8 +19,8 @@ import {
   withService,
 } from "../run/fixtures/service-harness.ts";
 import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
-import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { view } from "./fixtures/tool-harness.ts";
+import { signalAwaitEntry, subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
+import { startCapturingService, view } from "./fixtures/tool-harness.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const output = (text: string) => {
@@ -29,30 +30,20 @@ const output = (text: string) => {
 };
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 
-const capturingService = (requests: StartSubagentRequest[]) =>
-  subagentServiceDouble({
-    start: (input) =>
-      Effect.sync(() => {
-        requests.push(input);
-        return view({
-          id: `workflow-${requests.length}`,
-          name: input.name ?? "workflow",
-          profile: input.profile,
-          state: "running",
-          writeIntent: input.writeIntent,
-        });
-      }),
-  });
+/** Live time is intentional: each test drives the actual native QuickJS worker, not an LLM. */
+const nativeTest = <A, E>(
+  name: string,
+  body: () => Effect.Effect<A, E, Scope.Scope | Layer.Success<typeof nodeFilePlatformLayer>>,
+) => it.live(name, () => body().pipe(Effect.provide(nodeFilePlatformLayer)), 15_000);
 
-// Live time is intentional: the test drives the actual native QuickJS worker, not an LLM.
 describe("native scripted subagent workflows", () => {
   for (const callId of [undefined, ""]) {
-    it.live(
+    nativeTest(
       `retains successful launch IDs and refuses scripted writers with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
           const requests: StartSubagentRequest[] = [];
-          const service = capturingService(requests);
+          const service = startCapturingService(requests);
           const h = yield* nativeCodemodeSession(service);
           const result = yield* h.run(
             `
@@ -71,7 +62,7 @@ describe("native scripted subagent workflows", () => {
             outcome: "partial",
             launches: [
               { index: 0, status: "failed", failure: { code: "scripted_writer_not_supported" } },
-              { index: 1, status: "started", runId: "workflow-1", name: "entry-scout" },
+              { index: 1, status: "started", runId: "agent-1", name: "entry-scout" },
             ],
           });
           expect(requests.map((request) => request.writeIntent)).toEqual(["read-only"]);
@@ -83,11 +74,10 @@ describe("native scripted subagent workflows", () => {
             callId,
           );
           expect(requests.at(-1)?.writeIntent).toBe("writer");
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
+        }),
     );
 
-    it.live(
+    nativeTest(
       `lists runs as text without consuming reports with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -108,11 +98,10 @@ describe("native scripted subagent workflows", () => {
           expect(listed).toBe(direct.text);
           expect(listed).toContain(run.id);
           expect(listed).not.toContain(run.finalText);
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
+        }),
     );
 
-    it.live(
+    nativeTest(
       `inspects profile routes as text without launching runs with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -126,11 +115,10 @@ describe("native scripted subagent workflows", () => {
           expect(direct.isError).toBe(false);
           expect(output(result.text)).toBe(direct.text);
           expect(output(result.text)).toContain("scout");
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
+        }),
     );
 
-    it.live(
+    nativeTest(
       `renames runs and surfaces failed renames with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -159,11 +147,10 @@ describe("native scripted subagent workflows", () => {
           );
           expect(failed.isError).toBe(true);
           expect(run.name).toBe("entry-map");
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
+        }),
     );
 
-    it.live(
+    nativeTest(
       `keeps judgment tools model-only and limits scripted lifecycle to stop with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -216,13 +203,12 @@ describe("native scripted subagent workflows", () => {
             callId,
           );
           expect(direct.isError).toBe(false);
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
+        }),
     );
   }
 
   for (const callId of [undefined, ""])
-    it.live(
+    nativeTest(
       `carries native ${callId === undefined ? "generated" : "empty"} caller script provenance into authenticated delegation`,
       () => {
         const fixture = nativeReportServiceFixture();
@@ -254,47 +240,29 @@ describe("native scripted subagent workflows", () => {
           expect((yield* service.list).filter((run) => run.writeIntent === "writer")).toHaveLength(
             1,
           );
-        }).pipe(Effect.provide(nodeFilePlatformLayer));
+        });
       },
-      15_000,
     );
 
-  it.live(
-    "does not expose nested-Pi coordinator definitions to scripts",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* nativeCodemodeSession(subagentServiceDouble({}), { proxy: true });
-        expect(
-          h.session.getCallableToolNames().filter((name) => name.startsWith("subagent_")),
-        ).toEqual([]);
-        expect(h.session.getActiveToolNames()).toContain("subagent_start");
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
+  nativeTest("does not expose nested-Pi coordinator definitions to scripts", () =>
+    Effect.gen(function* () {
+      const h = yield* nativeCodemodeSession(subagentServiceDouble({}), { proxy: true });
+      expect(
+        h.session.getCallableToolNames().filter((name) => name.startsWith("subagent_")),
+      ).toEqual([]);
+      expect(h.session.getActiveToolNames()).toContain("subagent_start");
+    }),
   );
 
   for (const callId of [undefined, ""]) {
-    it.live(
+    nativeTest(
       `hands parent attention back without consumption with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () => {
         const fixture = localServiceFixture({ notify: acknowledgeCompletions });
         return withService(fixture.layer, function* (service) {
           const run = yield* service.start(request());
           const entered = yield* Deferred.make<void>();
-          const observed: SubagentServiceContract = {
-            ...service,
-            withAwaitTerminalObservations: (ids, until, update, use, coverage) =>
-              service.withAwaitTerminalObservations(
-                ids,
-                until,
-                (runs, projection) => {
-                  Deferred.doneUnsafe(entered, Effect.void);
-                  update?.(runs, projection);
-                },
-                use,
-                coverage,
-              ),
-          };
-          const h = yield* nativeCodemodeSession(observed);
+          const h = yield* nativeCodemodeSession(signalAwaitEntry(service, entered));
           const script = yield* h
             .run(
               `await tools.subagent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});`,
@@ -317,12 +285,11 @@ describe("native scripted subagent workflows", () => {
           );
           expect(direct.isError).toBe(false);
           expect(direct.text).toContain("Choose the next scope");
-        }).pipe(Effect.provide(nodeFilePlatformLayer));
+        });
       },
-      15_000,
     );
 
-    it.live(
+    nativeTest(
       `scripted status hands back attention without consumption with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
@@ -332,7 +299,7 @@ describe("native scripted subagent workflows", () => {
               run: view({
                 id: "question",
                 state: "waiting_for_parent",
-                question: { requestId: "q", message: "Choose scope", createdAt: 1 },
+                question: { requestId: "q", message: "Choose scope" },
               }),
             },
             {
@@ -363,33 +330,18 @@ describe("native scripted subagent workflows", () => {
           expect(direct.isError).toBe(false);
           expect(direct.text).toContain("Status report");
           expect(consumed).toBe(true);
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
+        }),
     );
   }
 
-  it.live(
+  nativeTest(
     "recovers a report discarded by a successful script without another notification",
     () => {
       const fixture = localServiceFixture({ notify: acknowledgeCompletions });
       return withService(fixture.layer, function* (service) {
         const run = yield* service.start(request());
         const entered = yield* Deferred.make<void>();
-        const observed: SubagentServiceContract = {
-          ...service,
-          withAwaitTerminalObservations: (ids, until, update, use, coverage) =>
-            service.withAwaitTerminalObservations(
-              ids,
-              until,
-              (runs, projection) => {
-                Deferred.doneUnsafe(entered, Effect.void);
-                update?.(runs, projection);
-              },
-              use,
-              coverage,
-            ),
-        };
-        const h = yield* nativeCodemodeSession(observed);
+        const h = yield* nativeCodemodeSession(signalAwaitEntry(service, entered));
         const script = yield* h
           .run(`
         await tools.subagent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});
@@ -412,91 +364,77 @@ describe("native scripted subagent workflows", () => {
         expect(
           fixture.notifications.filter((notification) => notification.type === "completed"),
         ).toEqual([]);
-      }).pipe(Effect.provide(nodeFilePlatformLayer));
+      });
     },
-    15_000,
   );
 
-  it.live(
-    "cancels only the scripted wait and allows a later wait",
-    () =>
-      Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        let interrupted = false;
-        let wait = true;
-        const service = subagentServiceDouble({
-          withAwaitTerminalObservations: (_ids, _until, _update, use) =>
-            wait
-              ? Deferred.succeed(entered, undefined).pipe(
-                  Effect.andThen(Effect.never),
-                  Effect.onInterrupt(() =>
-                    Effect.sync(() => {
-                      interrupted = true;
-                    }),
-                  ),
-                )
-              : use([
-                  { run: view({ id: "run-1", state: "completed", reportStatus: "delivered" }) },
-                ]),
-        });
-        const h = yield* nativeCodemodeSession(service);
-        const script = yield* h
-          .run("await tools.subagent_await({runIds:['run-1'],until:'all_finished'});")
-          .pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
-        yield* Effect.promise(() => h.session.abort());
-        yield* Fiber.join(script);
-        expect(interrupted).toBe(true);
-        wait = false;
-        const result = yield* h.run(
-          `const r=await tools.subagent_await({runIds:['run-1'],until:'all_finished'});${print("r.outcome")}`,
-        );
-        expect(output(result.text)).toBe("finished");
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
+  nativeTest("cancels only the scripted wait and allows a later wait", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      let interrupted = false;
+      let wait = true;
+      const service = subagentServiceDouble({
+        withAwaitTerminalObservations: (_ids, _until, _update, use) =>
+          wait
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() =>
+                  Effect.sync(() => {
+                    interrupted = true;
+                  }),
+                ),
+              )
+            : use([{ run: view({ id: "run-1", state: "completed", reportStatus: "delivered" }) }]),
+      });
+      const h = yield* nativeCodemodeSession(service);
+      const script = yield* h
+        .run("await tools.subagent_await({runIds:['run-1'],until:'all_finished'});")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() => h.session.abort());
+      yield* Fiber.join(script);
+      expect(interrupted).toBe(true);
+      wait = false;
+      const result = yield* h.run(
+        `const r=await tools.subagent_await({runIds:['run-1'],until:'all_finished'});${print("r.outcome")}`,
+      );
+      expect(output(result.text)).toBe("finished");
+    }),
   );
 });
 
 describe("profile selection in native sessions", () => {
-  for (const classifier of ["reviewer", "throws"] as const)
-    it.live(
-      `honors supplied profiles and otherwise uses generalist without consulting a classifier that ${classifier === "throws" ? "throws" : "would choose reviewer"}`,
-      () =>
-        Effect.gen(function* () {
-          const requests: StartSubagentRequest[] = [];
-          const h = yield* nativeCodemodeSession(capturingService(requests), { classifier });
-          const agents = [
-            { task: "Map the entry points", profile: "scout" },
-            { task: "Assess the finished change for regressions" },
-          ];
-          const agentsJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-            agents,
-          );
-          const scripted = yield* h.run(`
+  nativeTest("honors supplied profiles and otherwise uses generalist", () =>
+    Effect.gen(function* () {
+      const requests: StartSubagentRequest[] = [];
+      const h = yield* nativeCodemodeSession(startCapturingService(requests));
+      const agents = [
+        { task: "Map the entry points", profile: "scout" },
+        { task: "Assess the finished change for regressions" },
+      ];
+      const agentsJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(agents);
+      const scripted = yield* h.run(`
             const r = await tools.subagent_start({agents:${agentsJson}});
             ${print("r")}
           `);
-          expect(scripted.isError).toBe(false);
-          expect(output(scripted.text)).toMatchObject({
-            contract: "pi-subagents/orchestration",
-            version: 1,
-            outcome: "started",
-            launches: [
-              { status: "started", profile: "scout" },
-              { status: "started", profile: "generalist" },
-            ],
-          });
-          const direct = yield* h.call("subagent_start", { agents });
-          expect(direct.isError).toBe(false);
-          expect(requests.map((request) => [request.profile, request.writeIntent])).toEqual([
-            ["scout", "read-only"],
-            ["generalist", "read-only"],
-            ["scout", "read-only"],
-            ["generalist", "read-only"],
-          ]);
-          expect(h.catalogLookups()).toBe(0);
-          expect(h.classifierCalls()).toBe(0);
-        }).pipe(Effect.provide(nodeFilePlatformLayer)),
-      15_000,
-    );
+      expect(scripted.isError).toBe(false);
+      expect(output(scripted.text)).toMatchObject({
+        contract: "pi-subagents/orchestration",
+        version: 1,
+        outcome: "started",
+        launches: [
+          { status: "started", profile: "scout" },
+          { status: "started", profile: "generalist" },
+        ],
+      });
+      const direct = yield* h.call("subagent_start", { agents });
+      expect(direct.isError).toBe(false);
+      expect(requests.map((request) => [request.profile, request.writeIntent])).toEqual([
+        ["scout", "read-only"],
+        ["generalist", "read-only"],
+        ["scout", "read-only"],
+        ["generalist", "read-only"],
+      ]);
+    }),
+  );
 });

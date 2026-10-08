@@ -39,18 +39,38 @@ export const asyncRequest: AskUserAsyncRequest = {
   blockedWork: "Choose",
 };
 
-export const formOwner = {
-  extensionId: "pi-mcp",
-  operationId: "operation",
-  requestId: "request",
-  label: "MCP",
-};
-
-export const emptyForm = { kind: "form", message: "private", fields: [] } as const;
-
 export const submitted = (...answers: AskUserAnswer[]): AskUserOutcome => ({
   outcome: "submitted",
   answers,
 });
 
 export const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
+
+/** Registered tools under presentation tests must never execute. */
+export const noExecution = () => {
+  throw new Error("Rendering must not execute");
+};
+
+/** `target` with `key` behind a throwing getter, as hostile replayed data may arrive. */
+export const hostile = <Target extends object>(target: Target, key: string): Target =>
+  Object.defineProperty(target, key, {
+    get() {
+      throw new Error("hostile");
+    },
+  });
+
+/** Replayed answers whose note is malformed or unreadable; renderers decline both. */
+export const malformedNoteAnswers = () => [
+  { key: "route", kind: "custom", text: "Scenic", note: 123 },
+  hostile({ key: "route", kind: "custom", text: "Scenic" }, "note"),
+];
+
+/** Replayed content around `text`: a control sequence, an image, and malformed or throwing parts. */
+export const hostileContent = (text: string) => [
+  { type: "text", text: `${text}\u001b[31m fallback` },
+  { type: "image", data: "secret" },
+  { type: "text", text: 123 },
+  null,
+  hostile({ type: "text" }, "text"),
+  { type: "text", text: "after" },
+];

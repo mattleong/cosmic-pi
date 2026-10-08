@@ -19,3 +19,8 @@ it("treats dot-prefixed child names as inside the working directory", () => {
     "/tmp/project/../sibling/file.ts",
   );
 });
+
+// Regression: a POSIX file whose name starts with a literal `..\` was shown as an absolute path.
+it.skipIf(process.platform === "win32")("keeps POSIX names that start with ..\\ inside cwd", () => {
+  expect(formatDisplayPath("/tmp/project/..\\notes.md", "/tmp/project", "/h")).toBe("..\\notes.md");
+});

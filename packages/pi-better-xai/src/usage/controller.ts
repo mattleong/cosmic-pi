@@ -5,20 +5,17 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Result from "effect/Result";
 import {
-  InvalidSettingError,
   makeUsageRefreshController,
   timedDiagnosticResult,
   type UsageFetchOutcome,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
 import { decodeSettingUpdate } from "../config/options.ts";
-import type { ResolvedConfig } from "../config/schema.ts";
 import {
   modifyConfig,
   readRawConfig,
   resolveCommittedConfig,
   resolveConfig,
-  type XaiConfigError,
 } from "../config/store.ts";
 import { requestXaiUsage } from "./request.ts";
 import { formatUsageDetails, formatUsageSnapshot, type UsageSnapshot } from "./format.ts";
@@ -37,7 +34,6 @@ export interface XaiUsageServiceOptions {
   readonly canPublish?: () => boolean;
   readonly startPolling?: boolean;
   readonly isUsageVisible?: () => boolean;
-  readonly agentDir?: string;
   readonly projectTrusted?: boolean;
   /** Owned domain seam for deterministic refresh/concurrency tests. */
   readonly requestUsage?: typeof requestXaiUsage;
@@ -46,31 +42,20 @@ export interface XaiUsageServiceOptions {
 export class XaiUsageService extends Context.Service<XaiUsageService>()(
   "pi-better-xai/usage/controller/XaiUsageService",
   {
-    make: Effect.fnUntraced(function* (options: XaiUsageServiceOptions) {
+    make: Effect.fnUntraced(function* ({
+      requestUsage = requestXaiUsage,
+      isUsageVisible,
+      ...shared
+    }: XaiUsageServiceOptions) {
       const registryAuth = yield* ModelRegistryAuth;
-      const requestUsage = options.requestUsage ?? requestXaiUsage;
-      const controller = yield* makeUsageRefreshController<
-        XaiProjection,
-        ResolvedConfig,
-        UsageSnapshot,
-        XaiConfigError,
-        InvalidSettingError,
-        ModelRegistryAuth
-      >({
+      const { refresh, contextChanged, updateSetting } = yield* makeUsageRefreshController({
+        ...shared,
         spanPrefix: "pi-better-xai.usage",
         logLabel: "Better xAI",
-        context: options.context,
-        cwd: options.cwd,
-        projection: options.projection,
-        onChange: options.onChange,
-        canPublish: options.canPublish,
-        startPolling: options.startPolling,
-        backgroundEnabled: options.isUsageVisible,
-        agentDir: options.agentDir,
-        projectTrusted: options.projectTrusted,
+        backgroundEnabled: isUsageVisible,
         initialProjection: initialXaiProjection,
         hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
-        missingCredentialsMessage: () => "Sign in with /login xai",
+        missingCredentialsMessage: "Sign in with /login xai",
         clearAuthPatch: { authFound: false, teamId: undefined },
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate,
@@ -95,11 +80,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
         formatStatusText: formatUsageDetails,
         dependencies: Context.make(ModelRegistryAuth, registryAuth),
       });
-      return {
-        refresh: controller.refresh,
-        contextChanged: controller.contextChanged,
-        updateSetting: controller.updateSetting,
-      };
+      return { refresh, contextChanged, updateSetting };
     }, Effect.withSpan("pi-better-xai.usage.initialize")),
   },
 ) {

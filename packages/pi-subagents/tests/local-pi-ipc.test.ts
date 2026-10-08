@@ -1,11 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import { spawnIpcChild } from "pi-cosmic-core/testing";
 import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-pi-protocol.ts";
 import {
   attachLocalPiParentIpc,
@@ -13,24 +13,16 @@ import {
   makeLocalPiParentIpcChannel,
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
-import { nodeSpawn as spawn } from "./support/node-builtins.ts";
 
 const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.mjs", import.meta.url));
 
-class IpcIntegrationTestError extends Schema.TaggedError<IpcIntegrationTestError>()(
-  "IpcIntegrationTestError",
-  { message: Schema.String },
-) {}
-
-type TestMessageListener = <MessageInput>(message: MessageInput) => void;
 type SendBehavior = "success" | "error" | "pending" | "throw";
 
 const fakePort = <Outbound>() => {
   const sent: Outbound[] = [];
+  const events = new EventEmitter();
   let connected = true;
   let behavior: SendBehavior = "success";
-  let messageListener: TestMessageListener | undefined;
-  let disconnectListener: (() => void) | undefined;
   const port: LocalPiIpcPort<Outbound> = {
     connected: () => connected,
     send: (message, callback) => {
@@ -48,18 +40,7 @@ const fakePort = <Outbound>() => {
           throw new Error("write was not dispatched");
       }
     },
-    addMessageListener: (listener) => {
-      messageListener = listener;
-    },
-    removeMessageListener: (listener) => {
-      if (messageListener === listener) messageListener = undefined;
-    },
-    addDisconnectListener: (listener) => {
-      disconnectListener = listener;
-    },
-    removeDisconnectListener: (listener) => {
-      if (disconnectListener === listener) disconnectListener = undefined;
-    },
+    events,
   };
   return {
     port,
@@ -70,8 +51,8 @@ const fakePort = <Outbound>() => {
     setBehavior: (value: SendBehavior) => {
       behavior = value;
     },
-    emitMessage: <MessageInput>(value: MessageInput) => messageListener?.(value),
-    disconnect: () => disconnectListener?.(),
+    emitMessage: <MessageInput>(value: MessageInput) => events.emit("message", value),
+    disconnect: () => events.emit("disconnect"),
   };
 };
 
@@ -91,7 +72,7 @@ const progressContact = (message = "Still working."): LocalPiContact => ({
   message,
 });
 
-const ignoreParent = { onContact: () => {}, onProtocolError: () => {}, onDisconnect: () => {} };
+const ignoreParent = { onContact: () => {}, onProtocolError: () => {} };
 
 const isQuestion = (contact: LocalPiContact) =>
   contact.type === "contact_parent" && contact.kind === "question";
@@ -103,13 +84,9 @@ describe("Local Pi IPC boundary", () => {
     const fake = fakePort<LocalPiParentControl>();
     const contacts: LocalPiContact[] = [];
     const protocolErrors: string[] = [];
-    let disconnects = 0;
     const channel = makeLocalPiParentIpcChannel(fake.port, {
       onContact: (contact) => contacts.push(contact),
       onProtocolError: (message) => protocolErrors.push(message),
-      onDisconnect: () => {
-        disconnects += 1;
-      },
     });
 
     const acks: LocalPiContact[] = [
@@ -120,17 +97,13 @@ describe("Local Pi IPC boundary", () => {
     fake.emitMessage(progressContact());
     for (const ack of acks) fake.emitMessage(ack);
     fake.emitMessage({ type: "agent_settled" });
-    fake.disconnect();
 
     expect(contacts).toEqual([progressContact(), ...acks]);
     expect(protocolErrors).toEqual(["Subagent emitted an invalid parent-contact event."]);
-    expect(disconnects).toBe(1);
 
     channel.detach();
     fake.emitMessage(progressContact("late"));
-    fake.disconnect();
     expect(contacts).toHaveLength(4);
-    expect(disconnects).toBe(1);
   });
 
   it.effect("distinguishes definite parent-control rejection from uncertain delivery", () =>
@@ -175,41 +148,9 @@ describe("Local Pi IPC boundary", () => {
 
   it.live("exchanges typed contacts and controls with a real IPC child", () =>
     Effect.gen(function* () {
-      const child = spawn(process.execPath, [childFixture], {
-        cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-        windowsHide: true,
-      });
-      let detach = () => {};
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          detach();
-          child.stderr?.destroy();
-          if (child.exitCode === null) child.kill("SIGKILL");
-        }),
-      );
-
-      const closed = yield* Deferred.make<
-        { readonly code: number | null; readonly signal: NodeJS.Signals | null },
-        IpcIntegrationTestError
-      >();
-      let stderr = "";
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
-      });
-      child.once("error", (error) => {
-        Deferred.doneUnsafe(
-          closed,
-          Effect.fail(new IpcIntegrationTestError({ message: error.message })),
-        );
-      });
-      child.once("close", (code, signal) => {
-        Deferred.doneUnsafe(closed, Effect.succeed({ code, signal }));
-      });
-
+      const { child, exited } = yield* spawnIpcChild(childFixture, [], { timeout: "5 seconds" });
       const contacts = yield* Queue.unbounded<LocalPiContact>();
       const protocolErrors: string[] = [];
-      let disconnects = 0;
       const ipc = attachLocalPiParentIpc(child, {
         onContact: (contact) => {
           Queue.offerUnsafe(contacts, contact);
@@ -217,11 +158,9 @@ describe("Local Pi IPC boundary", () => {
         onProtocolError: (message) => {
           protocolErrors.push(message);
         },
-        onDisconnect: () => {
-          disconnects += 1;
-        },
       });
-      detach = ipc.detach;
+      // Registered after the child's kill, so the listeners detach first.
+      yield* Effect.addFinalizer(() => Effect.sync(ipc.detach));
 
       // Takes at most four contacts until every predicate has matched one of them.
       const takeUntil = (...predicates: ReadonlyArray<(contact: LocalPiContact) => boolean>) =>
@@ -237,9 +176,7 @@ describe("Local Pi IPC boundary", () => {
       const initial = yield* takeUntil(hasMessage("child-ready"), isQuestion);
       const question = initial.find(isQuestion);
       if (!question || question.type !== "contact_parent")
-        return yield* new IpcIntegrationTestError({
-          message: `Real IPC child did not ask its question: ${stderr}`,
-        });
+        return yield* Effect.die(new Error("The real IPC child did not ask its question."));
 
       yield* ipc.sendControl({
         channel: "pi-subagents",
@@ -259,13 +196,10 @@ describe("Local Pi IPC boundary", () => {
       const responses = yield* takeUntil(isPeer, isReply);
       expect(responses.some(isPeer)).toBe(true);
       expect(responses.some(isReply)).toBe(true);
-      expect(yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))).toEqual({
-        code: 0,
-        signal: null,
-      });
+      // The fixture exits nonzero on any failure it observes.
+      yield* exited;
+      expect(child.exitCode).toBe(0);
       expect(protocolErrors).toEqual([]);
-      expect(disconnects).toBe(1);
-      expect(stderr).toBe("");
     }).pipe(Effect.scoped),
   );
 
@@ -301,8 +235,11 @@ describe("Local Pi IPC boundary", () => {
       expect(uncertain.code).toBe("transport_outcome_uncertain");
 
       detach();
+      disconnected = false;
       fake.emitMessage(parentReply("late"));
+      fake.disconnect();
       expect(controls).toHaveLength(1);
+      expect(disconnected).toBe(false);
     }),
   );
 });

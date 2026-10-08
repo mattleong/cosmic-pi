@@ -9,10 +9,9 @@ export interface PiCatalogModel {
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
 }
 
-export const canonicalPiModelId = (model: PiCatalogModel): string =>
-  `${model.provider}/${model.id}`;
+const canonicalPiModelId = (model: PiCatalogModel): string => `${model.provider}/${model.id}`;
 
-export type PiModelResolution =
+type PiModelResolution =
   | { readonly kind: "resolved"; readonly provider: string; readonly id: string }
   | { readonly kind: "ambiguous"; readonly candidates: ReadonlyArray<string> }
   | { readonly kind: "unknown"; readonly nearMatches: ReadonlyArray<string> };

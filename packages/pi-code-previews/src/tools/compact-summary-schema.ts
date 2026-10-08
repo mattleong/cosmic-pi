@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { CompactIssueSchema } from "./compact-issues";
 
-const Outcome = Schema.Literals([
+export const CompactOutcomeSchema = Schema.Literals([
   "success",
   "returned",
   "warning",
@@ -11,7 +11,6 @@ const Outcome = Schema.Literals([
   "uncertain",
 ]);
 const Labels = Schema.Array(Schema.String);
-const Issues = Schema.Array(CompactIssueSchema);
 const Fields = {
   compactSubject: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(Schema.String),
@@ -19,12 +18,12 @@ const Fields = {
   metadata: Schema.optionalKey(Labels),
   showTiming: Schema.optionalKey(Schema.Literal(true)),
   showShortTiming: Schema.optionalKey(Schema.Literal(true)),
-  issues: Schema.optionalKey(Issues),
+  issues: Schema.optionalKey(Schema.Array(CompactIssueSchema)),
 };
 const Summary = Schema.Struct({
   ...Fields,
   subject: Schema.String,
-  outcome: Schema.optionalKey(Outcome),
+  outcome: Schema.optionalKey(CompactOutcomeSchema),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,
@@ -35,16 +34,7 @@ const Summary = Schema.Struct({
           returnedCheckmark: Schema.optionalKey(Schema.Literal(true)),
           subject: Schema.optionalKey(Schema.String),
           durationMs: Schema.optionalKey(Schema.Finite),
-          status: Schema.Literals([
-            "pending",
-            "running",
-            "returned",
-            "success",
-            "warning",
-            "error",
-            "cancelled",
-            "uncertain",
-          ]),
+          status: Schema.Literals(["pending", "running", ...CompactOutcomeSchema.literals]),
         }),
       ),
     }),

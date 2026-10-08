@@ -6,16 +6,6 @@ import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.t
 import { isUncertainToolFailure } from "./outcome.ts";
 import { failureMessage } from "pi-cosmic-core";
 
-/** Progress counter; a sole named target needs no count. */
-export function progressDetail(
-  count: number,
-  total: number,
-  state: "started" | "finished",
-  subject: string,
-): string {
-  return count === 1 && total === 1 && subject.trim() ? state : `${count}/${total} ${state}`;
-}
-
 type AdmittedRun = NonNullable<
   NonNullable<SubagentStartDetails["startFailures"]>[number]["admittedRun"]
 >;
@@ -40,6 +30,10 @@ const launchFailureIssue = (
   detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
 });
 
+/** Launches started so far; a sole named launch needs no count. */
+const startedCounter = (started: number, total: number, subject: string): string =>
+  started === 1 && total === 1 && subject.trim() ? "started" : `${started}/${total} started`;
+
 /** Launch receipts own start counters, launch-slot issues, and start outcome. */
 export function summarizeStart(
   details: SubagentStartDetails,
@@ -48,9 +42,8 @@ export function summarizeStart(
   issues: CompactIssue[],
 ): CompactSummary {
   const started = details.startEntries.filter((entry) => entry.status === "started").length;
-  summary.counters = [
-    progressDetail(started, details.startEntries.length, "started", summary.subject),
-  ];
+  const total = details.startEntries.length;
+  summary.counters = [startedCounter(started, total, summary.subject)];
   for (const entry of details.startEntries) {
     const label = entry.name.slice(0, 60);
     if (entry.routeStatus === "selected" && entry.warning)
@@ -58,16 +51,6 @@ export function summarizeStart(
         severity: "warning",
         code: `launch:${entry.index}:warning`,
         ...quoted(label, entry.warning, "has a launch option warning"),
-      });
-    if (
-      entry.status === "failed" &&
-      !details.startFailures?.some((failure) => failure.index === entry.index)
-    )
-      issues.push({
-        severity: "error",
-        code: `launch:${entry.index}:failed`,
-        message: `${label} couldn't start`,
-        detail: "Inspect expanded launch evidence.",
       });
   }
   for (const failure of details.startFailures ?? []) {
@@ -103,7 +86,6 @@ export function summarizeStart(
     });
   }
   if (compactIssueSeverity(issues) === "error") summary.outcome = "error";
-  else if (phase === "settled" && started !== details.startEntries.length)
-    summary.outcome = "uncertain";
+  else if (phase === "settled" && started !== total) summary.outcome = "uncertain";
   return summary;
 }

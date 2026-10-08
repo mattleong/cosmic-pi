@@ -26,11 +26,8 @@ export class CompactSlots {
 
   private entry(slot: CompactSlot, content: boolean): Entry {
     const key = `${slot}:${content}`;
-    let entry = this.entries.get(key);
-    if (!entry) {
-      entry = { component: undefined, body: undefined, failed: false };
-      this.entries.set(key, entry);
-    }
+    const entry = this.entries.get(key) ?? { component: undefined, body: undefined, failed: false };
+    this.entries.set(key, entry);
     return entry;
   }
 

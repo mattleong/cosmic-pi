@@ -1,11 +1,14 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
-import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
-import { footerDataProviderFixture } from "./support/host.ts";
 
 const footer = (options: {
   readonly contributions: readonly CosmicFooterTextContribution[];
@@ -25,14 +28,13 @@ const footer = (options: {
   return createFooterComponent({
     pi: extensionApiFixture({ getThinkingLevel: () => "off" }),
     ctx: () => ctx,
-    footerData: footerDataProviderFixture({
+    footerData: opaqueFixture({
       getGitBranch: () => null,
       getExtensionStatuses: () => new Map(),
       getAvailableProviderCount: () => 1,
     }),
-    theme: { fg: (_color, text) => text },
+    theme: plainTheme,
     registry: { snapshot: () => ({ contributions: options.contributions }) },
-    callbacks: makeHostCallbackBoundary(),
     config: options.config,
     projection: () => ({
       totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
@@ -97,4 +99,17 @@ it("uses compact text for labeled contributions in compact mode", () => {
     .join("\n");
   expect(rendered).toContain("compact detail");
   expect(rendered).not.toContain("full detail");
+});
+
+it("renders a labeled detail once even when its id is extension-scoped", () => {
+  const rendered = footer({
+    contributions: [
+      { kind: "text", id: "extension.usage", region: "details", text: "plain detail", label: "P" },
+    ],
+    config: makeDefaultResolvedCosmicUiConfig,
+    contextUsage: () => undefined,
+  })
+    .render(120)
+    .join("\n");
+  expect(rendered.split("plain detail")).toHaveLength(2);
 });

@@ -241,6 +241,7 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
           model: input.model,
           effort: input.effort,
           selection: input.selection ?? view().selection,
+          ...(input.name !== undefined && { name: input.name }),
           ...(input.profile && { profile: input.profile }),
         });
       }),

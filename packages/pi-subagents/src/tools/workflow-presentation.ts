@@ -86,6 +86,10 @@ const agentStateParts = (run: WorkflowRunSummary): ReadonlyArray<string> =>
     run.skipped ? `${run.skipped} skipped` : "",
   ].filter(Boolean);
 
+/** A list's saved workflows and this session's runs, as the row and the digest count them. */
+const listCounter = (details: WorkflowToolDetails): string =>
+  `${countLabel(details.saved ?? 0, "saved workflow")} · ${countLabel(details.runs ?? 0, "run")}`;
+
 /** Counter alternatives, longest first: the row shows the first that fits. */
 const runCounters = (run: WorkflowRunSummary): ReadonlyArray<string> => {
   const state = workflowStateLabel(run.state);
@@ -172,10 +176,7 @@ export const workflowCompactSummary: CompactSummaryProvider<
   if (details.run) return settledRun(base, details, details.run);
   return {
     ...base,
-    counters: [
-      `${countLabel(details.saved ?? 0, "saved workflow")} · ${countLabel(details.runs ?? 0, "run")}`,
-      countLabel(details.saved ?? 0, "saved workflow"),
-    ],
+    counters: [listCounter(details), countLabel(details.saved ?? 0, "saved workflow")],
     outcome: "returned",
   };
 };
@@ -239,8 +240,7 @@ const resultText = (result: AgentToolResult<unknown>): string =>
 /** A routine one-line digest of the result; the agent-facing text waits for expansion. */
 const digest = (details: WorkflowToolDetails): string => {
   const run = details.run;
-  if (!run)
-    return `${countLabel(details.saved ?? 0, "saved workflow")} · ${countLabel(details.runs ?? 0, "run")}`;
+  if (!run) return listCounter(details);
   if (details.action === "start")
     return `Running in the background${run.phases > 0 ? ` · ${countLabel(run.phases, "phase")}` : ""}`;
   if (details.unchanged === true) return `${workflowStateLabel(run.state)} · ${UNCHANGED}`;

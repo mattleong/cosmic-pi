@@ -38,16 +38,9 @@ import { recordRunWarning } from "./warnings.ts";
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
 export interface RunEventDependencies {
-  readonly mutateView: RunSettlement["mutateEventView"];
-  readonly mergeLateUsage: RunSettlement["mergeLateUsage"];
-  readonly mergeProcessUsage: RunSettlement["mergeProcessUsage"];
-  readonly runStarted: RunSettlement["runStartedFromBackend"];
-  readonly runSettled: RunSettlement["runSettledFromBackend"];
-  readonly acceptReport: RunSettlement["acceptBackendReport"];
-  readonly settle: RunSettlement["settle"];
-  /** Called inside mutateView's locked transition before projection publication. */
+  readonly settlement: RunSettlement;
+  /** Called inside mutateEventView's locked transition before projection publication. */
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
-  readonly failRun: RunSettlement["failRun"];
   /** Starts asynchronous containment after an unambiguous native file-tool violation. */
   readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
   readonly onProxyEvent: RunProxyExecution;
@@ -57,28 +50,23 @@ export interface RunEventDependencies {
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
   const {
-    mutateView,
-    mergeLateUsage,
-    mergeProcessUsage,
-    runStarted,
-    runSettled,
-    acceptReport,
-    settle,
+    settlement,
     queueQuestionLocked,
-    failRun,
     onWriteClaimViolation,
     onProxyEvent,
     onStructuredResult,
   } = dependencies;
 
-  /** Reads the clock before mutateView takes the lock, then passes that time to `update`. */
+  /** Reads the clock before mutateEventView takes the lock, then passes that time to `update`. */
   const mutateAt = (
     record: RunRecord,
     assignmentEpoch: number | undefined,
     update: (view: SubagentRunView, now: number) => SubagentRunView | undefined,
   ) =>
     Clock.currentTimeMillis.pipe(
-      Effect.flatMap((now) => mutateView(record, assignmentEpoch, (view) => update(view, now))),
+      Effect.flatMap((now) =>
+        settlement.mutateEventView(record, assignmentEpoch, (view) => update(view, now)),
+      ),
     );
 
   const handleContact = (
@@ -87,28 +75,20 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
   ) => {
     const message = sanitizeDiagnosticText(envelope.message, 16 * 1024);
     return mutateAt(record, envelope.assignmentEpoch, (current, now) => {
+      if (envelope.kind !== "question" && current.state === "paused") return undefined;
       if (envelope.kind === "progress")
-        return current.state === "paused"
-          ? undefined
-          : {
-              ...current,
-              progress: message,
-              lastActivityAt: now,
-              sessionEvents: appendNoticeSessionEvent(
-                current.sessionEvents,
-                "progress",
-                message,
-                now,
-              ),
-            };
+        return {
+          ...current,
+          progress: message,
+          lastActivityAt: now,
+          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "progress", message, now),
+        };
       if (envelope.kind === "warning")
-        return current.state === "paused"
-          ? undefined
-          : {
-              ...current,
-              ...recordRunWarning(record, current.sessionEvents, "child", message, now),
-              lastActivityAt: now,
-            };
+        return {
+          ...current,
+          ...recordRunWarning(record, current.sessionEvents, "child", message, now),
+          lastActivityAt: now,
+        };
       if (current.state !== "running") return undefined;
       if (record.replyPendingRequestId === envelope.requestId) return undefined;
       record.replyPendingRequestId = undefined;
@@ -125,7 +105,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         ...current,
         state: "waiting_for_parent",
         lastActivityAt: now,
-        question: { requestId: envelope.requestId, message, createdAt: now },
+        question: { requestId: envelope.requestId, message },
         sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
       };
     });
@@ -250,8 +230,12 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     return isInactiveRunRecord(record)
       ? Effect.void
       : event.failure
-        ? failRun(record, processFailure.message, processFailure)
-        : settle(record, "failed", sanitizeDiagnosticText(processFailure.message, MAX_ERROR_CHARS));
+        ? settlement.failRun(record, processFailure.message, processFailure)
+        : settlement.settle(
+            record,
+            "failed",
+            sanitizeDiagnosticText(processFailure.message, MAX_ERROR_CHARS),
+          );
   };
 
   const handleEvent = (
@@ -265,7 +249,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       // A backend may report final cumulative usage/cost only at its native result, after the
       // accepted report settled the run. That exact epoch's usage still merges into the outcome.
       return event.type === "assistant_message"
-        ? mergeLateUsage(record, event.assignmentEpoch, event.usage)
+        ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
         : Effect.void;
     switch (event.type) {
       case "input_delivery":
@@ -289,13 +273,13 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           };
         });
       case "backend_failure":
-        return failRun(record, event.error.message, event.error);
+        return settlement.failRun(record, event.error.message, event.error);
       case "run_started":
-        return runStarted(record, event.assignmentEpoch);
+        return settlement.runStartedFromBackend(record, event.assignmentEpoch);
       case "run_settled":
-        return runSettled(record, event.assignmentEpoch, event.terminal);
+        return settlement.runSettledFromBackend(record, event.assignmentEpoch, event.terminal);
       case "report":
-        return acceptReport(record, event);
+        return settlement.acceptBackendReport(record, event);
       case "activity":
         return mutateAt(record, event.assignmentEpoch, (current, now) =>
           now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
@@ -306,13 +290,11 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         return mutateAt(record, event.assignmentEpoch, (current, now) => {
           const activityId = sanitizeDiagnosticText(event.activityId, 256);
           const kind = sanitizeDiagnosticText(event.kind, 128);
+          let total = current.nativeActivity?.total ?? 0;
           if (event.state === "running") {
             if (!record.nativeAgents.has(activityId) && record.nativeAgents.size < 64) {
-              record.nativeAgents.set(activityId, { kind });
-              record.nativeAgentTotal = Math.min(
-                Number.MAX_SAFE_INTEGER,
-                record.nativeAgentTotal + 1,
-              );
+              record.nativeAgents.add(activityId);
+              total = Math.min(Number.MAX_SAFE_INTEGER, total + 1);
             }
           } else if (event.state !== "activity") record.nativeAgents.delete(activityId);
           return {
@@ -320,7 +302,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             lastActivityAt: now,
             nativeActivity: {
               active: record.nativeAgents.size,
-              total: record.nativeAgentTotal,
+              total,
               latest: { id: activityId, kind, state: event.state, updatedAt: now },
             },
           };
@@ -348,7 +330,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       case "supervisor_contact":
         return handleContact(record, event);
       case "supervisor_question_cancelled":
-        return mutateView(record, event.assignmentEpoch, (current) => {
+        return settlement.mutateEventView(record, event.assignmentEpoch, (current) => {
           const waitingForQuestion =
             current.state === "waiting_for_parent" &&
             current.question?.requestId === event.requestId;
@@ -376,7 +358,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       }
       case "protocol_error": {
         const error = new SubagentProtocolError({ message: event.message });
-        return failRun(record, error.message, error);
+        return settlement.failRun(record, error.message, error);
       }
       case "exit":
         return handleExit(record, event);
@@ -385,7 +367,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
 
   return (record: RunRecord, event: BackendEvent, source?: BackendHandle) => {
     if (event.type === "usage")
-      return mergeProcessUsage(record, source, event.usage).pipe(Effect.asVoid);
+      return settlement.mergeProcessUsage(record, source, event.usage).pipe(Effect.asVoid);
     if (event.type === "proxy_request" || event.type === "proxy_cancel")
       return onProxyEvent(record, event).pipe(Effect.asVoid);
     if (event.type === "structured_result") return onStructuredResult(record, event);

@@ -8,13 +8,13 @@ import {
   invokeHostCallback,
   isAgentGuidance,
   sanitizeDiagnosticContent,
-  sanitizeDiagnosticError,
 } from "pi-cosmic-core";
 import { getBoundedTextContent } from "./data/results";
 import type { CompactIssue } from "./compact-issues";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
 import { nativeMcpReceiptMatches, type NativeMcpIdentity } from "./native-mcp-identity";
 import { nativeMcpArgumentText, nativeMcpHeading } from "./native-mcp-subject";
+import { visibleDiagnosticLine } from "./native-safe-content";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
@@ -25,15 +25,13 @@ const Evidence = Schema.Struct({
 });
 /** Native `details`: `{ server, tool, fullOutputPath? }`. Never an operation outcome. */
 export type NativeMcpEvidence = typeof Evidence.Type;
-const evidenceFields = ["server", "tool", "fullOutputPath"] as const;
-type EvidenceInput = Partial<Record<(typeof evidenceFields)[number], string>>;
 
 /** Own data properties only: accessors are never invoked, and other fields are ignored. */
 export function nativeMcpEvidence<Details>(details: Details): NativeMcpEvidence | undefined {
   return invokeHostCallback(() => {
-    if (!Predicate.isObject(details) || Array.isArray(details)) return undefined;
-    const input: EvidenceInput = {};
-    for (const key of evidenceFields) {
+    if (!Predicate.isObject(details)) return undefined;
+    const input: Partial<Record<string, string>> = {};
+    for (const key of Object.keys(Evidence.fields)) {
       const descriptor = Object.getOwnPropertyDescriptor(details, key);
       if (!descriptor) continue;
       if (!("value" in descriptor)) return undefined;
@@ -104,32 +102,25 @@ function nativeMcpListing(
   const [part, ...rest] = result.content;
   if (rest.length > 0 || part?.type !== "text" || part.text.length > MAX_LISTING_TEXT)
     return undefined;
-  if (name === "list_mcp_resources") {
-    const listing = decodeUnknownOrUndefined(ResourceListing, part.text);
-    return listing && (listing.server ?? "") === server
-      ? listingEvidence(listing.resources.length, listing)
-      : undefined;
-  }
-  const listing = decodeUnknownOrUndefined(TemplateListing, part.text);
-  return listing && (listing.server ?? "") === server
-    ? listingEvidence(listing.resourceTemplates.length, listing)
-    : undefined;
-}
-
-function listingEvidence(
-  count: number,
-  listing: Pick<typeof ResourceListing.Type, "nextCursor" | "errors">,
-): NativeMcpListing {
-  return { count, more: listing.nextCursor !== undefined, failures: listing.errors ?? [] };
+  // Decoding keeps only declared fields, so a listing has exactly one item array.
+  const listing =
+    name === "list_mcp_resources"
+      ? decodeUnknownOrUndefined(ResourceListing, part.text)
+      : decodeUnknownOrUndefined(TemplateListing, part.text);
+  if (!listing || (listing.server ?? "") !== server) return undefined;
+  const items = "resources" in listing ? listing.resources : listing.resourceTemplates;
+  return {
+    count: items.length,
+    more: listing.nextCursor !== undefined,
+    failures: listing.errors ?? [],
+  };
 }
 
 /** Each bounded server failure in an aggregate listing, then how many more were not shown. */
 function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   const issues: CompactIssue[] = [];
   for (const failure of listing.failures.slice(0, MAX_LISTED_FAILURES)) {
-    const server = failure.server.trim()
-      ? sanitizeDiagnosticError(failure.server, { maximumLength: 60 })
-      : "A server";
+    const server = visibleDiagnosticLine(failure.server, 60) || "A server";
     const reason = isAgentGuidance(failure.error) ? "" : failureMessage(failure.error, "", 100);
     const detail = sanitizeDiagnosticContent(failure.error).trim();
     const issue: CompactIssue = {
@@ -213,14 +204,13 @@ function contentCounters(result: AgentToolResult<unknown>): string[] {
 /** A running call's latest native progress message, one bounded plain line. */
 export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined): string {
   const part = result?.content.find((entry) => entry.type === "text");
-  const line =
-    part?.type === "text"
-      ? part.text
-          .slice(0, 1024)
-          .split("\n")
-          .find((entry) => entry.trim())
-      : undefined;
-  return line ? sanitizeDiagnosticError(line, { maximumLength: 80 }) : "";
+  const text = part?.type === "text" ? part.text.slice(0, 1024) : "";
+  // Redact only up to the first visible line; this runs on every animation frame.
+  for (const line of text.split("\n")) {
+    const visible = visibleDiagnosticLine(line, 80);
+    if (visible) return visible;
+  }
+  return "";
 }
 
 /**

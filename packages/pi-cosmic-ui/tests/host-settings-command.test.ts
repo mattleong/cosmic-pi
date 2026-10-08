@@ -39,7 +39,6 @@ const harness = (
     config: () => undefined,
     status: () => "demo diagnostics",
     apply,
-    afterApply: () => undefined,
     open,
     ...overrides,
   });

@@ -60,9 +60,6 @@ it.live(
         diff.length,
       );
       expect(yield* Effect.promise(() => fs.readdir(directory))).toEqual(["record.json"]);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))),
-    ),
+    }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer)))),
   60_000,
 );

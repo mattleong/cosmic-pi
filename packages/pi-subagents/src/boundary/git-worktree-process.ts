@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { runBoundedProcessNode, type BoundedProcessRequest } from "pi-cosmic-core";
+import { runBoundedProcessNode } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 
@@ -33,8 +33,32 @@ export const git = (
     readonly index?: string;
   },
 ) =>
-  Effect.suspend(() => {
-    const environment = {
+  runBoundedProcessNode({
+    executable: "/usr/bin/git",
+    args: [
+      "--no-pager",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "-c",
+      "core.autocrlf=false",
+      "-c",
+      "core.attributesFile=/dev/null",
+      "-c",
+      "diff.external=",
+      "-c",
+      "protocol.allow=never",
+      "-c",
+      "core.fsync=all",
+      "-c",
+      "core.fsyncMethod=fsync",
+      ...args,
+    ],
+    cwd,
+    environment: {
       GIT_INDEX_FILE: options?.index,
       PATH: "/usr/bin:/bin",
       LC_ALL: "C",
@@ -47,63 +71,43 @@ export const git = (
       GIT_AUTHOR_EMAIL: "workspace@invalid",
       GIT_COMMITTER_NAME: "Pi workspace",
       GIT_COMMITTER_EMAIL: "workspace@invalid",
-    };
-    let request: BoundedProcessRequest = {
-      executable: "/usr/bin/git",
-      args: [
-        "--no-pager",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.untrackedCache=false",
-        "-c",
-        "core.autocrlf=false",
-        "-c",
-        "core.attributesFile=/dev/null",
-        "-c",
-        "diff.external=",
-        "-c",
-        "protocol.allow=never",
-        "-c",
-        "core.fsync=all",
-        "-c",
-        "core.fsyncMethod=fsync",
-        ...args,
-      ],
-      cwd,
-      environment,
-      stdoutLimitBytes: 48 * 1024 * 1024,
-      stderrLimitBytes: 8192,
-      timeoutMillis: 30_000,
-      cleanupTimeoutMillis: 2000,
-      detached: true,
-      sweepProcessTreeOnExit: true,
-    };
-    if (options?.stdin) request = { ...request, stdin: options.stdin };
-    return runBoundedProcessNode(request).pipe(
-      Effect.mapError(
-        () =>
-          new WorkspaceError({
-            operation: "git",
-            message: "Git execution failed; no automatic retry is safe.",
-            cleanupUnconfirmed: true,
-          }),
-      ),
-      Effect.flatMap((result) =>
-        result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed
-          ? Effect.succeed(result.stdout)
-          : Effect.fail(
-              new WorkspaceError({
-                operation: "git",
-                message: "Git operation failed or cleanup is uncertain; artifacts were retained.",
-                cleanupUnconfirmed: result.cleanupUnconfirmed,
-              }),
-            ),
-      ),
-    );
-  });
+    },
+    ...(options?.stdin && { stdin: options.stdin }),
+    stdoutLimitBytes: 48 * 1024 * 1024,
+    stderrLimitBytes: 8192,
+    timeoutMillis: 30_000,
+    cleanupTimeoutMillis: 2000,
+    detached: true,
+    sweepProcessTreeOnExit: true,
+  }).pipe(
+    Effect.mapError(
+      () =>
+        new WorkspaceError({
+          operation: "git",
+          message: "Git execution failed; no automatic retry is safe.",
+          cleanupUnconfirmed: true,
+        }),
+    ),
+    Effect.flatMap((result) =>
+      result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed
+        ? Effect.succeed(result.stdout)
+        : Effect.fail(
+            new WorkspaceError({
+              operation: "git",
+              message: "Git operation failed or cleanup is uncertain; artifacts were retained.",
+              cleanupUnconfirmed: result.cleanupUnconfirmed,
+            }),
+          ),
+    ),
+  );
+
+/** The NUL-separated fields of a `-z` Git listing, without the empty trailing one. */
+export const gitFields = (cwd: string, args: ReadonlyArray<string>) =>
+  git(cwd, args).pipe(Effect.map((output) => output.split("\0").filter(Boolean)));
+
+/** A registry directory that another user owns, or that group or others can reach. */
+export const isSharedOrForeign = (stat: { readonly mode: number; readonly uid: number }) =>
+  (stat.mode & 0o077) !== 0 || (process.getuid !== undefined && stat.uid !== process.getuid());
 
 export const writeWorkspaceFile = (target: string, bytes: Uint8Array, mode: number) =>
   Effect.acquireUseRelease(

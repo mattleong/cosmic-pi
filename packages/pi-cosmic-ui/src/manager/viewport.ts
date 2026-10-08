@@ -3,17 +3,11 @@ export interface TerminalSize {
   readonly rows: number;
 }
 
-export interface ScreenViewport {
-  readonly width: number;
-  readonly height: number;
-  readonly inset: boolean;
-}
-
 const cells = (value: number): number =>
   Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 
 /** Outer dimensions, including the screen's own borders and footer. */
-export const screenViewport = (terminal: TerminalSize): ScreenViewport => {
+export const screenViewport = (terminal: TerminalSize) => {
   const columns = cells(terminal.columns);
   const rows = cells(terminal.rows);
   const inset = columns >= 125 && rows >= 30;

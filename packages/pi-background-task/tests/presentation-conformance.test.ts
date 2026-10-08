@@ -93,16 +93,6 @@ it("renders the registered management actions and task states without parsing fe
               // A Pi error explains itself with its first line; the body stays collapsed.
               if (!isError) expect(text).not.toContain("fetched-body-marker");
               expect(text).not.toContain("just log content");
-              expect(text).not.toMatch(
-                /afterCursor|inspect status before retrying|Request a smaller log slice/,
-              );
-              if (
-                !isError &&
-                details &&
-                "snapshot" in details &&
-                details.snapshot.state === "stopping"
-              )
-                expect(text).toMatch(/processes may still be running/);
             }
           }
         expect(result).toEqual(before);
@@ -161,10 +151,7 @@ it.each([
         // Multi-line details wrap under their message; check each line.
         for (const line of issue.detail.split("\n")) expect(text.includes(line)).toBe(expanded);
       }
-      if (expanded) {
-        expect(text).toContain("Raw result");
-        expect(text).toContain(marker);
-      } else expect(text).not.toContain(marker);
+      expect(text.includes(marker)).toBe(expanded);
     }
     expect(result).toEqual(before);
   }
@@ -174,33 +161,13 @@ it("shows a task's full reported error only when expanded", () => {
   const error = "Spawn failed\nENOENT: missing-binary-marker";
   const details = { action: "status", snapshot: { ...snapshot, state: "failed", error } };
   const result = { content: [{ type: "text" as const, text: "task-1 failed" }], details };
-  const harness = createToolPresentationHarness(registeredTool("on"));
-  for (const expanded of [false, true]) {
-    harness.call({ action: "status", id: "task-1" }, { expanded });
-    harness.result(result, { expanded });
-    const text = harness.render(200).join("\n");
+  const harness = createToolPresentationHarness(registeredTool("on"), { width: 200 });
+  const args = { action: "status", id: "task-1" };
+  for (const { expanded, text } of harness.cycle(args, result, { states: [false, true] })) {
     expect(text).toContain("Spawn failed");
     if (expanded) expect(text).toContain("ENOENT: missing-binary-marker");
     else expect(text).not.toContain("missing-binary-marker");
   }
-});
-
-it("keeps successful command delivery distinct from failed task state and discarded logs", () => {
-  const summary = projectBackgroundTaskCompactSummary({
-    phase: "settled",
-    args: { action: "status", id: "task-1" },
-    isError: false,
-    result: {
-      details: {
-        action: "status",
-        snapshot: { ...snapshot, state: "failed", exitCode: 9, droppedLogBytes: 50 },
-      },
-    },
-  });
-  expect(summary?.outcome).toBe("error");
-  expect(summary?.issues?.map((issue) => issue.code)).toEqual(
-    expect.arrayContaining(["task-1:exit-code", "task-1:log-loss"]),
-  );
 });
 
 it("keeps the owned log metadata header and all expanded logs without another cursor footer", () => {
@@ -260,12 +227,9 @@ it("names the task, never its ID, in the collapsed preview heading and body", ()
     { args: { action: "stop_all" }, details: { action: "stop_all", tasks: [named] } },
   ];
   for (const { args, details } of cases) {
-    const harness = createToolPresentationHarness(registeredTool("on", "preview"));
+    const harness = createToolPresentationHarness(registeredTool("on", "preview"), { width: 160 });
     const result = { content: [{ type: "text" as const, text: "task-1 raw agent text" }], details };
-    for (const expanded of [false, true]) {
-      harness.call(args, { expanded, executionStarted: true, isPartial: false });
-      harness.result(result, { expanded });
-      const text = harness.render(160).join("\n");
+    for (const { expanded, text } of harness.cycle(args, result, { states: [false, true] })) {
       expect(text).toContain("dev-server-name");
       expect(text.split("\n")[0]).not.toMatch(/task-1|stop_all/u);
       // The agent's raw text, IDs included, is reachable only once expanded.

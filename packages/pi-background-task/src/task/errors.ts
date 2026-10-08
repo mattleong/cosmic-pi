@@ -24,7 +24,7 @@ export const backgroundTaskNotFound = (id: string) =>
 
 export class BackgroundTaskCapacityError extends Schema.TaggedError<BackgroundTaskCapacityError>()(
   "BackgroundTaskCapacityError",
-  { limit: Schema.Number, message: Schema.String },
+  { limit: Schema.Finite, message: Schema.String },
 ) {}
 
 export class BackgroundSpawnError extends Schema.TaggedError<BackgroundSpawnError>()(

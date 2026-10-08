@@ -1,54 +1,32 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "vitest";
-import type * as Schema from "effect/Schema";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
+import { beforeEach, test } from "vitest";
 import { nativeArgumentPreview } from "../../src/tools/native-codemode-args";
-import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
 import { nativeCodemodeCallSubject } from "../../src/tools/native-codemode-subject";
-import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import {
+  applyPresentationSettings,
   createToolPresentationHarness,
   issueMessageStyleProblems,
-  renderContextFixture,
 } from "../../testing";
+import {
+  codemodeRenderers,
+  codemodeSubject as subject,
+  nativeCall,
+  nativeReceipt as receipt,
+  scriptResult,
+  settledSummary as summarize,
+} from "../support/native-codemode";
 
-type NativeMcpArguments = Schema.JsonObject;
-
-const receipt = (args: NativeMcpArguments): string => {
-  const json = JSON.stringify(args);
-  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
-};
-const subject = (name: string, args?: NativeMcpArguments) =>
-  nativeCodemodeCallSubject(
-    name,
-    args === undefined ? undefined : nativeArgumentPreview(receipt(args)),
-    "/project",
-  );
-const completed = (calls: unknown[]): AgentToolResult<unknown> => ({
-  content: [
-    { type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+const completed = (calls: unknown[]) =>
+  scriptResult(
+    "completed",
+    { calls },
     { type: "text", text: "OUTPUT_RETAINED" },
     { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-  ],
-  details: { calls },
-});
-const call = (name: string, args = "{}", status = "ok") => ({
-  id: "private/1",
-  name,
-  args,
-  status,
-});
-const summarize = (result: AgentToolResult<unknown>) =>
-  nativeCodemodeSummary("/project")({
-    phase: "settled",
-    args: { code: "" },
-    result,
-    context: renderContextFixture(),
-  });
-
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+  );
+const call = (name: string, args = "{}", status = "ok") => nativeCall({ name, args, status });
+beforeEach(() =>
+  applyPresentationSettings({ syntaxHighlighting: false, toolCallBackground: "off" }),
+);
 
 test("native MCP registered aliases provide targets without recovering remote identifiers", () => {
   for (const name of [
@@ -183,15 +161,8 @@ test("MCP failures, cancellations and unfinished calls retain their existing cla
 
 for (const style of ["compact", "preview"] as const)
   test(`MCP ${style} expansion retains program, registered alias, arguments, errors and output`, () => {
-    setCodePreviewSettings({
-      ...defaultCodePreviewSettings,
-      syntaxHighlighting: false,
-      toolCallCollapsedStyle: style,
-      toolCallBackground: "off",
-    });
-    const styled = createNativeCodemodeRenderers("/project", {
-      scheduleAnimation: () => undefined,
-    });
+    applyPresentationSettings({ toolCallCollapsedStyle: style });
+    const styled = codemodeRenderers();
     const name = "mcp__docs__lookup_1234abcd";
     const result = completed([
       {

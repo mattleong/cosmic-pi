@@ -4,25 +4,19 @@ export {
   applyPresentationSettings,
   captureRegistrations,
   createToolPresentationHarness,
+  drawToolRow,
+  hostToolRow,
   probeAnimationOwnership,
+  toolRowFrames,
   renderContextFixture,
   withPresentationSettings,
-  type AnimationSchedulerProbe,
-  type PresentationCycleOptions,
   type ToolPresentationHarness,
 } from "./src/testing/tool-presentation";
+export { issueMessageStyleProblems } from "./src/testing/issue-messages";
+export { galleryDirectory, writeGallerySection } from "pi-cosmic-core/testing";
 export {
-  issueMessageStyleProblems,
-  type IssueMessageStyleOptions,
-} from "./src/testing/issue-messages";
-export {
-  GALLERY_VIEWS,
-  galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
-  writeGallerySection,
   type GalleryMessageScenario,
-  type GalleryPhase,
   type GalleryScenario,
-  type GalleryView,
 } from "./src/testing/gallery";

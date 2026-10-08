@@ -1,7 +1,6 @@
 // Fixed-target Pi editor. State, saves, and cancellable pickers have separate owners.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
-import { invokeHostCallback } from "pi-cosmic-core";
 import { pageSteps, type FullScreenResolution } from "pi-cosmic-ui/manager/keymap";
 import { isMovementMotion, movementOffset } from "pi-cosmic-ui/manager/list-navigation";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
@@ -23,7 +22,7 @@ import {
   PROFILE_WORKSPACE_SHORTCUTS,
   isWorkspaceNavigationKey,
 } from "./ui/profile-workspace-keys.ts";
-import { makeRouteActionsSelector } from "./ui/profile-workspace-selectors.ts";
+import { makeRouteActionsSelector, selectHost } from "./ui/profile-workspace-selectors.ts";
 import { ProfileWorkspacePickers } from "./profile-workspace-pickers.ts";
 import type { ProfileWorkspaceSelectionMemory } from "./profile-workspace-state.ts";
 import type {
@@ -71,8 +70,6 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly supportedPiEfforts: (
     candidate: ProfileCandidate,
   ) => ReadonlyArray<SubagentEffort> | undefined;
-  readonly fastModeAvailable: (candidate: ProfileCandidate) => boolean;
-  readonly onDispose?: (() => void) | undefined;
   readonly editVisit?: ProfileEditVisit | undefined;
   readonly onInspection?: ((inspection: ProfileSettingsInspection) => void) | undefined;
 }
@@ -87,7 +84,7 @@ export class ProfileWorkspaceComponent
     if (this.pane === "fields" && this.rows()[this.fieldIndex]?.scope !== "candidate") return;
     this.showSelectPage(
       makeRouteActionsSelector({
-        ...this.selectorHost(),
+        ...selectHost(this.options),
         profile: this.profile(),
         candidateIndex: this.candidateIndex,
         draft: this.draft(),
@@ -108,23 +105,17 @@ export class ProfileWorkspaceComponent
     this.renderSoon();
   }
 
-  protected confirmPending(): void {
-    if (this.pendingAction) this.performDraftAction(this.pendingAction);
-  }
-
   protected openSelectedField(): void {
     const row = this.rows()[this.fieldIndex];
     if (!row || this.busy) return;
     if (row.field === "reset") {
       if (this.editVisit.isEdited(this.options.target, this.profile(), this.inspection))
         this.arm("reset");
-      else this.setMessage("info", "No undoable changes from this visit.");
-      this.renderSoon();
+      else this.notice("info", "No undoable changes from this visit.");
       return;
     }
     if (row.fixed) {
-      this.setMessage("info", row.fixedReason ?? "Nothing to change");
-      this.renderSoon();
+      this.notice("info", row.fixedReason ?? "Nothing to change");
       return;
     }
     if (row.field === "add") {
@@ -228,7 +219,7 @@ export class ProfileWorkspaceComponent
         this.message = undefined;
         this.renderSoon();
       } else if (resolution?._tag === "Action" && resolution.action === "confirm")
-        this.confirmPending();
+        this.performDraftAction(this.pendingAction);
       return;
     }
     const resolution = this.keymap.resolve(data, {
@@ -266,8 +257,7 @@ export class ProfileWorkspaceComponent
       return;
     }
     if (resolution._tag === "Shortcut") {
-      if (this.handleShortcutKey(resolution.key)) return;
-      this.renderSoon();
+      if (!this.handleShortcutKey(resolution.key)) this.renderSoon();
       return;
     }
     const steps = pageSteps(this.options.getHeight() - 8);
@@ -326,9 +316,6 @@ export class ProfileWorkspaceComponent
       case "last":
         this.moveToEndpoint(action);
         return true;
-      case "search":
-        if (this.pane === "profiles") this.openProfileSearch();
-        return false;
       case "help":
         this.helpOpen = true;
         return true;
@@ -412,6 +399,5 @@ export class ProfileWorkspaceComponent
     this.catalogLoad = undefined;
     this.modelPicker = undefined;
     this.selectPage = undefined;
-    invokeHostCallback(() => this.options.onDispose?.(), undefined);
   }
 }

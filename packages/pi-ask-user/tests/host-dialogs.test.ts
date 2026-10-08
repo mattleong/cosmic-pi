@@ -1,7 +1,7 @@
 import { cancelled, defaultQuestion, submitted } from "./support/questionnaire.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
-import { makeTuiHost } from "./support/host.ts";
+import { eventually, makeTuiHost } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
@@ -137,9 +137,7 @@ describe("RPC questionnaire boundary", () => {
         const controller = new AbortController();
         const pending = rpc({ select }, request, { signal: controller.signal });
 
-        yield* Effect.promise(() =>
-          vi.waitFor(() => expect(nativeSignal).toBeInstanceOf(AbortSignal)),
-        );
+        yield* eventually(() => expect(nativeSignal).toBeInstanceOf(AbortSignal));
         controller.abort();
 
         yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
@@ -368,7 +366,7 @@ describe("TUI questionnaire boundary", () => {
       const controller = new AbortController();
       const opening = run(host.ctx, request, { bridge, signal: controller.signal });
 
-      yield* Effect.promise(() => vi.waitFor(() => expect(host.ui.custom).toHaveBeenCalledOnce()));
+      yield* eventually(() => expect(host.ui.custom).toHaveBeenCalledOnce());
       controller.abort();
       yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
 

@@ -11,7 +11,7 @@ import {
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import { makeAwaitDetails } from "./details.ts";
-import { attentionRecoveryText, boundToolOutput } from "./format.ts";
+import { attentionRecoveryText, joinBoundedToolText } from "./format.ts";
 import { formatAwaitProgress } from "./render-await.ts";
 import { cancelledAwaitContract } from "./contract.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
@@ -94,23 +94,19 @@ export function makeAwaitExecution(
       latestRuns.length === 0
         ? "Await cancelled before progress was observed; selected run states are unobserved."
         : `Await cancelled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
-    const text = boundToolOutput(
-      [
-        summary,
-        `Requested runs: ${requestedIds.join(", ")}.`,
-        "Only this local wait was cancelled. Children continue; this cancellation did not stop or retry any run.",
-        proxyCleanupUnconfirmed
-          ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
-          : "Wait cleanup is complete. Await these IDs again when their results are needed.",
-        deliveryAttemptedIds.size > 0
-          ? "Report delivery may have committed before cancellation. Use subagent_status with includeDeliveredReports: true to recover the latest retained delivered reports."
-          : "",
-        latestRuns.length > 0 ? progressText(latestRuns) : "",
-        attentionRecoveryText(latestRuns),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
+    const text = joinBoundedToolText([
+      summary,
+      `Requested runs: ${requestedIds.join(", ")}.`,
+      "Only this local wait was cancelled. Children continue; this cancellation did not stop or retry any run.",
+      proxyCleanupUnconfirmed
+        ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
+        : "Wait cleanup is complete. Await these IDs again when their results are needed.",
+      deliveryAttemptedIds.size > 0
+        ? "Report delivery may have committed before cancellation. Use subagent_status with includeDeliveredReports: true to recover the latest retained delivered reports."
+        : "",
+      latestRuns.length > 0 ? progressText(latestRuns) : "",
+      attentionRecoveryText(latestRuns),
+    ]);
     return {
       content: [{ type: "text", text }],
       structuredContent: encodeSubagentContract(

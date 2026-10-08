@@ -1,8 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
 import {
   inheritedInvalidInspection,
+  jsonObject,
   makeProfileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -16,13 +16,13 @@ import {
 import {
   selectCandidateField,
   candidateFieldRows,
+  profileWorkspaceRows,
 } from "../src/settings/ui/profile-workspace-model.ts";
 import {
   renderProfileWorkspace,
   workspaceCandidateSummary,
   type ProfileWorkspaceRenderState,
 } from "../src/settings/ui/profile-workspace-render.ts";
-import { profileWorkspaceRows } from "../src/settings/ui/profile-workspace-rows.ts";
 import {
   makeProfileSearchSelector,
   type ProfileSearchSelectorOptions,
@@ -36,18 +36,15 @@ const route = [
 
 const inspection = (
   workerRoute: ReadonlyArray<ProfileCandidate> = route,
-): ProfileSettingsInspection => {
-  const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
-    version: 6,
-    defaultProfileSet: "work",
-    profileSets: { work: { profiles: { worker: workerRoute } } },
-  });
-  return makeProfileSettingsInspection({
-    globalDocument,
+): ProfileSettingsInspection =>
+  makeProfileSettingsInspection({
+    globalDocument: jsonObject({
+      version: 6,
+      defaultProfileSet: "work",
+      profileSets: { work: { profiles: { worker: workerRoute } } },
+    }),
     projectTrusted: true,
   });
-};
 
 const targetAwareInspection = (): ProfileSettingsInspection => {
   const saved = inspection([profileCandidate("openai/saved-only-4x8v")]);
@@ -96,7 +93,6 @@ const search = (overrides: Partial<ProfileSearchSelectorOptions>) =>
     theme: plainTheme,
     inspection: inspection(),
     current: "worker",
-    parentEffort: "high",
     target: { kind: "session" },
     initialQuery: "",
     getHeight: () => 24,

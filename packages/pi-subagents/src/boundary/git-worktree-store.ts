@@ -5,6 +5,7 @@ import { WorkspaceRecordSchema, type WorkspaceRecord } from "../workspace/model.
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
+  isSharedOrForeign,
   workspaceFailure,
   workspaceIO,
   workspaceIOIfPresent,
@@ -12,12 +13,13 @@ import {
 } from "./git-worktree-process.ts";
 
 const MAX_RECORD_BYTES = 64 * 1024 * 1024;
+const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
+const decodeRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(WorkspaceRecordSchema));
 
-export const newWorkspaceId = () =>
-  Effect.try({
-    try: synchronousRandomUuid,
-    catch: () => workspaceFailure("identity", "Unable to allocate workspace identity."),
-  });
+export const newWorkspaceId = Effect.try({
+  try: synchronousRandomUuid,
+  catch: () => workspaceFailure("identity", "Unable to allocate workspace identity."),
+});
 export const validWorkspaceId = (id: string) => /^[a-f0-9-]{36}$/u.test(id);
 export const workspaceDirectory = (root: string, id: string) => path.join(root, id);
 
@@ -49,23 +51,30 @@ export const initializeWorkspaceStore = (root: string) =>
       }
     }
     yield* checkDirectory(root);
-    const stat = yield* workspaceIO("registry", () => fs.lstat(root));
-    if ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()))
+    if (isSharedOrForeign(yield* workspaceIO("registry", () => fs.lstat(root))))
       return yield* workspaceFailure(
         "registry",
         "Workspace registry must be private and owned by the current user.",
       );
   });
 
-export const saveWorkspaceRecord = (root: string, record: WorkspaceRecord) =>
+/**
+ * Durably replaces a workspace's record. `onCommitted` runs inside the uninterruptible commit,
+ * once the record is durable, so state that must match the record cannot be separated from it.
+ */
+export const saveWorkspaceRecord = (
+  root: string,
+  record: WorkspaceRecord,
+  onCommitted?: () => void,
+) =>
   Effect.gen(function* () {
     const directory = workspaceDirectory(root, record.handle.workspaceId);
     yield* checkDirectory(directory);
-    const id = yield* newWorkspaceId();
+    const id = yield* newWorkspaceId;
     const temporary = path.join(directory, `${id}.tmp`);
-    const data = yield* Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(
-      record,
-    ).pipe(Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")));
+    const data = yield* encodeRecord(record).pipe(
+      Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")),
+    );
     // JSON escaping can exceed the reader's bound even for an allowed raw diff.
     if (Buffer.byteLength(data, "utf8") > MAX_RECORD_BYTES)
       return yield* workspaceFailure(
@@ -81,6 +90,7 @@ export const saveWorkspaceRecord = (root: string, record: WorkspaceRecord) =>
         fs.rename(temporary, path.join(directory, "record.json")),
       );
       yield* syncWorkspaceDirectory(directory);
+      onCommitted?.();
     }).pipe(Effect.uninterruptible);
   });
 
@@ -98,9 +108,7 @@ export const readWorkspaceRecord = (root: string, id: string) =>
           workspaceFailure("registry", "Cannot read workspace recovery record."),
         ),
       );
-    const record = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkspaceRecordSchema))(
-      new TextDecoder().decode(bytes),
-    ).pipe(
+    const record = yield* decodeRecord(new TextDecoder().decode(bytes)).pipe(
       Effect.mapError(() => workspaceFailure("registry", "Invalid workspace recovery record.")),
     );
     if (

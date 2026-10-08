@@ -286,28 +286,26 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect(
-    "refuses a scripted descendant writer without reclaiming or quarantining full history",
-    () => {
+  for (const refusal of ["scripted_subtree_writer_not_supported", "nesting_depth_limit"] as const)
+    it.effect(`refuses ${refusal} without reclaiming or quarantining full history`, () => {
       const { fake, layer } = localServiceFixture();
       return withService(layer, function* (service) {
         const scripted = yield* service.startScriptSessionOwned(request());
         const history = yield* completeHistory(service, fake, MAX_RETAINED_RUNS, "retained", 1);
         for (const id of history) yield* service.status(id);
         const before = yield* service.list;
-        expect(
-          yield* service
-            .startSessionOwnedFrom(scripted.id, request({ writeIntent: "writer" }))
-            .pipe(Effect.flip),
-        ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
+        const refused =
+          refusal === "nesting_depth_limit"
+            ? service.start(request({ nestingPolicy: { maxDirectChildren: 12, maxDepth: 0 } }))
+            : service.startSessionOwnedFrom(scripted.id, request({ writeIntent: "writer" }));
+        expect(yield* refused.pipe(Effect.flip)).toMatchObject({ code: refusal });
         expect(yield* service.list).toEqual(before);
         expect(fake.reclaimedRunIds).toEqual([]);
         // A normal start still reclaims the eligible leaf, proving history really was at capacity.
         yield* service.start(request({ name: "allowed-after-refusal" }));
         expect(fake.reclaimedRunIds).toEqual([history[0]]);
       });
-    },
-  );
+    });
 
   it.effect("keeps the evicted record registered and admits nothing when reclaim fails", () => {
     let reclaimFails = true;

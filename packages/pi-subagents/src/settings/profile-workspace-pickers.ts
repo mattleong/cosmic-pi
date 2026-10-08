@@ -4,10 +4,15 @@ import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
 import { updateCandidateControls, updateCandidateModel } from "./profile-route-editor.ts";
 import { makeProfileModelPickerPage } from "./ui/model-picker.ts";
-import { runWithChoice, type SelectableCandidateField } from "./ui/profile-workspace-model.ts";
+import {
+  candidateFastModeAvailable,
+  runWithChoice,
+  type SelectableCandidateField,
+} from "./ui/profile-workspace-model.ts";
 import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
+  selectHost,
   shortTargetLabel,
 } from "./ui/profile-workspace-selectors.ts";
 import { ProfileWorkspaceSave } from "./profile-workspace-save.ts";
@@ -17,8 +22,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     const controller = new AbortController();
     this.catalogLoad = controller;
     this.busy = true;
-    this.setMessage("info", message);
-    this.renderSoon();
+    this.notice("info", message);
     return controller;
   }
 
@@ -37,14 +41,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     this.busy = false;
     this.addingCandidate = false;
     controller.abort();
-    this.setMessage("info", "Stopped loading models.");
-    this.renderSoon();
-  }
-
-  /** Host plumbing shared by every full-page selector this editor opens. */
-  protected selectorHost() {
-    const { theme, getHeight, requestRender, matchesKeybinding, keybindingLabel } = this.options;
-    return { theme, getHeight, requestRender, matchesKeybinding, keybindingLabel };
+    this.notice("info", "Stopped loading models.");
   }
 
   protected showSelectPage(page: SearchableSelectPage<string>): void {
@@ -69,7 +66,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     const candidateIndex = this.candidateIndex;
     this.showSelectPage(
       makeCandidateFieldSelector({
-        ...this.selectorHost(),
+        ...selectHost(this.options),
         profile: this.profile(),
         candidateIndex,
         candidate,
@@ -122,14 +119,15 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           field,
           fastMode ? undefined : current?.supportedEfforts,
           fastMode
-            ? (current?.fastModeAvailable ?? this.options.fastModeAvailable(candidate))
+            ? (current?.fastModeAvailable ??
+                candidateFastModeAvailable(candidate, this.options.parentModel))
             : undefined,
           picker.warning,
         );
       })
       .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
-        this.setMessage(
+        this.notice(
           "error",
           error instanceof Error
             ? error.message
@@ -137,7 +135,6 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
               ? "Could not check fast mode."
               : "Could not load reasoning levels.",
         );
-        this.renderSoon();
       });
   }
 
@@ -161,15 +158,11 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         if (!this.finishCatalogLoad(controller)) return;
         if (picker.choices.length === 0) {
           this.addingCandidate = false;
-          this.setMessage(
-            "warning",
-            picker.warning ?? "No models are available for this selection.",
-          );
-          this.renderSoon();
+          this.notice("warning", picker.warning ?? "No models are available for this selection.");
           return;
         }
         this.modelPicker = makeProfileModelPickerPage({
-          ...this.selectorHost(),
+          ...selectHost(this.options),
           choices: picker.choices,
           scopedChoices: picker.scopedChoices,
           initialSelection:
@@ -216,19 +209,16 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
       .catch((error) => {
         if (!this.finishCatalogLoad(controller)) return;
         this.addingCandidate = false;
-        this.setMessage("error", error instanceof Error ? error.message : "Could not load models.");
-        this.renderSoon();
+        this.notice("error", error instanceof Error ? error.message : "Could not load models.");
       });
   }
 
   protected openProfileSearch(): void {
     this.showSelectPage(
       makeProfileSearchSelector({
-        ...this.selectorHost(),
+        ...selectHost(this.options),
         inspection: this.inspection,
         current: this.profile(),
-        parentEffort: this.options.parentEffort,
-        parentModel: this.options.parentModel,
         target: this.options.target,
         select: (profile) => {
           this.selectPage = undefined;

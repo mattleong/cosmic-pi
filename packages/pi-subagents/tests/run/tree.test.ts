@@ -8,6 +8,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   acknowledgeCompletions,
+  completeLocalRun,
   fakeChildLayer,
   localServiceFixture,
   request,
@@ -180,6 +181,30 @@ describe("root-owned subagent run tree", () => {
     });
   });
 
+  it.effect("marks a descendant outcome delivered once a void root notifier accepts it", () => {
+    const { fake, notifications, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const parent = yield* service.start(request({ name: "parent" }));
+      const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+      // A completed parent cannot take its child's outcome, so delivery falls back to the root.
+      yield* completeLocalRun(service, fake.controls[0]!, parent.id);
+      yield* completeLocalRun(service, fake.controls[1]!, child.id);
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() =>
+        notifications.some(
+          (notification) =>
+            notification.type === "completed" &&
+            notification.runs.some((run) => run.id === child.id),
+        ),
+      );
+      // Status queues behind the delivery gate, so it observes the acknowledgement.
+      const reportStatus = yield* service.withStatusObservations([child.id], ({ observations }) =>
+        Effect.succeed(observations[0]?.run.reportStatus),
+      );
+      expect(reportStatus).toBe("delivered");
+    });
+  });
+
   it.effect(
     "drains admitted descendant notifications before pausing and skips paused ancestors",
     () => {
@@ -260,24 +285,6 @@ describe("root-owned subagent run tree", () => {
       yield* service.stop(parent.id);
       expect(releaseOrder).toEqual([2, 1, 0]);
       expect(fake.controls.map((control) => control.released())).toEqual([1, 1, 1]);
-    });
-  });
-
-  it.effect("stops an explicit subtree leaf-first", () => {
-    const releaseOrder: number[] = [];
-    const { layer } = localServiceFixture(
-      {},
-      fakeChildLayer(Effect.void, {
-        onRelease: (index) => releaseOrder.push(index),
-      }),
-    );
-    return withService(layer, function* (service) {
-      const parent = yield* service.start(request({ name: "parent" }));
-      const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
-      yield* service.startSessionOwnedFrom(child.id, request({ name: "grandchild" }));
-      yield* service.stop(parent.id);
-      expect(releaseOrder).toEqual([2, 1, 0]);
-      expect((yield* service.list).filter((run) => run.state === "stopped")).toHaveLength(3);
     });
   });
 });

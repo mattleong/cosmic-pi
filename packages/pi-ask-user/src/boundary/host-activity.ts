@@ -7,8 +7,6 @@ import {
   type ActivityProviderRegistration,
 } from "pi-cosmic-ui/activity";
 import type { QuestionnaireActivity } from "../questionnaire/service.ts";
-import type { AskUserRequest, QuestionnaireOwner } from "../questionnaire/protocol.ts";
-import type { OwnedFormRequest, ExtensionFormOwner } from "../questionnaire/form-protocol.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 interface Row {
@@ -20,7 +18,6 @@ interface Row {
 /** A synchronous projection of service and mounted-dialog transitions, never draft storage. */
 export function makeQuestionnaireActivity(options: {
   readonly bridge: AskUserDialogBridge;
-  readonly register?: typeof registerActivityProvider;
   readonly isCurrent: () => boolean;
   readonly run: (effect: Effect.Effect<void>, signal: AbortSignal) => Promise<void>;
 }) {
@@ -48,47 +45,25 @@ export function makeQuestionnaireActivity(options: {
     Effect.try(() => {
       if (current()) operation();
     }).pipe(Effect.ignore);
-  const admitted = (
-    id: string,
-    request: AskUserRequest | OwnedFormRequest,
-    cancel: Effect.Effect<void>,
-    owner?: QuestionnaireOwner | ExtensionFormOwner,
-  ) =>
-    transition(() => {
-      const item: ActivityItem = {
-        id,
-        kind: "question",
-        title: stripTerminalControls(
-          "questions" in request
-            ? request.questions.map((question) => question.title).join(" / ")
-            : owner && "extensionId" in owner
-              ? owner.label
-              : "Extension form",
-        ),
-        status: "pending",
-        revision: "",
-        summary: "queued",
-        detail:
-          "questions" in request
-            ? request.questions.map((question) => question.prompt).join("\n\n")
-            : "Private extension request. Answers return only to the requesting extension.",
-        actions: [cancelAction],
-      };
-      set(id, {
-        cancel,
-        item: owner
-          ? {
-              ...item,
-              parent:
-                "extensionId" in owner
-                  ? { providerId: owner.extensionId, itemId: owner.operationId }
-                  : { providerId: "pi-subagents", itemId: owner.runId },
-            }
-          : item,
-      });
-    });
   const observer: QuestionnaireActivity = {
-    admitted,
+    admitted: (id, request, cancel, owner) =>
+      transition(() => {
+        const { questions } = request;
+        set(id, {
+          cancel,
+          item: {
+            id,
+            kind: "question",
+            title: stripTerminalControls(questions.map((question) => question.title).join(" / ")),
+            status: "pending",
+            revision: "",
+            summary: "queued",
+            detail: questions.map((question) => question.prompt).join("\n\n"),
+            actions: [cancelAction],
+            ...(owner && { parent: { providerId: "pi-subagents", itemId: owner.runId } }),
+          },
+        });
+      }),
     presenting: (id) =>
       transition(() => {
         options.bridge.setRequest(id);
@@ -140,7 +115,7 @@ export function makeQuestionnaireActivity(options: {
           },
         });
       });
-      registration = (options.register ?? registerActivityProvider)(events, {
+      registration = registerActivityProvider(events, {
         sessionId,
         providerId: "pi-ask-user",
         snapshot: () => (current() ? [...rows.values()].map((row) => row.item) : []),

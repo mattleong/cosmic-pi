@@ -46,3 +46,25 @@ it.effect("shares the callback retention bound across duplicate and distinct req
     assert.equal(overflow, 1);
   }),
 );
+
+it.effect("a saturated row's synchronous redraw does not invalidate it again", () =>
+  Effect.gen(function* () {
+    const owner = acquireProjectionOwnership("code-preview-syntax-projection");
+    const ingress = yield* makeSyntaxIngress(owner, {
+      initialize: () => Effect.void,
+      language: () => Effect.never,
+    });
+    yield* Effect.addFinalizer(() =>
+      ingress.shutdown.pipe(Effect.andThen(Effect.sync(() => clearSyntaxProjection(owner)))),
+    );
+    for (let index = 0; index < 128; index++) requestSyntaxLanguage("rust", () => undefined);
+    // Pi's invalidate redraws the row at once, and the redraw requests the language again.
+    let redraws = 0;
+    const invalidate = () => {
+      redraws++;
+      requestSyntaxLanguage("rust", invalidate);
+    };
+    requestSyntaxLanguage("rust", invalidate);
+    assert.equal(redraws, 1);
+  }),
+);

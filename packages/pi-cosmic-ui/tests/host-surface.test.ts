@@ -44,14 +44,19 @@ describe("owned custom surfaces", () => {
       });
       h.mount();
       const options = h.overlayOptions!;
-      for (const [columns, rows, width, allocated] of [
-        [160, 50, 144, 45],
-        [124, 50, 124, 50],
-        [160, 29, 160, 29],
-        [125, 30, 112, 27],
-      ]) {
+      for (const [columns, rows, width, allocated, anchor] of [
+        [160, 50, 144, 45, "center"],
+        [124, 50, 124, 50, "top-left"],
+        [160, 29, 160, 29, "top-left"],
+        [125, 30, 112, 27, "center"],
+      ] as const) {
         Object.assign(h.terminal, { columns, rows });
-        expect([options.width, options.maxHeight, height()]).toEqual([width, allocated, allocated]);
+        expect([options.width, options.maxHeight, height(), options.anchor]).toEqual([
+          width,
+          allocated,
+          allocated,
+          anchor,
+        ]);
       }
       yield* Fiber.interrupt(fiber);
       expect(h.overlays).toEqual([]);

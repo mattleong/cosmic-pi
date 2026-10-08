@@ -6,8 +6,8 @@ import {
 } from "../../profiles/model.ts";
 import type { SubagentConfigScope } from "../../config/store.ts";
 import {
-  decodedAt,
   resolvedSet,
+  SCOPE_LABELS,
   type ProfileSettingsInspection,
   type PersistentProfileSetRef,
 } from "../profile-route-editor.ts";
@@ -50,13 +50,11 @@ export type ProfileSetPickerEntry =
       readonly description: string;
     };
 
-const setKey = (scope: SubagentConfigScope, name: string): string => `${scope}:${name}`;
-
 const scopeEntries = (
   inspection: ProfileSettingsInspection,
   scope: SubagentConfigScope,
 ): ReadonlyArray<ProfileSetPickerEntry> => {
-  const decoded = decodedAt(inspection, scope);
+  const decoded = inspection[scope];
   if (!decoded) return [];
   const names = new Set([
     ...Object.keys(decoded.file.profileSets ?? {}),
@@ -85,7 +83,7 @@ const scopeEntries = (
       ].filter((value): value is string => value !== undefined);
       return {
         kind: "set",
-        key: setKey(scope, name),
+        key: `${scope}:${name}`,
         scope,
         ref: { scope, name },
         scopeDefault,
@@ -114,11 +112,12 @@ const scopeEntries = (
     ? [
         {
           kind: "invalid-default",
-          key: `${scope}:invalid-default`,
+          // Set keys are `scope:name`, so this key cannot collide with a set named invalid-default.
+          key: `${scope}/invalid-default`,
           scope,
           scopeDefault: true,
           label: "Invalid default setting",
-          description: `Clear the invalid ${scope === "project" ? "Project" : "Global"} default setting`,
+          description: `Clear the invalid ${SCOPE_LABELS[scope]} default setting`,
         },
         ...sets,
       ]
@@ -129,7 +128,7 @@ const emptyScopeNote = (scope: SubagentConfigScope): ProfileSetPickerEntry => ({
   kind: "scope-note",
   key: `${scope}:empty`,
   scope,
-  label: `No ${scope === "project" ? "Project" : "Global"} sets saved`,
+  label: `No ${SCOPE_LABELS[scope]} sets saved`,
   description: "Save Current Session here to add one",
 });
 
@@ -171,4 +170,4 @@ export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPi
 };
 
 export const qualifiedProfileSetLabel = (ref: PersistentProfileSetRef): string =>
-  `${ref.scope === "project" ? "Project" : "Global"}/${ref.name}`;
+  `${SCOPE_LABELS[ref.scope]}/${ref.name}`;

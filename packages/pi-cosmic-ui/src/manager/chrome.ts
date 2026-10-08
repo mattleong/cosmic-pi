@@ -12,9 +12,6 @@ export const SPINNER_FRAME_MS = 160;
 /** The spinner frame shown at a clock reading. */
 export const spinnerFrameAt = (now: number): number => Math.floor(now / SPINNER_FRAME_MS);
 
-export const brailleSpinnerFrame = (frame: number): string =>
-  frameAt(BRAILLE_SPINNER_FRAMES, frame, "⠋");
-
 export const startingSpinnerFrame = (frame: number): string =>
   frameAt(STARTING_SPINNER_FRAMES, frame, "◌");
 
@@ -36,9 +33,12 @@ const MANAGER_NOTICE_GLYPHS = {
 /** Shared status glyph vocabulary for manager notices and feedback lines. */
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
-export type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
+/** Notice text color: info recedes as muted; the other kinds keep their own token. */
+export const managerNoticeColor = (kind: ManagerNoticeKind) => (kind === "info" ? "muted" : kind);
+
+type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
 /** Live states that need someone else before they can continue. */
-export type ManagerAttentionKind = "waiting" | "paused";
+type ManagerAttentionKind = "waiting" | "paused";
 export type ManagerActivityKind =
   | "pending"
   | "running"
@@ -62,7 +62,7 @@ export const managerActivityGlyph = (kind: ManagerActivityKind, frame = 0): stri
   kind === "pending"
     ? startingSpinnerFrame(frame)
     : kind === "running"
-      ? brailleSpinnerFrame(frame)
+      ? frameAt(BRAILLE_SPINNER_FRAMES, frame, "⠋")
       : kind === "waiting" || kind === "paused"
         ? managerNoticeGlyph("warning")
         : managerStateGlyph(kind);
@@ -99,8 +99,8 @@ export const managerActivityLabel = (kind: ManagerActivityKind): string =>
   MANAGER_ACTIVITY_LABELS[kind];
 
 /** Clips to `width` terminal columns, keeping styling, and marks the cut with "…". */
-export const clipToWidth = (text: string, width: number, marker = "…", pad = false): string =>
-  truncateToWidth(text, width, marker, pad);
+export const clipToWidth = (text: string, width: number, marker = "…"): string =>
+  truncateToWidth(text, width, marker);
 
 /** Keep the active tab visible when the complete strip cannot fit. Labels may contain ANSI. */
 export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
@@ -112,9 +112,6 @@ export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: 
 
 export type ManagerFooterGroup = string | undefined;
 
-export const managerFooterLine = (groups: ReadonlyArray<ManagerFooterGroup>): string =>
-  ` ${groups.filter((group): group is string => Boolean(group)).join(" │ ")} `;
-
 /** Selects the first grouped footer variant that fits, then safely clips the narrow fallback. */
 export const renderResponsiveManagerFooter = (
   contentWidth: number,
@@ -122,7 +119,9 @@ export const renderResponsiveManagerFooter = (
 ): string => {
   const safeWidth = Math.max(0, Math.floor(contentWidth));
   if (safeWidth === 0 || variants.length === 0) return "";
-  const lines = variants.map(managerFooterLine);
+  const lines = variants.map(
+    (groups) => ` ${groups.filter((group): group is string => Boolean(group)).join(" │ ")} `,
+  );
   return (
     lines.find((line) => visibleWidth(line) <= safeWidth) ??
     truncateToWidth(lines.at(-1) ?? "", safeWidth, "")

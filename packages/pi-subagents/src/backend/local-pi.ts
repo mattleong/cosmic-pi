@@ -1,12 +1,12 @@
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
+import { makeLocalCliEventIngress } from "./local-cli-events.ts";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { safeTextPrefix } from "pi-cosmic-core";
 import {
   type ChildProcessHandle,
   type ChildProcessContract,
@@ -36,7 +36,6 @@ import {
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
-  safeTextPrefix,
   sanitizeStreamDiagnostic,
   sanitizeDiagnosticText,
   sanitizeOutputText,
@@ -54,9 +53,6 @@ import {
 const RPC_TIMEOUT = "10 seconds";
 // Process spawn precedes Pi model/resource loading and extension startup.
 const STARTUP_RPC_TIMEOUT = "30 seconds";
-const EVENT_CAPACITY = 512;
-
-const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
 
 const RPC_OUTCOME_CODES = new Map<RpcCommand["type"], string>([
   ["steer", "guidance_outcome_uncertain"],
@@ -132,11 +128,10 @@ const normalizeRpcEvent = (
     case "extension_error":
       return Effect.succeed<BackendEvent>({
         type: "warning",
-        source: "runtime-extension",
         message: envelope.error,
       });
     default:
-      return noBackendEvent;
+      return Effect.undefined;
   }
 };
 
@@ -163,7 +158,6 @@ interface PendingRpcResponse {
 const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   child: ChildProcessHandle,
 ) {
-  const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
   const turnControl = yield* Semaphore.make(1);
   const withTurnControl = turnControl.withPermits(1);
   const responses = new Map<string, PendingRpcResponse>();
@@ -174,16 +168,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let latestTerminal: BackendAssistantTerminal | undefined;
   let transportFailure: SubagentError | undefined;
 
-  const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
-    events,
-    (event: ChildWireEvent) => child.acknowledge?.(event),
+  const { events, offer, release, acknowledge } = yield* makeLocalCliEventIngress(
+    child.acknowledge,
     "local-Pi",
-  );
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      acknowledgeAll();
-      Queue.endUnsafe(events);
-    }),
   );
 
   const cancelPending = (error: SubagentError) => {
@@ -309,7 +296,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     while (usageDirty || pendingSettlement) {
       usageDirty = false;
       const settlement = pendingSettlement;
-      yield* reconcileUsage.pipe(Effect.catch(() => Effect.void));
+      yield* Effect.ignore(reconcileUsage);
       if (settlement && settlement === pendingSettlement) {
         pendingSettlement = undefined;
         if (settlement.assignmentEpoch === assignmentEpoch) yield* offer(settlement);
@@ -398,7 +385,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             return {
               type: "structured_result",
               assignmentEpoch,
-              requestId: contact.requestId,
               valueJson: contact.valueJson,
               respond: (ok, message) =>
                 child.sendContactControl({
@@ -415,7 +401,6 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       })();
       return offer(normalized, event);
     }
-    if (event.type === "exit") return release(event);
     return decodeRpcEnvelope(event.value).pipe(
       Effect.flatMap((envelope) => {
         if (envelope.type === "response") {
@@ -444,10 +429,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               id: envelope.id,
               cancelled: true,
             })
-            .pipe(
-              Effect.catch(() => Effect.void),
-              Effect.ensuring(release(event)),
-            );
+            .pipe(Effect.ignore, Effect.ensuring(release(event)));
         if (
           envelope.type === "ignored" &&
           ["turn_end", "compaction_end", "entry_appended"].includes(envelope.eventType)
@@ -498,7 +480,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
         cancelPending(transportFailure);
       }),
     ),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.ensuring(
       Effect.gen(function* () {
         transportFailure ??= new SubagentProcessError({
@@ -665,7 +647,7 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): 
         ),
   spawn: (request: BackendLaunchRequest) =>
     Effect.gen(function* () {
-      const { closeOnReport: _closeOnReport, resumeToken, ...launch } = request;
+      const { resumeToken, ...launch } = request;
       const resumeSessionFile = resumeToken
         ? (yield* decodeLocalPiResumeToken(resumeToken)).sessionFile
         : undefined;

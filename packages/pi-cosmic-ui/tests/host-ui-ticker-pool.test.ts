@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import { makeHostUiTickerOwner } from "../src/boundary/host-status.ts";
 import {
@@ -143,12 +144,11 @@ describe("host UI ticker pool", () => {
   });
 
   it.effect("rotates to a fresh pool while awaiting the previous pool", () => {
-    const finishDisposal = Deferred.makeUnsafe<void>();
-    const disposal = Effect.runPromise(Deferred.await(finishDisposal));
+    const disposal = deferredPromise();
     const firstStart = vi.fn(() => () => undefined);
     const secondStart = vi.fn(() => () => undefined);
     const pools: HostUiTickerPool[] = [
-      { start: firstStart, dispose: vi.fn(() => disposal) },
+      { start: firstStart, dispose: vi.fn(() => disposal.promise) },
       { start: secondStart, dispose: vi.fn(() => Promise.resolve()) },
     ];
     let poolIndex = 0;
@@ -165,7 +165,7 @@ describe("host UI ticker pool", () => {
       expect(firstStart).toHaveBeenCalledOnce();
       expect(secondStart).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
-      yield* Deferred.succeed(finishDisposal, undefined);
+      disposal.resolve();
       yield* Effect.promise(() => shutdown);
       expect(settled).toBe(true);
     });

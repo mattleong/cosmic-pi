@@ -1,4 +1,4 @@
-import * as Duration from "effect/Duration";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Ref from "effect/Ref";
@@ -9,21 +9,19 @@ import {
   type RefreshRequest,
 } from "./refresh-coordinator.ts";
 
-export interface SubscriptionRefreshOptions<Key, Value, E, R> {
+interface SubscriptionRefreshOptions<Key, Value, E, R> {
   readonly currentKey: Effect.Effect<Key, never, R>;
   readonly interval: Effect.Effect<number, never, R>;
   readonly fetch: (request: RefreshRequest) => Effect.Effect<Value, E, R>;
-  readonly commit: (value: Value, request: RefreshRequest) => Effect.Effect<void, E, R>;
+  readonly commit: (value: Value) => Effect.Effect<void, E, R>;
   readonly spanName?: string;
 }
 
-export interface SubscriptionRefresh<E, R> {
+interface SubscriptionRefresh<E, R> {
   readonly request: (request: RefreshRequest) => Effect.Effect<void, E, R>;
-  readonly invalidate: Effect.Effect<void>;
   /** Consumer invalidation and stale validation/publication share the same reentrant gate. */
   readonly invalidateWith: <A, E2, R2>(
     effect: Effect.Effect<A, E2, R2>,
-    wakePolling?: boolean,
   ) => Effect.Effect<A, E2, R2>;
   readonly startPolling: (request: RefreshRequest) => Effect.Effect<void, E, R>;
 }
@@ -47,16 +45,10 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
     const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
       TxReentrantLock.withLock(commitGate, effect);
 
-    const wake = Latch.release(wakeLatch).pipe(Effect.asVoid);
-
-    const invalidateWith: SubscriptionRefresh<E, R>["invalidateWith"] = (
-      effect,
-      wakePolling = true,
-    ) =>
+    const invalidateWith: SubscriptionRefresh<E, R>["invalidateWith"] = (effect) =>
       withCommitPermit(
         Ref.update(revisionRef, (revision) => revision + 1).pipe(Effect.andThen(effect)),
-      ).pipe(Effect.tap(() => (wakePolling ? wake : Effect.void)));
-    const invalidate = invalidateWith(Effect.void);
+      ).pipe(Effect.tap(() => Latch.release(wakeLatch)));
 
     const perform = Effect.fn(spanName)(function* (request: RefreshRequest) {
       const capturedRevision = yield* Ref.get(revisionRef);
@@ -66,7 +58,7 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
         Effect.gen(function* () {
           if (capturedRevision !== (yield* Ref.get(revisionRef))) return;
           const currentKey = yield* options.currentKey;
-          if (Object.is(capturedKey, currentKey)) yield* options.commit(value, request);
+          if (Object.is(capturedKey, currentKey)) yield* options.commit(value);
         }),
       );
     });
@@ -74,13 +66,18 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
     const request = (next: RefreshRequest) => coordinator.run(next, perform);
 
     const startPolling = (pollRequest: RefreshRequest) =>
-      Effect.gen(function* () {
-        while (true) {
-          const interval = yield* options.interval;
-          yield* Effect.raceFirst(Effect.sleep(Duration.millis(interval)), Latch.await(wakeLatch));
-          yield* request(pollRequest);
-        }
-      });
+      Effect.forever(
+        options.interval.pipe(
+          Effect.flatMap((interval) => Latch.await(wakeLatch).pipe(Effect.timeoutOption(interval))),
+          Effect.andThen(request(pollRequest)),
+          // A joined owner's interruption is replayed to its joiners; only this fiber's own
+          // interruption ends polling.
+          Effect.catchCauseIf(
+            (cause) => Cause.hasInterruptsOnly(cause),
+            () => Effect.void,
+          ),
+        ),
+      );
 
-    return { request, invalidate, invalidateWith, startPolling };
+    return { request, invalidateWith, startPolling };
   });

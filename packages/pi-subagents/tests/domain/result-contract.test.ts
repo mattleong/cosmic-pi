@@ -63,14 +63,6 @@ describe("result contracts", () => {
     expect(decode(contract, ["a"])._tag).toBe("Failure");
   });
 
-  it("marks schemas with non-structural keywords as unsafe for strict sampling", () => {
-    expect(compile(closed({ n: { type: "integer", minimum: 0 } })).strictSafe).toBe(false);
-    expect(compile(closed({ minimum: { type: "string" } })).strictSafe).toBe(true);
-    expect(compile(closed({ code: { type: "string", pattern: "^[A-Z]+$" } })).strictSafe).toBe(
-      false,
-    );
-  });
-
   it("uses strict sampling only when it cannot change what the schema accepts", () => {
     // Strict conversion closes every object, so an open one could only be sampled as `{}`.
     const unsafe: ReadonlyArray<Schema.Json> = [
@@ -87,12 +79,16 @@ describe("result contracts", () => {
       closed({ value: { description: "anything" } }),
       closed({ either: { type: ["string", "null"] } }),
       closed({ flag: true }),
+      // Non-structural keywords would be dropped.
+      closed({ n: { type: "integer", minimum: 0 } }),
+      closed({ code: { type: "string", pattern: "^[A-Z]+$" } }),
     ];
     for (const schema of unsafe)
       expect(compile(schema).strictSafe, JSON.stringify(schema)).toBe(false);
     expect(compile(FINDINGS).strictSafe).toBe(true);
     expect(compile({ type: "array", items: { type: "string" } }).strictSafe).toBe(true);
     expect(compile({ enum: ["ok", "bad"] }).strictSafe).toBe(true);
+    expect(compile(closed({ minimum: { type: "string" } })).strictSafe).toBe(true);
     expect(compile(closed({ kind: { const: "report" }, at: { type: "null" } })).strictSafe).toBe(
       true,
     );

@@ -1,11 +1,6 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
-import {
-  decodeTolerantFields,
-  makeConfigDocumentErrorFactory,
-  makeScopedConfigStore,
-  type JsonObject,
-} from "pi-cosmic-core";
+import { decodeTolerantFields, makeScopedConfigStore, type JsonObject } from "pi-cosmic-core";
 import {
   CONFIG_BASENAME,
   DEFAULT_USAGE_CONFIG,
@@ -19,14 +14,10 @@ export class XaiConfigError extends Schema.TaggedError<XaiConfigError>()("XaiCon
   message: Schema.String,
 }) {}
 
-const mapDocumentError = makeConfigDocumentErrorFactory(XaiConfigError, "Better xAI");
-
-const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-
 function decodeConfig<ValueInput>(value: ValueInput) {
   const root = decodeTolerantFields(
     value,
-    { usage: UnknownRecordSchema },
+    { usage: Schema.Record(Schema.String, Schema.Unknown) },
     { path: "config" },
   ).value;
   const usage = decodeTolerantFields(
@@ -42,7 +33,7 @@ function decodeConfig<ValueInput>(value: ValueInput) {
 }
 
 const store = makeScopedConfigStore({
-  errorFactory: mapDocumentError,
+  error: XaiConfigError,
   label: "Better xAI",
   spanPrefix: "XaiConfig",
   projectConfigDirectory: CONFIG_DIR_NAME,

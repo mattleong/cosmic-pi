@@ -7,7 +7,7 @@ import * as Scope from "effect/Scope";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { deliverTerminalReport } from "../src/backend/terminal-report-delivery.ts";
+import { deliverTerminalReport } from "../src/backend/local-cli-driver.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 
 const report: BackendEvent = {

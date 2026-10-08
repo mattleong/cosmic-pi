@@ -4,11 +4,12 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import type * as Types from "effect/Types";
 import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
-import type {
-  OpenAICompactionCheckpoint,
-  OpenAICompactionJsonObject,
+import {
+  JsonObjectSchema,
+  NonNegativeIntSchema,
+  type OpenAICompactionCheckpoint,
+  type OpenAICompactionJsonObject,
 } from "../compaction/protocol.ts";
 
 const ProviderHeadersSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
@@ -20,11 +21,6 @@ const AuthSchema = Schema.Union([
   }),
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),
 ]);
-const NonNegativeIntegerSchema = Schema.Number.check(
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
 const CompactRequestSchema = Schema.Struct({
   model: Schema.String,
   input: Schema.Array(JsonObjectSchema),
@@ -36,14 +32,10 @@ const CompactedResponseSchema = Schema.Struct({
   object: Schema.Literal("response.compaction"),
   output: Schema.Array(JsonObjectSchema),
   usage: Schema.Struct({
-    input_tokens: NonNegativeIntegerSchema,
-    input_tokens_details: Schema.optional(
-      Schema.Struct({
-        cached_tokens: NonNegativeIntegerSchema,
-      }),
-    ),
-    output_tokens: NonNegativeIntegerSchema,
-    total_tokens: NonNegativeIntegerSchema,
+    input_tokens: NonNegativeIntSchema,
+    input_tokens_details: Schema.optional(Schema.Struct({ cached_tokens: NonNegativeIntSchema })),
+    output_tokens: NonNegativeIntSchema,
+    total_tokens: NonNegativeIntSchema,
   }),
 });
 
@@ -58,6 +50,12 @@ export class OpenAICompactionBoundaryError extends Schema.TaggedError<OpenAIComp
 
 const boundaryError = (operation: OpenAICompactionBoundaryError["operation"], message: string) =>
   new OpenAICompactionBoundaryError({ operation, message });
+const HTTP_FAILURES = {
+  encode: "OpenAI compaction request was invalid.",
+  request: "OpenAI compaction request failed.",
+  response: "Unable to read the OpenAI compaction response.",
+  decode: "OpenAI compaction response was invalid.",
+} as const;
 
 export interface OpenAICompactRequest {
   readonly model: Model<"openai-responses">;
@@ -77,10 +75,7 @@ export interface OpenAICompactionClientContract {
   ) => Effect.Effect<OpenAICompactResult, OpenAICompactionBoundaryError>;
 }
 
-type Registry = Pick<
-  Pick<ExtensionContext, "modelRegistry">["modelRegistry"],
-  "getApiKeyAndHeaders"
->;
+type Registry = Pick<ExtensionContext["modelRegistry"], "getApiKeyAndHeaders">;
 
 function hasAuthorization(headers: Readonly<Record<string, string>>): boolean {
   return Object.entries(headers).some(
@@ -104,7 +99,7 @@ export class OpenAICompactionClient extends Context.Service<
             try: () => getRegistry().getApiKeyAndHeaders(request.model),
             catch: () => boundaryError("auth", "Unable to resolve OpenAI credentials."),
           });
-          const auth = yield* Schema.decodeUnknownEffect(AuthSchema)(authRaw).pipe(
+          const auth = yield* Schema.decodeEffect(AuthSchema)(authRaw).pipe(
             Effect.mapError(() => boundaryError("auth", "OpenAI authentication was invalid.")),
           );
           if (!auth.ok)
@@ -116,12 +111,6 @@ export class OpenAICompactionClient extends Context.Service<
           );
           if (!hasAuthorization(headers))
             return yield* boundaryError("auth", "OpenAI API credentials were unavailable.");
-          const body: Types.Mutable<Schema.Schema.Type<typeof CompactRequestSchema>> = {
-            model: request.model.id,
-            input: request.input,
-          };
-          if (request.instructions) body.instructions = request.instructions;
-          if (request.serviceTier) body.service_tier = request.serviceTier;
           const response = yield* http
             .requestJson(
               {
@@ -132,17 +121,16 @@ export class OpenAICompactionClient extends Context.Service<
                 maxResponseBytes: MAX_COMPACTION_RESPONSE_BYTES,
               },
               CompactRequestSchema,
-              body,
+              {
+                model: request.model.id,
+                input: request.input,
+                ...(request.instructions && { instructions: request.instructions }),
+                ...(request.serviceTier && { service_tier: request.serviceTier }),
+              },
             )
             .pipe(
               Effect.mapError((error) =>
-                error.operation === "encode"
-                  ? boundaryError("encode", "OpenAI compaction request was invalid.")
-                  : error.operation === "decode"
-                    ? boundaryError("decode", "OpenAI compaction response was invalid.")
-                    : error.operation === "response"
-                      ? boundaryError("response", "Unable to read the OpenAI compaction response.")
-                      : boundaryError("request", "OpenAI compaction request failed."),
+                boundaryError(error.operation, HTTP_FAILURES[error.operation]),
               ),
               Effect.withSpan("pi-better-openai.compaction.request", {
                 attributes: { "http.request.method": "POST" },
@@ -154,20 +142,23 @@ export class OpenAICompactionClient extends Context.Service<
               message: `OpenAI compaction failed (${response.status}).`,
               status: response.status,
             });
-          const decoded = response.body;
-          if (!decoded.output.some((item) => item.type === "compaction"))
+          const { output, usage } = response.body;
+          if (!output.some((item) => item.type === "compaction"))
             return yield* boundaryError(
               "decode",
               "OpenAI compaction response did not contain a compaction item.",
             );
-          const usage: Types.Mutable<OpenAICompactResult["usage"]> = {
-            inputTokens: decoded.usage.input_tokens,
-            outputTokens: decoded.usage.output_tokens,
-            totalTokens: decoded.usage.total_tokens,
+          return {
+            output,
+            usage: {
+              inputTokens: usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              totalTokens: usage.total_tokens,
+              ...(usage.input_tokens_details && {
+                cachedInputTokens: usage.input_tokens_details.cached_tokens,
+              }),
+            },
           };
-          if (decoded.usage.input_tokens_details)
-            usage.cachedInputTokens = decoded.usage.input_tokens_details.cached_tokens;
-          return { output: decoded.output, usage };
         });
         return OpenAICompactionClient.of({ compact });
       }),

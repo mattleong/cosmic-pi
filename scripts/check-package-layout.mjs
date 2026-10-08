@@ -1,16 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
-import {
-  NESTED_PACKAGE_DIRECTORIES,
-  workspacePackageDirectories,
-} from "./workspace-manifest-paths.mjs";
+import { workspacePackageDirectories } from "./workspace-manifest-paths.mjs";
 
 const rootDir = join(import.meta.dirname, "..");
-const packagesDir = join(rootDir, "packages");
-/** The only subdirectories allowed to carry their own package manifest. */
-const declaredNestedPackages = new Set(
-  NESTED_PACKAGE_DIRECTORIES.map((nested) => join(packagesDir, nested)),
-);
 const violations = [];
 const hostProvidedPackages = new Set([
   "@earendil-works/pi-ai",
@@ -37,30 +29,23 @@ const hasOwnManifest = async (directory) => {
 };
 
 /**
- * Walk one package's own files. A subdirectory with its own `package.json` must be a declared
- * nested workspace package (see `NESTED_PACKAGE_DIRECTORIES`); it is then validated as its
- * own package entry instead of leaking into its parent's layout rules. An undeclared nested
- * manifest is a violation, so nesting can never silently exempt files from these rules.
+ * Walk one package's own files. A subdirectory with its own `package.json` is a violation and
+ * is not descended into, so nesting can never silently exempt files from these rules.
  */
-const walkFiles = async (directory, nestedPackages) => {
+const walkFiles = async (directory) => {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (ignoredDirectories.has(entry.name)) continue;
       const child = join(directory, entry.name);
       if (await hasOwnManifest(child)) {
-        if (declaredNestedPackages.has(child)) {
-          nestedPackages.push(child);
-        } else {
-          violations.push(
-            `${relative(rootDir, child).split(sep).join("/")}/package.json: undeclared nested ` +
-              "package manifest (declare it in scripts/workspace-manifest-paths.mjs and " +
-              "pnpm-workspace.yaml, or remove it)",
-          );
-        }
+        violations.push(
+          `${relative(rootDir, child).split(sep).join("/")}/package.json: nested package ` +
+            "manifest (remove it, or make it a top-level packages/* workspace package)",
+        );
         continue;
       }
-      files.push(...(await walkFiles(child, nestedPackages)));
+      files.push(...(await walkFiles(child)));
     } else if (entry.isFile()) {
       files.push(join(directory, entry.name));
     }
@@ -70,10 +55,9 @@ const walkFiles = async (directory, nestedPackages) => {
 
 const packageDirectories = await workspacePackageDirectories(rootDir);
 
-for (let index = 0; index < packageDirectories.length; index += 1) {
-  const packageDir = packageDirectories[index];
+for (const packageDir of packageDirectories) {
   const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
-  const files = await walkFiles(packageDir, packageDirectories);
+  const files = await walkFiles(packageDir);
   const isExtensionPackage = manifest.pi !== undefined;
 
   for (const name of hostProvidedPackages) {

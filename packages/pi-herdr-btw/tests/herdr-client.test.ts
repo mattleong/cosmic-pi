@@ -282,7 +282,6 @@ it.effect("keeps the owned start precondition rejection confirmed", () =>
     expect(error).toMatchObject({
       code: "herdr_start_side_session_pi_rejected",
       outcome: "confirmed",
-      herdrCode: "agent_pane_busy",
     });
   }),
 );

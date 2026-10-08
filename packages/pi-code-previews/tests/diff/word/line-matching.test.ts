@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { AddedDiffLine, RemovedDiffLine } from "../../../src/diff/parse";
-import type { IndexedChangedLine } from "../../../src/diff/word/changed-line";
 import { profileLine, profilePlacement } from "../../support/word-fixtures/profile-lines";
 import { matchChangedLines, type ChangedLinePair } from "../../../src/diff/word/line-matching";
 
@@ -131,22 +129,17 @@ function uniqueLine(index: number, value: "new" | "old"): string {
   return `const record${index}Checksum${1000 + index} = transform${index}(${value}${index});`;
 }
 
-function removedLines(
-  contents: string[],
-  indexOffset = 0,
-): Array<IndexedChangedLine<RemovedDiffLine>> {
+function changedLines<Kind extends "-" | "+">(kind: Kind, contents: string[], indexOffset = 0) {
   return contents.map((content, position) => ({
     index: indexOffset + position,
-    line: { kind: "-", lineNumber: String(position + 1), content },
+    line: { kind, lineNumber: String(position + 1), content },
   }));
 }
 
-function addedLines(contents: string[], indexOffset = 0): Array<IndexedChangedLine<AddedDiffLine>> {
-  return contents.map((content, position) => ({
-    index: indexOffset + position,
-    line: { kind: "+", lineNumber: String(position + 1), content },
-  }));
-}
+const removedLines = (contents: string[], indexOffset?: number) =>
+  changedLines("-", contents, indexOffset);
+const addedLines = (contents: string[], indexOffset?: number) =>
+  changedLines("+", contents, indexOffset);
 
 function pairPositions(pairs: ChangedLinePair[]): number[][] {
   return pairs.map((pair) => [pair.removedIndex, pair.addedIndex]);

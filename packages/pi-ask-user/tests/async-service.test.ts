@@ -1,4 +1,4 @@
-import { ordinalChoices, defaultQuestion } from "./support/questionnaire.ts";
+import { asyncRequest as request } from "./support/questionnaire.ts";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Scheduler from "effect/Scheduler";
@@ -13,28 +14,21 @@ import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
-import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
+import { pausedScheduler } from "pi-cosmic-core/testing";
+import {
+  AskUserService,
+  type AskUserHost,
+  type QuestionnairePresence,
+} from "../src/questionnaire/service.ts";
+import { formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import {
   MAX_RETAINED_REQUESTS,
   type AsyncQuestionnaireSnapshot,
 } from "../src/questionnaire/async-model.ts";
-import type { AskUserAsyncControl, AskUserAsyncRequest } from "../src/questionnaire/schema.ts";
+import type { AskUserAsyncControl } from "../src/questionnaire/schema.ts";
 
-const request: AskUserAsyncRequest = {
-  independentWork: "Inspect the test fixtures",
-  blockedWork: "Choose the implementation",
-  questions: [
-    {
-      ...defaultQuestion,
-      key: "library",
-      title: "Library",
-      prompt: "Which?",
-      choices: ordinalChoices,
-    },
-  ],
-};
 const outcome: AskUserOutcome = {
   outcome: "submitted",
   answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
@@ -56,9 +50,9 @@ const control = (
     .controlAsync(requestId === undefined ? { action } : { action, requestId })
     .pipe(Effect.map((result) => result.requests[0]));
 
-const immediateHost: AskUserHost = (_request, opened) =>
+const immediateHost: AskUserHost = (_request, presence) =>
   Effect.gen(function* () {
-    if (opened) yield* Deferred.succeed(opened, undefined);
+    if (presence) yield* Deferred.succeed(presence.opened, undefined);
     return outcome;
   });
 
@@ -74,11 +68,11 @@ const fixture = Effect.gen(function* () {
   const delivered = yield* Deferred.make<void>();
   const released = yield* Ref.make(0);
   const messages = yield* Ref.make<ReadonlyArray<AsyncQuestionnaireSnapshot>>([]);
-  const host: AskUserHost = (_request, opened) =>
+  const host: AskUserHost = (_request, presence) =>
     Effect.gen(function* () {
       yield* Deferred.succeed(entered, undefined);
       yield* Deferred.await(mount);
-      if (opened) yield* Deferred.succeed(opened, undefined);
+      if (presence) yield* Deferred.succeed(presence.opened, undefined);
       return yield* Deferred.await(answer);
     }).pipe(Effect.ensuring(Ref.update(released, (n) => n + 1)));
   const delivery = (snapshot: AsyncQuestionnaireSnapshot) =>
@@ -117,6 +111,34 @@ it.effect("waits only for mounting, admits independent work, and retains automat
     expect(status?.delivery).toBe("sent");
     expect((yield* Ref.get(f.messages))[0]?.deliveryId).toBe(receipt.deliveryId);
     expect(yield* Ref.get(f.released)).toBe(1);
+  }),
+);
+
+it.effect("reports a pending questionnaire hidden until the user resumes it", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const visibility = yield* Deferred.make<QuestionnairePresence["visibility"]>();
+    const host: AskUserHost = (input, presence) =>
+      (presence ? Deferred.succeed(visibility, presence.visibility) : Effect.void).pipe(
+        Effect.andThen(f.host(input, presence)),
+      );
+    yield* Deferred.succeed(f.mount, undefined);
+    const service = yield* acquireService(host, f.delivery);
+    const { requestId } = yield* service.startAsync(request);
+    const signals = yield* Deferred.await(visibility);
+    // The presenter applies each signal on its next turn.
+    const statusAfter = (signal: "open" | "hidden") =>
+      Queue.offer(signals, signal).pipe(
+        Effect.andThen(Effect.yieldNow),
+        Effect.andThen(control(service, "status", requestId)),
+      );
+    const hidden = yield* statusAfter("hidden");
+    expect(hidden?.presentation).toBe("hidden");
+    expect(formatAsyncSnapshot(hidden!)).toContain("/ask-user");
+    expect((yield* statusAfter("open"))?.presentation).toBe("open");
+    yield* Deferred.succeed(f.answer, outcome);
+    yield* Deferred.await(f.delivered);
+    expect((yield* statusAfter("hidden"))?.presentation).toBe("settled");
   }),
 );
 
@@ -406,36 +428,29 @@ it.effect("scope shutdown closes the presenter and cannot emit an answer afterwa
   }),
 );
 
-it.effect("rejects blank work descriptions and unavailable async hosts before opening", () =>
+it.effect("rejects blank work descriptions before opening", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
-    yield* Effect.gen(function* () {
-      const service = yield* acquireService(f.host, f.delivery);
-      for (const work of [" ", "x".repeat(501)])
-        expect(
-          yield* Effect.flip(service.startAsync({ ...request, blockedWork: work })),
-        ).toMatchObject({ _tag: "AskUserValidationError" });
-      expect(yield* Effect.flip(control(service, "await"))).toMatchObject({
-        reason: "invalid-control",
-      });
-      expect(yield* Ref.get(f.released)).toBe(0);
-    }).pipe(Effect.scoped);
-    yield* Effect.gen(function* () {
-      expect(yield* Effect.flip((yield* AskUserService).startAsync(request))).toMatchObject({
-        reason: "unavailable",
-      });
-    }).pipe(Effect.provide(AskUserService.layer(f.host)));
+    const service = yield* acquireService(f.host, f.delivery);
+    for (const work of [" ", "x".repeat(501)])
+      expect(
+        yield* Effect.flip(service.startAsync({ ...request, blockedWork: work })),
+      ).toMatchObject({ _tag: "AskUserValidationError" });
+    expect(yield* Effect.flip(control(service, "await"))).toMatchObject({
+      reason: "invalid-control",
+    });
+    expect(yield* Ref.get(f.released)).toBe(0);
   }),
 );
 
 it.effect("acknowledging failed openings recovers a full registry after host recovery", () =>
   Effect.gen(function* () {
     const recovered = yield* Ref.make(false);
-    const host: AskUserHost = (_request, opened) =>
+    const host: AskUserHost = (_request, presence) =>
       Effect.gen(function* () {
         if (!(yield* Ref.get(recovered)))
           return yield* new AskUserHostError({ operation: "open", message: "Unavailable" });
-        if (opened) yield* Deferred.succeed(opened, undefined);
+        if (presence) yield* Deferred.succeed(presence.opened, undefined);
         return yield* Effect.never;
       });
     const service = yield* acquireService(host, () => Effect.void);
@@ -478,11 +493,11 @@ it.effect(
       ]);
       const cleanup = yield* Deferred.make<void>();
       const mounted = yield* Ref.make<string[]>([]);
-      const host: AskUserHost = (input, opened) =>
+      const host: AskUserHost = (input, presence) =>
         Effect.gen(function* () {
           const key = input.questions[0]!.key;
           yield* Ref.update(mounted, (items) => [...items, key]);
-          if (opened) yield* Deferred.succeed(opened, undefined);
+          if (presence) yield* Deferred.succeed(presence.opened, undefined);
           return yield* Deferred.await(answers[Number(key)]!);
         }).pipe(
           Effect.ensuring(input.questions[0]!.key === "0" ? Deferred.await(cleanup) : Effect.void),
@@ -526,23 +541,6 @@ it.effect("queued admission is bounded and shutdown never mounts waiting request
     expect(yield* Ref.get(f.messages)).toEqual([]);
   }),
 );
-
-const pausedScheduler = () => {
-  const tasks: Array<() => void> = [];
-  const scheduler: Scheduler.Scheduler = {
-    executionMode: "async",
-    shouldYield: (fiber) => fiber.currentOpCount >= fiber.cache.maxOpsBeforeYield,
-    makeDispatcher: () => ({
-      scheduleTask: (task) => {
-        tasks.push(task);
-      },
-      flush: () => {
-        while (tasks.length) tasks.shift()!();
-      },
-    }),
-  };
-  return { scheduler, step: () => tasks.shift()?.() };
-};
 
 for (const prior of ["none", "pending", "failed"] as const) {
   for (const budget of [8, 16]) {

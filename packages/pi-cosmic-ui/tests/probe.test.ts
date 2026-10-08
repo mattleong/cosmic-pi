@@ -21,7 +21,7 @@ describe("repository probe", () => {
         }),
     });
     return Effect.gen(function* () {
-      expect(yield* probe.git("/secret/project/not-recorded")).toMatchObject({
+      expect(yield* probe.git("/secret/project/not-recorded", () => true)).toMatchObject({
         modified: 1,
         linesAdded: 3,
       });

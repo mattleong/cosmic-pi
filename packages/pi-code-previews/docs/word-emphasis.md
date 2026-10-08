@@ -4,7 +4,7 @@ Word emphasis is the stronger inline highlighting used inside added/removed diff
 
 ## Settings
 
-Word emphasis is controlled by `wordEmphasis` / `CODE_PREVIEW_WORD_EMPHASIS`:
+Word emphasis is controlled by the `wordEmphasis` setting:
 
 - `all` — show all accepted word-emphasis spans.
 - `smart` — suppress low-signal noise, such as wrapper-only syntax changes, while keeping meaningful token/operator changes.

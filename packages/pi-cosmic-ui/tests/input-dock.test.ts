@@ -1,34 +1,19 @@
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { opaqueFixture } from "pi-cosmic-core/testing";
 import { createInputDock, inputDockVisible } from "../src/boundary/host-input-dock.ts";
+import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 
 const harness = () => {
-  const widgets = new Map<string, Component>();
-  const tui: TUI = opaqueFixture({ terminal: { columns: 200, rows: 60 }, requestRender: vi.fn() });
-  const ui: ExtensionUIContext = opaqueFixture({
-    setWidget: (key: string, factory: (() => Component) | undefined) => {
-      if (factory) widgets.set(key, factory());
-      else widgets.delete(key);
-    },
-  });
-  return { tui, ui, widgets };
+  const host = fakeCustomSurfaceHost();
+  const tui: TUI = opaqueFixture(host.tui);
+  return { tui, ui: host.ctx.ui, widgets: host.widgets, overlay: () => host.showUnrelated() };
 };
 const component = () => ({
   focused: false,
   render: () => ["panel"],
   invalidate: vi.fn(),
   handleInput: vi.fn(),
-});
-const overlay = (): OverlayHandle => ({
-  hide: vi.fn(),
-  setHidden: vi.fn(),
-  isHidden: () => false,
-  focus: vi.fn(),
-  unfocus: vi.fn(),
-  isFocused: () => true,
-  getBounds: () => undefined,
 });
 
 describe("input dock ownership", () => {
@@ -44,7 +29,7 @@ describe("input dock ownership", () => {
     expect(dialog.handleInput).toHaveBeenCalledWith("x");
     expect(dock.input.render(80)).toEqual([]);
     expect(widget.render(80)).toEqual(dialog.render());
-    const handle = dock.handle(overlay());
+    const handle = dock.handle(h.overlay());
     handle.setHidden(true);
     expect(widget.render(80)).toEqual([]);
     dialog.handleInput.mockClear();
@@ -81,7 +66,7 @@ describe("input dock ownership", () => {
     const dock = createInputDock(h.ui);
     dock.mount(h.tui, component());
     const handle = dock.handle({
-      ...overlay(),
+      ...h.overlay(),
       hide: () => {
         throw new Error("host failure");
       },
@@ -98,7 +83,7 @@ describe("input dock presence", () => {
     expect(inputDockVisible()).toBe(false);
     dock.mount(h.tui, component());
     expect(inputDockVisible()).toBe(true);
-    const handle = dock.handle(overlay());
+    const handle = dock.handle(h.overlay());
     handle.setHidden(true);
     expect(inputDockVisible()).toBe(false);
     handle.setHidden(false);

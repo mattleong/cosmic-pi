@@ -9,7 +9,7 @@ const Count = Schema.Int.check(
   Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
 );
 const Texts = Schema.Array(Text).check(Schema.isMaxLength(32));
-const Field = Schema.Union([Text, Schema.Number, Schema.Boolean, Schema.Null, Texts]);
+const Field = Schema.Union([Text, Schema.Finite, Schema.Boolean, Schema.Null, Texts]);
 const Arguments = Schema.Struct({
   query: Schema.optionalKey(Text),
   queries: Schema.optionalKey(Texts),
@@ -98,7 +98,7 @@ export function webAccessArgumentReference<Args>(args: Args): string {
   }, "");
 }
 
-export interface WebAccessEvidence {
+interface WebAccessEvidence {
   readonly details: typeof Details.Type;
   readonly researchErrors: number;
 }

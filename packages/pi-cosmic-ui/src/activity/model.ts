@@ -8,13 +8,13 @@ export type ActivityRow = ActivityItem & {
   readonly retained?: true;
   /** Lower bounds, not exact lifetime totals. Repeated snapshots never inflate them. */
   readonly omittedChildren?: number;
-  readonly omittedHistory?: number;
 };
 export const isFinished = (item: Pick<ActivityItem, "status">): boolean =>
   item.status === "done" || item.status === "failed" || item.status === "cancelled";
 export const COMPLETED_BRANCH_LIMIT = 128;
-export const COMPLETED_TOTAL_LIMIT = 1024;
-export const HISTORY_ROOT_LIMIT = 100;
+const COMPLETED_TOTAL_LIMIT = 1024;
+const HISTORY_ROOT_LIMIT = 100;
+const endedAt = (row: ActivityRow) => row.endedAt ?? row.updatedAt ?? 0;
 
 /** Missing owners and every path entering a cycle become roots. Package-private. */
 export function resolveActivityOwnership(byKey: ReadonlyMap<string, ActivityRow>) {
@@ -63,8 +63,14 @@ export function retainActivity(
     }
   }
   const history = rows.filter((row) => !parents.has(row.key) && !protectedKeys.has(row.key));
+  // Each publication puts the rows its sources just dropped ahead of older retained rows, so
+  // reversed retained rows go longest-dropped first; rows still published go earliest ended first.
+  const evictionOrder = [
+    ...history.filter((row) => row.retained).reverse(),
+    ...history.filter((row) => !row.retained).sort((left, right) => endedAt(left) - endedAt(right)),
+  ];
   const evictedRoots = new Set(
-    history.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
+    evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
   );
   const keep = new Set(
     rows.filter((row) => !evictedRoots.has(roots.get(row.key)!)).map((row) => row.key),
@@ -94,7 +100,7 @@ export function retainActivity(
   queue.sort(
     (left, right) =>
       Number(left.planned !== true) - Number(right.planned !== true) ||
-      (left.endedAt ?? left.updatedAt ?? 0) - (right.endedAt ?? right.updatedAt ?? 0),
+      endedAt(left) - endedAt(right),
   );
   for (let index = 0; index < queue.length; index++) {
     const row = queue[index]!;
@@ -117,21 +123,27 @@ export function retainActivity(
         queue.push(owner);
     }
   }
-  const retained = rows.filter((row) => keep.has(row.key));
-  const omittedHistory = Math.max(
-    evictedRoots.size,
-    ...previous.map((row) => row.omittedHistory ?? 0),
-  );
-  return Object.freeze(
-    retained.map((row, index) => {
-      const detached = { ...row };
+  return rows
+    .filter((row) => keep.has(row.key))
+    .map((row) => {
       const omittedChildren = Math.max(
         omitted.get(row.key) ?? 0,
         old.get(row.key)?.omittedChildren ?? 0,
       );
-      if (omittedChildren) Object.assign(detached, { omittedChildren });
-      if (index === 0 && omittedHistory) Object.assign(detached, { omittedHistory });
-      return Object.freeze(detached);
-    }),
-  );
+      return { ...row, ...(omittedChildren > 0 && { omittedChildren }) };
+    });
+}
+
+/** A row's ownership path, root first, through the same resolved owners as the tree. */
+export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {
+  const byKey = new Map(rows.map((row) => [row.key, row]));
+  const { parents } = resolveActivityOwnership(byKey);
+  const path: ActivityRow[] = [];
+  let cursor = byKey.get(key);
+  while (cursor) {
+    path.unshift(cursor);
+    const parent = parents.get(cursor.key);
+    cursor = parent ? byKey.get(parent) : undefined;
+  }
+  return path;
 }

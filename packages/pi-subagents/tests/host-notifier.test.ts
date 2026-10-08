@@ -49,22 +49,6 @@ describe("subagent host notifier", () => {
     expect(content().split("Check write state before retrying.")).toHaveLength(3);
   });
 
-  it("wakes the parent once for a retained report generation", () => {
-    const { sendMessage, notify, content } = notifier();
-    const run = completion("agent-1", "reader", {
-      generation: 2,
-      finalText: "Follow-up report.",
-      retained: true,
-    });
-
-    expect(notify({ type: "completed", runs: [run] })?.deliveredCompletionKeys).toEqual([
-      "agent-1:2",
-    ]);
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(content()).toContain("reported generation 2 and remains available for guidance");
-    expect(content()).toContain("Follow-up report.");
-  });
-
   it("delivers failures and folded warnings through the coalesced outcome channel", () => {
     const { sendMessage, notify, content } = notifier();
     const warning =
@@ -162,6 +146,24 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toEqual(steer);
   });
 
+  it("names the workflow and never asks the root to await a workflow agent's run", () => {
+    const { notify, content } = notifier();
+    const delivery = notify({
+      type: "question",
+      id: "agent-r1-4",
+      name: "find-issues",
+      requestId: "question-1",
+      message: "Which module?",
+      generation: 1,
+      workflow: { workflowId: "wf-r1-1", name: "review", phase: "Find" },
+    });
+    expect(delivery?.actionAccepted).toBe(true);
+    expect(content()).toContain("wf-r1-1");
+    expect(content()).toContain('subagent_reply({ runId: "agent-r1-4", message: "..." })');
+    // Root await rejects owned runs; the workflow resumes on its own after the reply.
+    expect(content()).not.toContain("subagent_await");
+  });
+
   it("explains a single completion without a final report", () => {
     const { notify, content } = notifier();
 
@@ -170,25 +172,19 @@ describe("subagent host notifier", () => {
     expect(content()).toContain("Completed without a final report.");
   });
 
-  it("coalesces completed, failed, and retained outcomes into one batch", () => {
+  it("coalesces completed and failed outcomes into one batch", () => {
     const { sendMessage, notify, content } = notifier();
     notify({
       type: "completed",
       runs: [
         completion("agent-1", "reader", { finalText: "Read." }),
-        completion("agent-2", "reviewer", {
-          generation: 2,
-          finalText: "Reviewed.",
-          retained: true,
-        }),
+        completion("agent-2", "reviewer", { generation: 2, finalText: "Reviewed." }),
         completion("agent-3", "tester", { outcome: "failed", error: "Tests failed." }),
       ],
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();
-    expect(content()).toContain(
-      "3 background subagents finished · 1 completed · 1 failed · 1 reported and retained",
-    );
+    expect(content()).toContain("3 background subagents finished · 2 completed · 1 failed");
     for (const section of ["## reader (agent-1)", "## reviewer (agent-2)", "## tester (agent-3)"]) {
       expect(content()).toContain(section);
     }

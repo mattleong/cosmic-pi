@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { activityWidgetSections, renderActivityWidget } from "../src/activity/widget.ts";
-import { activityGlyph } from "../src/activity/row-line.ts";
+import { renderActivityWidget } from "../src/activity/widget.ts";
+import { activityMark } from "../src/activity/row-line.ts";
 import { activityStatus } from "../src/activity/attention.ts";
-import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
+import { activityWidgetHeight, activityWidgetSections } from "../src/activity/widget-projection.ts";
 import { phaseRowId, type GroupedActivityRow } from "../src/activity/grouped-tree.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
@@ -362,8 +362,8 @@ describe("grouped activity widget", () => {
     expect(renderActivityWidget(rows, 100, 8, { now: 0 })).not.toEqual(
       renderActivityWidget(rows, 100, 8, { now: SPINNER_FRAME_MS }),
     );
-    expect(activityGlyph(queued, 0)).toBe(activityGlyph(queued, SPINNER_FRAME_MS));
-    expect(activityGlyph(starting, 0)).not.toBe(activityGlyph(starting, SPINNER_FRAME_MS));
+    expect(activityMark(queued, 0)).toEqual(activityMark(queued, SPINNER_FRAME_MS));
+    expect(activityMark(starting, 0)).not.toEqual(activityMark(starting, SPINNER_FRAME_MS));
     expect(activityStatus(queued)).not.toBe(activityStatus(starting));
   });
   it("does not hide standalone queued questions or misclassify them as tasks", () => {
@@ -372,14 +372,9 @@ describe("grouped activity widget", () => {
     expect(sections.map((section) => section.heading.section)).toEqual(["attention"]);
     expect(sections[0]?.entries.map((entry) => entry.id)).toEqual([question.key]);
   });
-  it("ignores full-screen zoom and bounds every row across narrow sizes", () => {
+  it("bounds every row across narrow sizes", () => {
     const question = activityRow("urgent", "needs-input", undefined, { kind: "question" });
     const rows: readonly ActivityRow[] = [...workflows, ...grouped, ...standalone, question];
-    expect(
-      activityWidgetSections(rows, 8, { focus: grouped[0]!.key }).map(
-        (section) => section.heading.section,
-      ),
-    ).toEqual(["workflows", "subagents", "tasks", "attention"]);
     for (const width of [0, 1, 2, 8, 21, 40, 80, 160])
       for (const maxRows of [0, 1, 2, 4, 8]) {
         const rendered = renderActivityWidget(rows, width, maxRows);

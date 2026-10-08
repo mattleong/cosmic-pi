@@ -79,8 +79,10 @@ interface LedgerState {
   dropped: number;
 }
 
-export const localClaudeDebugEnabled = (environment: NodeJS.ProcessEnv): boolean =>
-  environment.PI_SUBAGENTS_CLAUDE_DEBUG === "1";
+const ledgerHeader = (dropped: number) => `{"kind":"ledger","dropped":${dropped}}\n`;
+// The tail reserves room for the largest header, so publication never drops an uncounted entry;
+// exact drop accounting costs at most 15 bytes of retained capacity.
+const MAX_TAIL_BYTES = MAX_LEDGER_BYTES - Buffer.byteLength(ledgerHeader(Number.MAX_SAFE_INTEGER));
 
 const safeInteger = (value: number): number =>
   Number.isSafeInteger(value) && value >= 0 ? value : 0;
@@ -103,7 +105,7 @@ const appendBounded = (state: LedgerState, line: string): void => {
   const bytes = Buffer.byteLength(line, "utf8");
   state.lines.push(line);
   state.bytes += bytes;
-  while (state.lines.length > MAX_LEDGER_ENTRIES || state.bytes > MAX_LEDGER_BYTES) {
+  while (state.lines.length > MAX_LEDGER_ENTRIES || state.bytes > MAX_TAIL_BYTES) {
     const removed = state.lines.shift();
     if (!removed) break;
     state.bytes -= Buffer.byteLength(removed, "utf8");
@@ -157,7 +159,7 @@ const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(functi
 const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
   agentDirectory: string,
   runIdentity: string,
-  state: LedgerState,
+  ledger: string,
 ) {
   const canonicalAgentDirectory = yield* diagnosticIo(() => safeAgentDirectory(agentDirectory));
   const packageRoot = join(canonicalAgentDirectory, "subagents");
@@ -170,21 +172,7 @@ const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
 
   const directory = join(root, `claude-${runIdentity}-${synchronousRandomHex(8)}`);
   yield* diagnosticIo(() => fs.mkdir(directory, { mode: 0o700 }));
-  const header = `{"kind":"ledger","dropped":${safeInteger(state.dropped)}}\n`;
-  const available = MAX_LEDGER_BYTES - Buffer.byteLength(header, "utf8");
-  const retained: string[] = [];
-  let retainedBytes = 0;
-  for (let index = state.lines.length - 1; index >= 0; index -= 1) {
-    const line = state.lines[index];
-    if (!line) continue;
-    const bytes = Buffer.byteLength(line, "utf8");
-    if (retainedBytes + bytes > available) break;
-    retained.unshift(line);
-    retainedBytes += bytes;
-  }
-  yield* diagnosticIo(() =>
-    writeExclusive(join(directory, LEDGER_FILE), `${header}${retained.join("")}`),
-  ).pipe(
+  yield* diagnosticIo(() => writeExclusive(join(directory, LEDGER_FILE), ledger)).pipe(
     Effect.tapError(() =>
       diagnosticIo(() => fs.rm(directory, { recursive: true, force: true })).pipe(Effect.ignore),
     ),
@@ -201,21 +189,22 @@ export const acquireLocalClaudeDebug = Effect.fn("LocalClaudeDebug.acquire")(fun
   readonly environment: NodeJS.ProcessEnv;
   readonly runId: string;
 }) {
-  if (!localClaudeDebugEnabled(options.environment)) return undefined;
-  const lock = yield* Semaphore.make(1);
-  const withLock = lock.withPermits(1);
+  if (options.environment.PI_SUBAGENTS_CLAUDE_DEBUG !== "1") return undefined;
   const state: LedgerState = { lines: [], bytes: 0, dropped: 0 };
   const runIdentity = sha256Text(options.runId).slice(0, 12);
+  // Appends are synchronous, so the snapshot taken under the retention lock is a whole ledger.
   const record = (entry: LocalClaudeDebugEntry): Effect.Effect<void> =>
-    withLock(Effect.sync(() => appendBounded(state, encodeEntry(entry)))).pipe(Effect.ignoreCause);
+    Effect.sync(() => appendBounded(state, encodeEntry(entry))).pipe(Effect.ignoreCause);
   yield* Effect.addFinalizer(() =>
     persistenceLock.withPermits(1)(
-      withLock(
-        Effect.suspend(() =>
-          state.lines.length === 0 && state.dropped === 0
-            ? Effect.void
-            : persistLedger(options.agentDirectory, runIdentity, state).pipe(Effect.ignoreCause),
-        ),
+      Effect.suspend(() =>
+        state.lines.length === 0 && state.dropped === 0
+          ? Effect.void
+          : persistLedger(
+              options.agentDirectory,
+              runIdentity,
+              ledgerHeader(safeInteger(state.dropped)) + state.lines.join(""),
+            ).pipe(Effect.ignoreCause),
       ),
     ),
   );

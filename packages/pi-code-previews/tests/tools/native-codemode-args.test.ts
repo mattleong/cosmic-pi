@@ -3,21 +3,18 @@ import { test } from "vitest";
 import type * as Schema from "effect/Schema";
 import { nativeArgumentPreview } from "../../src/tools/native-codemode-args";
 import { nativeCodemodeCallSubject } from "../../src/tools/native-codemode-subject";
-import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
-import { renderContextFixture } from "../../testing";
+import {
+  codemodeSubject as subject,
+  nativeCall,
+  nativeReceipt as receipt,
+  scriptResult,
+  settledSummary,
+} from "../support/native-codemode";
 
-type NativeArgumentFixture = Schema.JsonObject;
-
-const receipt = (args: NativeArgumentFixture): string => {
-  const json = JSON.stringify(args);
-  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
-};
 const cutAt = (tail: string): string => {
   const framing = '{"padding":"","';
   return `{"padding":"${"x".repeat(197 - framing.length - tail.length)}","${tail}...`;
 };
-const subject = (name: string, args: NativeArgumentFixture) =>
-  nativeCodemodeCallSubject(name, nativeArgumentPreview(receipt(args)), "/project");
 
 for (const tool of ["edit", "write"])
   test(`${tool} retains a complete leading path when later payload is truncated`, () => {
@@ -77,7 +74,7 @@ test("malformed receipts, duplicate keys, and excessive nesting fail closed", ()
     cutAt('path":"a", "payload":garbage'),
     receipt({
       path: "a",
-      payload: Array.from({ length: 20 }).reduce<NativeArgumentFixture>((value) => ({ value }), {
+      payload: Array.from({ length: 20 }).reduce<Schema.JsonObject>((value) => ({ value }), {
         text: "x".repeat(300),
       }),
     }),
@@ -160,37 +157,26 @@ test("quoted credential names and truncated URI userinfo remain redacted", () =>
   assert.equal(benign?.values.command, "curl https://host:3000/path");
 });
 
+const call = (id: string, name: string, args: Schema.JsonObject) =>
+  nativeCall({ id, name, args: receipt(args) });
+
 test("subject recovery leaves native receipts unchanged and never reads plausible guest output", () => {
-  const result = {
-    content: [
-      { type: "text" as const, text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
-      { type: "text" as const, text: '{"path":"guessed.ts","command":"guessed command"}' },
-    ],
-    details: {
+  const result = scriptResult(
+    "completed",
+    {
       calls: [
-        {
-          id: "edit/1",
-          name: "edit",
-          args: receipt({ path: "actual.ts", edits: [{ oldText: "x".repeat(300) }] }),
-          status: "ok",
-        },
-        {
-          id: "edit/2",
-          name: "edit",
-          args: receipt({ edits: [{ oldText: "x".repeat(300) }], path: "hidden.ts" }),
-          status: "ok",
-        },
+        call("edit/1", "edit", { path: "actual.ts", edits: [{ oldText: "x".repeat(300) }] }),
+        call("edit/2", "edit", { edits: [{ oldText: "x".repeat(300) }], path: "hidden.ts" }),
+        // Invariant: a target with nothing visible leaves the row without a subject.
+        call("task/1", "background_task", { action: "start", name: " \t" }),
       ],
     },
-  };
+    { type: "text", text: '{"path":"guessed.ts","command":"guessed command"}' },
+  );
   const before = structuredClone(result);
-  const projected = nativeCodemodeSummary("/project")({
-    phase: "settled",
-    args: { code: "" },
-    result,
-    context: renderContextFixture(),
-  });
+  const projected = settledSummary(result);
   assert.equal(projected?.children?.entries[0]?.subject, "actual.ts");
   assert.equal(projected?.children?.entries[1]?.subject, "");
+  assert.equal(projected?.children?.entries[2]?.subject, "");
   assert.deepEqual(result, before);
 });

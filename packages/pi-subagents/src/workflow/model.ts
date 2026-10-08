@@ -1,16 +1,20 @@
-import type * as Schema from "effect/Schema";
+import * as Schema from "effect/Schema";
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { safeTextPrefix } from "pi-cosmic-core";
 import { emptyUsage, type SubagentUsage } from "../run/model.ts";
 import { addUsage } from "../run/state.ts";
-import type { WorkflowPhase } from "./script.ts";
+import type { WorkflowPhase, WorkflowPlannedAgentSpec } from "./script.ts";
+
+/** Text of 1 to `maximum` characters. */
+export const NonEmptyText = (maximum: number) =>
+  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
 
 /** Claude-Code-compatible backstop on agent() calls in one run. */
 export const WORKFLOW_AGENT_LIMIT = 1_000;
 export const WORKFLOW_LOG_LIMIT = 200;
-export const WORKFLOW_LOG_ENTRY_MAX_CHARS = 2_000;
+const WORKFLOW_LOG_ENTRY_MAX_CHARS = 2_000;
 /** Warnings kept apart from the log, so later output can't evict what explains null results. */
-export const WORKFLOW_WARNING_LIMIT = 12;
+const WORKFLOW_WARNING_LIMIT = 12;
 /** Finished runs kept for status, resume and Activity history. */
 export const WORKFLOW_RETAINED_RUNS = 32;
 /** Verbatim args stay small enough to show and to journal. */
@@ -20,7 +24,7 @@ export const WORKFLOW_PHASE_TITLE_MAX_CHARS = ACTIVITY_LIMITS.phaseTitle;
 /** agent() labels as Activity and notifications show them. */
 export const WORKFLOW_AGENT_LABEL_MAX_CHARS = 80;
 /** meta.phases plus phases added at runtime. */
-export const WORKFLOW_RUN_PHASE_LIMIT = 64;
+const WORKFLOW_RUN_PHASE_LIMIT = 64;
 /** Planned agents one run shows: its script's and those of the workflows it nests. */
 export const WORKFLOW_RUN_PLANNED_LIMIT = 256;
 /** The narrator line: the newest log line, on one line. */
@@ -87,17 +91,6 @@ export type WorkflowAgentWaiting =
       readonly name: string;
       readonly paused: boolean;
     };
-
-export const sameWorkflowWaiting = (
-  left: WorkflowAgentWaiting | undefined,
-  right: WorkflowAgentWaiting | undefined,
-): boolean =>
-  left?.kind === right?.kind &&
-  (left?.kind !== "writer" ||
-    (right?.kind === "writer" &&
-      left.runId === right.runId &&
-      left.name === right.name &&
-      left.paused === right.paused));
 
 export interface WorkflowAgentView {
   /** 1-based position among this run's live agent() calls. */
@@ -187,17 +180,9 @@ export const WORKFLOW_SKIPPED_BEFORE_START = "skipped by the user before it star
  * agent() call claims it and takes over its run id, so its Activity row keeps one id from planned
  * through queued, running and finished.
  */
-export interface WorkflowPlannedAgent {
+export interface WorkflowPlannedAgent extends WorkflowPlannedAgentSpec {
   /** A subagent run id reserved when the run started. */
   readonly runId: string;
-  readonly phase: string;
-  readonly label: string;
-  readonly profile?: string | undefined;
-  /**
-   * The nested workflow() whose meta declares it, by name; absent for the run's own script. Only
-   * calls made in that workflow claim it outside a phase.
-   */
-  readonly workflow?: string | undefined;
   /**
    * When the user skipped it, before any call claimed it. The call that claims it resolves null at
    * once without starting anything; one no call claims stays skipped instead of never run.
@@ -210,7 +195,7 @@ export const isWorkflowPlannedSkipped = (agent: WorkflowPlannedAgent): boolean =
   agent.skippedAt !== undefined;
 
 /** A worktree an earlier run's writer left for review, carried by the run that reused it. */
-export interface WorkflowReusedWorkspace {
+interface WorkflowReusedWorkspace {
   readonly workspaceId: string;
   readonly label: string;
 }
@@ -255,7 +240,6 @@ export interface WorkflowRunView {
   readonly name: string;
   readonly description: string;
   readonly source: WorkflowSource;
-  readonly sha256: string;
   /** meta.phases followed by phases first seen at runtime, in order. */
   readonly phases: ReadonlyArray<WorkflowPhase>;
   readonly currentPhase?: string | undefined;
@@ -301,26 +285,12 @@ export interface WorkflowRunView {
 }
 
 /** Agents in each state; stopped and skipped agents are counted apart. */
-export interface WorkflowAgentCounts {
-  readonly queued: number;
-  readonly running: number;
-  readonly completed: number;
-  readonly failed: number;
-  readonly stopped: number;
-  readonly skipped: number;
-}
+export type WorkflowAgentCounts = { readonly [State in WorkflowAgentState]: number };
 
 export const countWorkflowAgents = (
   agents: ReadonlyArray<WorkflowAgentView>,
 ): WorkflowAgentCounts => {
-  const counts = {
-    queued: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-    stopped: 0,
-    skipped: 0,
-  } satisfies Record<WorkflowAgentState, number>;
+  const counts = { queued: 0, running: 0, completed: 0, failed: 0, stopped: 0, skipped: 0 };
   for (const agent of agents) counts[agent.state] += 1;
   return counts;
 };
@@ -378,16 +348,19 @@ export const addWorkflowReusedPhase = (
     ? phases.map((phase) => (phase.title === title ? { title, count: phase.count + 1 } : phase))
     : [...phases, { title, count: 1 }];
 
+/** `text` of at most `maximum` characters, ending in an ellipsis when clipped. */
+const clipped = (text: string, maximum: number): string =>
+  text.length > maximum ? `${safeTextPrefix(text, maximum - 1)}…` : text;
+
 const appendBounded = (
   entries: ReadonlyArray<WorkflowLogEntry>,
   entry: WorkflowLogEntry,
   limit: number,
 ): ReadonlyArray<WorkflowLogEntry> => {
-  const message =
-    entry.message.length > WORKFLOW_LOG_ENTRY_MAX_CHARS
-      ? `${entry.message.slice(0, WORKFLOW_LOG_ENTRY_MAX_CHARS - 1)}…`
-      : entry.message;
-  const next = [...entries, { ...entry, message }];
+  const next = [
+    ...entries,
+    { ...entry, message: clipped(entry.message, WORKFLOW_LOG_ENTRY_MAX_CHARS) },
+  ];
   return next.length > limit ? next.slice(next.length - limit) : next;
 };
 
@@ -404,10 +377,7 @@ export const appendWorkflowWarning = (
 ): ReadonlyArray<WorkflowLogEntry> => appendBounded(warnings, entry, WORKFLOW_WARNING_LIMIT);
 
 /** Trimmed display text of at most `maximum` characters, ending in an ellipsis when clipped. */
-const displayText = (text: string, maximum: number): string => {
-  const trimmed = text.trim();
-  return trimmed.length > maximum ? `${safeTextPrefix(trimmed, maximum - 1)}…` : trimmed;
-};
+const displayText = (text: string, maximum: number): string => clipped(text.trim(), maximum);
 
 /** A log message as the narrator line shows it; undefined when it is blank. */
 export const workflowNarratorLine = (message: string): string | undefined =>

@@ -36,9 +36,9 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
       terminated = true;
       return false;
     }
-    const rawEvent = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
-      data,
-    ).pipe(Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")));
+    const rawEvent = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(data).pipe(
+      Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")),
+    );
     const event = yield* decodeImageStreamEvent(rawEvent, mimeType, fallbackId).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained a malformed event.")),
     );

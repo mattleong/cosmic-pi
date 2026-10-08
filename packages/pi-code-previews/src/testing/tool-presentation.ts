@@ -1,17 +1,16 @@
-import type {
-  AgentToolResult,
-  ExtensionAPI,
-  Theme,
-  ToolDefinition,
-  ToolRenderers,
-  ToolRendererResolver,
+import {
+  ToolExecutionComponent,
+  type AgentToolResult,
+  type ExtensionAPI,
+  type Theme,
+  type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
+import { opaqueFixture, plainTheme, recordingExtensionHost } from "pi-cosmic-core/testing";
 import type { CodePreviewSettings } from "../config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
-import type { AdaptableToolDefinition, AdaptableToolRenderers } from "../tools/renderer-adapter";
+import type { AdaptableToolDefinition, AdaptableToolRenderers } from "../tools/cooperative-tools";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 
 type RenderContext = ToolRenderContext<any, any>;
@@ -59,38 +58,19 @@ export function withPresentationSettings<A>(
   }
 }
 
-type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
-
-/** Registers through a render-only extension API; commands are accepted and ignored. */
+/** Registers through core's recording extension host; commands are recorded and never run. */
 export function captureRegistrations(register: (pi: ExtensionAPI) => void) {
-  const tools: ToolDefinition<any, any, any>[] = [];
-  const toolRenderers: ToolRendererResolver[] = [];
-  const messageRenderers = new Map<string, MessageRenderer>();
-  register(
-    extensionApiFixture({
-      registerTool: (tool: ToolDefinition<any, any, any>) => {
-        tools.push(tool);
-      },
-      registerToolRenderer: (resolver: ToolRendererResolver) => {
-        toolRenderers.push(resolver);
-      },
-      registerMessageRenderer: (customType: string, render: MessageRenderer) => {
-        messageRenderers.set(customType, render);
-      },
-      registerCommand: () => undefined,
-    }),
-  );
-  const resolveToolRenderers = (name: string, base?: ToolRenderers): ToolRenderers | undefined => {
-    const resolve = (index: number): ToolRenderers | undefined =>
-      index < toolRenderers.length
-        ? toolRenderers[index]!(name, () => resolve(index + 1))
-        : (base ?? tools.find((tool) => tool.name === name));
-    return resolve(0);
+  const host = recordingExtensionHost();
+  register(host.pi);
+  return {
+    tools: host.registrations,
+    messageRenderers: host.messageRenderers,
+    toolRenderers: host.toolRenderers,
+    resolveToolRenderers: host.resolve,
   };
-  return { tools, messageRenderers, toolRenderers, resolveToolRenderers };
 }
 
-export interface PresentationCycleOptions {
+interface PresentationCycleOptions {
   /** Expansion states in order. Defaults to collapsed, expanded, collapsed, expanded. */
   readonly states?: readonly boolean[];
   /** Opt-in harness invalidation around each state's render. */
@@ -201,6 +181,46 @@ export function createToolPresentationHarness(
   return harness;
 }
 
+/**
+ * Pi's own tool row, built once with the renderers it resolved, as history replay does, then
+ * given `result` when there is one.
+ */
+export function hostToolRow<Args>(
+  name: string,
+  args: Args,
+  renderers: ToolRenderers | undefined,
+  options: {
+    readonly cwd?: string;
+    readonly id?: string;
+    readonly result?: Parameters<ToolExecutionComponent["updateResult"]>[0];
+  } = {},
+): ToolExecutionComponent {
+  const row = new ToolExecutionComponent(
+    name,
+    options.id ?? "replay",
+    args,
+    { showImages: false },
+    renderers,
+    opaqueFixture({ requestRender() {} }),
+    options.cwd ?? "/project",
+  );
+  if (options.result) row.updateResult(options.result);
+  return row;
+}
+
+/** A row's text after a reader sets its expansion, which invalidates it as Pi does. */
+export function drawToolRow(row: ToolExecutionComponent, expanded = false, width = 120): string {
+  row.setExpanded(expanded);
+  row.invalidate();
+  return row.render(width).join("\n");
+}
+
+/** A row's text collapsed, then expanded. */
+export const toolRowFrames = (row: ToolExecutionComponent) => [
+  drawToolRow(row, false),
+  drawToolRow(row, true),
+];
+
 /** A fake `scheduleAnimation` owner that records scheduled ticks and released animations. */
 export function animationSchedulerProbe() {
   let latest: (() => void) | undefined;
@@ -226,7 +246,7 @@ export function animationSchedulerProbe() {
   };
 }
 
-export type AnimationSchedulerProbe = ReturnType<typeof animationSchedulerProbe>;
+type AnimationSchedulerProbe = ReturnType<typeof animationSchedulerProbe>;
 
 /**
  * For each tool: renders a started pending call, fires the owner's newest tick, then settles

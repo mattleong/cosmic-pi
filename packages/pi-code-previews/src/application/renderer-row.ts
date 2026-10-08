@@ -5,7 +5,8 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { withSelfBackground } from "../preview/self-background";
+import { invokeHostCallback } from "pi-cosmic-core";
+import { rowPerState, withSelfBackground } from "../preview/self-background";
 import { getFallbackResultText } from "../tools/data/results";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { RendererArguments, ToolRenderContext } from "../tools/renderers/shared/types";
@@ -20,11 +21,30 @@ export function rendererFields(renderers: ToolRenderers | undefined): ToolRender
   };
 }
 
-export interface RetainedRendererOwner {
-  readonly ready: boolean;
-  readonly live: boolean;
-  subscribe(refresh: () => void): void;
+/** An owner's one-way readiness: rows retained before startup refresh once when it publishes. */
+export class RetainedRendererGate {
+  live = true;
+  ready = false;
+  private readonly refreshers = new Set<() => void>();
+
+  subscribe(refresh: () => void): void {
+    if (this.live && !this.ready) this.refreshers.add(refresh);
+  }
+
+  /** Publish the owner's state first; each retained row then adopts it. */
+  markReady(): void {
+    this.ready = true;
+    for (const refresh of this.refreshers) invokeHostCallback(refresh, undefined);
+    this.refreshers.clear();
+  }
+
+  retire(): void {
+    this.live = false;
+    this.refreshers.clear();
+  }
 }
+/** Rows observe readiness; only the owner publishes or retires it. */
+type RetainedRendererOwner = Readonly<Pick<RetainedRendererGate, "live" | "ready" | "subscribe">>;
 
 /** Cold rows preserve downstream content with the same framing Pi would otherwise provide. */
 function nativeBackground(name: string, downstream: ToolRenderers | undefined): ToolRenderers {
@@ -46,15 +66,7 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
     });
   if (downstream?.renderShell === "self")
     return { renderShell: "self", renderCall: call, renderResult: result };
-  const slots = new WeakMap<object, { call?: Component; result?: Component }>();
-  const state = (context: ToolRenderContext) => {
-    let current = slots.get(context.state);
-    if (!current) {
-      current = {};
-      slots.set(context.state, current);
-    }
-    return current;
-  };
+  const state = rowPerState<{ call?: Component; result?: Component }>(() => ({}));
   const shell = withSelfBackground({
     renderShell: "default",
     renderCall: (context, _theme, render) => render(context),
@@ -64,7 +76,7 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
     renderShell: "self",
     renderCall: (args, theme, context) =>
       shell.renderCall(context, theme, (current) => {
-        const cache = state(current);
+        const cache = state(current, theme);
         cache.call = call(args, theme, { ...current, lastComponent: cache.call });
         return cache.call;
       }),
@@ -73,7 +85,7 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
         context,
         theme,
         (current) => {
-          const cache = state(current);
+          const cache = state(current, theme);
           cache.result = result(value, options, theme, { ...current, lastComponent: cache.result });
           return cache.result;
         },
@@ -205,20 +217,12 @@ export function retainedCodePreviewRenderers(
   owner: RetainedRendererOwner,
   select: () => ToolRenderers | undefined,
 ): ToolRenderers {
-  const rows = new WeakMap<object, RetainedRendererRow>();
   const fallback = nativeBackground(name, downstream);
-  const row = (context: ToolRenderContext) => {
-    let current = rows.get(context.state);
-    if (!current) {
-      current = new RetainedRendererRow(owner, fallback, select);
-      rows.set(context.state, current);
-    }
-    return current;
-  };
+  const row = rowPerState(() => new RetainedRendererRow(owner, fallback, select));
   return {
     renderShell: "self",
-    renderCall: (args, theme, context) => row(context).updateCall(args, theme, context),
+    renderCall: (args, theme, context) => row(context, theme).updateCall(args, theme, context),
     renderResult: (value, options, theme, context) =>
-      row(context).updateResult(value, options, theme, context),
+      row(context, theme).updateResult(value, options, theme, context),
   };
 }

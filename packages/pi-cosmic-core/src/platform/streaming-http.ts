@@ -6,6 +6,7 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { StreamingHttpError } from "./errors.ts";
+import type { IsAny } from "./json-http.ts";
 
 export interface StreamingHttpRequest {
   readonly url: string;
@@ -21,16 +22,14 @@ export interface StreamingHttpResponse {
   readonly discardRawBody: Effect.Effect<void, StreamingHttpError>;
 }
 
-type IsAny<A> = 0 extends 1 & A ? true : false;
-
-export type StreamingJsonBodyCodec<A, E, R> =
+type StreamingJsonBodyCodec<A, E, R> =
   IsAny<E> extends true
     ? never
     : undefined extends E
       ? never
       : Schema.ConstraintCodec<A, E, unknown, R>;
 
-export interface StreamingHttpClientContract {
+interface StreamingHttpClientContract {
   readonly requestJsonRawBytes: <A, E, R>(
     request: StreamingHttpRequest,
     bodySchema: StreamingJsonBodyCodec<A, E, R>,

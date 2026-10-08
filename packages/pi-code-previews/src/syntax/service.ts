@@ -35,6 +35,7 @@ type InitializationFlight = {
 type SyntaxState = {
   readonly highlighter: ShikiHighlighter | undefined;
   readonly theme: string | undefined;
+  /** Advances whenever the highlighter is installed or released. */
   readonly generation: number;
   readonly initialization: InitializationFlight | undefined;
   readonly loadedLanguages: ReadonlySet<string>;
@@ -43,19 +44,15 @@ type SyntaxState = {
   readonly failedThemes: ReadonlySet<string>;
   readonly failedLanguages: ReadonlySet<string>;
   readonly statusVersion: number;
+  /** Set by finalization so a late caller cannot create a highlighter nothing would dispose. */
+  readonly closed: boolean;
 };
+/** `superseded` is a pending flight that the decision settled as completed. */
 type InitializeDecision =
-  | { readonly tag: "Ready" }
-  | { readonly tag: "Await"; readonly done: Deferred.Deferred<InitializationOutcome> }
-  | { readonly tag: "Start"; readonly flight: InitializationFlight };
-type LanguageDecision =
-  | {
-      readonly highlighter: ShikiHighlighter;
-      readonly generation: number;
-    }
-  | undefined;
+  | { readonly tag: "Ready" | "Start"; readonly superseded: InitializationFlight | undefined }
+  | { readonly tag: "Await"; readonly done: Deferred.Deferred<InitializationOutcome> };
 
-export interface CodePreviewSyntaxServiceContract {
+interface CodePreviewSyntaxServiceContract {
   readonly initialize: (theme: string) => Effect.Effect<void>;
 }
 
@@ -108,6 +105,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         failedThemes: new Set(),
         failedLanguages: new Set(),
         statusVersion: 0,
+        closed: false,
       };
       const state = yield* SynchronizedRef.make(initial);
       const highlighterLifecycle = yield* Semaphore.make(1);
@@ -116,39 +114,27 @@ export class CodePreviewSyntaxService extends Context.Service<
         publishSyntaxProjection(owner, syntaxSnapshot(current));
       publish(initial);
 
-      const modify = <A>(
-        transition: (current: SyntaxState) => Effect.Effect<readonly [A, SyntaxState]>,
-      ) =>
-        SynchronizedRef.modifyEffect(state, (current) =>
-          transition(current).pipe(
-            Effect.tap(([, next]) =>
-              next === current ? Effect.void : Effect.sync(() => publish(next)),
-            ),
-          ),
-        );
-
-      // Pure transitions publish and replace the backing value in one synchronous step.
+      // Transitions are pure: they publish and replace the backing value in one synchronous
+      // step, and callers release highlighters or settle flights only after that commit.
       // Lock waiting and the language adapter remain interruptible.
-      const modifyPure = <A>(transition: (current: SyntaxState) => readonly [A, SyntaxState]) =>
+      const modify = <A>(transition: (current: SyntaxState) => readonly [A, SyntaxState]) =>
         SynchronizedRef.modify(state, (current) => {
           const result = transition(current);
           if (result[1] !== current) publish(result[1]);
           return result;
         });
 
+      // The old highlighter is released after the new snapshot no longer publishes it.
       const dispose = highlighterLifecycle.withPermits(1)(
-        modify((current) =>
-          releaseHighlighter(current.highlighter).pipe(
-            Effect.as([
-              undefined,
-              {
-                ...initial,
-                generation: current.generation + 1,
-                statusVersion: current.statusVersion + 1,
-              },
-            ] as const),
-          ),
-        ),
+        modify((current) => [
+          current.highlighter,
+          {
+            ...initial,
+            generation: current.generation + 1,
+            statusVersion: current.statusVersion + 1,
+            closed: true,
+          },
+        ]).pipe(Effect.flatMap(releaseHighlighter)),
       );
 
       const initialize: (theme: string) => Effect.Effect<void> = Effect.fn(
@@ -159,62 +145,55 @@ export class CodePreviewSyntaxService extends Context.Service<
         // restore caller interruption; acquired candidates retain the existing disposal commit.
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            const decision = yield* modify<InitializeDecision>((current) =>
-              Effect.gen(function* () {
-                if (current.highlighter && current.theme === theme) {
-                  if (!current.initialization) return [{ tag: "Ready" } as const, current] as const;
-                  // A return to the installed theme supersedes the pending replacement too.
-                  // Settling as completed prevents its joiners from restarting an obsolete request.
-                  yield* Deferred.succeed(current.initialization.done, "Completed");
-                  return [
-                    { tag: "Ready" } as const,
-                    { ...current, initialization: undefined },
-                  ] as const;
-                }
-                if (current.initialization?.theme === theme)
-                  return [
-                    { tag: "Await" as const, done: current.initialization.done },
-                    current,
-                  ] as const;
-                if (current.initialization)
-                  yield* Deferred.succeed(current.initialization.done, "Completed");
-                const done = yield* Deferred.make<InitializationOutcome>();
-                const flight = { theme, done } satisfies InitializationFlight;
+            const flight: InitializationFlight = {
+              theme,
+              done: yield* Deferred.make<InitializationOutcome>(),
+            };
+            const decision = yield* modify<InitializeDecision>((current) => {
+              const pending = current.initialization;
+              if (current.closed) return [{ tag: "Ready", superseded: undefined }, current];
+              // A return to the installed theme supersedes the pending replacement too.
+              if (current.highlighter && current.theme === theme)
                 return [
-                  { tag: "Start" as const, flight },
-                  { ...current, initialization: flight },
-                ] as const;
-              }),
-            );
-            if (decision.tag === "Ready") return;
+                  { tag: "Ready", superseded: pending },
+                  pending ? { ...current, initialization: undefined } : current,
+                ];
+              if (pending?.theme === theme) return [{ tag: "Await", done: pending.done }, current];
+              return [
+                { tag: "Start", superseded: pending },
+                { ...current, initialization: flight },
+              ];
+            });
             if (decision.tag === "Await") {
               const outcome = yield* restore(Deferred.await(decision.done));
               if (outcome === "Interrupted") return yield* restore(initialize(theme));
               return;
             }
+            // Settling as completed prevents superseded joiners from restarting an obsolete request.
+            if (decision.superseded) yield* Deferred.succeed(decision.superseded.done, "Completed");
+            if (decision.tag === "Ready") return;
 
-            const { flight } = decision;
             // Replacement is transactional: a failed or interrupted candidate only clears its
             // flight. The working highlighter and renderer projection remain installed.
             const clearFlight = modify((current) =>
-              Effect.succeed([
-                undefined,
-                current.initialization === flight
-                  ? {
+              current.initialization === flight
+                ? [
+                    true,
+                    {
                       ...current,
                       initialization: undefined,
                       statusVersion: current.statusVersion + 1,
-                    }
-                  : current,
-              ] as const),
+                    },
+                  ]
+                : [false, current],
             );
             // A failed theme is remembered for the session so renderers stop requesting it. Only
             // the first failure publishes a new status version and warns; explicit retries stay quiet.
             const recordFailure = modify((current) => {
               const owned = current.initialization === flight;
               const repeated = current.failedThemes.has(theme);
-              if (repeated && !owned) return Effect.succeed([false, current] as const);
-              return Effect.succeed([
+              if (repeated && !owned) return [false, current];
+              return [
                 !repeated,
                 {
                   ...current,
@@ -224,7 +203,7 @@ export class CodePreviewSyntaxService extends Context.Service<
                     : new Set(current.failedThemes).add(theme),
                   statusVersion: repeated ? current.statusVersion : current.statusVersion + 1,
                 },
-              ] as const);
+              ];
             });
             return yield* restore(adapter.create(theme, PRELOADED_SHIKI_LANGUAGES)).pipe(
               Effect.matchEffect({
@@ -238,35 +217,37 @@ export class CodePreviewSyntaxService extends Context.Service<
                         : Effect.void,
                     ),
                   ),
+                // Installs the candidate only while its flight is current; whichever highlighter
+                // loses is released after the commit.
                 onSuccess: (next) =>
                   highlighterLifecycle.withPermits(1)(
-                    modify((current) => {
-                      if (current.initialization !== flight)
-                        return releaseHighlighter(next).pipe(
-                          Effect.as([undefined, current] as const),
-                        );
-                      return releaseHighlighter(current.highlighter).pipe(
-                        Effect.as([
-                          undefined,
-                          {
-                            ...current,
-                            highlighter: next,
-                            theme,
-                            generation: current.generation + 1,
-                            initialization: undefined,
-                            loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
-                            pendingLanguages: new Set(),
-                            failedThemes: withoutEntry(current.failedThemes, theme),
-                            statusVersion: current.statusVersion + 1,
-                          },
-                        ] as const),
-                      );
-                    }),
+                    modify((current) =>
+                      current.initialization !== flight
+                        ? [next, current]
+                        : [
+                            current.highlighter,
+                            {
+                              ...current,
+                              highlighter: next,
+                              theme,
+                              generation: current.generation + 1,
+                              initialization: undefined,
+                              loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
+                              pendingLanguages: new Set(),
+                              failedThemes: withoutEntry(current.failedThemes, theme),
+                              statusVersion: current.statusVersion + 1,
+                            },
+                          ],
+                    ).pipe(Effect.flatMap(releaseHighlighter)),
                   ),
               }),
+              // Only the current owner's interruption lets joiners retry; a superseded flight
+              // completes even if its successor has not settled it yet.
               Effect.onInterrupt(() =>
                 clearFlight.pipe(
-                  Effect.andThen(Deferred.succeed(flight.done, "Interrupted")),
+                  Effect.flatMap((owned) =>
+                    Deferred.succeed(flight.done, owned ? "Interrupted" : "Completed"),
+                  ),
                   Effect.asVoid,
                 ),
               ),
@@ -282,57 +263,48 @@ export class CodePreviewSyntaxService extends Context.Service<
       const requestLanguage = Effect.fn("CodePreviewShiki.requestLanguage")(function* (
         language: string,
       ) {
-        const decision = yield* modifyPure<LanguageDecision>((current) => {
-          if (current.loadedLanguages.has(language) || !current.highlighter)
-            return [undefined, current] as const;
-          if (current.pendingLanguages.has(language) || current.failedLanguages.has(language))
-            return [undefined, current] as const;
-          const pending = new Set(current.pendingLanguages);
-          pending.add(language);
-          return [
-            {
-              highlighter: current.highlighter,
-              generation: current.generation,
-            },
-            { ...current, pendingLanguages: pending },
-          ] as const;
-        });
-        if (!decision) return;
-        const loadCurrentGeneration = highlighterLifecycle.withPermits(1)(
-          SynchronizedRef.get(state).pipe(
-            Effect.flatMap((current) =>
-              current.generation === decision.generation &&
-              current.highlighter === decision.highlighter
-                ? adapter.loadLanguage(decision.highlighter, language)
-                : Effect.void,
+        // Every highlighter change advances the generation, so it alone identifies the target.
+        const generation = yield* modify((current) =>
+          !current.highlighter ||
+          current.loadedLanguages.has(language) ||
+          current.pendingLanguages.has(language) ||
+          current.failedLanguages.has(language)
+            ? [undefined, current]
+            : [
+                current.generation,
+                { ...current, pendingLanguages: new Set(current.pendingLanguages).add(language) },
+              ],
+        );
+        if (generation === undefined) return;
+        const succeeded = yield* Effect.isSuccess(
+          highlighterLifecycle.withPermits(1)(
+            SynchronizedRef.get(state).pipe(
+              Effect.flatMap((current) =>
+                current.generation === generation && current.highlighter
+                  ? adapter.loadLanguage(current.highlighter, language)
+                  : Effect.void,
+              ),
             ),
           ),
         );
-        return yield* Effect.isSuccess(loadCurrentGeneration).pipe(
-          Effect.flatMap((succeeded) =>
-            modifyPure((current) => {
-              if (current.generation !== decision.generation) return [undefined, current] as const;
-              const pending = new Set(current.pendingLanguages);
-              pending.delete(language);
-              const loaded = succeeded
-                ? new Set(current.loadedLanguages).add(language)
-                : current.loadedLanguages;
-              // A grammar that failed stays plain for the session instead of being requested again.
-              const failed = succeeded
-                ? current.failedLanguages
-                : new Set(current.failedLanguages).add(language);
-              return [
+        yield* modify((current) =>
+          current.generation !== generation
+            ? [undefined, current]
+            : [
                 undefined,
                 {
                   ...current,
-                  loadedLanguages: loaded,
-                  pendingLanguages: pending,
-                  failedLanguages: failed,
+                  loadedLanguages: succeeded
+                    ? new Set(current.loadedLanguages).add(language)
+                    : current.loadedLanguages,
+                  pendingLanguages: withoutEntry(current.pendingLanguages, language),
+                  // A grammar that failed stays plain for the session instead of being requested again.
+                  failedLanguages: succeeded
+                    ? current.failedLanguages
+                    : new Set(current.failedLanguages).add(language),
                   statusVersion: current.statusVersion + 1,
                 },
-              ] as const;
-            }),
-          ),
+              ],
         );
       });
 
@@ -349,14 +321,13 @@ export class CodePreviewSyntaxService extends Context.Service<
         language: requestLanguage,
       });
 
-      const service = CodePreviewSyntaxService.of({ initialize });
-
-      return yield* Effect.acquireRelease(Effect.succeed(service), () =>
+      yield* Effect.addFinalizer(() =>
         ingress.shutdown.pipe(
           Effect.andThen(dispose),
           Effect.ensuring(Effect.sync(() => clearSyntaxProjection(owner))),
         ),
       );
+      return CodePreviewSyntaxService.of({ initialize });
     }),
   );
 }

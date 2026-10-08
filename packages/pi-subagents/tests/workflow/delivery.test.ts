@@ -23,15 +23,9 @@ const notification: SubagentWorkflowNotification = {
   workspaces: [],
 };
 
-interface FakeHost {
-  attempts: number;
-  accept: boolean;
-  readonly finished: string[];
-}
-
 /** A host that refuses every notification until told to accept, and a close that is recorded. */
 const fakeHost = () => {
-  const host: FakeHost = { attempts: 0, accept: false, finished: [] };
+  const host = { attempts: 0, accept: false, finished: new Array<string>() };
   return {
     host,
     notify: () => {

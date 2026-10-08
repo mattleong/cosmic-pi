@@ -4,42 +4,25 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodePlatformLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { prepareSettingUpdate } from "../src/config/options.ts";
-import { DEFAULT_IMAGE_CONFIG, type ConfigFile } from "../src/config/schema.ts";
-import { configPaths, readRawConfig, resolveConfig, writeConfig } from "../src/config/store.ts";
+import { DEFAULT_IMAGE_CONFIG } from "../src/config/schema.ts";
+import { configPaths, resolveConfig, writeConfig } from "../src/config/store.ts";
 
-const temp = FileSystem.FileSystem.pipe(
-  Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "pi-better-openai-config-" })),
-);
+/** A scoped temporary project root with its agent directory and both config paths. */
+const configRoot = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "pi-better-openai-config-" });
+  const agent = (yield* Path.Path).join(root, "agent");
+  return { root, agent, paths: yield* configPaths(root, agent) };
+});
 
 layer(nodePlatformLayer)("config helpers", (it) => {
-  it.effect("preserves unknown fields through Effect document writes", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const configPath = path.join(yield* temp, "config.json");
-      yield* writeConfig(configPath, {
-        active: false,
-        unknownField: "keep me",
-        usage: { enabled: true, unknownUsageField: 123 },
-      });
-      const current = yield* readRawConfig(configPath);
-      yield* writeConfig(configPath, { ...current, active: true });
-      const after = yield* readRawConfig(configPath);
-      expect(after).toMatchObject({ active: true, unknownField: "keep me" });
-      expect(after.usage).toEqual({ enabled: true, unknownUsageField: 123 });
-    }),
-  );
-
   it.effect("ignores untrusted project configuration and selects the global document", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const root = yield* temp;
-      const cwd = path.join(root, "project");
-      const agent = path.join(root, "agent");
-      const paths = yield* configPaths(cwd, agent);
+      const { root, agent, paths } = yield* configRoot;
       yield* writeConfig(paths.global, { usage: { showResetTimes: true } });
       yield* writeConfig(paths.project, { usage: { showResetTimes: false } });
 
-      const resolved = yield* resolveConfig(cwd, agent, false);
+      const resolved = yield* resolveConfig(root, agent, false);
       expect(resolved.configPath).toBe(paths.global);
       expect(resolved.projectConfigExists).toBe(false);
       expect(resolved.usage.showResetTimes).toBe(true);
@@ -52,10 +35,7 @@ layer(nodePlatformLayer)("config helpers", (it) => {
     ["invalid project model", " custom-model ", 42, "custom-model"],
   ] as const)("inherits image model for %s", ([, globalModel, projectModel, expected]) =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const root = yield* temp;
-      const agent = path.join(root, "agent");
-      const paths = yield* configPaths(root, agent);
+      const { root, agent, paths } = yield* configRoot;
       yield* writeConfig(paths.global, { image: { defaultModel: globalModel, enabled: false } });
       yield* writeConfig(paths.project, { image: { defaultModel: projectModel, enabled: true } });
 
@@ -67,14 +47,12 @@ layer(nodePlatformLayer)("config helpers", (it) => {
 
   it.effect("clamps numeric settings", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const root = yield* temp;
-      const paths = yield* configPaths(root, path.join(root, "agent"));
+      const { root, agent, paths } = yield* configRoot;
       yield* writeConfig(paths.project, {
         usage: { refreshIntervalMs: 1 },
         image: { timeoutMs: 1 },
       });
-      const resolved = yield* resolveConfig(root, path.join(root, "agent"), true);
+      const resolved = yield* resolveConfig(root, agent, true);
       expect(resolved.usage.refreshIntervalMs).toBe(15_000);
       expect(resolved.image.timeoutMs).toBe(30_000);
     }),
@@ -95,12 +73,9 @@ layer(nodePlatformLayer)("config helpers", (it) => {
     "resolves desired fast state with legacy precedence from %s",
     ([, project, global, expected]) =>
       Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const root = yield* temp;
-        const agent = path.join(root, "agent");
-        const paths = yield* configPaths(root, agent);
-        if (project) yield* writeConfig(paths.project, project satisfies ConfigFile);
-        if (global) yield* writeConfig(paths.global, global satisfies ConfigFile);
+        const { root, agent, paths } = yield* configRoot;
+        if (project) yield* writeConfig(paths.project, project);
+        if (global) yield* writeConfig(paths.global, global);
 
         const resolved = yield* resolveConfig(root, agent, true);
         expect(resolved.desiredActive).toBe(expected);

@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import * as Predicate from "effect/Predicate";
 import {
   loadCodePreviewSettings,
   registerCodePreviewReplay,
@@ -22,10 +23,6 @@ import {
   PiSessionRuntimeError,
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
-import {
-  backgroundTaskCodeModeSessionId,
-  makeBackgroundTaskCodeModeHost,
-} from "./boundary/host-code-mode.ts";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
 import { makeProjectionBridge } from "./boundary/host-ui.ts";
@@ -48,6 +45,8 @@ interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
   readonly publishesReplay: boolean;
 }
 
+const UNAVAILABLE = "Background Tasks aren't available in this session";
+
 export interface BackgroundTaskApplicationBoundaries {
   readonly loadSettings: (
     cwd: string,
@@ -61,18 +60,12 @@ export function registerBackgroundTaskApplication(
   boundaries: BackgroundTaskApplicationBoundaries = { loadSettings: loadCodePreviewSettings },
 ): void {
   const bridge = makeProjectionBridge(pi.events);
-  const codeModeHost = makeBackgroundTaskCodeModeHost(pi.events);
   // History rebuilt before session_start adopts the first ready activation's presentation.
   const replay = registerCodePreviewReplay(pi, { command: "tasks", tools: ["background_task"] });
   let releaseActivity: (() => void) | undefined;
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   /** The settings this session started with; `/tasks settings` changes apply after /reload. */
   let currentConfig: BackgroundTaskConfig | undefined;
-  const revokeActivity = () => {
-    openActivity = undefined;
-    releaseActivity?.();
-    releaseActivity = undefined;
-  };
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTaskSessionActivation,
@@ -105,7 +98,7 @@ export function registerBackgroundTaskApplication(
           scheduler: yield* CodePreviewSchedulerService,
         };
       }),
-    onActivated: ({ ctx, cwd, publishesReplay }, token, prepared) => {
+    onActivated: ({ ctx, publishesReplay }, token, prepared) => {
       // Only the current-generation activation reaches this hook, and settings are already
       // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
       registerBackgroundTaskTool(
@@ -118,25 +111,19 @@ export function registerBackgroundTaskApplication(
         replay.shell,
       );
       if (publishesReplay) replay.publish();
-      codeModeHost.activate({
-        sessionId: backgroundTaskCodeModeSessionId(ctx),
-        sessionCwd: cwd,
-        tokenCurrent: () => slot.isCurrent(token),
-        toolActive: () =>
-          invokeHostCallback(() => pi.getActiveTools().includes("background_task"), false),
-        run,
-      });
+      const sessionId = invokeHostCallback(() => {
+        const id = ctx.sessionManager?.getSessionId?.();
+        return Predicate.isString(id) && id.length > 0 ? id : undefined;
+      }, undefined);
       currentConfig = prepared.config;
       bridge.setFooterEnabled(prepared.config.showFooterStatus);
       bridge.setContext(ctx);
-      const sessionId = backgroundTaskCodeModeSessionId(ctx);
       openActivity = (signal) => {
-        if (!slot.isCurrent(token) || !slot.isActive() || signal?.aborted)
-          throw new Error("Background Tasks aren't available in this session");
+        if (!slot.isCurrent(token) || signal?.aborted) throw new Error(UNAVAILABLE);
         const capability = sessionId ? discoverActivityView(pi.events, sessionId) : undefined;
         return Promise.resolve(capability ? capability.open("tasks", signal) : false).then(
           (opened) => {
-            if (!slot.isCurrent(token) || !slot.isActive() || signal?.aborted)
+            if (!slot.isCurrent(token) || signal?.aborted)
               throw new Error("Background Tasks session was replaced");
             return opened;
           },
@@ -147,24 +134,19 @@ export function registerBackgroundTaskApplication(
           events: pi.events,
           sessionId,
           bridge,
-          isCurrent: () => slot.isCurrent(token) && slot.isActive(),
-          stop: (id, signal) =>
-            run(
-              BackgroundTaskService.use((service) => service.stop(id)),
-              signal,
-            ).then(() => undefined),
-          clear: (signal) =>
-            run(
-              BackgroundTaskService.use((service) => service.clear),
-              signal,
-            ).then(() => undefined),
+          isCurrent: () => slot.isCurrent(token),
+          stop: stopTask,
+          clear: clearTasks,
         });
     },
+    // Every start and shutdown removes the active runtime synchronously, so revocation runs here
+    // before any replacement or disposal work.
     onDeactivated: (input) => {
       MutableRef.set(input.publicationOwner, false);
       currentConfig = undefined;
-      revokeActivity();
-      codeModeHost.deactivate();
+      openActivity = undefined;
+      releaseActivity?.();
+      releaseActivity = undefined;
       bridge.clear();
     },
     onStartFailure: ({ ctx }) => {
@@ -187,15 +169,22 @@ export function registerBackgroundTaskApplication(
             message: "Background Tasks isn't running in this session",
           }),
         );
+  const stopTask = (id: string, signal?: AbortSignal) =>
+    run(
+      BackgroundTaskService.use((service) => Effect.asVoid(service.stop(id))),
+      signal,
+    );
+  const clearTasks = (signal?: AbortSignal) =>
+    run(
+      BackgroundTaskService.use((service) => Effect.asVoid(service.clear)),
+      signal,
+    );
 
   registerTasksCommand(pi, bridge, {
     openActivity: (signal) =>
-      openActivity
-        ? openActivity(signal)
-        : Promise.reject(new Error("Background Tasks aren't available in this session")),
-    stop: (id) =>
-      run(BackgroundTaskService.use((service) => service.stop(id))).then(() => undefined),
-    clear: () => run(BackgroundTaskService.use((service) => service.clear)).then(() => undefined),
+      openActivity ? openActivity(signal) : Promise.reject(new Error(UNAVAILABLE)),
+    stop: (id) => stopTask(id),
+    clear: () => clearTasks(),
     config: () => currentConfig,
     read: (location) => run(BackgroundTaskSettingsFiles.use((files) => files.read(location))),
     write: (location, id, value) =>
@@ -203,13 +192,8 @@ export function registerBackgroundTaskApplication(
   });
 
   const startSession = (ctx: ExtensionContext, publishesReplay: boolean) => {
-    revokeActivity();
-    codeModeHost.deactivate();
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable" || captured.aborted) {
-      bridge.clear();
-      return slot.shutdown();
-    }
+    if (captured._tag === "Unavailable" || captured.aborted) return slot.shutdown();
     return slot
       .start(
         {
@@ -224,15 +208,9 @@ export function registerBackgroundTaskApplication(
       .then(() => undefined);
   };
 
-  // Settlement closes replay adoption unless the first startup published it.
-  pi.on("session_start", (_event, ctx) => {
-    try {
-      return startSession(ctx, true).finally(replay.finishStartup);
-    } catch (error) {
-      replay.finishStartup();
-      throw error;
-    }
-  });
+  // Settlement closes replay adoption unless the first startup published it. Session capture
+  // and the slot never throw synchronously, so the returned Promise always reaches it.
+  pi.on("session_start", (_event, ctx) => startSession(ctx, true).finally(replay.finishStartup));
   // Tree navigation keeps the session id but abandons the prior branch's task ownership.
   // Slot replacement joins process cleanup and revokes capabilities before reactivation.
   pi.on("session_tree", (_event, ctx) => startSession(ctx, false));
@@ -243,9 +221,6 @@ export function registerBackgroundTaskApplication(
 
   pi.on("session_shutdown", () => {
     replay.retire();
-    revokeActivity();
-    codeModeHost.deactivate();
-    bridge.clear();
-    return slot.shutdown().finally(codeModeHost.dispose);
+    return slot.shutdown();
   });
 }

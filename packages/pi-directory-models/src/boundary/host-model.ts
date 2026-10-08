@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import {
   makeDirectoryModelPreference,
   type DirectoryModelPreference,
@@ -28,11 +28,11 @@ const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
 
 export function captureThinkingLevel<ValueInput>(value: ValueInput): ThinkingLevel | undefined {
-  return invokeHostCallback(() => Option.getOrUndefined(decodeThinkingLevel(value)), undefined);
+  return decodeUnknownOrUndefined(ThinkingLevelSchema, value);
 }
 
 export function captureSelectedModel<ValueInput>(value: ValueInput): SelectedModel | undefined {
-  return invokeHostCallback(() => Option.getOrUndefined(decodeSelectedModel(value)), undefined);
+  return decodeUnknownOrUndefined(SelectedModelSchema, value);
 }
 
 export function captureContextModel(ctx: ExtensionContext): SelectedModel | undefined {
@@ -64,6 +64,8 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
   ctx: ExtensionContext,
   preference: DirectoryModelPreference,
 ) {
+  // Decode directly rather than through captureSelectedModel: a throwing nested getter must stay a
+  // typed read failure here, not collapse into "no current model" and trigger a host mutation.
   const current = yield* Effect.try({
     try: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
     catch: hostError("read", "Couldn't read Pi's current model"),

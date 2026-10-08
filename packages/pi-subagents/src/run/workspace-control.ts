@@ -9,17 +9,22 @@ import type {
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
 import {
+  isWithin,
   makeWorkspaceControlContext,
   mapWorkspaceError,
+  type WorkspaceBindingStatus,
   type WorkspaceControlDependencies,
-  workspaceBindingStatusLocked,
 } from "./workspace-binding.ts";
 import {
   makeWorkspaceIntegrate,
   type WorkspaceIntegrationOutcome,
 } from "./workspace-integration.ts";
 import { makeWorkspaceLaunch } from "./workspace-launch.ts";
-import { makeWorkspaceReview, type WorkspaceReview } from "./workspace-review.ts";
+import {
+  makeWorkspaceReview,
+  type WorkspaceReview,
+  type WorkspaceReviewOptions,
+} from "./workspace-review.ts";
 
 /** Why the writer workspace mode cannot change right now. */
 export type WriterWorkspaceBlockCode =
@@ -35,7 +40,6 @@ interface WorkspaceBlock {
 
 export interface WriterWorkspaceInspection {
   readonly mode: WriterWorkspaceMode;
-  readonly canSwitch: boolean;
   readonly blockedReason?: string;
   readonly blockedCode?: WriterWorkspaceBlockCode;
 }
@@ -44,7 +48,7 @@ export interface WorkspaceCoordinatorContract {
   readonly workspaceList: (callerRunId?: string) => Effect.Effect<WorkspaceListing, SubagentError>;
   readonly workspaceReview: (
     workspaceId: string,
-    options?: { readonly revisionId?: string; readonly offset?: number; readonly limit?: number },
+    options?: WorkspaceReviewOptions,
     callerRunId?: string,
   ) => Effect.Effect<WorkspaceReview, SubagentError>;
   readonly workspacePrepare: (
@@ -94,35 +98,27 @@ export interface WorkspaceCoordinatorContract {
  */
 export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies) {
   const context = makeWorkspaceControlContext(dependencies);
-  const { engine, ownerId, records, writerPools, withLock, isClosed, state } = context;
-  const { ownerFor, requireEngine } = context;
+  const { engine, ownerId, records, writerPools, withLock, isClosed, state, ownerFor } = context;
+  const { requireEngine, sourceCwd, writerLeases } = context;
   const sourceRecords = (listing: WorkspaceListing) =>
     Effect.gen(function* () {
       const entries = listing.records;
       const owned = (record: WorkspaceRecord) => record.handle.ownerId.startsWith(`${ownerId}/`);
       // Resolve aliases only when inspecting foreign artifacts, never during reader startup.
       const source =
-        dependencies.sourceCwd !== undefined && entries.some((record) => !owned(record))
-          ? (yield* dependencies.writerLeases
-              .canonicalize(dependencies.sourceCwd)
-              .pipe(Effect.mapError(mapWorkspaceError))).path
+        sourceCwd !== undefined && entries.some((record) => !owned(record))
+          ? (yield* writerLeases.canonicalize(sourceCwd).pipe(Effect.mapError(mapWorkspaceError)))
+              .path
           : undefined;
       return {
         // Unknown source identity cannot justify hiding an artifact from the root.
         unavailable: listing.unavailable,
         records: entries.filter(
           (record) =>
-            owned(record) ||
-            (source !== undefined &&
-              (source === record.handle.sourceRoot ||
-                source.startsWith(`${record.handle.sourceRoot.replace(/\/$/, "")}/`))),
+            owned(record) || (source !== undefined && isWithin(source, record.handle.sourceRoot)),
         ),
       };
     });
-  const all = () =>
-    engine
-      ? engine.listAll().pipe(Effect.mapError(mapWorkspaceError))
-      : Effect.succeed<WorkspaceListing>({ records: [], unavailable: [] });
   const workspaceBlock = (): Effect.Effect<WorkspaceBlock | undefined, SubagentError> =>
     Effect.gen(function* () {
       if (
@@ -150,7 +146,9 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
           reason: `Workspace ${busy.handle.workspaceId} has an operation in progress. Retry once it finishes.`,
         };
       // Unknown previous-session artifacts are not evidence of process death. Never silently adopt them.
-      const listing = yield* all();
+      const listing: WorkspaceListing = engine
+        ? yield* engine.listAll.pipe(Effect.mapError(mapWorkspaceError))
+        : { records: [], unavailable: [] };
       if (listing.unavailable.length > 0)
         return {
           code: "records-unavailable",
@@ -172,7 +170,6 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
       const block = yield* workspaceBlock();
       return {
         mode: state.mode,
-        canSwitch: block === undefined,
         ...(block && { blockedReason: block.reason, blockedCode: block.code }),
       };
     }),
@@ -222,9 +219,10 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
       const service = yield* requireEngine;
       const listing: WorkspaceListing =
         caller === SUBAGENT_ROOT_RUN_ID
-          ? yield* service
-              .listAll()
-              .pipe(Effect.mapError(mapWorkspaceError), Effect.flatMap(sourceRecords))
+          ? yield* service.listAll.pipe(
+              Effect.mapError(mapWorkspaceError),
+              Effect.flatMap(sourceRecords),
+            )
           : {
               records: yield* service
                 .list({ ownerId: ownerFor(caller) })
@@ -235,23 +233,22 @@ export function makeWorkspaceControl(dependencies: WorkspaceControlDependencies)
         Effect.sync(() => ({ ...listing, records: listing.records.map(currentRecord) })),
       );
     });
-  const launch = makeWorkspaceLaunch(context);
-  const { workspaceReview, workspacePrepare, workspaceDiscard, workspaceDiscardUnchanged } =
-    makeWorkspaceReview(context);
-  const workspaceIntegrate: WorkspaceCoordinatorContract["workspaceIntegrate"] =
-    makeWorkspaceIntegrate(context);
   return {
-    ...launch,
+    ...makeWorkspaceLaunch(context),
+    ...makeWorkspaceReview(context),
+    workspaceIntegrate: makeWorkspaceIntegrate(context),
     workspaceList,
-    workspaceReview,
-    workspacePrepare,
-    workspaceIntegrate,
-    workspaceDiscard,
-    workspaceDiscardUnchanged,
     inspectWriterWorkspace,
     setWriterWorkspaceMode,
     workspaceBindingStatus: (workspaceId: string) =>
-      withLock(Effect.sync(() => workspaceBindingStatusLocked(state, workspaceId))),
+      withLock(
+        Effect.sync((): WorkspaceBindingStatus => {
+          const binding = state.bindings.get(workspaceId);
+          if (!binding) return "unbound";
+          if (!binding.finished) return "pending";
+          return binding.integrated ? "integrated" : "closed";
+        }),
+      ),
   };
 }
 

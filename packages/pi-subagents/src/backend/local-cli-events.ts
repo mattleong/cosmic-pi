@@ -44,7 +44,7 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
     // Make overflow losses diagnosable instead of acknowledging them silently.
     Effect.logWarning(
       `Subagent ${label} event ingress overflowed; dropped a ${event.type} event.`,
-    ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))), Effect.asVoid);
+    ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))));
   const offer = (event: BackendEvent, raw?: Raw): Effect.Effect<void> =>
     Effect.suspend(() => {
       if (raw) rawOwners.set(event, raw);
@@ -53,8 +53,24 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
       return Queue.offer(events, event).pipe(
         Effect.flatMap((delivered) => (delivered ? Effect.void : dropDiagnostic(event))),
         Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : dropDiagnostic(event))),
-        Effect.asVoid,
       );
     });
   return { offer, release, acknowledge, acknowledgeAll };
 };
+
+/** Bounded backend ingress whose scope releases every still-owned raw event, then ends it. */
+export const makeLocalCliEventIngress = <Raw = LocalCliWireEvent>(
+  acknowledgeRaw: (raw: Raw) => void,
+  label?: string,
+) =>
+  Effect.gen(function* () {
+    const events = yield* Queue.bounded<BackendEvent, Cause.Done>(512);
+    const ownership = makeLocalCliRawEventOwnership(events, acknowledgeRaw, label);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        ownership.acknowledgeAll();
+        Queue.endUnsafe(events);
+      }),
+    );
+    return { events, ...ownership };
+  });

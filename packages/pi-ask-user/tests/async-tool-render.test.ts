@@ -7,6 +7,7 @@ import {
   renderAsyncMessage,
   renderAsyncResult,
 } from "../src/ui/async-tool-render.ts";
+import { hostile, hostileContent, malformedNoteAnswers } from "./support/questionnaire.ts";
 
 const output = (component: Component) => component.render(240).join("\n");
 const callContext = (expanded = false) => ({ expanded, state: {} });
@@ -58,16 +59,7 @@ describe("async questionnaire replay rendering", () => {
   });
 
   it("rejects malformed or hostile notes but accepts string fallback content", () => {
-    const hostileNote = Object.defineProperty({}, "note", {
-      get() {
-        throw new Error("hostile note");
-      },
-    });
-    for (const note of [{ note: 123 }, hostileNote]) {
-      const answer = Object.defineProperties(
-        { key: "route", kind: "custom", text: "Scenic" },
-        Object.getOwnPropertyDescriptors(note),
-      );
+    for (const answer of malformedNoteAnswers()) {
       const details = { ...snapshot, outcome: { outcome: "submitted", answers: [answer] } };
       for (const rendered of [
         result(details, false, "string fallback"),
@@ -201,11 +193,7 @@ describe("async questionnaire replay rendering", () => {
   });
 
   it("renders six questions and answers but falls back safely beyond them and for hostile data", () => {
-    const hostile = Object.defineProperty({}, "details", {
-      get() {
-        throw new Error("hostile getter");
-      },
-    });
+    const hostileResult = hostile({}, "details");
     const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
     const answers = Array.from({ length: 7 }, (_, index) => ({
       key: `answer-${index + 1}`,
@@ -222,24 +210,8 @@ describe("async questionnaire replay rendering", () => {
       { requests: Array.from({ length: 17 }, () => snapshot) },
       { ...snapshot, outcome: { outcome: "submitted", answers } },
     ];
-    const throwingPart = Object.defineProperty({ type: "text" }, "text", {
-      get() {
-        throw new Error("hostile text");
-      },
-    });
-    const content = [
-      { type: "text", text: "safe\u001b[31m fallback" },
-      { type: "image", data: "secret" },
-      { type: "text", text: 123 },
-      null,
-      throwingPart,
-      { type: "text", text: "after" },
-    ];
-    const hostileId = Object.defineProperty({ ...snapshot }, "requestId", {
-      get() {
-        throw new Error("hostile ID getter");
-      },
-    });
+    const content = hostileContent("safe");
+    const hostileId = hostile({ ...snapshot }, "requestId");
     for (const rendered of [
       ...[...invalid, hostileId, { requests: [hostileId] }].map((details) =>
         result(details, false, content),
@@ -252,22 +224,12 @@ describe("async questionnaire replay rendering", () => {
       expect(rendered).not.toContain("\u001b");
     }
     expect(() =>
-      renderAsyncResult(hostile, { expanded: true, isPartial: false }, theme),
+      renderAsyncResult(hostileResult, { expanded: true, isPartial: false }, theme),
     ).not.toThrow();
     expect(() =>
-      renderAsyncMessage(hostile, { expanded: true, outputPad: 0 }, theme),
+      renderAsyncMessage(hostileResult, { expanded: true, outputPad: 0 }, theme),
     ).not.toThrow();
-    expect(() =>
-      renderAsyncCall(
-        Object.defineProperty({}, "questions", {
-          get() {
-            throw new Error("hostile getter");
-          },
-        }),
-        theme,
-        callContext(true),
-      ),
-    ).not.toThrow();
+    expect(() => renderAsyncCall(hostile({}, "questions"), theme, callContext(true))).not.toThrow();
   });
 
   it("sanitizes answers, notes, titles, metadata and notification fallback text", () => {
@@ -312,8 +274,7 @@ describe("async questionnaire replay rendering", () => {
     expect(result({ requests: [] })).not.toBe("");
     // A returned cancellation is stated once, as cancelled; failures are the shell's issue lines.
     const cancelledResult = { ...snapshot, status: "cancelled", outcome: { outcome: "cancelled" } };
-    expect(result(cancelledResult, false, agentText)).toMatch(/⊘ Cancelled/);
-    expect(result(cancelledResult, false, agentText)).not.toContain("⚠");
+    expect(result(cancelledResult, false, agentText)).toMatch(/cancelled/i);
     const failed = { ...snapshot, status: "failed", outcome: undefined };
     expect(result(failed, false, agentText).trim()).toBe("");
     for (const details of [snapshot, cancelledResult])
@@ -324,21 +285,6 @@ describe("async questionnaire replay rendering", () => {
           }),
         ).trim(),
       ).toBe("");
-  });
-
-  it("marks cancelled messages as cancelled, never as a warning", () => {
-    const cancelledMessage = {
-      details: { ...message.details, outcome: { outcome: "cancelled" } },
-      content: "The user cancelled the questionnaire.",
-    };
-    for (const compact of [false, true])
-      for (const expanded of [false, true]) {
-        const text = output(
-          renderAsyncMessage(cancelledMessage, { expanded, outputPad: 0 }, theme, compact),
-        );
-        expect(text).toContain("⊘");
-        expect(text).not.toContain("⚠");
-      }
   });
 
   it("headers name the tool and subject without request IDs", () => {

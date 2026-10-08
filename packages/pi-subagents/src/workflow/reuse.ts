@@ -1,19 +1,14 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { SubagentServiceContract } from "../run/service.ts";
-import type { WorkflowAgentAccess, WorkflowAgentCallError } from "./agent.ts";
+import type { WorkflowAgentAccess } from "./agent.ts";
+import type { WorkflowAgentCallError } from "./errors.ts";
 import type { WorkflowJournalEntry, WorkflowReplay } from "./journal.ts";
 import type { WorkflowAgentView } from "./model.ts";
 import type { WorkflowAgentOptions } from "./options.ts";
 
-/** A result reused from the resumed run, and the entry its view counts. */
-export interface WorkflowReused {
-  readonly entry: WorkflowJournalEntry;
-  readonly counted: WorkflowJournalEntry;
-}
-
 /** A call that claims a planned agent the user skipped, which starts nothing. */
-export interface WorkflowSkippedCall<A> {
+interface WorkflowSkippedCall<A> {
   /**
    * Claims the skipped entry the call would claim and publishes the call's view, already skipped,
    * in one step; undefined, changing nothing, when the call would claim no skipped entry.
@@ -32,15 +27,15 @@ export interface WorkflowSkippedCall<A> {
  * it from the new run's journal; a call that runs live gets undefined once `check` has accepted
  * it.
  */
-export type WorkflowConsult = <A>(
+type WorkflowConsult = <A>(
   key: string,
   options: WorkflowAgentOptions,
   check: Effect.Effect<WorkflowAgentAccess, WorkflowAgentCallError>,
-  settle: (reused: WorkflowReused) => Effect.Effect<A>,
+  settle: (reused: WorkflowJournalEntry) => Effect.Effect<A>,
   skipped: WorkflowSkippedCall<A>,
 ) => Effect.Effect<A | undefined, WorkflowAgentCallError>;
 
-export interface WorkflowReuse {
+interface WorkflowReuse {
   /**
    * Runs one agent() call, which takes its turn at the replay in its very first step, so turns
    * follow the order the script issued its calls. A call that ends before it consults the replay
@@ -49,11 +44,6 @@ export interface WorkflowReuse {
   readonly inIssueOrder: <A, E>(
     call: (consult: WorkflowConsult) => Effect.Effect<A, E>,
   ) => Effect.Effect<A, E>;
-}
-
-export interface WorkflowReuseRun {
-  readonly replay: WorkflowReplay | undefined;
-  readonly log: (level: "info" | "warning", message: string) => Effect.Effect<void>;
 }
 
 /** Why a resumed worktree writer runs again instead of reusing its result. */
@@ -86,7 +76,10 @@ const freshConsult: WorkflowConsult = (_key, _options, check, _settle, skipped) 
  * issue order, and the writer's miss closes the replay in the same turn.
  */
 export const makeWorkflowReuse = (
-  run: WorkflowReuseRun,
+  run: {
+    readonly replay: WorkflowReplay | undefined;
+    readonly log: (level: "info" | "warning", message: string) => Effect.Effect<void>;
+  },
   subagents: Pick<SubagentServiceContract, "workspaceBindingStatus">,
 ): WorkflowReuse => {
   const replay = run.replay;
@@ -97,19 +90,20 @@ export const makeWorkflowReuse = (
 
   /**
    * A worktree writer's result is reused only while its edit awaits review, listed as a
-   * proposal, or after it was integrated into the checkout, unlisted. A writer whose worktree
-   * was discarded, whose integration is unconfirmed, or that this session never bound, runs
-   * again: its entry misses like any other, so a writer without isolation: "worktree" closes the
-   * replay, since the session's writer mode may now put its rerun in the checkout.
+   * proposal, or after it was integrated into the checkout, without its worktree, which then
+   * needs neither review nor recovery. A writer whose worktree was discarded, whose integration
+   * is unconfirmed, or that this session never bound, runs again: its entry misses like any
+   * other, so a writer without isolation: "worktree" closes the replay, since the session's
+   * writer mode may now put its rerun in the checkout.
    */
   const bound = (entry: WorkflowJournalEntry, options: WorkflowAgentOptions) =>
     Effect.gen(function* () {
-      if (entry.workspaceId === undefined) return { entry, counted: entry };
+      if (entry.workspaceId === undefined) return entry;
       const status = yield* subagents.workspaceBindingStatus(entry.workspaceId);
-      if (status === "pending") return { entry, counted: entry };
+      if (status === "pending") return entry;
       if (status === "integrated") {
-        const { workspaceId: _integrated, ...counted } = entry;
-        return { entry, counted };
+        const { workspaceId: _integrated, ...integrated } = entry;
+        return integrated;
       }
       const label = options.label ?? entry.label ?? "agent";
       yield* run.log(

@@ -42,45 +42,36 @@ const subagentBackendRegistryLayer = Layer.effect(
 );
 
 export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
-  readonly workspaceOwnerId?: string;
   /**
-   * Pi session whose resume memory survives /reload and /tree, and whose workflow run records let
-   * a restarted Pi resume and announce its runs; absent keeps both local to the activation.
+   * Pi session whose resume memory survives /reload and /tree, whose workflow run records let a
+   * restarted Pi resume and announce its runs, and which owns its writer workspaces; absent keeps
+   * them local to the activation.
    */
   readonly sessionKey?: string | undefined;
-  /** Read live before loading project workflows; defaults to the activation's trust. */
-  readonly isProjectTrusted?: (() => boolean) | undefined;
+  /** Read live before loading project workflows. */
+  readonly isProjectTrusted: () => boolean;
   readonly publish: (projection: SubagentProjection) => void;
-  readonly workflowActivity?: WorkflowActivitySink | undefined;
+  readonly workflowActivity: WorkflowActivitySink;
   /** Follows which workflow runs still need the main agent, which keeps workflows available. */
-  readonly workflowObserver?: WorkflowRunObserver | undefined;
+  readonly workflowObserver: WorkflowRunObserver;
   readonly notify: SubagentNotifier;
-  readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
-  readonly questionnaireHandler?: SubagentServiceOptions["questionnaireHandler"] | undefined;
+  readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
+  readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
 }
 
 export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   // The store remains the single persistence door and is exposed for the human settings command.
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
+  const directory = { agentDirectory: options.agentDirectory };
   const backendBoundaries = Layer.mergeAll(
-    ChildProcess.layer({ agentDirectory: options.agentDirectory }),
-    LocalCliProcess.layer({ agentDirectory: options.agentDirectory }),
-    SupervisorChannel.layer({ agentDirectory: options.agentDirectory }),
+    ChildProcess.layer(directory),
+    LocalCliProcess.layer(directory),
+    SupervisorChannel.layer(directory),
   );
   const backend = subagentBackendRegistryLayer.pipe(Layer.provide(backendBoundaries));
-  const nativeModelCatalog = NativeModelCatalog.layer({
-    agentDirectory: options.agentDirectory,
-  });
-  const writerLeases = WriterLeaseService.layer({ agentDirectory: options.agentDirectory });
-  const workspaces = WorkspaceService.layer({ agentDirectory: options.agentDirectory });
-  const serviceOptions: SubagentServiceOptions = {
-    workspaceSourceCwd: options.cwd,
-    ...(options.workspaceOwnerId && { workspaceOwnerId: options.workspaceOwnerId }),
-    publish: options.publish,
-    notify: options.notify,
-    ...(options.questionnaireHandler && { questionnaireHandler: options.questionnaireHandler }),
-  };
+  const writerLeases = WriterLeaseService.layer(directory);
+  const workspaces = WorkspaceService.layer(directory);
   const service = Layer.unwrap(
     Effect.gen(function* () {
       // Read the persisted mode separately from profile handoffs, which preserve an older route baseline.
@@ -91,21 +82,25 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
         options.projectTrusted,
       );
       return SubagentService.layer({
-        ...serviceOptions,
+        workspaceSourceCwd: options.cwd,
+        ...(options.sessionKey && { workspaceOwnerId: options.sessionKey }),
+        publish: options.publish,
+        notify: options.notify,
+        questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,
-        ...(options.proxyHandler && { proxyHandler: options.proxyHandler }),
+        proxyHandler: options.proxyHandler,
       });
     }),
   ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, workspaces, configStore)));
   const workflowStore = WorkflowStore.layer({
     cwd: options.cwd,
     agentDirectory: options.agentDirectory,
-    isProjectTrusted: options.isProjectTrusted ?? (() => options.projectTrusted),
+    isProjectTrusted: options.isProjectTrusted,
   }).pipe(Layer.provide(SafeFile.layer), Layer.provide(nodeFilePlatformLayer));
   // Built on the subagent service, so its runs are interrupted before that service stops.
   const workflows = WorkflowService.layer({
-    ...(options.workflowActivity && { activity: options.workflowActivity }),
-    ...(options.workflowObserver && { observer: options.workflowObserver }),
+    activity: options.workflowActivity,
+    observer: options.workflowObserver,
     notify: options.notify,
     sessionKey: options.sessionKey,
   }).pipe(
@@ -122,7 +117,7 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     profiles,
     configStore,
     backend,
-    nativeModelCatalog,
+    NativeModelCatalog.layer(directory),
     CodePreviewSchedulerService.layer,
   );
 };

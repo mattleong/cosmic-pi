@@ -39,12 +39,11 @@ import {
   type WorkflowToolDetails,
 } from "../../src/tools/workflow-schema.ts";
 import {
-  inline,
   memoryLocations,
   reportTask,
   runWhere,
   script,
-  testHost,
+  startScript,
   workflowFixture,
 } from "../workflow/fixtures/workflow-harness.ts";
 
@@ -92,8 +91,7 @@ const liveTool = (scripts: Readonly<Record<string, string>> = {}, clock?: Clock.
   const onService = <A, E>(
     effect: (workflows: typeof WorkflowService.Service) => Effect.Effect<A, E>,
   ) => Effect.promise(() => runtime.runPromise(WorkflowService.use(effect)));
-  const startRun = (body: string) =>
-    onService((workflows) => workflows.start({ source: inline(body), args: null }, testHost()));
+  const startRun = (body: string) => onService((workflows) => startScript(workflows, body));
   const runMatching = (id: string, predicate: (run: WorkflowRunView) => boolean) =>
     onService((workflows) => runWhere(workflows, id, predicate));
   const tool = registeredTool({
@@ -282,10 +280,6 @@ describe("subagent_workflow status repeats", () => {
       yield* dispose;
     }),
   );
-
-  it("says in the description when to stop a run", () => {
-    expect(registeredTool().description).toContain(WORKFLOW_STOP_GUIDANCE);
-  });
 });
 
 describe("subagent_workflow args schemas", () => {
@@ -354,19 +348,7 @@ describe("subagent_workflow presentation", () => {
         details: {
           version: 1,
           action: "start",
-          run: {
-            id: "wf-a-1",
-            name: "test-workflow",
-            state: "running",
-            phases: 1,
-            agents: 0,
-            queued: 0,
-            running: 0,
-            failed: 0,
-            skipped: 0,
-            reused: 0,
-            startedAt: 1,
-          },
+          run: workflowRunSummary(workflowRunView({ name: "test-workflow" })),
         },
       },
     );
@@ -387,21 +369,13 @@ describe("subagent_workflow presentation", () => {
         details: {
           version: 1,
           action: "status",
-          run: {
-            id: "wf-a-1",
-            name: "review",
-            state: "failed",
-            phases: 1,
-            agents: 2,
-            queued: 0,
-            running: 0,
-            failed: 1,
-            skipped: 0,
-            reused: 0,
-            startedAt: 1,
-            endedAt: 2,
-            failure: "bad input",
-          },
+          run: workflowRunSummary(
+            workflowRunView({
+              state: "failed",
+              endedAt: 2,
+              failure: { name: "Error", message: "bad input" },
+            }),
+          ),
         },
       },
     );
@@ -451,13 +425,12 @@ describe("subagent_workflow presentation", () => {
     const hostile = script(
       'await agent("Summarize \u001b[2J\u001b]8;;https://example.test\u0007this file\u001b]8;;\u0007");',
     );
-    const harness = createToolPresentationHarness(registeredTool());
-    for (const expanded of [false, true]) {
-      harness.call({ action: "start", script: hostile }, { expanded });
-      const rendered = harness.render(160).join("\n");
-      expect(rendered).toContain("this file");
-      expect(rendered).not.toContain("\u001b[2J");
-      expect(rendered).not.toContain("\u001b]8;;");
+    const harness = createToolPresentationHarness(registeredTool(), { width: 160 });
+    const args = { action: "start", script: hostile };
+    for (const { text } of harness.cycle(args, undefined, { states: [false, true] })) {
+      expect(text).toContain("this file");
+      expect(text).not.toContain("\u001b[2J");
+      expect(text).not.toContain("\u001b]8;;");
     }
   });
 
@@ -497,6 +470,14 @@ describe("saved workflow discovery", () => {
     expect(many).toContain("flow-19");
     expect(many).not.toContain("flow-20 ");
     expect(many).toContain("10 more");
+  });
+
+  it("clips long saved descriptions without splitting a surrogate pair", () => {
+    // The emoji's two UTF-16 units straddle the 199-unit clip point; neither half survives alone.
+    const description = `${"x".repeat(198)}\u{1F600}${"y".repeat(20)}`;
+    const workflow = { ...saved("long"), meta: { ...saved("long").meta, description } };
+    const listed = workflowToolDescription([workflow], memoryLocations);
+    expect(listed).toContain(`- long (project): ${"x".repeat(198)}…`);
   });
 
   it("advertises each saved workflow's args from its meta.args schema", () => {

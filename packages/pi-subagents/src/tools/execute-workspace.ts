@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { clipText, countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { Check } from "typebox/value";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { invalidRequest } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
@@ -40,7 +40,7 @@ const fileName = (name: string) =>
   clipText(sanitizeTerminalLine(name.replace(/\/+$/u, "").split("/").pop() ?? ""), 40) || "A file";
 
 /** Problems a committed integration left behind, worded for people and for the agent. */
-export function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
+function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
   const warnings: WorkspaceWarning[] = [];
   const paths = outcome.uncapturedPaths;
   const worker = JSON.stringify(outcome.workerRoot);
@@ -128,21 +128,18 @@ const executeWorkspaceList = (
     let chars = 0;
     for (const entry of entries.slice(offset, offset + 8)) {
       const line = yield* encodeWorkspaceMetadata(entry).pipe(
-        Effect.mapError(
-          () =>
-            new InvalidSubagentRequestError({
-              code: "workspace_metadata_invalid",
-              message:
-                "Workspace metadata could not be encoded safely; inspect private workspace state manually.",
-            }),
+        Effect.mapError(() =>
+          invalidRequest(
+            "workspace_metadata_invalid",
+            "Workspace metadata could not be encoded safely; inspect private workspace state manually.",
+          ),
         ),
       );
       if (line.length > 32_000)
-        return yield* new InvalidSubagentRequestError({
-          code: "workspace_metadata_too_large",
-          message:
-            "Workspace metadata exceeds the safe output bound; inspect private workspace state manually.",
-        });
+        return yield* invalidRequest(
+          "workspace_metadata_too_large",
+          "Workspace metadata exceeds the safe output bound; inspect private workspace state manually.",
+        );
       if (chars + line.length > 32_000) break;
       chars += line.length;
       lines.push(line);
@@ -173,7 +170,10 @@ const executeWorkspaceList = (
     );
   });
 
-/** The coordinator binds identity and enforces direct-parent authority before any engine access. */
+/**
+ * The coordinator binds identity and enforces direct-parent authority before any engine access.
+ * The schema is checked again because Pi `tool_call` handlers may mutate already-validated input.
+ */
 export const executeWorkspaceAction = (
   operation: SubagentWorkspaceInput,
   callerRunId = SUBAGENT_ROOT_RUN_ID,
@@ -182,11 +182,7 @@ export const executeWorkspaceAction = (
     const error = Check(WorkspaceParameters, operation)
       ? workspaceOperationError(operation)
       : "Workspace arguments failed strict validation.";
-    if (error !== undefined)
-      return yield* new InvalidSubagentRequestError({
-        code: "workspace_input_invalid",
-        message: error,
-      });
+    if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);
     const service = yield* SubagentService;
     const workspaceId = operation.workspaceId ?? "";
     const revisionId = operation.revisionId ?? "";

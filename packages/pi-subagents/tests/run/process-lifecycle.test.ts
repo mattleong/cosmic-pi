@@ -10,13 +10,11 @@ import * as Scope from "effect/Scope";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import type { BackendEvent, BackendHandle } from "../../src/backend/model.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
-import type { SubagentError } from "../../src/run/errors.ts";
 import type { RunContext, RunRecord } from "../../src/run/internal.ts";
 import { makeRunProcessInitializer } from "../../src/run/process-lifecycle.ts";
 import { makeRunRecordCleanup } from "../../src/run/record-cleanup.ts";
 import { makeWriterPreparation } from "../../src/run/writer-preparation.ts";
-import { emptyRunWarningSlots } from "../../src/run/warnings.ts";
-import type { WriterPoolEntry } from "../../src/run/writer-pool.ts";
+import { addWriterPoolMemberLocked } from "../../src/run/writer-pool.ts";
 import { view } from "../fixtures/run-view.ts";
 import { testBackendDriver } from "../tools/fixtures/tool-harness.ts";
 import { makeRunContext } from "./fixtures/run-context.ts";
@@ -57,19 +55,10 @@ const processFixture = () =>
           () => Effect.sync(() => void counts.released++),
         ),
     };
+    // Each flow removes the cwd's pool before admitting its next writer, which gets a fresh one.
     const newRecord = (id: string) =>
       Effect.gen(function* () {
-        const pool: WriterPoolEntry = {
-          cwd,
-          leaseScope: yield* Scope.fork(owner),
-          releaseState: { authorized: false },
-          preparationSettled: yield* Deferred.make<void, SubagentError>(),
-          members: new Map([[id, undefined]]),
-          violationRunIds: new Set(),
-          state: "pending",
-          admissionPaused: false,
-        };
-        context.writerPools.set(cwd.digest, pool);
+        const pool = yield* addWriterPoolMemberLocked(context.writerPools, cwd, id);
         const record: RunRecord = {
           scriptOrigin: false,
           view: view({ id, name: id, state: "starting", writeIntent: "writer", capabilities: [] }),
@@ -78,7 +67,6 @@ const processFixture = () =>
           launch: {
             runId: id,
             name: id,
-            closeOnReport: true,
             cwd: cwd.path,
             context: "fresh",
             writeIntent: "writer",
@@ -91,11 +79,9 @@ const processFixture = () =>
             systemPrompt: "",
           },
           activeTools: new Map(),
-          nativeAgents: new Map(),
-          nativeAgentTotal: 0,
+          nativeAgents: new Set(),
           cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
           cleanupDisposition: "pending",
-          retryExhausted: false,
           pauseRequested: false,
           stoppedByParent: false,
           cleanupPending: false,
@@ -106,7 +92,7 @@ const processFixture = () =>
           initializationPending: false,
           notificationGeneration: 0,
           completionGeneration: 0,
-          warningSlots: emptyRunWarningSlots(),
+          warningSlots: {},
           completionGenerations: new Map(),
           completionClaims: new Map(),
           assignment: {
@@ -136,42 +122,85 @@ const initializer = (context: RunContext, prepareBackendSpawn = makeWriterPrepar
   });
 };
 
+/** `context` with its lock pausing once, on leaving the first locked step after which `reached`. */
+const pauseOnceAfterLock = (context: RunContext, reached: () => boolean) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let pending = true;
+    const paused: RunContext = {
+      ...context,
+      withLock: (effect) =>
+        context.withLock(effect).pipe(
+          Effect.tap(() => {
+            if (!pending || !reached()) return Effect.void;
+            pending = false;
+            return Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+            );
+          }),
+        ),
+    };
+    return { context: paused, entered, release };
+  });
+
+it.effect(
+  "settles preparation cancelled right after its ownership claim and permits cwd reuse",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* processFixture();
+      const record = yield* fixture.newRecord("writer");
+      const pool = record.writerPool!;
+      // Pause after pending → preparing, before the caller installs its handler.
+      const claim = yield* pauseOnceAfterLock(fixture.context, () => pool.state === "preparing");
+      const context = claim.context;
+      const cleanup = makeRunRecordCleanup(context);
+      const preparing = yield* makeWriterPreparation(context)(record).pipe(Effect.forkScoped);
+      yield* Deferred.await(claim.entered);
+      preparing.interruptUnsafe();
+      yield* Deferred.succeed(claim.release, undefined);
+      expect(Exit.isFailure(yield* Fiber.await(preparing))).toBe(true);
+      // Assert before cleanup so the old leak fails directly, not by a timeout.
+      expect(yield* Deferred.isDone(pool.preparationSettled)).toBe(true);
+      yield* cleanup.closeRecordScope(record);
+      expect(record.cleanupDisposition).toBe("confirmed");
+      expect(record.writerPool).toBeUndefined();
+      expect(fixture.context.writerPools.size).toBe(0);
+
+      const replacement = yield* fixture.newRecord("replacement");
+      yield* makeWriterPreparation(context)(replacement);
+      expect(replacement.writerPool?.state).toBe("held");
+      yield* cleanup.closeRecordScope(replacement);
+      expect(fixture.context.writerPools.size).toBe(0);
+    }).pipe(Effect.provide(fakeWriterLeaseLayer())),
+);
+
 it.effect("settles an interrupted spawn claim before stop, compensation and session cleanup", () =>
   Effect.gen(function* () {
     const leases = leaseCounts();
     yield* Effect.gen(function* () {
       const fixture = yield* processFixture();
       const record = yield* fixture.newRecord("writer");
-      const claimed = yield* Deferred.make<void>();
-      const releaseClaim = yield* Deferred.make<void>();
-      let spawnSettlement: Deferred.Deferred<void> | undefined;
-      const context: RunContext = {
-        ...fixture.context,
-        withLock: (effect) =>
-          fixture.context.withLock(effect).pipe(
-            Effect.tap(() => {
-              if (spawnSettlement || !record.backendSpawnAttempt) return Effect.void;
-              spawnSettlement = record.backendSpawnAttempt.settled;
-              // Pause exactly after claim publication, before returning to the driver.
-              return Deferred.succeed(claimed, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseClaim)),
-              );
-            }),
-          ),
-      };
+      // Pause exactly after claim publication, before returning to the driver.
+      const claim = yield* pauseOnceAfterLock(
+        fixture.context,
+        () => record.backendSpawnAttempt !== undefined,
+      );
+      const context = claim.context;
       const cleanup = makeRunRecordCleanup(context);
       const starting = yield* initializer(context)(record).pipe(Effect.forkScoped);
-      yield* Deferred.await(claimed);
+      yield* Deferred.await(claim.entered);
+      const spawnSettlement = record.backendSpawnAttempt!.settled;
       record.stoppedByParent = true;
       record.view = { ...record.view, state: "stopping" };
       const stopping = yield* cleanup.closeRecordScope(record).pipe(Effect.forkScoped);
       yield* yieldUntil(() => record.closingScope === record.scope);
       expect(stopping.pollUnsafe()).toBeUndefined();
       starting.interruptUnsafe();
-      yield* Deferred.succeed(releaseClaim, undefined);
+      yield* Deferred.succeed(claim.release, undefined);
       expect(Exit.isFailure(yield* Fiber.await(starting))).toBe(true);
       // Fail directly on the old handoff leak before entering a cleanup join.
-      expect(yield* Deferred.isDone(spawnSettlement!)).toBe(true);
+      expect(yield* Deferred.isDone(spawnSettlement)).toBe(true);
       expect(record.backendSpawnAttempt).toBeUndefined();
       expect(fixture.counts.spawned).toBe(0);
       yield* Fiber.join(stopping);

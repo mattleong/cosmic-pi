@@ -1,4 +1,4 @@
-import { stripTerminalControls } from "pi-cosmic-core";
+import { safeTextPrefix, stripTerminalControls } from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_PROFILE_CANDIDATES,
@@ -9,13 +9,13 @@ import {
 import type { SubagentRunView, SubagentUsage } from "../run/model.ts";
 import { MAX_WRITE_CLAIMS, MAX_WRITE_CLAIM_CHARS } from "../domain/write-claims.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
+import { MAX_OBSERVED_WRITE_PATHS, MAX_WRITE_CLAIM_VIOLATIONS } from "../run/claims-observation.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
   MAX_NAME_CHARS,
   boundedAsciiOr,
-  safeTextPrefix,
   sanitizeName,
 } from "../run/state.ts";
 import {
@@ -29,10 +29,14 @@ import {
   MAX_ACTION_FAILURE_CODE_CHARS,
   MAX_ACTION_FAILURE_ID_CHARS,
   MAX_ACTION_FAILURE_MESSAGE_CHARS,
+  MAX_CURRENT_TOOL_CHARS,
   MAX_FAILURE_CODE_CHARS,
   MAX_FAILURE_MESSAGE_CHARS,
+  MAX_PROFILE_CANDIDATE_REASON_CHARS,
   MAX_PROFILE_CHARS,
-  PENDING_DELIVERY_FAILURE_CODE,
+  MAX_PROFILE_DESCRIPTION_CHARS,
+  MAX_PROGRESS_CHARS,
+  MAX_WARNING_CHARS,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
   type RunDetailsAction,
@@ -44,6 +48,7 @@ import {
   type SubagentStartEntry,
 } from "./details-schema.ts";
 import type { SubagentProfileView } from "./model.ts";
+import { actionFailureDisposition } from "./outcome.ts";
 
 type DetailDensity = "full" | "compact" | "minimal";
 
@@ -60,11 +65,9 @@ export interface AwaitDetailsInput {
   /** Original targets retained when cancellation occurs before the first observation. */
   readonly awaitedRunIds?: ReadonlyArray<string> | undefined;
   readonly awaitUntil: "all_finished" | "any_finished";
-  readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
   readonly cancellationCleanup?: "unconfirmed" | undefined;
-  readonly contentOmitted?: boolean | undefined;
 }
 
 export type CompactToolDetailsInput =
@@ -85,21 +88,21 @@ const FULL_LIMITS = {
   id: MAX_PROTOCOL_ID_CHARS,
   provenance: MAX_CARD_PROVENANCE_CHARS,
   skipped: MAX_CARD_SKIPS,
-  currentTool: 256,
-  progress: 512,
-  warning: 512,
+  currentTool: MAX_CURRENT_TOOL_CHARS,
+  progress: MAX_PROGRESS_CHARS,
+  warning: MAX_WARNING_CHARS,
   question: MAX_CARD_QUESTION_CHARS,
   writeClaims: MAX_WRITE_CLAIMS,
-  observedWrites: 64,
-  writeViolations: 16,
+  observedWrites: MAX_OBSERVED_WRITE_PATHS,
+  writeViolations: MAX_WRITE_CLAIM_VIOLATIONS,
   shortName: MAX_NAME_CHARS,
   startProfile: MAX_PROFILE_CHARS,
   startWarning: MAX_CARD_PROVENANCE_CHARS,
   failureMessage: MAX_FAILURE_MESSAGE_CHARS,
   failureCode: MAX_FAILURE_CODE_CHARS,
-  profileDescription: 512,
+  profileDescription: MAX_PROFILE_DESCRIPTION_CHARS,
   profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
-  profileReason: 1_024,
+  profileReason: MAX_PROFILE_CANDIDATE_REASON_CHARS,
   actionFailureMessage: MAX_ACTION_FAILURE_MESSAGE_CHARS,
   actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
 } as const;
@@ -166,7 +169,7 @@ const optionalText = (value: string | undefined, maximum: number): string | unde
 };
 const nonNegative = (value: number): number =>
   Number.isFinite(value) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value)) : 0;
-const nonNegativeInteger = (value: number): number => Math.floor(nonNegative(value));
+export const nonNegativeInteger = (value: number): number => Math.floor(nonNegative(value));
 
 const projectUsage = (usage: SubagentUsage): SubagentRunCard["usage"] => ({
   input: nonNegative(usage.input),
@@ -226,22 +229,18 @@ const projectWriteCardFields = (
   density: DetailDensity,
 ): Partial<SubagentRunCard> => {
   const limits = DENSITY_LIMITS[density];
-  const projectedClaims = run.writeClaims
-    ? run.writeClaims
-        .slice(0, limits.writeClaims)
-        .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file"))
-    : undefined;
   // Minimal density keeps only the single current-offender violation as containment evidence.
   const violationLimit =
     density === "minimal" && !run.writeViolationOffender ? 0 : limits.writeViolations;
   return {
     ...projectWorkspaceFields(run),
-    ...(projectedClaims !== undefined && {
-      writeClaims: projectedClaims,
-      writeClaimCount: nonNegativeInteger(run.writeClaims?.length ?? 0),
+    ...(run.writeClaims !== undefined && {
+      writeClaims: run.writeClaims
+        .slice(0, limits.writeClaims)
+        .map((path) => requiredText(path, MAX_WRITE_CLAIM_CHARS, "unknown-file")),
+      writeClaimCount: run.writeClaims.length,
+      ...(run.writeClaims.length > limits.writeClaims && { writeClaimsOmitted: true as const }),
     }),
-    ...(run.writeClaims !== undefined &&
-      run.writeClaims.length > limits.writeClaims && { writeClaimsOmitted: true as const }),
     ...(run.writeAudit !== undefined && {
       writeAudit: {
         observedFileWrites: (limits.observedWrites === 0
@@ -446,39 +445,37 @@ export const projectSubagentProfileRoutes = (
   density: DetailDensity = "full",
 ): ReadonlyArray<SubagentProfileRouteCard> => {
   const limits = DENSITY_LIMITS[density];
-  return profiles.slice(0, PROFILE_IDS.length).map((profile) => {
-    return {
-      id: profile.id,
-      description: requiredText(profile.description, limits.profileDescription, "Profile route."),
-      source: profile.source,
-      isDefault: profile.isDefault,
-      defaultContext: profile.defaultContext,
-      defaultWriteIntent: profile.defaultWriteIntent,
-      candidates: profile.candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
-        host: candidate.host,
-        runtime: candidate.runtime,
-        model:
-          density === "minimal"
-            ? boundedAsciiOr(
-                candidate.model,
-                limits.profileModel,
-                candidate.runtime === "pi" ? "x/y" : "x",
-              )
-            : requiredText(candidate.model, limits.profileModel, "omitted-model"),
-        effort: candidate.effort,
-        context: candidate.context,
-        writeIntent: candidate.writeIntent,
-        openaiFastMode: candidate.openaiFastMode ?? false,
-        closeOnReport: candidate.closeOnReport,
-        status: candidate.status,
-        reason:
-          density === "minimal"
-            ? boundedAsciiOr(candidate.reason, limits.profileReason, "Omitted.")
-            : requiredText(candidate.reason, limits.profileReason, "Route detail omitted."),
-      })),
-      ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
-    };
-  });
+  return profiles.slice(0, PROFILE_IDS.length).map((profile) => ({
+    id: profile.id,
+    description: requiredText(profile.description, limits.profileDescription, "Profile route."),
+    source: profile.source,
+    isDefault: profile.isDefault,
+    defaultContext: profile.defaultContext,
+    defaultWriteIntent: profile.defaultWriteIntent,
+    candidates: profile.candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
+      host: candidate.host,
+      runtime: candidate.runtime,
+      model:
+        density === "minimal"
+          ? boundedAsciiOr(
+              candidate.model,
+              limits.profileModel,
+              candidate.runtime === "pi" ? "x/y" : "x",
+            )
+          : requiredText(candidate.model, limits.profileModel, "omitted-model"),
+      effort: candidate.effort,
+      context: candidate.context,
+      writeIntent: candidate.writeIntent,
+      openaiFastMode: candidate.openaiFastMode ?? false,
+      closeOnReport: candidate.closeOnReport,
+      status: candidate.status,
+      reason:
+        density === "minimal"
+          ? boundedAsciiOr(candidate.reason, limits.profileReason, "Omitted.")
+          : requiredText(candidate.reason, limits.profileReason, "Route detail omitted."),
+    })),
+    ...(profile.defaultEffort !== undefined && { defaultEffort: profile.defaultEffort }),
+  }));
 };
 
 const projectActionFailures = (
@@ -492,9 +489,8 @@ const projectActionFailures = (
     const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
     // Persist the flag only where it can mean pending; decoders still accept it structurally.
     const pendingDelivery =
-      action === "send" &&
-      failure.pendingDelivery === true &&
-      code === PENDING_DELIVERY_FAILURE_CODE;
+      actionFailureDisposition(action, { code, pendingDelivery: failure.pendingDelivery }) ===
+      "pending";
     return {
       id: requiredText(failure.id, limits.actionFailureId, "unknown-run"),
       ...(code !== undefined && { code }),
@@ -586,7 +582,6 @@ const awaitCandidate = (
     cards: [...targetCards, ...contextCards],
     awaitedRunIds,
     awaitUntil: input.awaitUntil,
-    ...(input.timedOut && { timedOut: true as const }),
     ...(input.attentionRequired && { attentionRequired: true as const }),
     ...(input.cancelled && { cancelled: true as const }),
     ...(input.cancelled &&
@@ -594,9 +589,8 @@ const awaitCandidate = (
         cancellationCleanup: "unconfirmed" as const,
       }),
     ...(contextCandidates.length > contextSource.length && { contextOmitted: true as const }),
-    ...((input.contentOmitted || omitted) && { contentOmitted: true as const }),
+    ...(omitted && { contentOmitted: true as const }),
     ...(omitted &&
-      !input.contentOmitted &&
       density === "full" &&
       ![...source, ...contextSource].some((run) => run.error !== undefined) && {
         reportsOnlyOmitted: true as const,

@@ -164,7 +164,7 @@ describe("report disposition", () => {
 });
 
 describe("await contract", () => {
-  const question = { requestId: "q", message: "May I edit db/0007.sql?", createdAt: 1 };
+  const question = { requestId: "q", message: "May I edit db/0007.sql?" };
 
   it("reports parent attention with the run's one attention state", () => {
     const contract = decoded(

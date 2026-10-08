@@ -8,12 +8,8 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import {
-  JsonHttpClient,
-  provideBuiltLayer,
-  StreamingHttpClient,
-  type StreamingHttpRequest,
-} from "../index.ts";
+import { JsonHttpClient, provideBuiltLayer, StreamingHttpClient } from "../index.ts";
+import type { StreamingHttpRequest } from "../src/platform/streaming-http.ts";
 import {
   capturedTelemetrySnapshot,
   jsonHttpRawResponse,
@@ -40,8 +36,8 @@ const toClient = (source: BodyInit | HttpClient.HttpClient, status = 200) =>
   );
 const json = (source: BodyInit | HttpClient.HttpClient, status?: number) =>
   provideBuiltLayer(JsonHttpClient.layer.pipe(Layer.provide(toClient(source, status))));
-const streaming = (source: BodyInit | HttpClient.HttpClient, status?: number) =>
-  provideBuiltLayer(StreamingHttpClient.layer.pipe(Layer.provide(toClient(source, status))));
+const streaming = (source: BodyInit | HttpClient.HttpClient) =>
+  provideBuiltLayer(StreamingHttpClient.layer.pipe(Layer.provide(toClient(source))));
 const countingClient = () => {
   let executions = 0;
   const client = HttpClient.make((request) => {
@@ -93,33 +89,33 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
 });
 
 it.effect.each([
-  ["secret-body", "response"],
-  ['{"ok":"secret-value"}', "decode"],
-] as const)("maps unreadable response %s without exposing its contents", ([body, operation]) =>
+  "secret-body",
+  '{"ok":"secret-value"}',
+  "",
+  // A complete body followed by the first two bytes of a three-byte character.
+  Uint8Array.of(...new TextEncoder().encode('{"ok":true}'), 0xe2, 0x82),
+])("maps malformed response %s to a decode failure with or without a byte limit", (body) =>
   Effect.gen(function* () {
     const http = yield* JsonHttpClient;
-    const result = yield* Effect.result(http.request(okRequest));
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(result.failure.operation).toBe(operation);
-      expect(String(result.failure)).not.toContain("secret");
+    // Regression: an unbounded non-JSON body failed as "response", a bounded one as "decode",
+    // and a bounded read dropped a truncated UTF-8 tail that the unbounded read rejects.
+    for (const request of [okRequest, { ...okRequest, maxResponseBytes: 1024 }]) {
+      const failure = yield* Effect.flip(http.request(request));
+      expect(failure.operation).toBe("decode");
+      expect(String(failure)).not.toContain("secret");
     }
   }).pipe(json(body)),
 );
 
-it.effect("preserves rejected status and provider error bodies without decoding them", () =>
+it.effect("returns rejected status without decoding the provider error body", () =>
   Effect.gen(function* () {
     const http = yield* JsonHttpClient;
-    expect(yield* http.request(okRequest)).toEqual({
-      _tag: "Rejected",
-      status: 429,
-      errorBody: "provider-error",
-    });
+    expect(yield* http.request(okRequest)).toEqual({ _tag: "Rejected", status: 429 });
   }).pipe(json("provider-error", 429)),
 );
 
 it.effect(
-  "test HTTP responses preserve arbitrary raw rejected text and decode raw success JSON",
+  "test HTTP responses reject arbitrary raw text without decoding and decode raw success JSON",
   () =>
     Effect.gen(function* () {
       const request = JsonHttpClient.use((http) => http.request(okRequest));
@@ -130,11 +126,7 @@ it.effect(
           ),
         ),
       );
-      expect(rejected).toEqual({
-        _tag: "Rejected",
-        status: 502,
-        errorBody: "<html>provider unavailable</html>",
-      });
+      expect(rejected).toEqual({ _tag: "Rejected", status: 502 });
 
       const accepted = yield* request.pipe(
         provideBuiltLayer(
@@ -211,22 +203,6 @@ it.effect("bounds JSON response buffering before decoding", () =>
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("response");
   }).pipe(json('{"ok":true}')),
-);
-
-it.effect("rejects streaming request bodies that fail schema encoding before transport", () =>
-  Effect.gen(function* () {
-    const counting = countingClient();
-    const FiniteBody = Schema.Struct({ value: Schema.Number.check(Schema.isFinite()) });
-    const result = yield* StreamingHttpClient.use((http) =>
-      Effect.result(
-        http.requestJsonRawBytes({ url: "https://example.invalid", method: "POST" }, FiniteBody, {
-          value: Number.NaN,
-        }),
-      ),
-    ).pipe(streaming(counting.client));
-    expect(result._tag).toBe("Failure");
-    expect(counting.executions()).toBe(0);
-  }),
 );
 
 it.effect("rejects undefined JSON encodings before production or test transport", () =>

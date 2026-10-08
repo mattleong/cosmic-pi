@@ -1,70 +1,46 @@
 import assert from "node:assert/strict";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
-import { afterEach, test } from "vitest";
+import { failingTheme } from "pi-cosmic-core/testing";
+import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
+  applyPresentationSettings,
   createToolPresentationHarness,
   issueMessageStyleProblems,
-  renderContextFixture,
 } from "../../testing";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
-import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
+import type { NativeCodemodeCall } from "../../src/tools/native-codemode-evidence";
 import { compactStatus } from "../../src/tools/compact-summary";
+import {
+  codemodeRenderers,
+  nativeCall,
+  scriptResult,
+  settledSummary,
+} from "../support/native-codemode";
 import { stripAnsi } from "../support/render";
 
-function settings(
-  style: "compact" | "preview" = "compact",
-  background: "off" | "on" | "border" = "off",
-) {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
+const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
+  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
+beforeEach(() =>
+  applyPresentationSettings({
     syntaxHighlighting: false,
     toolCallTiming: false,
-    toolCallCollapsedStyle: style,
-    toolCallBackground: background,
-  });
-}
-const noSchedule = () => undefined;
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+    toolCallCollapsedStyle: "compact",
+    toolCallBackground: "off",
+  }),
+);
 
 const output = (
   state = "completed",
   calls: unknown[] = [],
   extra: { fullOutputPath?: string } = {},
-): AgentToolResult<unknown> => ({
-  content: [
-    { type: "text", text: `Script ${state}\nWall time 0.1 seconds\nOutput:\n` },
-    { type: "text", text: "FIRST_OUTPUT\nLAST_OUTPUT" },
-  ],
-  details: { calls, ...extra },
-});
-interface NativeCallFixture {
-  id: string;
-  name: string;
-  args: unknown;
-  status: string;
-  error?: string;
-  durationMs?: number;
-  cost?: number;
-}
-const call = (status = "ok", extra: Partial<NativeCallFixture> = {}) => ({
-  id: "private-call/1",
-  name: "read",
-  args: '{"path":"/project/a.ts"}',
-  status,
-  ...extra,
-});
-function projection(value: AgentToolResult<unknown>, isError = false) {
-  return nativeCodemodeSummary("/project")({
-    phase: "settled",
-    args: { code: "return 1" },
-    result: value,
-    context: renderContextFixture({ isError, args: { code: "return 1" } }),
-  });
-}
+): AgentToolResult<unknown> =>
+  scriptResult(state, { calls, ...extra }, { type: "text", text: "FIRST_OUTPUT\nLAST_OUTPUT" });
+const call = (
+  status: NativeCodemodeCall["status"] = "ok",
+  extra: Partial<NativeCodemodeCall> = {},
+) => nativeCall({ id: "private-call/1", status, ...extra });
+const projection = (value: AgentToolResult<unknown>, isError = false) =>
+  settledSummary(value, { code: "return 1", isError });
 test("native outcomes require known native evidence, and child delivery is neutral", () => {
   const completed = projection(output("completed", [call()]));
   assert.equal(completed?.outcome, "success");
@@ -76,25 +52,12 @@ test("native outcomes require known native evidence, and child delivery is neutr
     projection(output("completed", [call("error", { error: "handled" })]))?.outcome,
     "warning",
   );
-  for (const status of ["running", "cancelled"])
-    assert.equal(projection(output("completed", [call(status)]))?.outcome, "uncertain");
-  assert.equal(projection(output("completed"), true)?.outcome, "uncertain");
   const aborted = output("failed", [call("cancelled")]);
   aborted.content.push({
     type: "text",
     text: "Script error:\nScript aborted: stopped\n\nTool calls are not undone",
   });
   assert.equal(projection(aborted, true)?.outcome, "error");
-  assert.equal(projection(output("failed"), true)?.outcome, "error");
-  for (const details of [
-    undefined,
-    {},
-    { calls: [call("made-up")] },
-    { calls: [call("ok", { durationMs: -1 })] },
-    { calls: [call("ok", { args: {} })] },
-    { calls: Array.from({ length: 257 }, () => call()) },
-  ])
-    assert.equal(projection({ ...output(), details })?.outcome, "uncertain");
   for (const text of [
     "Script completed",
     "user output says Script completed\n",
@@ -133,23 +96,12 @@ test("saved output cannot hide script failures, child failures, or incomplete ca
       ?.outcome,
     "uncertain",
   );
-  const unsaved = output();
-  unsaved.content[1] = {
-    type: "text",
-    text: truncatedOutput + "\n\n[Could not save the full output: ENOSPC: disk full]",
-  };
-  const summary = projection(unsaved)!;
-  assert.equal(compactStatus("settled", summary), "warning");
-  assert.equal(
-    summary.issues?.find((entry) => entry.code === "native-output-save-failed")?.severity,
-    "warning",
-  );
 });
 
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} keeps recoverable clipping expanded-only without changing output`, () => {
     settings(style);
-    const tool = createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule });
+    const tool = codemodeRenderers();
     const value = output("completed", [call()], { fullOutputPath: "/tmp/RECOVERABLE_OUTPUT" });
     value.content[1] = { type: "text", text: truncatedOutput };
     const before = structuredClone(value);
@@ -174,17 +126,16 @@ for (const style of ["compact", "preview"] as const)
 
 const missing = "ENOENT: no such file or directory, open '/project/missing.ts'";
 /** Pi's result when a script awaits a failing nested call without catching it. */
-const uncaught = (calls: unknown[], notes: string[] = []): AgentToolResult<unknown> => ({
-  content: [
-    { type: "text", text: "Script failed\nWall time 0.1 seconds\nOutput:\n" },
+const uncaught = (calls: unknown[], notes: string[] = []) =>
+  scriptResult(
+    "failed",
+    { calls },
     {
       type: "text",
       text: `Script error:\nError: ${missing}\n\nTool calls made before the failure (they are not undone): read (error)`,
     },
     ...notes.map((text) => ({ type: "text" as const, text })),
-  ],
-  details: { calls },
-});
+  );
 const stoppedBy = (error: string) =>
   call("error", { args: '{"path":"/project/missing.ts"}', error });
 
@@ -211,9 +162,7 @@ test("a visible call that stopped its program explains the failure once", () => 
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} shows an uncaught nested failure once and expansion keeps the script error`, () => {
     settings(style);
-    const harness = createToolPresentationHarness(
-      createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule }),
-    );
+    const harness = createToolPresentationHarness(codemodeRenderers());
     for (const frame of harness.cycle(
       { code: "await tools.read({path: 'missing.ts'});" },
       uncaught([stoppedBy(missing)]),
@@ -234,10 +183,7 @@ test("native rendering reads the animation frame without invoking renderer state
       return 3;
     },
   });
-  const harness = createToolPresentationHarness(
-    createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule }),
-    { state },
-  );
+  const harness = createToolPresentationHarness(codemodeRenderers(), { state });
   const frames = harness.cycle(
     { code: "await tools.read({path: 'a.ts'});" },
     { content: [], details: { calls: [call("running")] } },
@@ -251,10 +197,7 @@ for (const style of ["compact", "preview"] as const)
   test(`native ${style} expanded calls follow spinner frames, the timing setting and newer results`, () => {
     settings(style);
     const state = { codePreviewAnimationFrame: 0 };
-    const h = createToolPresentationHarness(
-      createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule }),
-      { state },
-    );
+    const h = createToolPresentationHarness(codemodeRenderers(), { state });
     const callRow = (path: string) =>
       stripAnsi(h.render(100).join("\n"))
         .split("\n")
@@ -274,7 +217,7 @@ for (const style of ["compact", "preview"] as const)
     h.result(output("completed", [call("ok"), second]), settled);
     const untimed = callRow("b.ts");
     assert.ok(untimed, "a newer result lists its new call");
-    setCodePreviewSettings({ ...codePreviewSettings, toolCallTiming: true });
+    applyPresentationSettings({ toolCallTiming: true });
     assert.notEqual(callRow("b.ts"), untimed, "the timing setting applies without a new result");
   });
 
@@ -321,7 +264,7 @@ for (const style of ["compact", "preview"] as const)
   for (const mode of ["off", "on", "border"] as const)
     test(`native ${style}/${mode} expansion preserves source, errors, images, spill paths and malformed history`, () => {
       settings(style, mode);
-      const tool = createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule });
+      const tool = codemodeRenderers();
       const source = Array.from({ length: 20 }, (_, index) => `text('SOURCE_${index}');`).join(
         "\n",
       );
@@ -365,15 +308,11 @@ for (const style of ["compact", "preview"] as const)
     });
 
 test("expanded native source/output survive hostile theme construction and drawing", () => {
-  settings();
-  const badTheme = opaqueFixture({
-    ...plainTheme,
-    fg(token: string, text: string) {
-      if (token === "toolOutput") throw new Error("content theme unavailable");
-      return text;
-    },
+  const badTheme = failingTheme({
+    message: "content theme unavailable",
+    when: (token) => token === "toolOutput",
   });
-  const tool = createNativeCodemodeRenderers("/project", { scheduleAnimation: noSchedule });
+  const tool = codemodeRenderers();
   const h = createToolPresentationHarness(tool, { theme: badTheme });
   h.call({ code: "// SOURCE_COMPLETE\nreturn 1;" }, { expanded: true });
   h.result(output(), { expanded: true });
@@ -383,11 +322,8 @@ test("expanded native source/output survive hostile theme construction and drawi
 });
 
 test("native renderers use the injected animation owner and stop at settlement", () => {
-  settings();
   const probe = animationSchedulerProbe();
-  const h = createToolPresentationHarness(
-    createNativeCodemodeRenderers("/project", { scheduleAnimation: probe.schedule }),
-  );
+  const h = createToolPresentationHarness(codemodeRenderers(probe.schedule));
   h.call({ code: "return 1" }, { executionStarted: true });
   h.result({ content: [], details: { calls: [call("running")] } }, { isPartial: true });
   h.render();

@@ -22,18 +22,13 @@ import {
   extensionContextFixture,
   makeInMemoryDocuments,
   pausedScheduler,
+  type InMemoryDocuments,
   yieldUntil,
 } from "pi-cosmic-core/testing";
-import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { abortablePendingExec, execOk, execResult, type ExecResult } from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, makeProjection, resetProjection } from "../src/protocol/service.ts";
 import { makePiExec } from "../src/boundary/host-exec.ts";
-
-function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
-  const memory = makeInMemoryDocuments(initial);
-  return { values: memory.documents, layer: memory.layer };
-}
 
 const context = (cwd = "/project"): ExtensionContext =>
   extensionContextFixture({ cwd, mode: "tui", sessionManager: { getCwd: () => cwd } });
@@ -44,8 +39,7 @@ function serviceLayer(
     startPolling?: boolean;
     context?: MutableRef.MutableRef<ExtensionContext>;
     documents?: Readonly<Record<string, JsonObject>>;
-    store?: ReturnType<typeof documents>;
-    omitProjectTrust?: boolean;
+    store?: Pick<InMemoryDocuments, "documents" | "layer">;
     projectTrusted?: boolean;
     canPublish?: () => boolean;
     onChange?: () => void;
@@ -53,11 +47,10 @@ function serviceLayer(
 ) {
   const projection = makeProjection();
   const contextRef = options.context ?? MutableRef.make(context());
-  const callbacks = makeHostCallbackBoundary();
-  const store = options.store ?? documents(options.documents);
+  const store = options.store ?? makeInMemoryDocuments(options.documents);
   const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
   const repository = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));
-  const baseServiceOptions = {
+  const layer = CosmicUiService.layer({
     context: contextRef,
     cwd: "/project",
     exec: makePiExec(options.exec ?? (() => execOk())),
@@ -65,22 +58,17 @@ function serviceLayer(
     onChange: options.onChange ?? (() => undefined),
     canPublish: options.canPublish,
     startPolling: options.startPolling ?? false,
-  };
-  const serviceOptions = options.omitProjectTrust
-    ? baseServiceOptions
-    : { ...baseServiceOptions, projectTrusted: options.projectTrusted ?? true };
-  const layer = CosmicUiService.layer(serviceOptions).pipe(
-    Layer.provide(Layer.merge(repository, HostCallbackBoundary.layer(callbacks))),
-  );
-  return { layer, projection, contextRef, documents: store.values };
+    projectTrusted: options.projectTrusted ?? true,
+  }).pipe(Layer.provide(repository));
+  return { layer, projection, contextRef, documents: store.documents };
 }
 
 describe("Cosmic UI host service", () => {
-  it.effect("treats omitted project trust as untrusted", () => {
+  it.effect("reads only the global document for an untrusted project", () => {
     const projectPath = "/project/.pi/extensions/pi-cosmic-ui.json";
     const globalPath = "/agent/extensions/pi-cosmic-ui.json";
     const { layer, projection } = serviceLayer({
-      omitProjectTrust: true,
+      projectTrusted: false,
       documents: {
         [projectPath]: { footer: { density: "compact" } },
         [globalPath]: { footer: { density: "comfortable" } },
@@ -201,12 +189,12 @@ describe("Cosmic UI host service", () => {
     return Effect.gen(function* () {
       yield* CosmicUiService;
       yield* TestClock.adjust("2 seconds");
-      while (failures < 2) yield* Effect.yieldNow;
+      yield* yieldUntil(() => failures >= 2);
       expect(cwds).toEqual([]);
 
       MutableRef.set(contextRef, context("/recovered"));
       yield* TestClock.adjust("2 seconds");
-      while (cwds.length === 0) yield* Effect.yieldNow;
+      yield* yieldUntil(() => cwds.length > 0);
       expect(cwds.every((cwd) => cwd === "/recovered")).toBe(true);
     }).pipe(provideBuiltLayer(layer));
   });
@@ -254,12 +242,12 @@ describe("Cosmic UI host service", () => {
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
       const old = yield* service.refreshAll(true).pipe(Effect.forkScoped);
-      while (oldResolvers.size < 2) yield* Effect.yieldNow;
+      yield* yieldUntil(() => oldResolvers.size === 2);
       yield* service.invalidateProbes;
       const next = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       yield* resolveWith(oldResolvers.get("git"), execResult("## old\n M old.ts\n"));
       yield* resolveWith(oldResolvers.get("gh"), execResult("1\n"));
-      while (nextResolvers.size < 2) yield* Effect.yieldNow;
+      yield* yieldUntil(() => nextResolvers.size === 2);
       expect(MutableRef.get(projection).gitStatus).toBeUndefined();
       expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
       yield* resolveWith(nextResolvers.get("git"), execResult("## new\n"));
@@ -281,10 +269,10 @@ describe("Cosmic UI host service", () => {
       const observedRefresh: typeof makeRefresh = (options) =>
         makeRefresh({
           ...options,
-          commit: (value, request) => {
+          commit: (value) => {
             // Record the owned engine's actual commit admission, after its final key comparison.
             if (armed) validated = true;
-            return options.commit(value, request);
+            return options.commit(value);
           },
         });
       const boundary = vi
@@ -343,11 +331,9 @@ describe("Cosmic UI host service", () => {
 
   it.effect("serializes rapid visibility edits against the latest document", () => {
     const configPath = "/project/.pi/extensions/pi-cosmic-ui.json";
-    const {
-      layer,
-      projection,
-      documents: values,
-    } = serviceLayer({ documents: { [configPath]: { footer: { hidden: [] } } } });
+    const { layer, projection, documents } = serviceLayer({
+      documents: { [configPath]: { footer: { hidden: [] } } },
+    });
     return Effect.gen(function* () {
       const service = yield* CosmicUiService;
       yield* Effect.all(
@@ -362,7 +348,7 @@ describe("Cosmic UI host service", () => {
         "session",
       ]);
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const saved = values.get(configPath)?.footer as { hidden?: string[] } | undefined;
+      const saved = documents.get(configPath)?.footer as { hidden?: string[] } | undefined;
       expect([...(saved?.hidden ?? [])].sort()).toEqual(["metrics", "session"]);
     }).pipe(provideBuiltLayer(layer));
   });
@@ -388,11 +374,9 @@ describe("Cosmic UI host service", () => {
           ),
         );
       const gated = { ...memory.service, modifyObject } satisfies JsonDocumentStoreContract;
-      const store = {
-        values: memory.documents,
-        layer: Layer.succeed(JsonDocumentStore, gated),
-      };
-      const { layer, projection } = serviceLayer({ store });
+      const { layer, projection } = serviceLayer({
+        store: { ...memory, layer: Layer.succeed(JsonDocumentStore, gated) },
+      });
 
       yield* Effect.gen(function* () {
         const service = yield* CosmicUiService;
@@ -427,7 +411,7 @@ describe("Cosmic UI host service", () => {
         let current = true;
         let changes = 0;
         const { layer, projection } = serviceLayer({
-          store: { layer: memory.layer, values: memory.documents },
+          store: memory,
           canPublish: () => current,
           onChange: () => {
             changes++;
@@ -471,15 +455,15 @@ describe("Cosmic UI host service", () => {
       yield* TestClock.adjust("1999 millis");
       expect(calls).toBe(0);
       yield* TestClock.adjust("1 millis");
-      while (calls < 1) yield* Effect.yieldNow;
+      yield* yieldUntil(() => calls >= 1);
       expect(calls).toBe(1);
 
       failing = true;
       yield* TestClock.adjust("2 seconds");
-      while (calls < 2) yield* Effect.yieldNow;
+      yield* yieldUntil(() => calls >= 2);
       failing = false;
       yield* TestClock.adjust("2 seconds");
-      while (calls < 3) yield* Effect.yieldNow;
+      yield* yieldUntil(() => calls >= 3);
     }).pipe(provideBuiltLayer(layer));
   });
 
@@ -497,7 +481,7 @@ describe("Cosmic UI host service", () => {
     const program = Effect.gen(function* () {
       const service = yield* CosmicUiService;
       yield* service.refreshAll(true).pipe(Effect.forkScoped);
-      while (started < 2) yield* Effect.yieldNow;
+      yield* yieldUntil(() => started === 2);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
     return program.pipe(
       Effect.andThen(

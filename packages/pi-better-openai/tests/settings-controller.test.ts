@@ -1,11 +1,5 @@
-import {
-  initTheme,
-  type ExtensionAPI,
-  type ExtensionUIContext,
-  type KeybindingsManager,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { initTheme, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
@@ -14,10 +8,9 @@ import * as Schema from "effect/Schema";
 import { redactDiagnosticValue, formatDuration, registerExtensionCommand } from "pi-cosmic-core";
 import {
   deferredPromise,
-  extensionApiFixture,
   extensionContextFixture,
-  opaqueFixture,
-  plainTheme,
+  failingTheme,
+  recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { beforeAll, describe, vi } from "vitest";
@@ -25,15 +18,8 @@ import { initialFastSnapshot } from "../src/fast/controller.ts";
 import { registerSettingsController } from "../src/settings/controller.ts";
 import { makeResolvedConfig, waitUntil } from "./helpers.ts";
 
-type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
 type SettingsRun = Parameters<typeof registerSettingsController>[1]["run"];
 type StubRunResult = Result.Result<void, Error> | Schema.Json;
-type TestCustomFactory<Value> = (
-  tui: TUI,
-  theme: Theme,
-  keybindings: KeybindingsManager,
-  done: (result: Value) => void,
-) => Component | Promise<Component>;
 
 beforeAll(() => initTheme(undefined, false));
 
@@ -41,39 +27,18 @@ function settingsHarness(
   responses: Array<() => Promise<StubRunResult>>,
   hostCustom?: ExtensionUIContext["custom"],
 ) {
-  let command: RegisteredCommand | undefined;
-  let component: Component | undefined;
   let currentConfig = makeResolvedConfig({
     configPath: "/tmp/openai-settings.json",
   });
-  const requestRender = vi.fn();
   const notify = vi.fn();
-  const custom: ExtensionUIContext["custom"] = <Value>(
-    factory: TestCustomFactory<Value>,
-  ): Promise<Value> => {
-    const completion = deferredPromise<Value>();
-    const created = factory(
-      opaqueFixture({ requestRender }),
-      plainTheme,
-      opaqueFixture({ matches: () => false }),
-      completion.resolve,
-    );
-    // SAFETY: The controller's registered custom factory returns its component synchronously.
-    component = created as Component;
-    return completion.promise;
-  };
+  const surface = fakeCustomSurfaceHost();
   const ctx = extensionContextFixture({
+    ...surface.ctx,
     cwd: "/tmp",
-    mode: "tui",
-    hasUI: true,
     signal: undefined,
-    ui: { custom: hostCustom ?? custom, notify },
+    ui: { custom: hostCustom ?? surface.ctx.ui.custom, notify },
   });
-  const pi = extensionApiFixture({
-    registerCommand(name: string, value: RegisteredCommand) {
-      if (name === "openai") command = value;
-    },
-  });
+  const host = recordingExtensionHost();
   const runImpl = vi.fn(() => responses.shift()?.() ?? Promise.resolve({}));
   const run: SettingsRun = <A>() =>
     runImpl().then((value) => {
@@ -81,28 +46,32 @@ function settingsHarness(
       return value as A;
     });
 
-  registerSettingsController(registerExtensionCommand(pi, { name: "openai", description: "" }), {
-    config: () => currentConfig,
-    updateContext: vi.fn(),
-    updateFooter: vi.fn(),
-    formatDebugStatus: () => "diagnostics",
-    fastProjection: MutableRef.make(initialFastSnapshot()),
-    resetFastRoutingTransport: vi.fn(),
-    run,
-  });
+  registerSettingsController(
+    registerExtensionCommand(host.pi, { name: "openai", description: "" }),
+    {
+      config: () => currentConfig,
+      updateContext: vi.fn(),
+      updateFooter: vi.fn(),
+      formatDebugStatus: () => "diagnostics",
+      fastProjection: MutableRef.make(initialFastSnapshot()),
+      resetFastRoutingTransport: vi.fn(),
+      run,
+    },
+  );
 
-  const invoke = (args: string): Promise<void> => {
-    if (!command) throw new Error("settings command was not registered");
-    return Promise.resolve(command.handler(`settings ${args}`, ctx));
-  };
+  const invoke = (args: string) =>
+    Promise.resolve(host.commands.get("openai")!.handler(`settings ${args}`, ctx));
   const open = Effect.gen(function* () {
     const closed = invoke("");
-    yield* waitUntil(() => component !== undefined);
+    yield* waitUntil(() => {
+      surface.mount();
+      return surface.editor !== undefined;
+    });
     return { closed };
   });
   const selectedComponent = () => {
-    if (!component) throw new Error("settings component has not opened");
-    return component;
+    if (!surface.editor) throw new Error("settings component has not opened");
+    return surface.editor;
   };
   const setRefreshInterval = (refreshIntervalMs: number) => {
     currentConfig = {
@@ -111,7 +80,7 @@ function settingsHarness(
     };
   };
 
-  return { invoke, open, selectedComponent, setRefreshInterval, notify, requestRender };
+  return { invoke, open, selectedComponent, setRefreshInterval, notify, surface };
 }
 
 const input = {
@@ -166,10 +135,10 @@ describe("Better OpenAI settings controller", () => {
       component.handleInput?.(input.escape);
       component.handleInput?.(input.escape);
       yield* Effect.promise(() => closed);
-      const rendersBeforeSettlement = h.requestRender.mock.calls.length;
+      const rendersBeforeSettlement = h.surface.renders;
 
       write.reject(new Error("runtime closed"));
-      yield* waitUntil(() => h.requestRender.mock.calls.length > rendersBeforeSettlement);
+      yield* waitUntil(() => h.surface.renders > rendersBeforeSettlement);
       expect(() => component.render(100)).not.toThrow();
       expect(renderedRow(component, "Usage")).toContain(formatDuration(60_000));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
@@ -211,12 +180,7 @@ describe("Better OpenAI settings controller", () => {
 
   it.effect("contains a throwing picker factory and a rejecting custom surface", () =>
     Effect.gen(function* () {
-      const hostileTheme: Theme = opaqueFixture({
-        ...plainTheme,
-        fg: () => {
-          throw new Error("host-theme-secret");
-        },
-      });
+      const hostileTheme = failingTheme({ message: "host-theme-secret" });
       for (const custom of [
         // The shared fake models pinned Pi, which rejects `custom` when its factory throws.
         fakeCustomSurfaceHost({ theme: hostileTheme }).ctx.ui.custom,

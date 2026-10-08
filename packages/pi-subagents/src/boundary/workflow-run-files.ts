@@ -12,7 +12,7 @@ export const WORKFLOW_RUN_DIRECTORIES_KEPT = 64;
  * A run directory written this recently is never pruned, however many newer ones exist: every Pi
  * process shares the directory, and another one may still be running it.
  */
-export const WORKFLOW_RUN_DIRECTORY_GRACE_MS = 24 * 60 * 60 * 1000;
+const WORKFLOW_RUN_DIRECTORY_GRACE_MS = 24 * 60 * 60 * 1000;
 /** Only directories named like run ids are ever pruned. */
 const RUN_DIRECTORY = /^wf-[a-z0-9]+-[1-9][0-9]*$/u;
 const SCRIPT_FILE = "script.js";

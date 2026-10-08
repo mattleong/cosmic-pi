@@ -1,5 +1,4 @@
 import * as Predicate from "effect/Predicate";
-
 import * as Schema from "effect/Schema";
 
 export class InvalidSubagentRequestError extends Schema.TaggedError<InvalidSubagentRequestError>()(
@@ -14,12 +13,12 @@ export class SubagentNotFoundError extends Schema.TaggedError<SubagentNotFoundEr
 
 export class SubagentCapacityError extends Schema.TaggedError<SubagentCapacityError>()(
   "SubagentCapacityError",
-  { limit: Schema.Number, code: Schema.optional(Schema.String), message: Schema.String },
+  { limit: Schema.Finite, code: Schema.optional(Schema.String), message: Schema.String },
 ) {}
 
 export class SubagentHistoryCapacityError extends Schema.TaggedError<SubagentHistoryCapacityError>()(
   "SubagentHistoryCapacityError",
-  { limit: Schema.Number, code: Schema.String, message: Schema.String },
+  { limit: Schema.Finite, code: Schema.String, message: Schema.String },
 ) {}
 
 export class SubagentWriterConflictError extends Schema.TaggedError<SubagentWriterConflictError>()(
@@ -75,14 +74,13 @@ export const processCauseError = <ErrorInput>(
   error?: ErrorInput,
   code?: string,
   fallbackMessage = `Unable to ${operation} subagent process.`,
-): SubagentProcessError => {
-  const baseResult = {
+): SubagentProcessError =>
+  new SubagentProcessError({
     operation,
     message:
       error instanceof Error ? error.message : Predicate.isString(error) ? error : fallbackMessage,
-  };
-  return new SubagentProcessError(code ? { ...baseResult, code } : baseResult);
-};
+    ...(code && { code }),
+  });
 
 /** Machine-actionable failure code: an explicit `code` when present, else the error tag. */
 export const subagentErrorCode = (error: SubagentError): string =>

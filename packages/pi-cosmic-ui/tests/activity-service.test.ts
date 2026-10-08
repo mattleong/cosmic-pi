@@ -4,8 +4,17 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
-import { ActivityService, type ActivityActionRequest } from "../src/activity/service.ts";
-import { activityKey, type ActivityEnvelope, type ActivityItem } from "../src/activity/protocol.ts";
+import {
+  ActivityService,
+  type ActivityActionRequest,
+  type ActivityServiceOptions,
+} from "../src/activity/service.ts";
+import {
+  ACTIVITY_LIMITS,
+  activityKey,
+  type ActivityEnvelope,
+  type ActivityItem,
+} from "../src/activity/protocol.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { SPINNER_FRAME_MS } from "../src/manager/chrome.ts";
@@ -38,28 +47,71 @@ const action = (row: ActivityRow): ActivityActionRequest => ({
   revision: row.revision,
   actionId: "stop",
 });
-/** A service whose publications and clock-driven widget renders are recorded. */
-const recordingService = Effect.gen(function* () {
-  let rows: readonly ActivityRow[] = [];
-  let starting = 0;
-  let rendered: readonly string[] = [];
-  const service = yield* ActivityService.make({
-    publish: (next, count) => {
-      rows = next;
-      starting = count;
-    },
-    tick: (now) => {
-      rendered = renderActivityWidget(rows, 80, 8, { now, starting });
-    },
+/** A service whose publications, acknowledgements and clock-driven widget renders are recorded. */
+const recordingService = (connect?: ActivityServiceOptions["connect"]) =>
+  Effect.gen(function* () {
+    let rows: readonly ActivityRow[] = [];
+    let starting = 0;
+    let rendered: readonly string[] = [];
+    let available = false;
+    const service = yield* ActivityService.make({
+      publish: (next, count) => {
+        rows = next;
+        starting = count;
+      },
+      tick: (now) => {
+        rendered = renderActivityWidget(rows, 80, 8, { now, starting });
+      },
+      ...(connect && { connect }),
+    });
+    /** A new registration of `items` whose availability is recorded. */
+    const register = (
+      items: ActivityEnvelope["items"],
+      overrides: Partial<ActivityEnvelope> = {},
+    ): ActivityEnvelope => ({
+      ...registration({}),
+      items,
+      acknowledge: (next) => {
+        available = next;
+      },
+      ...overrides,
+    });
+    /**
+     * Restores `event` before each invalid snapshot, which must withdraw its rows, starting count
+     * and availability together.
+     */
+    const rejectsEach = (
+      event: ActivityEnvelope,
+      snapshots: ReadonlyArray<ActivityEnvelope["items"]>,
+    ) =>
+      Effect.forEach(
+        snapshots,
+        (items) =>
+          Effect.gen(function* () {
+            yield* service.receive(event);
+            expect(available).toBe(true);
+            expect(rows).not.toEqual([]);
+            yield* Effect.flip(service.receive({ ...event, operation: "publish", items }));
+            expect([rows, starting, available]).toEqual([[], 0, false]);
+          }),
+        { discard: true },
+      );
+    return {
+      service,
+      rows: () => rows,
+      starting: () => starting,
+      rendered: () => rendered,
+      available: () => available,
+      register,
+      rejectsEach,
+    };
   });
-  return { service, rows: () => rows, starting: () => starting, rendered: () => rendered };
-});
 describe("activity service", () => {
   it.effect(
     "publishes starting counts without rows and clears stale or invalid metadata atomically",
     () =>
       Effect.gen(function* () {
-        const { service, rows, starting } = yield* recordingService;
+        const { service, rows, starting } = yield* recordingService();
         const event = { ...registration({}, undefined, []), starting: 2 };
         yield* service.receive(event);
         expect(rows()).toEqual([]);
@@ -99,8 +151,7 @@ describe("activity service", () => {
   );
   it.effect("withdraws inconsistent workflow metadata and restores valid publication", () =>
     Effect.gen(function* () {
-      const { service, rows } = yield* recordingService;
-      let available = false;
+      const { service, rows, available, register, rejectsEach } = yield* recordingService();
       const workflow: ActivityItem = {
         id: "flow",
         title: "Review",
@@ -121,13 +172,8 @@ describe("activity service", () => {
         phase: "Find",
         actions: [{ id: "skip", label: "Skip" }],
       };
-      const event = {
-        ...registration({}, undefined, [workflow, member]),
-        acknowledge: (next: boolean) => {
-          available = next;
-        },
-      };
-      for (const invalid of [
+      const event = register([workflow, member]);
+      yield* rejectsEach(event, [
         [workflow, { ...member, phases: [{ title: "Find" }] }],
         [workflow, { ...member, unphasedPlanned: 1 }],
         [{ ...workflow, phases: [{ title: "Find" }, { title: "Find" }] }],
@@ -144,17 +190,10 @@ describe("activity service", () => {
         ],
         [{ ...workflow, status: "needs-input", inputTarget: "user" }],
         [{ ...workflow, status: "blocked" }],
-      ]) {
-        yield* service.receive(event);
-        expect(available).toBe(true);
-        expect(rows().map((row) => row.id)).toEqual(["flow", "queued"]);
-        yield* Effect.flip(service.receive({ ...event, operation: "publish", items: invalid }));
-        expect(rows()).toEqual([]);
-        expect(available).toBe(false);
-      }
+      ]);
       // Members are placed leniently: retained history can outlive a workflow's phase list.
       yield* service.receive({ ...event, items: [workflow, { ...member, phase: "Elsewhere" }] });
-      expect(available).toBe(true);
+      expect(available()).toBe(true);
       expect(rows()).toHaveLength(2);
       // Failed work is part of the finished work, apart from stopped work.
       const failing = { title: "Find", work: { items: 3, finished: 2, stopped: 1, failed: 1 } };
@@ -168,8 +207,8 @@ describe("activity service", () => {
   );
   it.effect("accepts planned work that never runs and never counts it as starting", () =>
     Effect.gen(function* () {
-      const { service, rows, starting } = yield* recordingService;
-      let available = false;
+      const { service, rows, starting, available, register, rejectsEach } =
+        yield* recordingService();
       const invoked: string[] = [];
       const planned: ActivityItem = {
         id: "planned",
@@ -180,18 +219,14 @@ describe("activity service", () => {
         planned: true,
       };
       const skippable: ActivityItem = { ...planned, actions: [{ id: "skip", label: "Skip" }] };
-      const event: ActivityEnvelope = {
-        ...registration({}, undefined, [planned]),
+      const event = register([planned], {
         invoke: (_itemId, actionId) => {
           invoked.push(actionId);
           return Promise.resolve();
         },
-        acknowledge: (next: boolean) => {
-          available = next;
-        },
-      };
+      });
       yield* service.receive(event);
-      expect(available).toBe(true);
+      expect(available()).toBe(true);
       expect(rows().map((row) => row.id)).toEqual(["planned"]);
       // Declared work isn't a launch, so it neither shows the startup spinner nor counts.
       expect(starting()).toBe(0);
@@ -210,20 +245,14 @@ describe("activity service", () => {
       const stale = yield* Effect.flip(service.invoke({ ...action(offered), actionId: "skip" }));
       expect(stale.reason).toBe("stale");
       expect(invoked).toEqual(["skip"]);
-      for (const invalid of [
-        { ...planned, kind: "workflow", phases: [] },
-        { ...skippable, status: "cancelled" },
-        { ...planned, status: "running" },
-        { ...planned, status: "done" },
-      ]) {
-        yield* service.receive(event);
-        expect(available).toBe(true);
-        yield* Effect.flip(service.receive({ ...event, operation: "publish", items: [invalid] }));
-        expect(rows()).toEqual([]);
-        expect(available).toBe(false);
-      }
+      yield* rejectsEach(event, [
+        [{ ...planned, kind: "workflow", phases: [] }],
+        [{ ...skippable, status: "cancelled" }],
+        [{ ...planned, status: "running" }],
+        [{ ...planned, status: "done" }],
+      ]);
       yield* service.receive({ ...event, items: [{ ...planned, status: "cancelled" }] });
-      expect(available).toBe(true);
+      expect(available()).toBe(true);
       expect(rows()[0]).toMatchObject({ planned: true, status: "cancelled", actions: [] });
     }),
   );
@@ -231,8 +260,7 @@ describe("activity service", () => {
     "accepts skipped work only on cancelled work that isn't planned, a workflow or a question",
     () =>
       Effect.gen(function* () {
-        const { service, rows } = yield* recordingService;
-        let available = false;
+        const { service, rows, register, rejectsEach } = yield* recordingService();
         const skipped: ActivityItem = {
           id: "skipped",
           title: "Skipped agent",
@@ -241,77 +269,75 @@ describe("activity service", () => {
           revision: "1",
           skipped: true,
         };
-        const event: ActivityEnvelope = {
-          ...registration({}, undefined, [skipped]),
-          acknowledge: (next: boolean) => {
-            available = next;
-          },
-        };
+        const event = register([skipped]);
         yield* service.receive(event);
         expect(rows()[0]).toMatchObject({ skipped: true, status: "cancelled" });
-        for (const invalid of [
-          { ...skipped, status: "done" },
-          { ...skipped, planned: true },
-          { ...skipped, kind: "question" },
-          { ...skipped, kind: "workflow", phases: [] },
-        ]) {
-          yield* service.receive(event);
-          expect(available).toBe(true);
-          yield* Effect.flip(service.receive({ ...event, operation: "publish", items: [invalid] }));
-          expect(rows()).toEqual([]);
-          expect(available).toBe(false);
-        }
-        // A phase's skipped work is part of its finished work, apart from stopped and failed work.
-        const workflow: ActivityItem = {
-          id: "workflow",
-          title: "Workflow",
-          kind: "workflow",
-          status: "running",
-          revision: "1",
-          phases: [{ title: "Find", work: { items: 2, finished: 2, stopped: 1, skipped: 2 } }],
-        };
-        yield* service.receive(event);
-        expect(available).toBe(true);
-        yield* Effect.flip(service.receive({ ...event, operation: "publish", items: [workflow] }));
-        expect(rows()).toEqual([]);
-        expect(available).toBe(false);
+        yield* rejectsEach(event, [
+          [{ ...skipped, status: "done" }],
+          [{ ...skipped, planned: true }],
+          [{ ...skipped, kind: "question" }],
+          [{ ...skipped, kind: "workflow", phases: [] }],
+          // A phase's skipped work is part of its finished work, apart from stopped and failed.
+          [
+            {
+              id: "workflow",
+              title: "Workflow",
+              kind: "workflow",
+              status: "running",
+              revision: "1",
+              phases: [{ title: "Find", work: { items: 2, finished: 2, stopped: 1, skipped: 2 } }],
+            },
+          ],
+        ]);
       }),
   );
   it.effect("withdraws invalid attention metadata and restores valid publication and actions", () =>
     Effect.gen(function* () {
-      const { service, rows, starting } = yield* recordingService;
-      let available = false;
+      const { service, rows, starting, available, register, rejectsEach } =
+        yield* recordingService();
       const valid = { ...item(), status: "needs-input", inputTarget: "user" };
-      const event = {
-        ...registration({}),
-        items: [valid],
-        starting: 2,
-        acknowledge: (next: boolean) => {
-          available = next;
-        },
-      };
-      for (const metadata of [
-        { status: "needs-input" },
-        { status: "needs-input", inputTarget: "agent" },
-        { status: "needs-input", inputTarget: "parent", blockedReason: "parent-review" },
-        { status: "blocked", blockedReason: "unknown" },
-        { status: "blocked", inputTarget: "user" },
-      ]) {
-        yield* service.receive(event);
-        expect(available).toBe(true);
-        expect(rows()[0]?.inputTarget).toBe("user");
-        yield* Effect.flip(
-          service.receive({ ...event, operation: "publish", items: [{ ...item(), ...metadata }] }),
-        );
-        expect(rows()).toEqual([]);
-        expect(starting()).toBe(0);
-        expect(available).toBe(false);
-      }
+      const event = register([valid], { starting: 2 });
+      yield* rejectsEach(
+        event,
+        [
+          { status: "needs-input" },
+          { status: "needs-input", inputTarget: "agent" },
+          { status: "needs-input", inputTarget: "parent", blockedReason: "parent-review" },
+          { status: "blocked", blockedReason: "unknown" },
+          { status: "blocked", inputTarget: "user" },
+        ].map((metadata) => [{ ...item(), ...metadata }]),
+      );
       yield* service.receive({ ...event, items: [{ ...valid, inputTarget: "parent" }] });
-      expect(available).toBe(true);
+      expect(available()).toBe(true);
       expect(rows()[0]?.inputTarget).toBe("parent");
       expect(starting()).toBe(2);
       yield* service.invoke(action(rows()[0]!));
+    }),
+  );
+  it.effect("withdraws a snapshot that throws while it is decoded", () =>
+    Effect.gen(function* () {
+      const { register, rejectsEach } = yield* recordingService();
+      const hostile = new Proxy([], {
+        get() {
+          throw new Error("hostile snapshot");
+        },
+      });
+      yield* rejectsEach(register([item()]), [hostile]);
+    }),
+  );
+  it.effect("keeps each cleaned field within its own limit after redaction lengthens it", () =>
+    Effect.gen(function* () {
+      const { service, rows } = yield* recordingService();
+      const near = (limit: number) => `${"a".repeat(limit - 8)} token=x`;
+      yield* service.receive(
+        registration({}, undefined, [
+          { ...item(), title: near(ACTIVITY_LIMITS.title), profile: near(ACTIVITY_LIMITS.profile) },
+        ]),
+      );
+      const [row] = rows();
+      expect(row!.title.length).toBeLessThanOrEqual(ACTIVITY_LIMITS.title);
+      expect(row!.profile!.length).toBeLessThanOrEqual(ACTIVITY_LIMITS.profile);
+      expect(`${row!.title}${row!.profile}`).not.toContain("token=x");
     }),
   );
   const startup = { ...registration({}, undefined, []), starting: 2 };
@@ -326,7 +352,7 @@ describe("activity service", () => {
     "animates %s between elapsed-second updates and settles once it clears",
     ([, started, cleared]) =>
       Effect.gen(function* () {
-        const { service, rendered } = yield* recordingService;
+        const { service, rendered } = yield* recordingService();
         yield* service.receive(started);
         yield* TestClock.adjust("1 second");
         const first = rendered();
@@ -340,39 +366,21 @@ describe("activity service", () => {
         expect(rendered()).toEqual([]);
       }),
   );
-  it.effect("detaches summaries and withdraws invalid snapshots before restoring valid ones", () =>
+  it.effect("detaches, sanitizes and freezes summaries at ingress", () =>
     Effect.gen(function* () {
-      const { service, rows } = yield* recordingService;
-      const token = {};
+      const { service, rows } = yield* recordingService();
       const source = { ...item(), title: "safe\u001b[2J", profile: "scout\u001b[2J" };
-      const availability: boolean[] = [];
-      yield* service.receive({
-        ...registration(token, undefined, [source]),
-        acknowledge: (value) => {
-          availability.push(value);
-        },
-      });
+      yield* service.receive(registration({}, undefined, [source]));
       source.title = "mutated";
       expect(rows()[0]?.title).toBe("safe");
       expect(rows()[0]?.profile).toBe("scout");
       expect(Object.isFrozen(rows()[0])).toBe(true);
-      yield* Effect.flip(
-        service.receive({
-          ...registration(token),
-          operation: "publish",
-          items: [{ ...item(), status: "bogus" }],
-        }),
-      );
-      expect(rows()).toEqual([]);
-      expect(availability).toEqual([true, false]);
-      yield* service.receive({ ...registration(token), operation: "publish" });
-      expect(availability).toEqual([true, false, true]);
     }),
   );
   it.effect("rejects stale revisions, removed actions and replaced registration capabilities", () =>
     Effect.gen(function* () {
       const calls: string[] = [];
-      const service = yield* ActivityService.make({ publish: () => undefined });
+      const { service, rows } = yield* recordingService();
       const token = {};
       yield* service.receive(
         registration(token, () => {
@@ -380,10 +388,10 @@ describe("activity service", () => {
           return Promise.resolve();
         }),
       );
-      const old = action((yield* service.snapshot)[0]!);
+      const old = action(rows()[0]!);
       yield* service.receive({ ...registration(token), operation: "publish", items: [item("2")] });
       yield* Effect.flip(service.invoke(old));
-      const second = action((yield* service.snapshot)[0]!);
+      const second = action(rows()[0]!);
       yield* service.receive(
         registration(
           {},
@@ -396,10 +404,9 @@ describe("activity service", () => {
       );
       yield* Effect.flip(service.invoke(second));
       yield* service.receive(registration(token));
-      yield* service.invoke(action((yield* service.snapshot)[0]!));
+      yield* service.invoke(action(rows()[0]!));
       expect(calls).toEqual(["new"]);
-      const latest = (yield* service.snapshot)[0]!;
-      expect(latest.key).toBe(activityKey("tasks", "one"));
+      expect(rows()[0]!.key).toBe(activityKey("tasks", "one"));
     }),
   );
   it.effect("revokes rows and actions on disposal and closes host resources exactly once", () =>
@@ -408,11 +415,8 @@ describe("activity service", () => {
       let releases = 0;
       const owned = yield* Effect.scoped(
         Effect.gen(function* () {
-          const service = yield* ActivityService.make({
-            publish: () => undefined,
-            connect: () => () => {
-              releases++;
-            },
+          const { service, rows } = yield* recordingService(() => () => {
+            releases++;
           });
           yield* service.receive({
             ...registration({}),
@@ -420,18 +424,18 @@ describe("activity service", () => {
               availability.push(value);
             },
           });
-          return { service, request: action((yield* service.snapshot)[0]!) };
+          return { service, rows, request: action(rows()[0]!) };
         }),
       );
       expect(availability).toEqual([true, false]);
       expect(releases).toBe(1);
-      expect(yield* owned.service.snapshot).toEqual([]);
+      expect(owned.rows()).toEqual([]);
       yield* Effect.flip(owned.service.invoke(owned.request));
     }),
   );
   it.effect("loads bounded redacted details lazily and rejects late stale results", () =>
     Effect.gen(function* () {
-      const service = yield* ActivityService.make({ publish: () => undefined });
+      const { service, rows } = yield* recordingService();
       const token = {};
       let calls = 0;
       yield* service.receive({
@@ -442,8 +446,7 @@ describe("activity service", () => {
         },
       });
       expect(calls).toBe(0);
-      const request = action((yield* service.snapshot)[0]!);
-      const detail = yield* service.detail(request);
+      const detail = yield* service.detail(action(rows()[0]!));
       expect(detail.length).toBeLessThanOrEqual(16384);
       expect(detail).not.toContain("private-value");
       expect(calls).toBe(1);
@@ -456,8 +459,7 @@ describe("activity service", () => {
           return pending.promise;
         },
       });
-      const current = action((yield* service.snapshot)[0]!);
-      const fiber = yield* service.detail(current).pipe(Effect.exit, Effect.forkScoped);
+      const fiber = yield* service.detail(action(rows()[0]!)).pipe(Effect.exit, Effect.forkScoped);
       yield* yieldUntil(() => started);
       yield* service.receive(registration({}));
       pending.resolve("late detail");
@@ -486,7 +488,7 @@ describe("activity service", () => {
   );
   it.effect("aborts a producer capability when its owning operation is interrupted", () =>
     Effect.gen(function* () {
-      const service = yield* ActivityService.make({ publish: () => undefined });
+      const { service, rows } = yield* recordingService();
       let signal: AbortSignal | undefined;
       const pending = deferredPromise<void>();
       yield* service.receive({
@@ -496,9 +498,7 @@ describe("activity service", () => {
           return pending.promise;
         },
       });
-      const fiber = yield* service
-        .invoke(action((yield* service.snapshot)[0]!))
-        .pipe(Effect.forkScoped);
+      const fiber = yield* service.invoke(action(rows()[0]!)).pipe(Effect.forkScoped);
       yield* yieldUntil(() => signal !== undefined);
       yield* Fiber.interrupt(fiber);
       expect(signal?.aborted).toBe(true);
@@ -507,15 +507,15 @@ describe("activity service", () => {
   );
   it.effect("cannot revive a revoked token and contains rejected producer actions", () =>
     Effect.gen(function* () {
-      const service = yield* ActivityService.make({ publish: () => undefined });
+      const { service, rows } = yield* recordingService();
       const token = {};
       yield* service.receive(
         registration(token, () => Promise.reject(new Error("private producer error"))),
       );
-      yield* Effect.flip(service.invoke(action((yield* service.snapshot)[0]!)));
+      yield* Effect.flip(service.invoke(action(rows()[0]!)));
       yield* service.receive({ ...registration(token), operation: "revoke" });
       yield* service.receive(registration(token));
-      expect(yield* service.snapshot).toEqual([]);
+      expect(rows()).toEqual([]);
     }),
   );
 });

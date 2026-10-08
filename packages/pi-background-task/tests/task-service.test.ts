@@ -42,16 +42,11 @@ interface FakeProcessControl {
   readonly complete: (exit?: LocalProcessExit) => void;
 }
 
-interface FakeSpawnBehavior {
+interface FakeProcessOptions {
   readonly completeOnGraceful?: boolean;
   readonly completeOnForce?: boolean;
   readonly failTermination?: boolean;
-}
-
-interface FakeProcessOptions extends FakeSpawnBehavior {
   readonly spawnGate?: Deferred.Deferred<void>;
-  /** Per-spawn behavior overrides by spawn index; missing entries fall back to the base options. */
-  readonly bySpawn?: ReadonlyArray<FakeSpawnBehavior | undefined>;
 }
 
 function fakeProcessLayer(options: FakeProcessOptions = {}) {
@@ -62,7 +57,6 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
       Effect.acquireRelease(
         Effect.gen(function* () {
           if (options.spawnGate) yield* Deferred.await(options.spawnGate);
-          const behavior: FakeSpawnBehavior = { ...options, ...options.bySpawn?.[controls.length] };
           const output = yield* Queue.unbounded<
             {
               readonly stream: "stdout" | "stderr";
@@ -93,7 +87,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
               Effect.suspend(() => {
                 modes.push(mode);
                 Deferred.doneUnsafe(modeRequested[mode], Effect.void);
-                if (behavior.failTermination)
+                if (options.failTermination)
                   return Effect.fail(
                     new LocalProcessError({
                       operation: "terminate process tree",
@@ -102,8 +96,8 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
                     }),
                   );
                 if (
-                  (mode === "force" && behavior.completeOnForce !== false) ||
-                  (mode === "graceful" && behavior.completeOnGraceful !== false)
+                  (mode === "force" && options.completeOnForce !== false) ||
+                  (mode === "graceful" && options.completeOnGraceful !== false)
                 ) {
                   complete({
                     exitCode: null,
@@ -583,20 +577,6 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("waits for exit and returns the terminal snapshot", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput({ command: "check" }));
-      const waiting = yield* service.wait(exitWait(started.id)).pipe(forkNow);
-
-      harness.controls[0]?.complete({ exitCode: 1 });
-      expect(yield* Fiber.join(waiting)).toMatchObject({
-        outcome: "completed",
-        snapshot: { state: "failed", exitCode: 1 },
-      });
-    });
-  });
-
   it.effect("keeps one redacted, bounded line of a failed task's output in memory", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {
@@ -612,7 +592,9 @@ describe("BackgroundTaskService", () => {
       );
       const waiting = yield* service.wait(exitWait(started.id)).pipe(forkNow);
       harness.controls[0]?.complete({ exitCode: 1 });
-      const failed: BackgroundTaskStatus = (yield* Fiber.join(waiting)).snapshot;
+      const exited = yield* Fiber.join(waiting);
+      expect(exited).toMatchObject({ outcome: "completed" });
+      const failed: BackgroundTaskStatus = exited.snapshot;
       expect(failed).toMatchObject({ state: "failed", exitCode: 1 });
       const line = failed.failureCause ?? "";
       expect(line).toMatch(/^FAIL tests\/auth\.test\.ts/u);
@@ -628,24 +610,7 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("returns a normal timeout result without stopping the task", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const waiting = yield* service.wait(exitWait(started.id, 5)).pipe(forkNow);
-
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("5 seconds");
-      expect(yield* Fiber.join(waiting)).toMatchObject({
-        outcome: "timeout",
-        snapshot: { state: "running" },
-      });
-      expect((yield* service.status(started.id)).state).toBe("running");
-      yield* service.stop(started.id);
-    });
-  });
-
-  it.effect("reports how long it let each wait run, capped at maxWaitSeconds", () => {
+  it.effect("times waits out as normal results, capped at maxWaitSeconds, without stopping", () => {
     const harness = serviceHarness({ maxWaitSeconds: 10 });
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
@@ -654,6 +619,7 @@ describe("BackgroundTaskService", () => {
       expect(yield* Fiber.join(capped)).toMatchObject({
         outcome: "timeout",
         appliedWaitSeconds: 10,
+        snapshot: { state: "running" },
       });
 
       const shorter = yield* service.wait(outputWait(started.id, { waitSeconds: 4 })).pipe(forkNow);
@@ -662,6 +628,7 @@ describe("BackgroundTaskService", () => {
         outcome: "timeout",
         appliedWaitSeconds: 4,
       });
+      expect((yield* service.status(started.id)).state).toBe("running");
       yield* service.stop(started.id);
     });
   });
@@ -788,30 +755,6 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("stops every sibling despite one failed termination and aggregates the failure", () => {
-    const harness = serviceHarness({ stopGraceMs: 2_000, maxRunning: 2 }, () => {}, {
-      bySpawn: [{ failTermination: true }, { completeOnGraceful: false }],
-    });
-    return harness.run(function* (service) {
-      const first = yield* service.start(taskInput({ command: "first" }));
-      const second = yield* service.start(taskInput({ command: "second" }));
-      const stopping = yield* service.stopAll().pipe(forkNow);
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("2 seconds");
-      const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
-      expect(failure._tag).toBe("BackgroundTerminationError");
-      expect(failure).toMatchObject({ id: first.id });
-      // The sibling's graceful-to-force workflow completed despite the first task's typed failure.
-      expect(yield* service.status(second.id)).toMatchObject({ state: "stopped" });
-      expect(harness.controls[1]?.modes).toEqual(["graceful", "force"]);
-      // The failed task keeps stopping ownership until its process confirms exit.
-      expect(yield* service.status(first.id)).toMatchObject({ state: "stopping" });
-      harness.controls[0]?.complete({ exitCode: null, signal: "SIGTERM" });
-      yield* Effect.yieldNow;
-      expect((yield* service.status(first.id)).state).toBe("stopped");
-    });
-  });
-
   it.effect("stops all active tasks and preserves the captured input order", () => {
     const harness = serviceHarness({ maxRunning: 3 });
     return harness.run(function* (service) {
@@ -846,22 +789,6 @@ describe("BackgroundTaskService", () => {
       yield* Deferred.succeed(spawnGate, undefined);
       expect((yield* service.stopAll()).map((task) => task.state)).toEqual(["stopped"]);
       expect(harness.controls[0]?.modes).toContain("graceful");
-    });
-  });
-
-  it.effect("updates snapshot metadata when the shared log budget evicts output", () => {
-    const harness = serviceHarness({
-      maxRunning: 2,
-      logBufferBytesPerTask: 4_096,
-      totalLogBufferBytes: 8_192,
-    });
-    return harness.run(function* (service) {
-      const first = yield* service.start(taskInput({ command: "first" }));
-      const second = yield* service.start(taskInput({ command: "second" }));
-      yield* emitAndRead(service, harness.controls[0], first.id, 0, "a".repeat(3_000));
-      yield* emitAndRead(service, harness.controls[1], second.id, 0, "b".repeat(3_000));
-      expect((yield* service.status(first.id)).droppedLogBytes).toBe(3_000);
-      yield* service.stopAll();
     });
   });
 

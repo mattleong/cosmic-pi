@@ -7,92 +7,64 @@ export type PreviewLineEntry<T> =
   | { kind: "line"; line: T; index: number }
   | { kind: "hidden"; hidden: number };
 
-type PreviewWindowPlan =
-  | { kind: "all"; shown: number; hidden: number }
-  | { kind: "head"; shown: number; hidden: number }
-  | { kind: "split"; head: number; tail: number; shown: number; hidden: number };
-
-export function selectPreviewLines<T>(lines: T[], limit: number) {
-  const total = lines.length;
-  const plan = previewWindowPlan(total, limit);
-  const entries: Array<PreviewLineEntry<T>> = [];
-  let markerAdded = false;
-  const tailStart = plan.kind === "split" ? total - plan.tail : total;
-  for (let index = 0; index < total; index++) {
-    if (!(index in lines)) continue;
-    // SAFETY: The property check preserves Array.prototype.forEach's sparse-array behavior.
-    const line = lines[index] as T;
-    if (plan.kind === "all" || (plan.kind === "head" && index < plan.shown)) {
-      entries.push({ kind: "line", line, index });
-      continue;
-    }
-    if (plan.kind !== "split") continue;
-    if (index < plan.head) {
-      entries.push({ kind: "line", line, index });
-      continue;
-    }
-    if (index >= tailStart) {
-      if (!markerAdded) {
-        entries.push({ kind: "hidden", hidden: plan.hidden });
-        markerAdded = true;
-      }
-      entries.push({ kind: "line", line, index });
-    }
-  }
-  return { entries, shown: plan.shown, hidden: plan.hidden };
-}
-
 const PREVIEW_SPLIT_MIN_LIMIT = 8;
 
-function previewSplitCounts(limit: number) {
+/** From eight lines, about two thirds of the limit is head and the rest, less the marker, tail. */
+function previewSplit(limit: number) {
+  if (limit < PREVIEW_SPLIT_MIN_LIMIT) return undefined;
   const head = Math.ceil(limit * 0.65);
   return { head, tail: Math.max(1, limit - head - 1) };
 }
 
-function previewWindowPlan(total: number, limit: number): PreviewWindowPlan {
-  if (total <= limit || limit <= 0) return { kind: "all", shown: total, hidden: 0 };
-  if (limit < PREVIEW_SPLIT_MIN_LIMIT) return { kind: "head", shown: limit, hidden: total - limit };
-  const { head, tail } = previewSplitCounts(limit);
-  return { kind: "split", head, tail, shown: head + tail, hidden: total - head - tail };
+/** Shown head and tail counts; a limit too small to split keeps only its head. */
+function previewWindow(total: number, limit: number) {
+  if (total <= limit || limit <= 0) return { head: total, tail: 0, hidden: 0 };
+  const { head, tail } = previewSplit(limit) ?? { head: limit, tail: 0 };
+  return { head, tail, hidden: total - head - tail };
 }
 
+const lineEntry = <T>(line: T, index: number): PreviewLineEntry<T> => ({
+  kind: "line",
+  line,
+  index,
+});
+
+/** The first lines, then the hidden marker and the last lines when the window splits. */
+function windowEntries<T>(first: readonly T[], last: readonly T[], hidden: number, total: number) {
+  const entries = first.map((line, index) => lineEntry(line, index));
+  if (last.length === 0) return entries;
+  const start = total - last.length;
+  return entries.concat(
+    { kind: "hidden", hidden },
+    last.map((line, offset) => lineEntry(line, start + offset)),
+  );
+}
+
+export function selectPreviewLines<T>(lines: readonly T[], limit: number) {
+  const total = lines.length;
+  const { head, tail, hidden } = previewWindow(total, limit);
+  const entries = windowEntries(lines.slice(0, head), lines.slice(total - tail), hidden, total);
+  return { entries, shown: head + tail, hidden };
+}
+
+/** Streams the text, retaining at most the limit's head plus a ring of the latest tail lines. */
 export function selectPreviewTextLines(text: string, limit: number) {
-  const entries: Array<PreviewLineEntry<string>> = [];
-  const split = limit >= PREVIEW_SPLIT_MIN_LIMIT;
-  const counts = split ? previewSplitCounts(limit) : undefined;
-  const head = counts === undefined ? limit : counts.head;
-  const tailLimit = counts === undefined ? 0 : counts.tail;
-  const tail: Array<string | undefined> = [];
-  let tailSize = 0;
-  let tailCursor = 0;
+  const split = previewSplit(limit);
+  const first: string[] = [];
+  const ring: string[] = [];
   let total = 0;
   forEachPreviewTextLine(text, (line, index) => {
     total++;
-    if (limit <= 0 || index < limit) entries.push({ kind: "line", line, index });
-    if (!split || index < head) return;
-    tail[tailCursor] = line;
-    if (++tailCursor === tailLimit) tailCursor = 0;
-    if (tailSize < tailLimit) tailSize++;
+    if (limit <= 0 || index < limit) first.push(line);
+    if (split && index >= split.head) ring[(index - split.head) % split.tail] = line;
   });
-
-  if (limit <= 0 || total <= limit) return { entries, shown: total, hidden: 0, total };
-  if (!split) return { entries, shown: limit, hidden: total - limit, total };
-  const hidden = total - head - tailLimit;
-  const selected = entries.slice(0, head);
-  selected.push({ kind: "hidden", hidden });
-  let tailSlot = tailSize === tailLimit ? tailCursor : 0;
-  for (let offset = 0; offset < tailSize; offset++) {
-    const line = tail[tailSlot];
-    if (line === undefined) throw new RangeError(`Missing preview tail line ${offset}`);
-    selected.push({ kind: "line", line, index: total - tailSize + offset });
-    if (++tailSlot === tailLimit) tailSlot = 0;
-  }
-  return {
-    entries: selected,
-    shown: head + tailLimit,
-    hidden,
-    total,
-  };
+  const { head, tail, hidden } = previewWindow(total, limit);
+  // A split window hides at least one line, so its full ring holds the last `tail` lines, the
+  // oldest where the next line would go.
+  const oldest = tail && (total - head) % tail;
+  const last = tail ? ring.slice(oldest).concat(ring.slice(0, oldest)) : [];
+  const entries = windowEntries(first.slice(0, head), last, hidden, total);
+  return { entries, shown: head + tail, hidden, total };
 }
 
 export function hiddenLinesMarker(theme: Theme, hidden: number): string {

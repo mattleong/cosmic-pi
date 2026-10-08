@@ -1,5 +1,12 @@
 import { AskUserValidationError } from "./errors.ts";
-import { MAX_CUSTOM_ANSWER_LENGTH, MAX_NOTE_LENGTH, type AskUserRequest } from "./schema.ts";
+import {
+  MAX_CUSTOM_ANSWER_LENGTH,
+  MAX_NOTE_LENGTH,
+  type AskUserChoice,
+  type AskUserChoiceQuestion,
+  type AskUserQuestion,
+  type AskUserRequest,
+} from "./schema.ts";
 
 /** Fixed bounds use JavaScript code units after trimming; invalid input is never truncated. */
 export function validateQuestionnaireInput(
@@ -21,7 +28,16 @@ const RESERVED_LABELS = new Set(["write a custom answer", "continue", "submit an
 const fail = (position: string, problem: string): AskUserValidationError =>
   new AskUserValidationError({ message: `${position} ${problem}` });
 
-export const normalizeAskUserRequest = (request: AskUserRequest): AskUserRequest => ({
+/** Tool input or a decoded transport request, whose arrays are readonly. */
+interface QuestionnaireInput {
+  readonly questions: ReadonlyArray<
+    | Exclude<AskUserQuestion, AskUserChoiceQuestion>
+    | (Omit<AskUserChoiceQuestion, "choices"> & { readonly choices: ReadonlyArray<AskUserChoice> })
+  >;
+}
+
+/** A detached, trimmed copy; callers never share question or choice objects with their input. */
+export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserRequest => ({
   questions: request.questions.map((question) => {
     const base = {
       key: question.key.trim(),

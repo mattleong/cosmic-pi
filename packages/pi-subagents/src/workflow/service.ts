@@ -9,16 +9,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import type * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { invokeHostCallback, synchronousRandomHex } from "pi-cosmic-core";
 import { runWorkflowSandbox, type WorkflowSandboxOutcome } from "../boundary/codemode-sandbox.ts";
 import { nodeAvailableParallelism } from "../boundary/node-builtins.ts";
 import { saveWorkflowResult } from "../boundary/workflow-result-file.ts";
-import type { WorkflowRunFiles } from "../boundary/workflow-run-files.ts";
 import { SubagentService } from "../run/service.ts";
 import type { WorkflowHost } from "./agent.ts";
-import { makeWorkflowSlots, makeWorkflowWaitOrder } from "./admission-queue.ts";
+import { makeWorkflowSlots } from "./admission-queue.ts";
 import { requireStartArgs } from "./args.ts";
 import { workflowViewStatus, type WorkflowViewStatus } from "./attention.ts";
 import { makeWorkflowBudget } from "./budget.ts";
@@ -119,7 +119,7 @@ export interface WorkflowServiceContract {
   readonly skip: (agentRunId: string) => Effect.Effect<void, WorkflowNotFoundError>;
 }
 
-export interface WorkflowServiceOptions {
+interface WorkflowServiceOptions {
   /** Synchronous host bridge for Activity; stages every change and gets coalesced publishes. */
   readonly activity?: WorkflowActivitySink | undefined;
   readonly notify?: WorkflowNotify | undefined;
@@ -131,12 +131,6 @@ export interface WorkflowServiceOptions {
    */
   readonly sessionKey?: string | undefined;
   readonly observer?: WorkflowRunObserver | undefined;
-}
-
-/** A starting run's private files, or the warning it logs instead. */
-interface SavedRunFiles {
-  readonly files?: WorkflowRunFiles | undefined;
-  readonly warning?: string | undefined;
 }
 
 const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions) {
@@ -154,7 +148,11 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
   const fibers = yield* FiberMap.make<string>();
   const delivery = yield* makeWorkflowDelivery(options.notify);
   const runs = yield* makeWorkflowRuns(options.activity);
-  const records = makeWorkflowRunRecordWriter({ store, runs, sessionKey: options.sessionKey });
+  const records = yield* makeWorkflowRunRecordWriter({
+    store,
+    runs,
+    sessionKey: options.sessionKey,
+  });
   const recovery = makeWorkflowRecovery({ store, sessionKey: options.sessionKey });
   const sources = makeWorkflowSources({ store, journal, recovery, subagents, runs });
   const members = makeWorkflowMembers({ runs, subagents, journal, store, sources });
@@ -202,7 +200,7 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
       // Ordered: the owner closes before the outcome is recorded, and the run record and
       // notification come last, once the view holds the final state.
       yield* subagents.closeOwner(id);
-      runs.controls.remove(id);
+      runs.controls.delete(id);
       // Teardown interrupts runs and leaves them open, in memory and in their records, so the
       // next activation of this session reports them; a torn-down session gets no notification.
       const tornDown = yield* delivery.closed;
@@ -289,110 +287,112 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     ).pipe(Effect.onExit((exit) => finish(setup.id, exit)));
 
   /**
-   * Saves the run's script in its private directory; a failure becomes a warning in the run's
-   * log instead of failing the start.
+   * Saves the run's script in its private directory; a failure becomes the warning the run logs
+   * instead of failing the start.
    */
   const saveRunFiles = (id: string, source: string) =>
     runs.list.pipe(
-      Effect.map(
-        (views) =>
-          new Set(views.filter((run) => !isWorkflowRunFinished(run.state)).map((run) => run.id)),
+      Effect.flatMap((views) =>
+        store.createRunFiles(
+          id,
+          source,
+          new Set(views.flatMap((run) => (isWorkflowRunFinished(run.state) ? [] : [run.id]))),
+        ),
       ),
-      Effect.flatMap((live) => store.createRunFiles(id, source, live)),
-      Effect.match({
-        onSuccess: (files): SavedRunFiles => ({ files }),
-        onFailure: (error): SavedRunFiles => ({
-          warning: `Couldn't save an editable copy of the script: ${error.message}`,
-        }),
-      }),
+      Effect.mapError((error) =>
+        workflowServiceLog(
+          "warning",
+          `Couldn't save an editable copy of the script: ${error.message}`,
+        ),
+      ),
+      Effect.result,
     );
 
-  const start: WorkflowServiceContract["start"] = (request, host) =>
-    Effect.gen(function* () {
-      const { script, source } = yield* sources.load(request.source);
-      yield* requireStartArgs(script.args, script.meta.name, request.args);
-      const replay =
-        request.resumeFromRunId === undefined
-          ? undefined
-          : yield* sources.resumeReplay(request.resumeFromRunId);
-      const slots = makeWorkflowSlots(concurrency);
-      const startedAt = yield* Clock.currentTimeMillis;
-      const ordinal = nextRunOrdinal++;
-      const id = `wf-${namespace}-${ordinal}`;
-      const budget = makeWorkflowBudget(request.budget, {
-        subagents,
-        warn: (message) => runs.recordEvent(id, workflowServiceLog("warning", message)),
-        show: (current) =>
-          runs.update(id, (run) => ({ ...run, budget: current() })).pipe(Effect.asVoid),
-      });
-      const planned = yield* sources.reservePlanned(
-        (script.meta.phases ?? []).flatMap((phase) => workflowPlannedAgents(phase)),
-      );
-      const saved = yield* saveRunFiles(id, script.source);
-      // Registration is atomic: an open owner always has a run fiber that will close it.
-      return yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          yield* journal.open(id, script.meta.name, { source, scriptPath: saved.files?.script });
-          yield* subagents.openOwner(id);
-          const created: WorkflowRunView = {
-            id,
-            name: script.meta.name,
-            description: script.meta.description,
-            source,
-            sha256: script.sha256,
-            phases: script.meta.phases ?? [],
-            state: "running",
-            startedAt,
-            agents: [],
-            planned,
-            reused: 0,
-            logs: [],
-            usage: emptyWorkflowUsage(),
-            args: request.args,
-            ...(saved.files && { scriptPath: saved.files.script }),
-            ...(request.resumeFromRunId !== undefined && { resumedFrom: request.resumeFromRunId }),
-            ...(request.budget !== undefined && {
-              budget: { total: request.budget, spent: 0, refused: 0 },
-            }),
-          };
-          const view =
-            saved.warning === undefined
-              ? created
-              : withWorkflowEvent(created, workflowServiceLog("warning", saved.warning), startedAt);
-          yield* runs.mutate((views) => retainWorkflowRuns([...views, view]));
-          const control: WorkflowRunControl = {
-            calls: 0,
-            skips: new Map(),
-            stop: Deferred.makeUnsafe<void>(),
-            failed: Deferred.makeUnsafe<WorkflowFailure>(),
-            journalLock: Semaphore.makeUnsafe(1),
-            journal: { written: false, warned: false, results: 0 },
-          };
-          runs.controls.add(id, control);
-          yield* observe((observer) => observer.opened(id));
-          yield* FiberMap.run(
-            fibers,
-            id,
-            runFiber(
-              {
-                id,
-                script,
-                args: request.args,
-                host,
-                replay,
-                slots,
-                order: makeWorkflowWaitOrder(),
-                budget,
-                control,
-                files: saved.files,
-              },
-              view,
-            ),
-          );
-          return view;
-        }),
-      );
+  const start = Effect.fn("WorkflowService.start")(function* (
+    request: WorkflowStartRequest,
+    host: WorkflowHost,
+  ) {
+    const { script, source } = yield* sources.load(request.source);
+    yield* requireStartArgs(script.args, script.meta.name, request.args);
+    const replay =
+      request.resumeFromRunId === undefined
+        ? undefined
+        : yield* sources.resumeReplay(request.resumeFromRunId);
+    const slots = makeWorkflowSlots(concurrency);
+    const startedAt = yield* Clock.currentTimeMillis;
+    const id = `wf-${namespace}-${nextRunOrdinal++}`;
+    const budget = makeWorkflowBudget(request.budget, {
+      subagents,
+      warn: (message) => runs.recordEvent(id, workflowServiceLog("warning", message)),
+      show: (current) =>
+        runs.update(id, (run) => ({ ...run, budget: current() })).pipe(Effect.asVoid),
     });
+    const planned = yield* sources.reservePlanned(
+      (script.meta.phases ?? []).flatMap((phase) => workflowPlannedAgents(phase)),
+    );
+    const saved = yield* saveRunFiles(id, script.source);
+    const files = Result.getOrUndefined(saved);
+    // Registration is atomic: an open owner always has a run fiber that will close it.
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        yield* journal.open(id, script.meta.name, { source, scriptPath: files?.script });
+        yield* subagents.openOwner(id);
+        const created: WorkflowRunView = {
+          id,
+          name: script.meta.name,
+          description: script.meta.description,
+          source,
+          phases: script.meta.phases ?? [],
+          state: "running",
+          startedAt,
+          agents: [],
+          planned,
+          reused: 0,
+          logs: [],
+          usage: emptyWorkflowUsage(),
+          args: request.args,
+          ...(files && { scriptPath: files.script }),
+          ...(request.resumeFromRunId !== undefined && { resumedFrom: request.resumeFromRunId }),
+          ...(request.budget !== undefined && {
+            budget: { total: request.budget, spent: 0, refused: 0 },
+          }),
+        };
+        const view = Result.isFailure(saved)
+          ? withWorkflowEvent(created, saved.failure, startedAt)
+          : created;
+        yield* runs.mutate((views) => retainWorkflowRuns([...views, view]));
+        const control: WorkflowRunControl = {
+          calls: 0,
+          skips: new Map(),
+          stop: yield* Deferred.make<void>(),
+          failed: yield* Deferred.make<WorkflowFailure>(),
+          journalLock: yield* Semaphore.make(1),
+          journal: { written: false, warned: false, results: 0 },
+        };
+        runs.controls.set(id, control);
+        yield* observe((observer) => observer.opened(id));
+        yield* FiberMap.run(
+          fibers,
+          id,
+          runFiber(
+            {
+              id,
+              script,
+              args: request.args,
+              host,
+              replay,
+              slots,
+              budget,
+              control,
+              files,
+            },
+            view,
+          ),
+        );
+        return view;
+      }),
+    );
+  });
 
   /** Waits until the run's fiber, and so every agent, has ended. */
   const awaitStopped = (id: string) =>
@@ -421,42 +421,49 @@ const makeService = Effect.fnUntraced(function* (options: WorkflowServiceOptions
     });
 
   const stop: WorkflowServiceContract["stop"] = (id, origin = "user") =>
-    // Marking the run and signalling its script happen together; only the wait is interruptible.
+    // Marking the run, signalling its script and recording who asked happen together; only the
+    // wait is interruptible.
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const current = yield* runs.require(id);
         if (isWorkflowRunFinished(current.state)) return current;
         // A teardown before the run settles then reports it without a restart hint.
         yield* journal.noteStop(id);
-        yield* runs.update(id, (run) =>
-          run.state === "running" ? { ...run, state: "stopping", stoppedBy: origin } : run,
-        );
+        // The call that starts the stop says who asked for it, in the view and the record, and
+        // only its tool stop is released when it ends early. Later calls just wait, but once that
+        // tool stop was released, nobody holds the stop and the record takes their origin.
+        const claim = yield* runs.modify(id, (run) => {
+          if (run.state === "running")
+            return ["starts", { ...run, state: "stopping", stoppedBy: origin }] as const;
+          const released = run.state === "stopping" && run.stoppedBy === undefined;
+          return [released ? "records" : "joins", run] as const;
+        });
         const control = runs.controls.get(id);
         if (control) yield* Deferred.succeed(control.stop, undefined);
-        return yield* restore(
-          records.noteStop(id, origin).pipe(Effect.andThen(awaitStopped(id))),
-        ).pipe(Effect.onInterrupt(() => (origin === "tool" ? releaseToolStop(id) : Effect.void)));
+        if (claim === "starts" || claim === "records") yield* records.noteStop(id, origin);
+        const stopped = restore(awaitStopped(id));
+        return yield* claim === "starts" && origin === "tool"
+          ? stopped.pipe(Effect.onInterrupt(() => releaseToolStop(id)))
+          : stopped;
       }),
     );
 
-  const status: WorkflowServiceContract["status"] = (id) =>
-    Effect.gen(function* () {
-      const view = yield* runs.find(id);
-      if (view) return yield* workflowViewStatus(subagents, view);
-      const recorded = yield* recovery.recorded(id);
-      if (recorded) return { kind: "recorded", run: recorded } satisfies WorkflowStatus;
-      return yield* workflowNotFound(id);
-    });
+  const status = Effect.fn("WorkflowService.status")(function* (id: string) {
+    const view = yield* runs.find(id);
+    if (view) return yield* workflowViewStatus(subagents, view);
+    const recorded = yield* recovery.recorded(id);
+    if (recorded) return { kind: "recorded", run: recorded } satisfies WorkflowStatus;
+    return yield* workflowNotFound(id);
+  });
 
-  const toolStatus: WorkflowServiceContract["toolStatus"] = (id) =>
-    Effect.gen(function* () {
-      const found = yield* status(id);
-      if (found.kind !== "view") return found;
-      const now = yield* Clock.currentTimeMillis;
-      const sinceMs = yield* Effect.sync(() => repeats.note(found, now));
-      if (sinceMs === undefined) return found;
-      return { kind: "unchanged", run: found.run, sinceMs } satisfies WorkflowUnchangedStatus;
-    });
+  const toolStatus = Effect.fn("WorkflowService.toolStatus")(function* (id: string) {
+    const found = yield* status(id);
+    if (found.kind !== "view") return found;
+    const now = yield* Clock.currentTimeMillis;
+    const sinceMs = yield* Effect.sync(() => repeats.note(found, now));
+    if (sinceMs === undefined) return found;
+    return { kind: "unchanged", run: found.run, sinceMs } satisfies WorkflowUnchangedStatus;
+  });
 
   const announce = (interrupted: WorkflowInterruptedRun) => {
     const notice = interruptedWorkflowNotification(interrupted);

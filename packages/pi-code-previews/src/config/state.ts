@@ -4,7 +4,7 @@ import {
   defaultCodePreviewSettings,
   type CodePreviewPerformanceConfig,
 } from "./defaults";
-import type { SettingsLoadProblem } from "./document-store";
+import type { SettingsLoadProblem } from "./service";
 import type { CodePreviewSettings } from "./schema";
 
 /** Live immutable synchronous projection. Imports observe replacement atomically. */

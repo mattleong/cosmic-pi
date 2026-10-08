@@ -4,13 +4,14 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import type {
   SubagentNotificationDelivery,
   SubagentWorkflowNotification,
 } from "../../../src/boundary/host-notifier.ts";
+import { subagentErrorCode, type SubagentError } from "../../../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentProjection } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
 import { WorkflowRunFileError } from "../../../src/boundary/workflow-run-files.ts";
@@ -20,18 +21,23 @@ import {
   type WorkspaceSettledTarget,
 } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
-import {
-  WorkflowAgentCallError,
-  type WorkflowAgentAccess,
-  type WorkflowAgentSpec,
-  type WorkflowHost,
+import type {
+  WorkflowAgentAccess,
+  WorkflowAgentSpec,
+  WorkflowHost,
 } from "../../../src/workflow/agent.ts";
-import { WorkflowJournal } from "../../../src/workflow/journal.ts";
+import { WorkflowAgentCallError } from "../../../src/workflow/errors.ts";
+import { WorkflowJournal, type WorkflowJournalContract } from "../../../src/workflow/journal.ts";
 import type { WorkflowRunView } from "../../../src/workflow/model.ts";
 import type { WorkflowActivitySink } from "../../../src/workflow/runs.ts";
 import { parseWorkflowScript } from "../../../src/workflow/script.ts";
 import type { WorkflowRunObserver } from "../../../src/workflow/run-observer.ts";
-import { WorkflowService, type WorkflowServiceContract } from "../../../src/workflow/service.ts";
+import {
+  WorkflowService,
+  type WorkflowServiceContract,
+  type WorkflowStartRequest,
+} from "../../../src/workflow/service.ts";
+import type { WorkflowSourceRequest } from "../../../src/workflow/source.ts";
 import {
   WorkflowSourceError,
   WorkflowStore,
@@ -49,15 +55,31 @@ const decodeResult = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json)
 /** A finished run's value, parsed from its JSON result text. */
 export const resultValue = (run: WorkflowRunView): Schema.Json => decodeResult(run.result?.text);
 
-/** A complete script with the given body. */
-export const script = (body: string, name = "test-workflow"): string =>
-  `export const meta = { name: ${JSON.stringify(name)}, description: "A test workflow", phases: [{ title: "Main" }] };\n${body}`;
+/** A complete script with the given body, declaring `phases` (a JavaScript array literal). */
+export const script = (body: string, name = "test-workflow", phases = '[{ title: "Main" }]') =>
+  `export const meta = { name: ${JSON.stringify(name)}, description: "A test workflow", phases: ${phases} };\n${body}`;
 
 /** An inline workflow source with a complete script around the given body. */
-export const inline = (body: string, name?: string) => ({
+export const inline = (body: string, name?: string, phases?: string) => ({
   kind: "inline" as const,
-  script: script(body, name),
+  script: script(body, name, phases),
 });
+
+/** Starts `source`, a script body to run inline unless it is a whole source, with null args. */
+export const startScript = (
+  workflows: WorkflowServiceContract,
+  source: string | WorkflowSourceRequest,
+  request: Partial<Omit<WorkflowStartRequest, "source">> = {},
+  host: WorkflowHost = testHost(),
+) =>
+  workflows.start(
+    { source: Predicate.isString(source) ? inline(source) : source, args: null, ...request },
+    host,
+  );
+
+/** A worktree writer's agent() call for `task`. */
+export const worktreeWriter = (task: string): string =>
+  `agent(${JSON.stringify(task)}, { profile: "worker", isolation: "worktree" })`;
 
 /**
  * Starts root children of the main agent, which hold root slots until they report, under the
@@ -74,19 +96,19 @@ export const mainChildren = (
     ),
   );
 
-const writes = (spec: WorkflowAgentSpec): boolean =>
-  spec.profile === "worker" || spec.writes !== undefined;
+const writes = (call: Pick<WorkflowAgentSpec, "profile" | "writes">): boolean =>
+  call.profile === "worker" || call.writes !== undefined;
 
 /** Resolves every agent to a native-report launch; `worker` and `writes` make it a writer. */
 export const testHost = (
   record: (request: StartSubagentRequest) => void = () => {},
 ): WorkflowHost => ({
-  checkAgent: (spec) => {
-    if (spec.profile === "unknown")
+  checkAgent: (options) => {
+    if (options.profile === "unknown")
       return Effect.fail(
         new WorkflowAgentCallError({ message: 'Unknown agent() profile "unknown".' }),
       );
-    const access: WorkflowAgentAccess = writes(spec) ? "writer" : "read-only";
+    const access: WorkflowAgentAccess = writes(options) ? "writer" : "read-only";
     return Effect.succeed(access);
   },
   resolveAgent: (spec) =>
@@ -349,10 +371,10 @@ export const memoryStore = (
  * What a settled writer left in its worktree, as the fake engine's check for changes finds it:
  * changes (the default), nothing, or a check or discard that fails.
  */
-export type FakeWorkerContents = "changed" | "unchanged" | "unreadable" | "undeletable";
+type FakeWorkerContents = "changed" | "unchanged" | "unreadable" | "undeletable";
 
 /** Holds a workspace operation once it starts, until `release` completes. */
-export interface FakeGate {
+interface FakeGate {
   readonly entered: Deferred.Deferred<void>;
   readonly release: Deferred.Deferred<void>;
 }
@@ -481,13 +503,12 @@ const creatingWorkspaceEngine = (
           );
         }),
       ),
-    recoverDiscard: unused,
     inspect: ({ workspaceId }) => existing(workspaceId),
     list: ({ ownerId }) =>
       Effect.sync(() =>
         [...records.values()].filter((record) => record.handle.ownerId === ownerId),
       ),
-    listAll: unused,
+    listAll: unused(),
   };
 };
 
@@ -595,35 +616,61 @@ export const workflowFixture = (options: WorkflowFixtureOptions = {}) => {
   };
 };
 
+export type WorkflowFixture = ReturnType<typeof workflowFixture>;
+
 /** Runs a body against the fixture's services; the layer closes when it returns. */
-export const withWorkflows = <A, E>(
-  fixture: ReturnType<typeof workflowFixture>,
+export const withWorkflows = <A, E, R>(
+  fixture: WorkflowFixture,
   body: (
     workflows: WorkflowServiceContract,
     subagents: SubagentServiceContract,
-  ) => Effect.Effect<A, E, Scope.Scope>,
+  ) => Effect.Effect<A, E, R>,
 ) =>
   Effect.gen(function* () {
     return yield* body(yield* WorkflowService, yield* SubagentService);
   }).pipe(Effect.scoped, Effect.provide(fixture.layer));
 
-/**
- * The live clock with its wall-clock milliseconds stopped, so everything reads the same time;
- * nanoseconds and sleeps stay live for the runtime's own timers.
- */
-export const stoppedWallClock = Effect.gen(function* () {
-  const live = yield* Clock.Clock;
+/** What a generator test body works with. */
+export interface WorkflowTestContext {
+  readonly fixture: WorkflowFixture;
+  readonly workflows: WorkflowServiceContract;
+  readonly subagents: SubagentServiceContract;
+}
+
+/** Runs a generator body, as `Effect.gen` would, against the fixture's services. */
+export const inWorkflows = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
+  fixture: WorkflowFixture,
+  body: (context: WorkflowTestContext) => Generator<Eff, A, never>,
+) =>
+  withWorkflows(fixture, (workflows, subagents) =>
+    Effect.gen(() => body({ fixture, workflows, subagents })),
+  );
+
+/** Runs a generator body, as `Effect.gen` would, against a new fixture's services. */
+export const workflowTest = <Eff extends Effect.Effect<unknown, unknown, unknown>, A>(
+  options: WorkflowFixtureOptions,
+  body: (context: WorkflowTestContext) => Generator<Eff, A, never>,
+) => inWorkflows(workflowFixture(options), body);
+
+/** The live clock with `overrides`; whatever they leave out stays live for the runtime's timers. */
+const liveClockWith = (overrides: (live: Clock.Clock) => Partial<Clock.Clock>) =>
+  Clock.clockWith((live) =>
+    Effect.succeed<Clock.Clock>({
+      currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
+      currentTimeMillis: live.currentTimeMillis,
+      currentTimeNanosUnsafe: () => live.currentTimeNanosUnsafe(),
+      currentTimeNanos: live.currentTimeNanos,
+      monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: live.monotonicTimeNanos,
+      sleep: (duration) => live.sleep(duration),
+      ...overrides(live),
+    }),
+  );
+
+/** The live clock with its wall-clock milliseconds stopped, so everything reads the same time. */
+export const stoppedWallClock = liveClockWith((live) => {
   const millis = live.currentTimeMillisUnsafe();
-  const clock: Clock.Clock = {
-    currentTimeMillisUnsafe: () => millis,
-    currentTimeMillis: Effect.succeed(millis),
-    currentTimeNanosUnsafe: () => live.currentTimeNanosUnsafe(),
-    currentTimeNanos: live.currentTimeNanos,
-    monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
-    monotonicTimeNanos: live.monotonicTimeNanos,
-    sleep: (duration) => live.sleep(duration),
-  };
-  return clock;
+  return { currentTimeMillisUnsafe: () => millis, currentTimeMillis: Effect.succeed(millis) };
 });
 
 /**
@@ -631,24 +678,32 @@ export const stoppedWallClock = Effect.gen(function* () {
  * a live run's directory refresh repeats quickly; shorter sleeps stay live.
  */
 export const hurriedClock = (hurried: Duration.Input) =>
-  Effect.gen(function* () {
-    const live = yield* Clock.Clock;
-    const clock: Clock.Clock = {
-      currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
-      currentTimeMillis: live.currentTimeMillis,
-      currentTimeNanosUnsafe: () => live.currentTimeNanosUnsafe(),
-      currentTimeNanos: live.currentTimeNanos,
-      monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
-      monotonicTimeNanos: live.monotonicTimeNanos,
-      sleep: (duration) =>
-        live.sleep(
-          Duration.isGreaterThanOrEqualTo(duration, Duration.minutes(1))
-            ? Duration.fromInputUnsafe(hurried)
-            : duration,
-        ),
-    };
-    return clock;
-  });
+  liveClockWith((live) => ({
+    sleep: (duration) =>
+      live.sleep(
+        Duration.isGreaterThanOrEqualTo(duration, Duration.minutes(1))
+          ? Duration.fromInputUnsafe(hurried)
+          : duration,
+      ),
+  }));
+
+/** Uses a session's resume journal, as an activation of that session would. */
+export const withJournal = <A>(
+  session: string,
+  use: (journal: WorkflowJournalContract) => Effect.Effect<A>,
+) => WorkflowJournal.use(use).pipe(Effect.provide(WorkflowJournal.layer(session)));
+
+/** Retries a root workspace operation until the writer's process cleanup is confirmed. */
+export const onceSettled = <A>(
+  operation: Effect.Effect<A, SubagentError>,
+): Effect.Effect<A, SubagentError> =>
+  operation.pipe(
+    Effect.catchIf(
+      (error) => subagentErrorCode(error) === "workspace_process_unsettled",
+      () =>
+        Effect.sleep("5 millis").pipe(Effect.andThen(Effect.suspend(() => onceSettled(operation)))),
+    ),
+  );
 
 /** Polls a condition on real time; sandbox scripts run in a worker thread. */
 export const eventually = <A>(probe: () => A | undefined, label: string) =>
@@ -660,6 +715,10 @@ export const eventually = <A>(probe: () => A | undefined, label: string) =>
     }
     return yield* Effect.die(new Error(`Timed out waiting for ${label}.`));
   });
+
+/** Polls until `condition` holds, on real time. */
+export const until = (condition: () => boolean, label: string) =>
+  eventually(() => (condition() ? true : undefined), label);
 
 /**
  * The first view of a run that satisfies `predicate`, polled from the service's run list on real
@@ -682,6 +741,10 @@ export const runWhere = (
 export const finished = (workflows: WorkflowServiceContract, id: string) =>
   runWhere(workflows, id, (run) => run.endedAt !== undefined);
 
+/** The notification the host accepted for run `id`, once it has. */
+export const deliveredFor = (fixture: WorkflowFixture, id: string) =>
+  eventually(() => fixture.delivered.find((sent) => sent.runId === id), `${id}'s notification`);
+
 const runsOf = (projections: ReadonlyArray<SubagentProjection>, task: string) =>
   projections.at(-1)?.runs.filter((run) => run.task === task) ?? [];
 
@@ -689,11 +752,7 @@ const runningRun = (projections: ReadonlyArray<SubagentProjection>, task: string
   runsOf(projections, task).find((run) => run.state === "running");
 
 /** Waits until the agent with `task` is running, then reports `text` as its result. */
-export const reportTask = (
-  fixture: ReturnType<typeof workflowFixture>,
-  task: string,
-  text: string,
-) =>
+export const reportTask = (fixture: WorkflowFixture, task: string, text: string) =>
   Effect.gen(function* () {
     const run = yield* eventually(
       () => runningRun(fixture.projections, task),
@@ -705,7 +764,7 @@ export const reportTask = (
   });
 
 /** The backend process that received `task`, matched on the exact assigned-task section. */
-export const controlForTask = (fixture: ReturnType<typeof workflowFixture>, task: string) =>
+export const controlForTask = (fixture: WorkflowFixture, task: string) =>
   eventually(
     () =>
       fixture.backend.controls.findLast((candidate) =>
@@ -719,7 +778,7 @@ export const controlForTask = (fixture: ReturnType<typeof workflowFixture>, task
  * when it is checked for changes; returns its workspace id.
  */
 export const leaveInWorktree = (
-  fixture: ReturnType<typeof workflowFixture>,
+  fixture: WorkflowFixture,
   task: string,
   contents: FakeWorkerContents,
 ) =>
@@ -733,11 +792,11 @@ export const leaveInWorktree = (
   });
 
 /** Waits until the agent with `task` is running and returns its subagent run id. */
-export const runningTask = (fixture: ReturnType<typeof workflowFixture>, task: string) =>
+export const runningTask = (fixture: WorkflowFixture, task: string) =>
   eventually(() => runningRun(fixture.projections, task)?.id, `agent "${task}" to run`);
 
 /** The state of the only subagent run that received `task`. */
-export const stateOfTask = (fixture: ReturnType<typeof workflowFixture>, task: string) => {
+export const stateOfTask = (fixture: WorkflowFixture, task: string) => {
   const runs = runsOf(fixture.projections, task);
   if (runs.length > 1) throw new Error(`Several agents received "${task}".`);
   return runs[0]?.state;

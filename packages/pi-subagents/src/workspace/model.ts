@@ -27,6 +27,11 @@ export const WorkspacePreparationSchema = Schema.Struct({
   leaseDirectories: Schema.Array(Schema.String),
 });
 export type WorkspacePreparation = typeof WorkspacePreparationSchema.Type;
+const WorkspaceJournalFileSchema = Schema.Struct({
+  oid: Schema.String,
+  mode: Schema.String,
+  permissions: Schema.Finite,
+});
 export const WorkspaceRecordSchema = Schema.Struct({
   version: Schema.Literal(1),
   handle: WorkspaceHandleSchema,
@@ -54,12 +59,8 @@ export const WorkspaceRecordSchema = Schema.Struct({
         path: Schema.String,
         temporaryPath: Schema.String,
         backupPath: Schema.String,
-        before: Schema.optional(
-          Schema.Struct({ oid: Schema.String, mode: Schema.String, permissions: Schema.Finite }),
-        ),
-        after: Schema.optional(
-          Schema.Struct({ oid: Schema.String, mode: Schema.String, permissions: Schema.Finite }),
-        ),
+        before: Schema.optional(WorkspaceJournalFileSchema),
+        after: Schema.optional(WorkspaceJournalFileSchema),
       }),
     ),
   ),
@@ -90,9 +91,9 @@ export interface WorkspaceSettledTarget extends WorkspaceTarget {
 export interface WorkspaceRevisionTarget extends WorkspaceTarget {
   readonly revisionId: string;
 }
-export interface WorkspaceIntegrationTarget extends WorkspaceRevisionTarget {
+export interface WorkspaceIntegrationTarget
+  extends WorkspaceRevisionTarget, WorkspaceSettledTarget {
   readonly preparationId: string;
-  readonly processCleanupConfirmed: true;
   /** Keeps the editable trees after integration because a live run still uses them. */
   readonly retainTrees?: boolean;
 }

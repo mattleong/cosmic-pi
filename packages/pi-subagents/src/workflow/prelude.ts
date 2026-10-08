@@ -5,12 +5,12 @@ export const WORKFLOW_ARGS_KEY = "__workflow_args";
 /** Store key holding the run's token budget, absent without one. */
 export const WORKFLOW_BUDGET_KEY = "__workflow_budget";
 /** One parallel()/pipeline() call accepts at most this many items. */
-export const WORKFLOW_BATCH_LIMIT = 4_096;
+const WORKFLOW_BATCH_LIMIT = 4_096;
 /**
  * Phase titles the prelude forwards are cut to this length; the host clips them further for
  * display, so a long title never travels with every agent() call or makes it invalid.
  */
-export const WORKFLOW_PRELUDE_PHASE_MAX_CHARS = 1_024;
+const WORKFLOW_PRELUDE_PHASE_MAX_CHARS = 1_024;
 /**
  * The `name` of the error an agent() call throws once the run's token budget is spent, so a
  * script's catch can tell it from other errors and the failure notice from other failures.
@@ -61,6 +61,10 @@ const preludeSource = `(() => {
     return error;
   };
   const isInvalid = (error) => error !== null && typeof error === "object" && error[INVALID_CALL] === true;
+  const rejectAt = (site) => (error) => {
+    site.message = error instanceof Error ? error.message : String(error);
+    throw invalid(site);
+  };
   const BUDGET_SPENT = Symbol("workflow budget spent");
   const isOverBudget = (error) => error !== null && typeof error === "object" && error[BUDGET_SPENT] === true;
   const isThenable = (value) => value !== null && typeof value === "object" && typeof value.then === "function";
@@ -113,7 +117,7 @@ const preludeSource = `(() => {
       if (options !== undefined && (options === null || typeof options !== "object" || Array.isArray(options)))
         return Promise.reject(invalid(new TypeError("agent(prompt, options) expects an options object")));
       const resolved = { ...options };
-      if (typeof resolved.phase === "string") resolved.phase = bounded(scope.prefix + resolved.phase.trim());
+      if (typeof resolved.phase === "string") resolved.phase = resolved.phase.trim() && bounded(scope.prefix + resolved.phase.trim());
       else if ((resolved.phase === undefined || resolved.phase === null) && current !== undefined) resolved.phase = current;
       const site = new Error();
       const reply = scope.workflow === undefined ? host.agent(prompt, resolved) : host.agent(prompt, resolved, scope.workflow);
@@ -126,10 +130,7 @@ const preludeSource = `(() => {
           Object.defineProperty(site, BUDGET_SPENT, { value: true });
           throw site;
         },
-        (error) => {
-          site.message = error instanceof Error ? error.message : String(error);
-          throw invalid(site);
-        },
+        rejectAt(site),
       );
     };
     return { phase, log, agent };
@@ -177,10 +178,7 @@ const preludeSource = `(() => {
         const run = new AsyncFunction("args", "phase", "log", "agent", "workflow", loaded.body);
         return run(freeze(passed), child.phase, child.log, child.agent, nested);
       },
-      (error) => {
-        site.message = error instanceof Error ? error.message : String(error);
-        throw invalid(site);
-      },
+      rejectAt(site),
     );
   };
 

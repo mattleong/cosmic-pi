@@ -1,29 +1,21 @@
 // Actual SDK/native factory boundary; no provider, network, or discovered fixture execution.
 import assert from "node:assert/strict";
 import {
-  createAgentSession,
   createToolSearchExtension,
-  DefaultResourceLoader,
   initTheme,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-  ToolExecutionComponent,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { beforeAll } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { makePiManagedRuntime, nodeFilePlatformLayer, stripAnsi } from "pi-cosmic-core";
-import { opaqueFixture } from "pi-cosmic-core/testing";
-import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
-import { codePreviewApplicationLayer } from "../../src/layer";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
+import { nodeFilePlatformLayer, stripAnsi } from "pi-cosmic-core";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { nativeToolSearchReceipt } from "../../src/tools/native-tool-search-summary";
 import { step } from "../support/effect-test";
+import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
+import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import { drawToolRow, hostToolRow } from "../../testing";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -37,27 +29,23 @@ for (const order of ["native-first", "previews-first"] as const)
           const directory = yield* fs.makeTempDirectoryScoped({
             prefix: "preview-tool-search-sdk-",
           });
-          const models = yield* step(() =>
-            ModelRuntime.create({
-              authPath: `${directory}/auth.json`,
-              modelsPath: null,
-              modelsStorePath: `${directory}/models-cache.json`,
-              refreshOnCreate: false,
-              allowModelNetwork: false,
-            }),
-          );
-          const settings = SettingsManager.inMemory({
-            compaction: { enabled: false },
-            retry: { enabled: false },
-          });
+          const models = yield* offlineModels(directory);
+          const settings = quietSettings();
           let rendererRegistrations = 0;
           let fixtureExecutions = 0;
           const previews: InlineExtension = {
             name: "code-previews",
-            factory: (pi) =>
-              codePreviewsWithDependencies(
-                {
-                  ...pi,
+            factory: codePreviewsUnderTest(
+              directory,
+              {
+                tools: ["tool_search"],
+                syntaxHighlighting: false,
+                toolCallTiming: false,
+                toolCallCollapsedStyle: style,
+                toolCallBackground: style === "preview" ? "on" : "off",
+              },
+              {
+                api: (pi) => ({
                   registerTool() {
                     throw new Error("presentation execution registration");
                   },
@@ -68,36 +56,9 @@ for (const order of ["native-first", "previews-first"] as const)
                     rendererRegistrations++;
                     pi.registerToolRenderer(resolver);
                   },
-                },
-                {
-                  makeRuntime: (api) =>
-                    makePiManagedRuntime(api, codePreviewApplicationLayer, {
-                      agentDirectory: () => directory,
-                      packageName: "pi-code-previews",
-                    }),
-                  registerCommands: (api) =>
-                    api.registerCommand("code-previews", {
-                      description: "Presentation fixture",
-                      handler: () => Promise.resolve(),
-                    }),
-                  loadSettings: () =>
-                    Effect.sync(() => {
-                      const preview = {
-                        ...defaultCodePreviewSettings,
-                        tools: ["tool_search" as const],
-                        syntaxHighlighting: false,
-                        toolCallTiming: false,
-                        toolCallCollapsedStyle: style,
-                        toolCallBackground:
-                          style === "preview" ? ("on" as const) : ("off" as const),
-                      };
-                      setCodePreviewSettings(preview);
-                      return preview;
-                    }),
-                  initializeSyntax: () => Effect.void,
-                  registerRenderers: () => undefined,
-                },
-              ),
+                }),
+              },
+            ),
           };
           // CLI-equivalent native factory, independently loaded without interception or source fixtures.
           const native: InlineExtension = {
@@ -106,14 +67,10 @@ for (const order of ["native-first", "previews-first"] as const)
             replaceable: true,
             builtin: true,
           };
-          const loader = new DefaultResourceLoader({
+          const loader = yield* quietLoader({
             cwd: directory,
             agentDir: directory,
             settingsManager: settings,
-            noSkills: true,
-            noPromptTemplates: true,
-            noThemes: true,
-            noContextFiles: true,
             extensionFactories: [
               ...(order === "native-first" ? [native, previews] : [previews, native]),
               {
@@ -137,29 +94,7 @@ for (const order of ["native-first", "previews-first"] as const)
               },
             ],
           });
-          yield* step(() => loader.reload());
-          const { session } = yield* step(() =>
-            createAgentSession({
-              cwd: directory,
-              agentDir: directory,
-              modelRuntime: models,
-              settingsManager: settings,
-              sessionManager: SessionManager.inMemory(directory),
-              resourceLoader: loader,
-            }),
-          );
-          yield* Effect.addFinalizer(() =>
-            step(() =>
-              session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-            ).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  session.dispose();
-                  setCodePreviewSettings(defaultCodePreviewSettings);
-                }),
-              ),
-            ),
-          );
+          const session = yield* scopedSession({ cwd: directory, models, settings, loader });
           const definition = session.getToolDefinition("tool_search");
           assert.ok(definition);
           const original = {
@@ -201,16 +136,7 @@ for (const order of ["native-first", "previews-first"] as const)
             () => definition,
           );
           assert.equal(renderers?.renderShell, "self");
-          const row = new ToolExecutionComponent(
-            "tool_search",
-            "historical-search",
-            args,
-            { showImages: false },
-            renderers,
-            opaqueFixture({ requestRender() {} }),
-            directory,
-          );
-          row.updateResult(result);
+          const row = hostToolRow("tool_search", args, renderers, { cwd: directory, result });
           row.render(100);
           yield* step(() => session.bindExtensions({ mode: "print" }));
           assert.equal(rendererRegistrations, 1);
@@ -228,9 +154,7 @@ for (const order of ["native-first", "previews-first"] as const)
           assert.deepEqual(session.getActiveToolNames(), active);
           assert.deepEqual(session.getCallableToolNames(), callable);
           for (const expanded of [false, true, false, true]) {
-            row.setExpanded(expanded);
-            row.invalidate();
-            const rendered = stripAnsi(row.render(100).join("\n"));
+            const rendered = stripAnsi(drawToolRow(row, expanded, 100));
             assert.match(rendered, /HISTORICAL_QUERY/);
             if (expanded)
               for (const marker of [

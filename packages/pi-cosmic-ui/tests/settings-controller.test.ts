@@ -1,69 +1,35 @@
-import {
-  initTheme,
-  type KeybindingsManager,
-  type RegisteredCommand,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import {
   KeybindingsManager as TuiKeybindingsManager,
   setKeybindings,
   TUI_KEYBINDINGS,
-  type Component,
-  type TUI,
 } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { extensionApiFixture, extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
 import {
-  deferredPromise,
-  extensionApiFixture,
-  extensionContextFixture,
-  opaqueFixture,
-  plainTheme,
-} from "pi-cosmic-core/testing";
-import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
-import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
+  makeDefaultResolvedCosmicUiConfig,
+  type ResolvedCosmicUiConfig,
+} from "../src/config/schema.ts";
 import type { CosmicUiService } from "../src/protocol/service.ts";
 import { registerSettingsCommand } from "../src/settings/controller.ts";
-
-/** Waits for every queued promise settlement, however many hops the apply chain takes. */
-const flushSettlements = Effect.callback<void>((resume) => {
-  const handle = setImmediate(() => resume(Effect.void));
-  return Effect.sync(() => clearImmediate(handle));
-});
+import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 
 function settingsHarness() {
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   let command: RegisteredCommand["handler"] | undefined;
-  let surface: Component | undefined;
   let config = makeDefaultResolvedCosmicUiConfig();
   const updates: Array<Deferred.Deferred<unknown, Error>> = [];
-  const modal = deferredPromise<unknown>();
   const notify = vi.fn();
   const afterApply = vi.fn();
   let current = true;
-  const requestRender = vi.fn();
-  const tui: TUI = opaqueFixture({ requestRender });
-  const keybindings: KeybindingsManager = opaqueFixture({ matches: () => false });
-  const custom = <T>(
-    factory: (
-      tui: TUI,
-      theme: Theme,
-      keybindings: KeybindingsManager,
-      done: (result: T) => void,
-    ) => Component | Promise<Component>,
-  ): Promise<T> => {
-    const created = factory(tui, plainTheme, keybindings, modal.resolve);
-    if (created instanceof Promise) throw new Error("Expected a synchronous settings surface.");
-    surface = created;
-    // SAFETY: The modal settles only with values supplied to the generic done callback.
-    return modal.promise as Promise<T>;
-  };
+  const host = fakeCustomSurfaceHost();
   const ctx = extensionContextFixture({
     mode: "tui" as const,
     signal: new AbortController().signal,
-    ui: { custom, notify },
+    ui: { custom: host.ctx.ui.custom, notify },
   });
   const pi = extensionApiFixture({
     registerCommand(_name: string, definition: Omit<RegisteredCommand, "name" | "sourceInfo">) {
@@ -84,52 +50,37 @@ function settingsHarness() {
       // SAFETY: Each test settles this Deferred with the successful update result type.
       return Effect.runPromise(Deferred.await(update)) as Promise<A>;
     },
-    callbacks: makeHostCallbackBoundary(),
   });
-  const open = () => {
-    if (!command) throw new Error("Settings command was not registered.");
-    return command("settings", ctx);
-  };
   const input = (data = "\r") => {
-    if (!surface?.handleInput) throw new Error("Settings surface was not opened.");
-    surface.handleInput(data);
+    if (!host.editor?.handleInput) throw new Error("Settings surface was not opened.");
+    host.editor.handleInput(data);
   };
-  const enabledLine = () =>
-    surface?.render(100).find((line) => line.includes("Custom footer")) ?? "";
-  const densityLine = () =>
-    surface?.render(100).find((line) => line.includes("Footer density")) ?? "";
-  const usageLine = () =>
-    surface
-      ?.render(100)
-      .filter((line) => line.includes("OpenAI usage"))
-      .join("\n") ?? "";
-  const setUsageVisible = (visible: boolean) => {
-    config = { ...config, footer: { ...config.footer, hidden: visible ? [] : ["openai.usage"] } };
-  };
-  const setEnabled = (enabled: boolean) => {
-    config = { ...config, footer: { ...config.footer, enabled } };
-  };
-  const setDensity = (density: "auto" | "comfortable" | "compact") => {
-    config = { ...config, footer: { ...config.footer, density } };
-  };
-  const close = () => modal.resolve(undefined);
   return {
-    close,
-    densityLine,
-    enabledLine,
+    host,
     input,
     notify,
-    open,
-    requestRender,
     afterApply,
+    updates,
+    open: () => {
+      if (!command) throw new Error("Settings command was not registered.");
+      const opened = command("settings", ctx);
+      host.mount();
+      return opened;
+    },
+    // Esc reaches the list as its cancel, which closes the picker.
+    close: () => input("\u001b"),
+    /** The rendered rows that mention one setting's label. */
+    line: (label: string) =>
+      host.editor
+        ?.render(100)
+        .filter((line) => line.includes(label))
+        .join("\n") ?? "",
     retire: () => {
       current = false;
     },
-    setDensity,
-    setEnabled,
-    setUsageVisible,
-    usageLine,
-    updates,
+    setFooter: (footer: Partial<ResolvedCosmicUiConfig["footer"]>) => {
+      config = { ...config, footer: { ...config.footer, ...footer } };
+    },
   };
 }
 
@@ -151,14 +102,14 @@ describe("Cosmic UI settings controller", () => {
           h.input();
           expect(h.updates).toHaveLength(1);
           h.notify.mockClear();
-          h.requestRender.mockClear();
+          const renders = h.host.renders;
           h.afterApply.mockClear();
           h.retire();
           if (outcome === "success") yield* Deferred.succeed(h.updates[0]!, undefined);
           else yield* Deferred.fail(h.updates[0]!, new Error("unavailable"));
-          yield* flushSettlements;
+          yield* macrotask;
           expect(h.notify).not.toHaveBeenCalled();
-          expect(h.requestRender).not.toHaveBeenCalled();
+          expect(h.host.renders).toBe(renders);
           expect(h.afterApply).not.toHaveBeenCalled();
         }),
       ),
@@ -175,15 +126,15 @@ describe("Cosmic UI settings controller", () => {
           for (const character of "OpenAI usage") h.input(character);
           h.input();
           expect(h.updates).toHaveLength(1);
-          h.setUsageVisible(false);
+          h.setFooter({ hidden: ["openai.usage"] });
           yield* Deferred.succeed(h.updates[0]!, undefined);
-          yield* flushSettlements;
-          expect(h.usageLine()).toContain("hidden");
+          yield* macrotask;
+          expect(h.line("OpenAI usage")).toContain("hidden");
           h.input();
           expect(h.updates).toHaveLength(2);
           yield* Deferred.fail(h.updates[1]!, new Error("write failed"));
-          yield* flushSettlements;
-          expect(h.usageLine()).toContain("hidden");
+          yield* macrotask;
+          expect(h.line("OpenAI usage")).toContain("hidden");
         }),
       ),
   );
@@ -192,29 +143,29 @@ describe("Cosmic UI settings controller", () => {
     withSettings((h) =>
       Effect.gen(function* () {
         h.input();
-        expect(h.enabledLine()).toContain("false");
+        expect(h.line("Custom footer")).toContain("false");
         h.input();
-        expect(h.enabledLine()).toContain("true");
+        expect(h.line("Custom footer")).toContain("true");
         expect(h.updates).toHaveLength(2);
 
-        h.setEnabled(false);
+        h.setFooter({ enabled: false });
         yield* Deferred.succeed(h.updates[0]!, undefined);
-        yield* flushSettlements;
-        expect(h.enabledLine()).toContain("true");
+        yield* macrotask;
+        expect(h.line("Custom footer")).toContain("true");
 
         h.input();
-        expect(h.enabledLine()).toContain("false");
+        expect(h.line("Custom footer")).toContain("false");
         expect(h.updates).toHaveLength(3);
-        h.setEnabled(true);
+        h.setFooter({ enabled: true });
         yield* Deferred.fail(h.updates[1]!, new Error("stale failure"));
-        yield* flushSettlements;
-        expect(h.enabledLine()).toContain("false");
+        yield* macrotask;
+        expect(h.line("Custom footer")).toContain("false");
         expect(h.notify).not.toHaveBeenCalled();
 
-        h.setEnabled(false);
+        h.setFooter({ enabled: false });
         yield* Deferred.succeed(h.updates[2]!, undefined);
-        yield* flushSettlements;
-        expect(h.enabledLine()).toContain("false");
+        yield* macrotask;
+        expect(h.line("Custom footer")).toContain("false");
       }),
     ),
   );
@@ -223,22 +174,23 @@ describe("Cosmic UI settings controller", () => {
     withSettings((h) =>
       Effect.gen(function* () {
         h.input();
-        expect(h.enabledLine()).toContain("false");
+        expect(h.line("Custom footer")).toContain("false");
         h.input("j");
         h.input();
-        expect(h.densityLine()).toContain("comfortable");
+        expect(h.line("Footer density")).toContain("comfortable");
         expect(h.updates).toHaveLength(2);
 
-        h.setEnabled(true);
+        h.setFooter({ enabled: true });
+        const renders = h.host.renders;
         yield* Deferred.fail(h.updates[0]!, new Error("enabled failure"));
-        yield* flushSettlements;
-        expect(h.enabledLine()).toContain("true");
+        yield* macrotask;
+        expect(h.line("Custom footer")).toContain("true");
         expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "error");
-        expect(h.requestRender).toHaveBeenCalled();
+        expect(h.host.renders).toBeGreaterThan(renders);
 
-        h.setDensity("comfortable");
+        h.setFooter({ density: "comfortable" });
         yield* Deferred.succeed(h.updates[1]!, undefined);
-        yield* flushSettlements;
+        yield* macrotask;
       }),
     ),
   );
@@ -247,11 +199,11 @@ describe("Cosmic UI settings controller", () => {
     withSettings((h) =>
       Effect.gen(function* () {
         h.input();
-        expect(h.enabledLine()).toContain("false");
-        h.setEnabled(true);
+        expect(h.line("Custom footer")).toContain("false");
+        h.setFooter({ enabled: true });
         yield* Deferred.succeed(h.updates[0]!, undefined);
-        yield* flushSettlements;
-        expect(h.enabledLine()).toContain("true");
+        yield* macrotask;
+        expect(h.line("Custom footer")).toContain("true");
       }),
     ),
   );

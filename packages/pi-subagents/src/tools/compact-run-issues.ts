@@ -1,5 +1,6 @@
 import { type CompactIssue } from "pi-code-previews";
 import { runAttention } from "../run/attention.ts";
+import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
@@ -31,15 +32,15 @@ const staticSkipCodes = new Set([
 ]);
 
 /** Producer copy that reads as a standalone sentence, continued after `name:`. */
-export const continued = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+const continued = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 
 /** A collapsed name for a subagent whose card has no display name of its own. */
-export const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
+const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
   (card.name === card.id ? "Subagent" : card.name).slice(0, 60);
 
 /** A reported writer's changes still need review before integration. */
 export const hasChangesToReview = (card: SubagentRunCard): boolean =>
-  (Boolean(card.finalText) || card.finalTextTruncated === true || card.state === "reported") &&
+  (Boolean(card.finalText) || card.finalTextTruncated === true) &&
   card.writeIntent === "writer" &&
   (card.writerWorkspaceMode === "worktree" || Boolean(card.workspaceId));
 
@@ -49,7 +50,7 @@ const cardIssueAdder =
     issues.push({ severity, code: `${card.id}:${code}`, message, ...(detail && { detail }) });
 
 /** How a projection's issues read; each flag makes routine facts quieter. */
-export interface RunIssueOptions {
+interface RunIssueOptions {
   /** A clean settled view keeps routine selection history to expansion. */
   readonly quietHistory?: boolean | undefined;
   /** The caller asked for a pause, so a paused run is the expected result. */
@@ -122,7 +123,7 @@ export function compactRunIssues(
     // Clean terminal static skips are routine history: kept, but only on expansion.
     const quiet =
       options.quietHistory === true &&
-      ["completed", "reported"].includes(card.state) &&
+      card.state === "completed" &&
       issues.length === issueStart &&
       card.selection.skippedCandidates.every((entry) => staticSkipCodes.has(entry.code));
     selectionIssues(card, label, add, quiet);
@@ -170,7 +171,7 @@ function attentionIssues(
   const attention = runAttention(card);
   switch (attention?.kind) {
     case "containment": {
-      const terminal = ["completed", "failed", "stopped"].includes(card.state);
+      const terminal = isTerminalRunState(card.state);
       const pausing = card.state !== "paused" && !terminal;
       add(
         "warning",
@@ -276,16 +277,12 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       "Inspect full status for cleanup confirmation before replacement or recovery.",
     );
   // Source identity, not prose, determines whether the system slot repeats the current warning.
-  if (card.warningSource === "system") {
-    if (card.warning) quote(add, label, "warning", card.warning, "reported a system warning");
-    // Inconsistent historical projections cannot establish that these are one event.
-    if (card.systemWarning && card.systemWarning !== card.warning)
-      quote(add, label, "system-warning", card.systemWarning, "reported a system warning");
-  } else {
-    if (card.warning) quote(add, label, "warning", card.warning, "reported a warning");
-    if (card.systemWarning)
-      quote(add, label, "system-warning", card.systemWarning, "reported a system warning");
-  }
+  const systemSourced = card.warningSource === "system";
+  const fallback = systemSourced ? "reported a system warning" : "reported a warning";
+  if (card.warning) quote(add, label, "warning", card.warning, fallback);
+  // Inconsistent historical projections cannot establish that these are one event.
+  if (card.systemWarning && !(systemSourced && card.systemWarning === card.warning))
+    quote(add, label, "system-warning", card.systemWarning, "reported a system warning");
   if (card.selection.warning)
     quote(add, label, "selection-warning", card.selection.warning, "has a launch option warning");
   reportEvidenceIssues(card, label, add);

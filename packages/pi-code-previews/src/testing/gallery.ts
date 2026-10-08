@@ -3,19 +3,16 @@
  * scenarios so wording and layout changes can be read and diffed; nothing here is asserted.
  */
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { nodeFilePlatformLayer, stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
-import type { AdaptableToolRenderers } from "../tools/renderer-adapter";
+import type { AdaptableToolRenderers } from "../tools/cooperative-tools";
 import { createToolPresentationHarness } from "./tool-presentation";
 
 /**
  * `pending` is a call awaiting execution (argument warnings show here); `running` is a started
  * call with an optional partial result; `settled` (the default) is a finished call.
  */
-export type GalleryPhase = "pending" | "running" | "settled";
+type GalleryPhase = "pending" | "running" | "settled";
 
 export interface GalleryScenario {
   readonly title: string;
@@ -27,13 +24,13 @@ export interface GalleryScenario {
   readonly durationMs?: number;
 }
 
-export interface GalleryView {
+interface GalleryView {
   readonly expanded: boolean;
   readonly width: number;
 }
 
 /** Collapsed at a wide and a narrow width, then expanded. */
-export const GALLERY_VIEWS: readonly GalleryView[] = [
+const GALLERY_VIEWS: readonly GalleryView[] = [
   { expanded: false, width: 100 },
   { expanded: false, width: 60 },
   { expanded: true, width: 100 },
@@ -77,9 +74,8 @@ export interface GalleryMessageScenario {
 export function galleryMessageFrames(
   render: MessageRenderer,
   scenario: GalleryMessageScenario,
-  views: readonly GalleryView[] = GALLERY_VIEWS,
 ): string[] {
-  return views.flatMap(({ expanded, width }) => {
+  return GALLERY_VIEWS.flatMap(({ expanded, width }) => {
     const component = render(scenario.message, { expanded, outputPad: 0 }, plainTheme);
     const content = scenario.message.content;
     const fallback = [
@@ -97,16 +93,3 @@ const frame = (title: string, expanded: boolean, width: number, lines: readonly 
   ...lines.map((line) => stripTerminalControls(line).replace(/\s+$/u, "")),
   "",
 ];
-
-/** The directory a gallery run collects sections in; undefined outside a gallery run. */
-export const galleryDirectory = (
-  environment: Readonly<Record<string, string | undefined>>,
-): string | undefined => environment["PRESENTATION_GALLERY"] || undefined;
-
-/** Writes one package's section into the gallery run's directory. */
-export const writeGallerySection = (directory: string, name: string, lines: readonly string[]) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    yield* fileSystem.writeFileString(path.join(directory, `${name}.txt`), `${lines.join("\n")}\n`);
-  }).pipe(Effect.provide(nodeFilePlatformLayer));

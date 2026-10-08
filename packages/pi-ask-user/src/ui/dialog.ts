@@ -1,7 +1,6 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   Editor,
-  type EditorTheme,
   type Focusable,
   isKeyRepeat,
   Key,
@@ -12,6 +11,7 @@ import {
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   FullScreenKeymap,
+  type FullScreenAction,
   type FullScreenSelectionKeybindingId,
 } from "pi-cosmic-ui/manager/keymap";
 import {
@@ -30,7 +30,7 @@ import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import { PreviewPane } from "./preview-pane.ts";
 import { DialogViewport } from "./viewport.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
-import { selectListTheme } from "./layout.ts";
+import { editorTheme } from "./layout.ts";
 
 const CHOICE_SHORTCUTS: readonly KeyId[] = Array.from(
   { length: MAX_CHOICES },
@@ -39,6 +39,12 @@ const CHOICE_SHORTCUTS: readonly KeyId[] = Array.from(
 );
 
 const DIALOG_SHORTCUTS = new Set(["b", "n"]);
+const TAB_MOVES = new Map<FullScreenAction, -1 | 1>([
+  ["forward", 1],
+  ["next-pane", 1],
+  ["back", -1],
+  ["previous-pane", -1],
+]);
 
 interface AskUserDialogOptions {
   readonly tui: TUI;
@@ -51,11 +57,6 @@ interface AskUserDialogOptions {
   /** Hides the docked dialog; the host owns hide/resume. */
   readonly collapse: () => void;
 }
-
-const editorTheme = (theme: Theme): EditorTheme => ({
-  borderColor: (value) => theme.fg("accent", value),
-  selectList: selectListTheme(theme),
-});
 
 export class AskUserDialog implements Focusable {
   private readonly options: Omit<AskUserDialogOptions, "request">;
@@ -260,13 +261,9 @@ export class AskUserDialog implements Focusable {
         this.options.done(cancelQuestionnaire());
         return;
       }
-      if (resolution.action === "forward" || resolution.action === "next-pane") {
-        this.dispatch({ type: "move-tab", delta: 1 });
-        this.refresh();
-        return;
-      }
-      if (resolution.action === "back" || resolution.action === "previous-pane") {
-        this.dispatch({ type: "move-tab", delta: -1 });
+      const delta = TAB_MOVES.get(resolution.action);
+      if (delta) {
+        this.dispatch({ type: "move-tab", delta });
         this.refresh();
         return;
       }

@@ -10,16 +10,12 @@ import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.ts";
 
-const smokeGateEnabled = (source: NodeJS.ProcessEnv): boolean =>
-  source.PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE === "1";
-const smokeModel = (source: NodeJS.ProcessEnv): string | undefined =>
-  source.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
 const sourceEnvironment = { ...process.env };
-const enabled = smokeGateEnabled(sourceEnvironment);
+const enabled = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE === "1";
 
 describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
   it("exercises Agent, SendMessage, TaskOutput, and supervisor report delivery", () => {
-    const model = smokeModel(sourceEnvironment);
+    const model = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
     if (!model) throw new Error("Set PI_SUBAGENTS_REAL_CLAUDE_MODEL for the live replay smoke.");
     const agentDirectory = getAgentDir();
     const environment = { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "1" };
@@ -42,7 +38,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
       Effect.gen(function* () {
         const supervisors = yield* SupervisorChannel;
         const driver = makeLocalClaudeBackendDriver(processes, supervisors);
-        yield* driver.preflight(launch);
+        yield* driver.preflight({ ...launch, closeOnReport: true });
         const backend = yield* driver.spawn(launch);
         yield* backend.controls.initialize;
         yield* backend.controls.start(

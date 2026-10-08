@@ -7,7 +7,7 @@ if (!fs) throw new Error("Node filesystem unavailable");
 
 export const publicationInputLimit = 48 * 1024 * 1024;
 const image = Schema.Struct({ bytes: Schema.String, mode: Schema.Finite });
-export const publicationRequestSchema = Schema.Struct({
+const publicationRequestSchema = Schema.Struct({
   directoryDev: Schema.Finite,
   directoryIno: Schema.Finite,
   name: Schema.String,
@@ -41,7 +41,7 @@ export const publicationResultSchema = Schema.Struct({
   ]),
   captured: Schema.Boolean,
 });
-export type PublicationResult = typeof publicationResultSchema.Type;
+type PublicationResult = typeof publicationResultSchema.Type;
 const validLeaf = (name: string) =>
   name !== "." &&
   name !== ".." &&
@@ -269,13 +269,11 @@ export const publicationMain = () =>
           },
           catch: () => new PublicationHelperError(),
         });
-        const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(inputSchema))(
-          input,
-        );
+        const request = yield* Schema.decodeEffect(Schema.fromJsonString(inputSchema))(input);
         return "operation" in request
           ? yield* createDirectory(request)
           : yield* executePublication(request);
-      }).pipe(Effect.catch(() => Effect.succeed(fallback)));
+      }).pipe(Effect.orElseSucceed(() => fallback));
       const encoded = yield* Schema.encodeEffect(
         Schema.fromJsonString(Schema.Union([publicationResultSchema, directoryResultSchema])),
       )(output);

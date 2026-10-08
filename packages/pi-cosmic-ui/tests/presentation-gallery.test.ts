@@ -1,19 +1,14 @@
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Config from "effect/Config";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { nodeFilePlatformLayer, stripTerminalControls } from "pi-cosmic-core";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { stripTerminalControls } from "pi-cosmic-core";
+import { galleryDirectory, plainTheme, writeGallerySection } from "pi-cosmic-core/testing";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
 import { isFinished, type ActivityRow } from "../src/activity/model.ts";
 import { activityRow, memberRow, workflowRow } from "./support/activity.ts";
 
-const directory = Effect.runSync(
-  Config.String("PRESENTATION_GALLERY").pipe(Config.withDefault("")),
-);
+const directory = galleryDirectory(process.env) ?? "";
 const stop = {
   id: "stop",
   label: "Stop workflow",
@@ -463,16 +458,25 @@ const scenarios: ReadonlyArray<{
   },
 ];
 
-const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
-  const component = new ActivityComponent({
+const manager = (rows: readonly ActivityRow[], height: number) =>
+  new ActivityComponent({
     snapshot: () => rows,
     theme: plainTheme,
-    height: () => 24,
+    height: () => height,
     now: () => 90_000,
     close: () => undefined,
     invoke: () => undefined,
     requestRender: () => undefined,
   });
+/** Presses `j` until `key` is selected, checking at most `presses` + 1 positions. */
+const select = (component: ActivityComponent, key: string, presses: number) => {
+  for (let step = 0; step < presses && component.shell.state.selectedId !== key; step++)
+    component.handleInput("j");
+  return component.shell.state.selectedId === key;
+};
+
+const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
+  const component = manager(rows, 24);
   const frames: Array<readonly [string, readonly string[]]> = [
     ["manager · 140 cols", component.render(140)],
   ];
@@ -485,32 +489,25 @@ const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
   component.handleInput("\r");
   frames.push(["inspect first child", component.render(140)]);
   component.handleInput("h");
-  const queued = rows.find(
-    (row) => row.status === "pending" && row.startedAt === undefined && row.planned !== true,
-  );
-  for (let step = 0; queued && step < 12; step++) {
-    if (component.shell.state.selectedId === queued.key) {
+  const inspected = [
+    [
+      rows.find(
+        (row) => row.status === "pending" && row.startedAt === undefined && row.planned !== true,
+      ),
+      "inspect queued placeholder",
+      11,
+    ],
+    [rows.find((row) => row.planned === true), "inspect planned agent", 15],
+  ] as const;
+  for (const [row, label, presses] of inspected) {
+    if (row && select(component, row.key, presses)) {
       component.handleInput("\r");
-      frames.push(["inspect queued placeholder", component.render(140)]);
+      frames.push([label, component.render(140)]);
       component.handleInput("h");
-      break;
     }
-    component.handleInput("j");
+    component.handleInput("g");
+    component.handleInput("g");
   }
-  component.handleInput("g");
-  component.handleInput("g");
-  const planned = rows.find((row) => row.planned === true);
-  for (let step = 0; planned && step < 16; step++) {
-    if (component.shell.state.selectedId === planned.key) {
-      component.handleInput("\r");
-      frames.push(["inspect planned agent", component.render(140)]);
-      component.handleInput("h");
-      break;
-    }
-    component.handleInput("j");
-  }
-  component.handleInput("g");
-  component.handleInput("g");
   component.handleInput("j");
   component.handleInput("h");
   frames.push(["collapsed manager · 100 cols", component.render(100)]);
@@ -546,18 +543,9 @@ const footerScenarios: ReadonlyArray<readonly [string, readonly ActivityRow[], s
   ["No actions", stoppedRows, stopped.key],
 ];
 const footerFrames = (rows: readonly ActivityRow[], key: string) => {
-  const component = new ActivityComponent({
-    snapshot: () => rows,
-    theme: plainTheme,
-    height: () => 12,
-    now: () => 90_000,
-    close: () => undefined,
-    invoke: () => undefined,
-    requestRender: () => undefined,
-  });
+  const component = manager(rows, 12);
   component.render(140);
-  for (let step = 0; step < 16 && component.shell.state.selectedId !== key; step++)
-    component.handleInput("j");
+  select(component, key, 16);
   const footers = (help: string) =>
     [140, 100, 80, 50].map((width) => `${help}${width} cols ${component.render(width).at(-1)}`);
   const lines = footers("");
@@ -601,12 +589,11 @@ describe.skipIf(!directory)("presentation gallery", () => {
       }
       for (const [title, rows, key] of footerScenarios)
         lines.push(`── Footer · ${title}`, ...footerFrames(rows, key), "");
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      yield* fs.writeFileString(
-        path.join(directory, "pi-cosmic-ui.txt"),
-        `${lines.map((line) => stripTerminalControls(line).replace(/\s+$/u, "")).join("\n")}\n`,
+      yield* writeGallerySection(
+        directory,
+        "pi-cosmic-ui",
+        lines.map((line) => stripTerminalControls(line).replace(/\s+$/u, "")),
       );
-    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    }),
   );
 });

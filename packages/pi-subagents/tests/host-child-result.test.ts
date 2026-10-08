@@ -1,19 +1,6 @@
 // Public SDK host boundary: the real agent loop runs the local Pi child bridge; no inference.
-import {
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxToolCall,
-  InMemoryCredentialStore,
-  InMemoryModelsStore,
-  type AssistantMessage,
-} from "@earendil-works/pi-ai";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall, type AssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -21,6 +8,12 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  fauxModels,
+  quietLoader,
+  quietSettings,
+  scopedPrintSession,
+} from "pi-cosmic-core/testing/sdk";
 import {
   LOCAL_PI_RESULT_CONTRACT_FLAG,
   LocalPiResultContractDocument,
@@ -62,20 +55,7 @@ const childSession = (options: ChildSessionOptions = {}) =>
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagents-result-" });
-    const fake = fauxProvider({ provider: "subagent-result-test", tokensPerSecond: 0 });
-    const models = yield* step(() =>
-      ModelRuntime.create({
-        credentials: new InMemoryCredentialStore(),
-        modelsStore: new InMemoryModelsStore(),
-        modelsPath: null,
-        refreshOnCreate: false,
-        allowModelNetwork: false,
-      }),
-    );
-    models.registerNativeProvider(fake.provider);
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => models.unregisterProvider(fake.provider.id)),
-    );
+    const { fake, models } = yield* fauxModels("subagent-result-test");
 
     const contacts: LocalPiContact[] = [];
     let listener: LocalPiChildIpcHandlers | undefined;
@@ -101,18 +81,11 @@ const childSession = (options: ChildSessionOptions = {}) =>
       },
     };
 
-    const settings = SettingsManager.inMemory({
-      compaction: { enabled: false },
-      retry: { enabled: false },
-    });
-    const loader = new DefaultResourceLoader({
+    const settings = quietSettings();
+    const loader = yield* quietLoader({
       cwd: directory,
       agentDir: directory,
       settingsManager: settings,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
       extensionFactories: [
         {
           name: "subagent-child-result-test",
@@ -124,7 +97,6 @@ const childSession = (options: ChildSessionOptions = {}) =>
         },
       ],
     });
-    yield* step(() => loader.reload());
     if (options.schema !== undefined) {
       const contract = yield* compileResultContract(options.schema).pipe(Effect.orDie);
       const file = path.join(directory, "result-schema.json");
@@ -136,27 +108,15 @@ const childSession = (options: ChildSessionOptions = {}) =>
       // Pi's CLI parser fills this runtime map from `--pi-subagents-result-schema <file>`.
       loader.getExtensions().runtime.flagValues.set(LOCAL_PI_RESULT_CONTRACT_FLAG, file);
     }
-    const { session } = yield* Effect.acquireRelease(
-      step(() =>
-        createAgentSession({
-          cwd: directory,
-          agentDir: directory,
-          model: fake.getModel(),
-          modelRuntime: models,
-          settingsManager: settings,
-          sessionManager: SessionManager.inMemory(directory),
-          resourceLoader: loader,
-        }),
-      ),
-      ({ session }) =>
-        step(() => session.abort()).pipe(
-          Effect.andThen(
-            step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })),
-          ),
-          Effect.ensuring(Effect.sync(() => session.dispose())),
-        ),
-    );
-    yield* step(() => session.bindExtensions({ mode: "print" }));
+    const session = yield* scopedPrintSession({
+      cwd: directory,
+      agentDir: directory,
+      model: fake.getModel(),
+      modelRuntime: models,
+      settingsManager: settings,
+      sessionManager: SessionManager.inMemory(directory),
+      resourceLoader: loader,
+    });
 
     const run = (responses: ReadonlyArray<AssistantMessage>) =>
       Effect.gen(function* () {
@@ -193,142 +153,125 @@ const childSession = (options: ChildSessionOptions = {}) =>
 const callResult = (args: Record<string, Schema.Json>) =>
   fauxAssistantMessage(fauxToolCall(SUBAGENT_RESULT_TOOL_NAME, args), { stopReason: "toolUse" });
 
-const live = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>) =>
-  effect.pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer));
+/** A live test whose body runs scoped over the Node filesystem. */
+const childTest = (
+  name: string,
+  body: () => Generator<
+    Effect.Effect<unknown, Error, FileSystem.FileSystem | Path.Path | Scope.Scope>,
+    void,
+    never
+  >,
+) =>
+  it.live(name, () => Effect.gen(body).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)));
 
 // Live time is intentional: the real agent loop schedules its own provider streaming.
 describe("local Pi child result tool", () => {
-  it.live("is absent, with no reminder, for a launch without a result contract", () =>
-    live(
-      Effect.gen(function* () {
-        const child = yield* childSession();
-        expect(child.session.getActiveToolNames()).not.toContain(SUBAGENT_RESULT_TOOL_NAME);
-        const outcome = yield* child.run([fauxAssistantMessage("Plain report.")]);
-        expect(outcome).toMatchObject({ requests: 1, reminders: 0, submissions: [] });
-      }),
-    ),
+  childTest("is absent, with no reminder, for a launch without a result contract", function* () {
+    const child = yield* childSession();
+    expect(child.session.getActiveToolNames()).not.toContain(SUBAGENT_RESULT_TOOL_NAME);
+    const outcome = yield* child.run([fauxAssistantMessage("Plain report.")]);
+    expect(outcome).toMatchObject({ requests: 1, reminders: 0, submissions: [] });
+  });
+
+  childTest(
+    "lets Pi reject invalid arguments, then submits one valid result and ends the run",
+    function* () {
+      const child = yield* childSession({ schema: VERDICT });
+      expect(child.session.getActiveToolNames()).toContain(SUBAGENT_RESULT_TOOL_NAME);
+      const outcome = yield* child.run([
+        callResult({ verdict: "maybe" }),
+        callResult({ verdict: "ok" }),
+        fauxAssistantMessage("A request after acceptance must not happen."),
+      ]);
+      expect(outcome.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
+      expect(outcome.results.map((result) => result.isError)).toEqual([true, false]);
+      expect(outcome).toMatchObject({ requests: 2, unused: 1, reminders: 0 });
+    },
   );
 
-  it.live("lets Pi reject invalid arguments, then submits one valid result and ends the run", () =>
-    live(
-      Effect.gen(function* () {
-        const child = yield* childSession({ schema: VERDICT });
-        expect(child.session.getActiveToolNames()).toContain(SUBAGENT_RESULT_TOOL_NAME);
-        const outcome = yield* child.run([
-          callResult({ verdict: "maybe" }),
-          callResult({ verdict: "ok" }),
-          fauxAssistantMessage("A request after acceptance must not happen."),
-        ]);
-        expect(outcome.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
-        expect(outcome.results.map((result) => result.isError)).toEqual([true, false]);
-        expect(outcome).toMatchObject({ requests: 2, unused: 1, reminders: 0 });
-      }),
-    ),
+  childTest("returns the parent's rejection to the model, which can submit again", function* () {
+    let rejections = 0;
+    const child = yield* childSession({
+      schema: VERDICT,
+      reject: () => (rejections++ === 0 ? "verdict: parent sentinel issue" : undefined),
+    });
+    const outcome = yield* child.run([
+      callResult({ verdict: "bad" }),
+      callResult({ verdict: "ok" }),
+    ]);
+    expect(outcome.submissions).toHaveLength(2);
+    expect(outcome.results[0]).toMatchObject({ isError: true });
+    expect(outcome.results[0]?.text).toContain("parent sentinel issue");
+    expect(outcome.results[1]).toMatchObject({ isError: false });
+  });
+
+  childTest(
+    "reminds a child that stops without a result, then submits in the same run",
+    function* () {
+      const child = yield* childSession({ schema: VERDICT });
+      const outcome = yield* child.run([
+        fauxAssistantMessage("Done, the verdict is ok."),
+        callResult({ verdict: "ok" }),
+      ]);
+      expect(outcome).toMatchObject({ requests: 2, reminders: 1 });
+      expect(outcome.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
+    },
   );
 
-  it.live("returns the parent's rejection to the model, which can submit again", () =>
-    live(
-      Effect.gen(function* () {
-        let rejections = 0;
-        const child = yield* childSession({
-          schema: VERDICT,
-          reject: () => (rejections++ === 0 ? "verdict: parent sentinel issue" : undefined),
-        });
-        const outcome = yield* child.run([
-          callResult({ verdict: "bad" }),
-          callResult({ verdict: "ok" }),
-        ]);
-        expect(outcome.submissions).toHaveLength(2);
-        expect(outcome.results[0]).toMatchObject({ isError: true });
-        expect(outcome.results[0]?.text).toContain("parent sentinel issue");
-        expect(outcome.results[1]).toMatchObject({ isError: false });
-      }),
-    ),
+  childTest(
+    "enforces schema patterns in the child, which the root does not evaluate",
+    function* () {
+      const child = yield* childSession({
+        schema: {
+          type: "object",
+          properties: { code: { type: "string", pattern: "^[A-Z]+$" } },
+          required: ["code"],
+          additionalProperties: false,
+        },
+      });
+      const outcome = yield* child.run([
+        callResult({ code: "lower" }),
+        callResult({ code: "UPPER" }),
+      ]);
+      expect(outcome.results.map((result) => result.isError)).toEqual([true, false]);
+      expect(outcome.submissions).toEqual([canonicalResultJson({ code: "UPPER" })]);
+    },
   );
 
-  it.live("reminds a child that stops without a result, then submits in the same run", () =>
-    live(
-      Effect.gen(function* () {
-        const child = yield* childSession({ schema: VERDICT });
-        const outcome = yield* child.run([
-          fauxAssistantMessage("Done, the verdict is ok."),
-          callResult({ verdict: "ok" }),
-        ]);
-        expect(outcome).toMatchObject({ requests: 2, reminders: 1 });
-        expect(outcome.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
-      }),
-    ),
-  );
+  childTest(
+    "gives every prompt, such as a resumed assignment, its own result and reminders",
+    function* () {
+      const child = yield* childSession({ schema: VERDICT });
+      const exhausted = yield* child.run(
+        Array.from({ length: MAX_RESULT_REMINDERS + 2 }, (_, index) =>
+          fauxAssistantMessage(`Prose answer ${index}.`),
+        ),
+      );
+      // Past its reminder budget the run settles without another request, and fails.
+      expect(exhausted).toMatchObject({
+        requests: MAX_RESULT_REMINDERS + 1,
+        unused: 1,
+        reminders: MAX_RESULT_REMINDERS,
+        submissions: [],
+      });
 
-  it.live("enforces schema patterns in the child, which the root does not evaluate", () =>
-    live(
-      Effect.gen(function* () {
-        const child = yield* childSession({
-          schema: {
-            type: "object",
-            properties: { code: { type: "string", pattern: "^[A-Z]+$" } },
-            required: ["code"],
-            additionalProperties: false,
-          },
-        });
-        const outcome = yield* child.run([
-          callResult({ code: "lower" }),
-          callResult({ code: "UPPER" }),
-        ]);
-        expect(outcome.results.map((result) => result.isError)).toEqual([true, false]);
-        expect(outcome.submissions).toEqual([canonicalResultJson({ code: "UPPER" })]);
-      }),
-    ),
-  );
+      // The next prompt reminds again even though the last one used up its budget.
+      const resumed = yield* child.run([
+        fauxAssistantMessage("Still prose."),
+        callResult({ verdict: "ok" }),
+      ]);
+      expect(resumed.reminders - exhausted.reminders).toBe(1);
+      expect(resumed.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
 
-  it.live("gives every prompt, such as a resumed assignment, its own result and reminders", () =>
-    live(
-      Effect.gen(function* () {
-        const child = yield* childSession({ schema: VERDICT });
-        const exhausted = yield* child.run(
-          Array.from({ length: MAX_RESULT_REMINDERS + 1 }, (_, index) =>
-            fauxAssistantMessage(`Prose answer ${index}.`),
-          ),
-        );
-        expect(exhausted).toMatchObject({ reminders: MAX_RESULT_REMINDERS, submissions: [] });
-
-        // The next prompt reminds again even though the last one used up its budget.
-        const resumed = yield* child.run([
-          fauxAssistantMessage("Still prose."),
-          callResult({ verdict: "ok" }),
-        ]);
-        expect(resumed.reminders - exhausted.reminders).toBe(1);
-        expect(resumed.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
-
-        // An accepted result belongs to its prompt; the next one must submit its own.
-        const next = yield* child.run([
-          fauxAssistantMessage("I already returned the verdict."),
-          callResult({ verdict: "bad" }),
-        ]);
-        expect(next.reminders - resumed.reminders).toBe(1);
-        expect(next.submissions.slice(resumed.submissions.length)).toEqual([
-          canonicalResultJson({ verdict: "bad" }),
-        ]);
-      }),
-    ),
-  );
-
-  it.live("stops reminding after its budget so the run can settle and fail", () =>
-    live(
-      Effect.gen(function* () {
-        const child = yield* childSession({ schema: VERDICT });
-        const outcome = yield* child.run(
-          Array.from({ length: MAX_RESULT_REMINDERS + 2 }, (_, index) =>
-            fauxAssistantMessage(`Prose answer ${index}.`),
-          ),
-        );
-        expect(outcome).toMatchObject({
-          requests: MAX_RESULT_REMINDERS + 1,
-          unused: 1,
-          reminders: MAX_RESULT_REMINDERS,
-          submissions: [],
-        });
-      }),
-    ),
+      // An accepted result belongs to its prompt; the next one must submit its own.
+      const next = yield* child.run([
+        fauxAssistantMessage("I already returned the verdict."),
+        callResult({ verdict: "bad" }),
+      ]);
+      expect(next.reminders - resumed.reminders).toBe(1);
+      expect(next.submissions.slice(resumed.submissions.length)).toEqual([
+        canonicalResultJson({ verdict: "bad" }),
+      ]);
+    },
   );
 });

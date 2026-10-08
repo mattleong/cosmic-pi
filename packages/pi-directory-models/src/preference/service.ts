@@ -27,7 +27,7 @@ export type DirectoryModelWarn = (message: string) => void;
 
 const READ_WARNING = "The saved model for this directory is invalid, so Pi kept its current model";
 const IDENTIFY_WARNING = "Couldn't identify this directory to remember its model";
-const WRITE_WARNING = "Couldn't save the model for this directory";
+export const WRITE_WARNING = "Couldn't save the model for this directory";
 
 export class DirectoryModelPreferenceService extends Context.Service<DirectoryModelPreferenceService>()(
   "pi-directory-models/preference/service/DirectoryModelPreferenceService",

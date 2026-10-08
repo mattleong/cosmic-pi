@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { AgentToolResult, ToolInfo, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, it } from "vitest";
-import { extensionApiFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
@@ -13,15 +13,13 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
+import {
+  builtinToolInfo as info,
+  inertScheduler as scheduler,
+  presentationResolver,
+  setPlainPreviewSettings,
+} from "../support/renderer-host";
 
-const info = (name: string, path = `builtin:${name}`): ToolInfo => ({
-  name,
-  description: name,
-  parameters: opaqueFixture({}),
-  exposure: "direct",
-  sourceInfo: { source: "builtin", path, scope: "temporary", origin: "top-level" },
-});
-const scheduler = { defer: () => () => undefined, schedule: () => () => undefined };
 const downstream: ToolRenderers = {
   renderCall: () => new Text("DOWNSTREAM CALL", 0, 0),
   renderResult: () => new Text("DOWNSTREAM RESULT", 0, 0),
@@ -34,21 +32,20 @@ const manager = {
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
 it("keeps foreign and unrelated renderers, calls next once, and never inspects execution fields", () => {
-  const pi = extensionApiFixture({
-    getAllTools: () => [
-      { ...info("read"), sourceInfo: { ...info("read").sourceInfo, source: "foreign" } },
-    ],
-    getCommands: () => [],
-  });
-  const owner = new CodePreviewPresentationOwner();
-  owner.publish("/project", new Set(["read"]), scheduler);
-  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  const { resolver } = presentationResolver(
+    {
+      getAllTools: () => [
+        { ...info("read"), sourceInfo: { ...info("read").sourceInfo, source: "foreign" } },
+      ],
+    },
+    ["read"],
+  );
   const foreign = Object.defineProperty({ ...downstream }, "execute", {
     get: () => {
       throw new Error("private definition access");
     },
   });
-  for (const name of ["read", "unrelated", "codemode", "mcp__docs__lookup"]) {
+  for (const name of ["read", "unrelated", "toString", "codemode", "mcp__docs__lookup"]) {
     let calls = 0;
     const resolved = resolver(name, () => {
       calls++;
@@ -61,27 +58,26 @@ it("keeps foreign and unrelated renderers, calls next once, and never inspects e
 });
 
 it("native tool search rejects foreign, misspelled, inline, duplicate, and missing ownership", () => {
-  const native = info("tool_search", "builtin:tool-search");
+  const native = info("tool_search");
   let tools: ToolInfo[] = [];
-  const pi = extensionApiFixture({
-    getAllTools: () => tools,
-    getCommands: () => [],
-    getActiveTools() {
-      throw new Error("selection access");
+  const { pi, owner, resolver } = presentationResolver(
+    {
+      getAllTools: () => tools,
+      getActiveTools() {
+        throw new Error("selection access");
+      },
+      setActiveTools() {
+        throw new Error("selection mutation");
+      },
+      registerTool() {
+        throw new Error("execution registration");
+      },
     },
-    setActiveTools() {
-      throw new Error("selection mutation");
-    },
-    registerTool() {
-      throw new Error("execution registration");
-    },
-  });
-  const owner = new CodePreviewPresentationOwner();
-  owner.publish("/project", new Set(["tool_search"]), scheduler);
-  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+    ["tool_search"],
+  );
   for (const rejected of [
     [],
-    [info("tool_search")],
+    [info("tool_search", "builtin:tool_search")],
     [info("tool_search", "builtin:tool-search/extra")],
     [{ ...native, sourceInfo: { ...native.sourceInfo, source: "foreign" } }],
     [
@@ -128,9 +124,10 @@ it("native tool search rejects foreign, misspelled, inline, duplicate, and missi
 it("requires exact native sources and a unique builtin MCP manager for missing history", () => {
   let tools = [info("codemode", "builtin:other"), info("mcp__docs__lookup", "builtin:other")];
   let commands = [manager];
-  const pi = extensionApiFixture({ getAllTools: () => tools, getCommands: () => commands });
-  const owner = new CodePreviewPresentationOwner();
-  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  const { resolver } = presentationResolver({
+    getAllTools: () => tools,
+    getCommands: () => commands,
+  });
   assert.equal(resolver("codemode", () => downstream)?.renderCall, downstream.renderCall);
   assert.equal(resolver("mcp__docs__lookup", () => downstream)?.renderCall, downstream.renderCall);
   assert.equal(resolver("mcp__missing__history", () => downstream)?.renderShell, "self");
@@ -139,7 +136,7 @@ it("requires exact native sources and a unique builtin MCP manager for missing h
     resolver("mcp__missing__history", () => downstream)?.renderCall,
     downstream.renderCall,
   );
-  tools = [info("codemode", "builtin:codemode")];
+  tools = [info("codemode")];
   assert.equal(resolver("codemode", () => downstream)?.renderShell, "self");
 });
 
@@ -147,11 +144,11 @@ it("claims registered MCP definitions only from the exact builtin MCP source", (
   const name = "mcp__team_docs__find_page";
   let tools: ToolInfo[] = [];
   let commands = [manager];
-  const pi = extensionApiFixture({ getAllTools: () => tools, getCommands: () => commands });
   for (const ready of [false, true]) {
-    const owner = new CodePreviewPresentationOwner();
-    if (ready) owner.publish("/project", new Set(), scheduler);
-    const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+    const { owner, resolver } = presentationResolver(
+      { getAllTools: () => tools, getCommands: () => commands },
+      ready ? [] : undefined,
+    );
     const claims = (toolName: string) =>
       resolver(toolName, () => downstream)?.renderCall !== downstream.renderCall;
     for (const [source, path] of [
@@ -171,16 +168,17 @@ it("claims registered MCP definitions only from the exact builtin MCP source", (
     assert.equal(claims(name), false, "missing history needs a proven manager");
     commands = [manager];
     assert.equal(claims(name), true);
-    tools = [info(name, "builtin:mcp")];
+    tools = [info(name)];
     assert.equal(claims(name), true);
     owner.retire();
   }
 });
 
 it("only exact native MCP aliases leave Pi's own presentation", () => {
-  const pi = extensionApiFixture({ getAllTools: () => [], getCommands: () => [manager] });
-  const owner = new CodePreviewPresentationOwner();
-  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  const { resolver } = presentationResolver({
+    getAllTools: () => [],
+    getCommands: () => [manager],
+  });
   assert.equal(
     resolver("mcp__docs-site__lookup", () => downstream)?.renderCall,
     downstream.renderCall,
@@ -194,18 +192,14 @@ it("only exact native MCP aliases leave Pi's own presentation", () => {
 for (const style of ["preview", "compact"] as const)
   for (const background of ["on", "off", "border"] as const)
     it(`${style}/${background} ready rows keep output when each slot is resolved separately`, () => {
-      setCodePreviewSettings({
-        ...defaultCodePreviewSettings,
-        syntaxHighlighting: false,
-        toolCallTiming: false,
+      setPlainPreviewSettings({
         toolCallCollapsedStyle: style,
         toolCallBackground: background,
         tools: ["bash"],
       });
-      const pi = extensionApiFixture({ getAllTools: () => [info("bash")], getCommands: () => [] });
-      const owner = new CodePreviewPresentationOwner();
-      owner.publish("/project", new Set(["bash"]), scheduler);
-      const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+      const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] }, [
+        "bash",
+      ]);
       // HTML export resolves renderers for each slot and shares only the row's state.
       const args = { command: "echo exact" };
       const state = {};
@@ -232,29 +226,22 @@ for (const style of ["preview", "compact"] as const)
     });
 
 it("renders inactive builtin tools without touching active selection or execution registration", () => {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallTiming: false,
-    syntaxHighlighting: false,
-    tools: ["read"],
-    toolCallCollapsedStyle: "compact",
-  });
-  const pi = extensionApiFixture({
-    getAllTools: () => [info("read")],
-    getCommands: () => [],
-    getActiveTools: () => {
-      throw new Error("selection access");
+  setPlainPreviewSettings({ tools: ["read"], toolCallCollapsedStyle: "compact" });
+  const { pi, resolver } = presentationResolver(
+    {
+      getAllTools: () => [info("read")],
+      getActiveTools: () => {
+        throw new Error("selection access");
+      },
+      setActiveTools: () => {
+        throw new Error("selection mutation");
+      },
+      registerTool: () => {
+        throw new Error("execution mutation");
+      },
     },
-    setActiveTools: () => {
-      throw new Error("selection mutation");
-    },
-    registerTool: () => {
-      throw new Error("execution mutation");
-    },
-  });
-  const owner = new CodePreviewPresentationOwner();
-  owner.publish("/project", new Set(["read"]), scheduler);
-  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+    ["read"],
+  );
   const renderers = resolver("read", () => downstream)!;
   const harness = createToolPresentationHarness(renderers);
   harness.call({ path: "/project/file.ts" });
@@ -267,10 +254,7 @@ it("renders inactive builtin tools without touching active selection or executio
 });
 
 it("new rows keep origin-owner appearance and tool selection until the next session", () => {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    syntaxHighlighting: false,
-    toolCallTiming: false,
+  setPlainPreviewSettings({
     toolCallCollapsedStyle: "compact",
     toolCallBackground: "off",
     tools: ["bash", "codemode"],
@@ -279,7 +263,7 @@ it("new rows keep origin-owner appearance and tool selection until the next sess
     getAllTools: () => [
       info("bash"),
       info("codemode"),
-      { ...info("mcp__docs__lookup", "builtin:mcp"), namespace: { name: "mcp__docs" } },
+      { ...info("mcp__docs__lookup"), namespace: { name: "mcp__docs" } },
     ],
     getCommands: () => [],
   });
@@ -326,10 +310,7 @@ it("new rows keep origin-owner appearance and tool selection until the next sess
     harness.result(fixture.result);
     return harness;
   });
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    syntaxHighlighting: false,
-    toolCallTiming: false,
+  setPlainPreviewSettings({
     toolCallCollapsedStyle: "preview",
     toolCallBackground: "border",
     tools: ["codemode"],

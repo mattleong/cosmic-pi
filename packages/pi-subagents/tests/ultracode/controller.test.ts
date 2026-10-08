@@ -1,16 +1,12 @@
 // Host callbacks are Promise-shaped test boundaries.
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { describe, expect, vi } from "vitest";
 import { registerUltracodeController } from "../../src/application/ultracode.ts";
 import { workflowAuthoringGuidePath } from "../../src/boundary/workflow-authoring-guide.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { effectTest, settle, step } from "../support/effect-test.ts";
-
-type Handler = ExtensionHandler<any, any>;
 
 const WORKFLOW = "subagent_workflow";
 /** Tools other extensions own, which the controller must never remove. */
@@ -19,21 +15,20 @@ const OTHERS = ["read", "mcp__docs__search"];
 const SECTION = "subagents_ultracode";
 
 const controllerFixture = () => {
-  const handlers = new Map<string, Handler>();
   let active: ReadonlyArray<string> = [...OTHERS];
   const userMessages: string[] = [];
-  const pi = extensionApiFixture({
-    on: vi.fn((name: string, handler: Handler) => {
-      handlers.set(name, handler);
-    }),
-    getActiveTools: vi.fn(() => [...active]),
-    setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-      active = [...names];
-    }),
-    sendUserMessage: vi.fn((message: string) => {
-      userMessages.push(message);
-    }),
-  });
+  const { pi, emit } = recordingExtensionHost(
+    {},
+    {
+      getActiveTools: vi.fn(() => [...active]),
+      setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
+        active = [...names];
+      }),
+      sendUserMessage: vi.fn((message: string) => {
+        userMessages.push(message);
+      }),
+    },
+  );
   const controller = registerUltracodeController(pi);
   const setStatus = vi.fn();
   let idle = true;
@@ -52,23 +47,19 @@ const controllerFixture = () => {
   const promptRun = function* (prompt = userMessages.at(-1) ?? "") {
     const sections: Record<string, string> = {};
     yield* settle(() =>
-      handlers.get("before_agent_start")?.(
-        {
-          type: "before_agent_start",
-          prompt,
-          systemPromptOptions: {
-            customPrompt: "A custom system prompt",
-            promptGuidelines: [],
-            sections,
-          },
+      emit("before_agent_start", ctx, {
+        type: "before_agent_start",
+        prompt,
+        systemPromptOptions: {
+          customPrompt: "A custom system prompt",
+          promptGuidelines: [],
+          sections,
         },
-        ctx,
-      ),
+      }),
     );
     return sections[SECTION];
   };
-  const settled = () =>
-    settle(() => handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx));
+  const settled = () => settle(() => emit("agent_settled", ctx, { type: "agent_settled" }));
   return {
     controller,
     ctx,
@@ -85,7 +76,7 @@ const controllerFixture = () => {
       idle = true;
       Deferred.doneUnsafe(compaction, Effect.void);
     },
-    agentStarted: () => settle(() => handlers.get("agent_start")?.({ type: "agent_start" }, ctx)),
+    agentStarted: () => settle(() => emit("agent_start", ctx, { type: "agent_start" })),
     workflowActive: () => active.includes(WORKFLOW),
     othersKept: () => OTHERS.every((name) => active.includes(name)),
     restore: (names: ReadonlyArray<string>) => {
@@ -227,18 +218,6 @@ describe("ultracode tool activation", () => {
     },
   );
 
-  effectTest("reopens for the next agent run when an interrupted run is announced", function* () {
-    const fixture = controllerFixture();
-    fixture.controller.activate(fixture.ctx, false);
-    const observer = fixture.controller.observer();
-    observer.opened("wf-1");
-    observer.closed("wf-1", "next-turn");
-    expect(fixture.workflowActive()).toBe(true);
-    expect(yield* fixture.promptRun("resume it")).toBeDefined();
-    yield* fixture.settled();
-    expect(fixture.workflowActive()).toBe(false);
-  });
-
   it("ignores runs of an activation a session boundary replaced", () => {
     const fixture = controllerFixture();
     const stale = fixture.controller.observer();
@@ -250,30 +229,17 @@ describe("ultracode tool activation", () => {
 
   effectTest("leaves a runner Pi restored until the next agent run starts", function* () {
     const fixture = controllerFixture();
-    fixture.restore([WORKFLOW]);
-    fixture.controller.activate(fixture.ctx, false);
+    // Pi restored the runner with tools still registering after a reload.
+    fixture.restore([WORKFLOW, "mcp__late__tool"]);
+    fixture.controller.activate(fixture.ctx, true);
+    fixture.controller.setEnabled(false);
     // Removing a tool now would drop the rest of a loadout Pi is still restoring.
+    expect(fixture.pi.setActiveTools).not.toHaveBeenCalled();
     expect(fixture.workflowActive()).toBe(true);
     yield* fixture.agentStarted();
     expect(fixture.workflowActive()).toBe(false);
     expect(fixture.othersKept()).toBe(true);
   });
-
-  effectTest(
-    "turns the runner off only once the next agent run starts after a reload",
-    function* () {
-      const fixture = controllerFixture();
-      // Pi restored the runner with tools still registering after a reload.
-      fixture.restore([WORKFLOW, "mcp__late__tool"]);
-      fixture.controller.activate(fixture.ctx, true);
-      fixture.controller.setEnabled(false);
-      expect(fixture.pi.setActiveTools).not.toHaveBeenCalled();
-      expect(fixture.workflowActive()).toBe(true);
-      yield* fixture.agentStarted();
-      expect(fixture.workflowActive()).toBe(false);
-      expect(fixture.othersKept()).toBe(true);
-    },
-  );
 
   effectTest("changes no tools while the session's runtime is away", function* () {
     const fixture = controllerFixture();

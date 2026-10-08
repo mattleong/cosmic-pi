@@ -48,4 +48,11 @@ describe("claimsOperationError", () => {
       expect.any(String),
     );
   });
+
+  it("rejects an action changed after schema validation", () => {
+    // SAFETY: A Pi `tool_call` handler may replace the schema-checked action at runtime.
+    expect(claimsOperationError({ action: "toString" as never, runId: "a" })).toEqual(
+      expect.any(String),
+    );
+  });
 });

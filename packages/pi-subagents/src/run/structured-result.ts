@@ -8,7 +8,7 @@ import { isInactiveRunRecord, type RunRecord, type WithRunLock } from "./interna
 type StructuredResultEvent = Extract<BackendEvent, { readonly type: "structured_result" }>;
 
 /** Why a submitted result was refused; the child's model sees the message and can correct. */
-export class StructuredResultRejected extends Schema.TaggedError<StructuredResultRejected>()(
+class StructuredResultRejected extends Schema.TaggedError<StructuredResultRejected>()(
   "StructuredResultRejected",
   { message: Schema.String },
 ) {}

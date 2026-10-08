@@ -4,6 +4,7 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../../src/config/schema";
 import { codePreviewSettings } from "../../src/config/state";
 import { normalizeSettingsWithDiagnostics, updateSetting } from "../../src/config/values";
+import { formatToolsSettingValue } from "../../src/tools/policy";
 
 type SettingsFixtureValue = string | number | boolean | readonly string[] | undefined;
 
@@ -135,7 +136,7 @@ test("turning a preview off and on again leaves the saved tool selection unchang
   const off = updateSetting(normalized, "readContentPreview", "off");
   assert.deepEqual(updateSetting(off, "readContentPreview", "on").tools, ["grep"]);
   // Turning a tool off sticks even while its preview setting keeps it rendered.
-  assert.deepEqual(updateSetting({ ...off, tools: ["grep", "read"] }, "tool:read", "off").tools, [
+  assert.deepEqual(updateSetting({ ...off, tools: ["grep", "read"] }, "tools", "grep").tools, [
     "grep",
   ]);
 });
@@ -154,13 +155,13 @@ test("compact style edits leave background, timing, preview limits, and tool sel
   assert.deepEqual(updateSetting(compact, "toolCallCollapsedStyle", "preview"), current);
 });
 
-test("individual tool toggles update configured previews", () => {
-  const withoutGrep = updateSetting(defaultCodePreviewSettings, "tool:grep", "off");
-  assert.deepEqual(
-    withoutGrep.tools,
-    defaultCodePreviewSettings.tools.filter((tool) => tool !== "grep"),
+test("the enabled tools list updates configured previews", () => {
+  const withoutGrep = defaultCodePreviewSettings.tools.filter((tool) => tool !== "grep");
+  const updated = updateSetting(
+    defaultCodePreviewSettings,
+    "tools",
+    formatToolsSettingValue(withoutGrep),
   );
-
-  const withGrep = updateSetting(withoutGrep, "tool:grep", "on");
-  assert.deepEqual(withGrep.tools, defaultCodePreviewSettings.tools);
+  assert.deepEqual(updated.tools, withoutGrep);
+  assert.deepEqual(updateSetting(updated, "tools", "none").tools, []);
 });

@@ -7,21 +7,16 @@ import { MAX_IMAGE_INPUTS, fail, failWith, type ImageInput } from "./types.ts";
 
 const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
-const SUPPORTED_INPUT_IMAGE_FORMATS = new Set(["png", "jpeg", "jpg", "webp", "gif"]);
-
-const inputMimeType = (format: string): string => {
-  switch (format) {
-    case "jpeg":
-    case "jpg":
-      return "image/jpeg";
-    case "webp":
-      return "image/webp";
-    case "gif":
-      return "image/gif";
-    default:
-      return "image/png";
-  }
-};
+// A Map, so a decoded format can never match an inherited object key.
+const INPUT_MIME_TYPES: ReadonlyMap<string, string> = new Map([
+  ["png", "image/png"],
+  ["jpeg", "image/jpeg"],
+  ["jpg", "image/jpeg"],
+  ["webp", "image/webp"],
+  ["gif", "image/gif"],
+]);
+const outsideWorkspace = (path: string) =>
+  fail("input", `Image input must be a file inside the current workspace: ${path}`);
 
 export const makeImageInputReader = (dependencies: {
   readonly fs: FileSystem.FileSystem;
@@ -38,19 +33,8 @@ export const makeImageInputReader = (dependencies: {
   ) {
     const realInput = yield* fs
       .realPath(inputPath)
-      .pipe(
-        Effect.mapError(
-          failWith(
-            "input",
-            `Image input must be a file inside the current workspace: ${inputPath}`,
-          ),
-        ),
-      );
-    if (!isInside(realWorkspace, realInput))
-      return yield* fail(
-        "input",
-        `Image input must be a file inside the current workspace: ${inputPath}`,
-      );
+      .pipe(Effect.mapError(() => outsideWorkspace(inputPath)));
+    if (!isInside(realWorkspace, realInput)) return yield* outsideWorkspace(inputPath);
     const verified = yield* safeFile
       .readContainedRegularFile(realInput, realWorkspace, MAX_IMAGE_INPUT_BYTES)
       .pipe(
@@ -68,13 +52,9 @@ export const makeImageInputReader = (dependencies: {
       .pipe(
         Effect.mapError(failWith("sharp", `Image input is not a readable image: ${inputPath}`)),
       );
-    if (!metadata.format || !SUPPORTED_INPUT_IMAGE_FORMATS.has(metadata.format))
-      return yield* fail("input", `Image input is not a readable image: ${inputPath}`);
-    return {
-      path: verified.path,
-      data: verified.bytes,
-      mimeType: inputMimeType(metadata.format),
-    };
+    const mimeType = metadata.format && INPUT_MIME_TYPES.get(metadata.format);
+    if (!mimeType) return yield* fail("input", `Image input is not a readable image: ${inputPath}`);
+    return { path: verified.path, data: verified.bytes, mimeType };
   });
 
   return Effect.fn("OpenAIImage.readInputs")(function* (
@@ -82,9 +62,7 @@ export const makeImageInputReader = (dependencies: {
     cwd: string,
   ) {
     const workspace = path.resolve(cwd);
-    const realWorkspace = yield* fs
-      .realPath(workspace)
-      .pipe(Effect.catch(() => Effect.succeed(workspace)));
+    const realWorkspace = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace));
     const seen = new Set<string>();
     const validated: ImageInput[] = [];
     let total = 0;
@@ -92,11 +70,7 @@ export const makeImageInputReader = (dependencies: {
       const trimmed = raw.trim();
       if (!trimmed) continue;
       const candidate = path.resolve(workspace, trimmed);
-      if (!isInside(workspace, candidate))
-        return yield* fail(
-          "input",
-          `Image input must be a file inside the current workspace: ${candidate}`,
-        );
+      if (!isInside(workspace, candidate)) return yield* outsideWorkspace(candidate);
       const input = yield* validateInput(candidate, realWorkspace);
       if (seen.has(input.path)) continue;
       if (validated.length >= MAX_IMAGE_INPUTS)

@@ -9,36 +9,28 @@ import {
 import { nodeJoin } from "../boundary/node";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { makeSettingsAdmission, type SettingsAdmission } from "./coordinator";
-import type { LoadSettingsOptions, SettingsLoadProblem } from "./document-store";
 import type { CodePreviewSettings } from "./schema";
-import { CodePreviewSettingsService } from "./service";
+import {
+  CodePreviewSettingsService,
+  type LoadSettingsOptions,
+  type SettingsLoadProblem,
+} from "./service";
 import { cloneCodePreviewSettings } from "./state";
 
-export type { LoadSettingsOptions, SettingsLoadProblem } from "./document-store";
 /** Effect settings persistence service — preferred session door. */
-export { CodePreviewSettingsService, type CodePreviewSettingsServiceContract } from "./service";
+export {
+  CodePreviewSettingsService,
+  type CodePreviewSettingsServiceContract,
+  type LoadSettingsOptions,
+  type SettingsLoadProblem,
+} from "./service";
 
 /** Run a settings Effect on the live session runtime, or a one-shot runtime when idle. */
-function runSettingsEffect<A, E>(
-  effect: Effect.Effect<A, E, CodePreviewSettingsService>,
-  signal?: AbortSignal,
-) {
+function runSettingsEffect<A, E>(effect: Effect.Effect<A, E, CodePreviewSettingsService>) {
   return hasCodePreviewSessionCapability()
-    ? runCodePreviewSessionEffect(effect, signal)
-    : runOneShotSettingsEffect(effect, signal);
+    ? runCodePreviewSessionEffect(effect)
+    : runOneShotSettingsEffect(effect);
 }
-
-const loadCodePreviewSettingsEffect = (
-  admission: SettingsAdmission,
-  projectCwd?: string,
-  projectTrusted = false,
-) =>
-  CodePreviewSettingsService.use((service) =>
-    service.load(
-      admission,
-      projectCwd === undefined ? { projectTrusted } : { projectCwd, projectTrusted },
-    ),
-  );
 
 const inFlightLoads = new Map<string, Promise<CodePreviewSettings>>();
 
@@ -49,7 +41,9 @@ export function loadCodePreviewSettings(
   signal?: AbortSignal,
 ): Promise<CodePreviewSettings> {
   const execute = (admission: SettingsAdmission): Promise<CodePreviewSettings> => {
-    const effect = loadCodePreviewSettingsEffect(admission, projectCwd, projectTrusted);
+    const effect = CodePreviewSettingsService.use((service) =>
+      service.load(admission, { projectCwd, projectTrusted }),
+    );
     // A replacement may dispose the published session capability between this check and execution.
     // Retry through one-shot loading unless this requesting startup was cancelled.
     if (!hasCodePreviewSessionCapability()) return runOneShotSettingsEffect(effect, signal);

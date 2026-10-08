@@ -43,20 +43,15 @@ export function getCodePreviewToolStatuses(): Map<CodePreviewToolName, CodePrevi
   return new Map(toolStatuses);
 }
 
-export function formatCodePreviewToolsWithState(
-  state: CodePreviewToolStatus["state"],
-  statuses = getCodePreviewToolStatuses(),
-): string {
+export function formatCodePreviewToolsWithState(state: CodePreviewToolStatus["state"]): string {
   return formatToolsSettingValue(
-    ALL_CODE_PREVIEW_TOOLS.filter((tool) => statuses.get(tool)?.state === state),
+    ALL_CODE_PREVIEW_TOOLS.filter((tool) => toolStatuses.get(tool)?.state === state),
   );
 }
 
-export function formatSkippedCodePreviewToolLines(
-  statuses = getCodePreviewToolStatuses(),
-): string[] {
+export function formatSkippedCodePreviewToolLines(): string[] {
   return ALL_CODE_PREVIEW_TOOLS.flatMap((tool) => {
-    const status = statuses.get(tool);
+    const status = toolStatuses.get(tool);
     if (status?.state !== "skipped-conflict") return [];
     return [`  ${tool} — owned by ${formatToolOwner(status.owner)}`];
   });

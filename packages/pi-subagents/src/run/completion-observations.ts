@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
-import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./errors.ts";
+import { invalidRequest, type SubagentRuntimeClosedError } from "./errors.ts";
 import {
   type RunContext,
   type RunRecord,
@@ -147,10 +147,8 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       Effect.sync(() => {
         for (const receipt of receipts) {
           const record = records.get(receipt.id);
-          const completion = record?.completionGenerations.get(receipt.generation);
           if (
-            !record ||
-            !completion ||
+            !record?.completionGenerations.has(receipt.generation) ||
             completionClaimOwner(record, receipt.generation) !== receipt.claimToken
           )
             continue;
@@ -183,10 +181,10 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             });
             const missingIds = ids.filter((id) => !records.has(id));
             if (claimAll && missingIds.length > 0)
-              return yield* new InvalidSubagentRequestError({
-                code: "subagent_runs_not_found",
-                message: `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
-              });
+              return yield* invalidRequest(
+                "subagent_runs_not_found",
+                `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
+              );
             const ownedFailure = claimAll
               ? selected
                   .map((record) => workflowOwnedRunError(record, "be awaited directly"))
@@ -194,34 +192,24 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
               : undefined;
             if (ownedFailure) return yield* ownedFailure;
             const claimToken = allocateClaimToken();
-            const desired = claimAll
-              ? selected.flatMap((record) => {
-                  const generation = isAssignmentFinishedRunState(record.view.state)
-                    ? record.completionGeneration
-                    : record.completionGeneration + 1;
-                  if (generation <= 0) return [];
-                  if (
-                    isAssignmentFinishedRunState(record.view.state) &&
-                    !record.completionGenerations.has(generation)
-                  )
-                    return [];
-                  return [{ record, generation }];
-                })
-              : selected.flatMap((record) =>
-                  isAssignmentFinishedRunState(record.view.state) &&
-                  record.completionGenerations.has(record.completionGeneration)
-                    ? [{ record, generation: record.completionGeneration }]
-                    : [],
-                );
+            // A finished run offers its unresolved current generation; await also claims the
+            // generation a running run will produce next. Generations start at 1.
+            const desired = selected.flatMap((record) => {
+              const finished = isAssignmentFinishedRunState(record.view.state);
+              const generation = record.completionGeneration + (finished ? 0 : 1);
+              return (finished ? record.completionGenerations.has(generation) : claimAll)
+                ? [{ record, generation }]
+                : [];
+            });
             if (claimAll) {
               const conflict = desired.find(
                 ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
               );
               if (conflict)
-                return yield* new InvalidSubagentRequestError({
-                  code: "completion_claim_conflict",
-                  message: `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
-                });
+                return yield* invalidRequest(
+                  "completion_claim_conflict",
+                  `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
+                );
             }
             const claimed = desired.filter(({ record, generation }) =>
               claimCompletion(record, generation, claimToken),
@@ -279,34 +267,28 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       ReadonlyArray<SubagentRunObservation>,
       SubagentRuntimeClosedError
     > =>
-      Effect.suspend(() =>
-        withLock(
-          Effect.sync(() => {
-            const observations = claim.selected.map((record) =>
-              observeRecord(record, claim.claimToken),
-            );
-            const runs = observations.map((observation) => observation.run);
-            const terminalCount = runs.filter((run) =>
-              isAssignmentFinishedRunState(run.state),
-            ).length;
-            const parentActionRequired = runs.some(isParentActionRequiredRun);
-            const done =
-              parentActionRequired ||
-              (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
-            if (done) return { done: true as const, runs, observations };
-            return {
-              done: false as const,
-              runs,
-              revision: currentProjection().revision,
-            };
-          }),
-        ).pipe(
-          Effect.tap(({ runs }) => emitUpdate(runs)),
-          Effect.flatMap((step) =>
-            step.done
-              ? Effect.succeed(step.observations)
-              : waitForRevision(step.revision).pipe(Effect.andThen(waitLoop())),
-          ),
+      withLock(
+        Effect.sync(() => {
+          const observations = claim.selected.map((record) =>
+            observeRecord(record, claim.claimToken),
+          );
+          const runs = observations.map((observation) => observation.run);
+          const terminalCount = runs.filter((run) =>
+            isAssignmentFinishedRunState(run.state),
+          ).length;
+          const parentActionRequired = runs.some(isParentActionRequiredRun);
+          const done =
+            parentActionRequired ||
+            (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
+          if (done) return { done: true as const, runs, observations };
+          return { done: false as const, runs, revision: currentProjection().revision };
+        }),
+      ).pipe(
+        Effect.tap(({ runs }) => emitUpdate(runs)),
+        Effect.flatMap((step) =>
+          step.done
+            ? Effect.succeed(step.observations)
+            : waitForRevision(step.revision).pipe(Effect.andThen(waitLoop())),
         ),
       );
     return waitLoop();
@@ -320,10 +302,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
   ) => {
     if (ids.length === 0)
       return Effect.fail(
-        new InvalidSubagentRequestError({
-          code: "run_ids_required",
-          message: "Await requires at least one subagent run ID.",
-        }),
+        invalidRequest("run_ids_required", "Await requires at least one subagent run ID."),
       );
     return withCompletionClaims(ids, true, (claim) =>
       waitForTerminalObservations(claim, until, onUpdate).pipe(
@@ -357,12 +336,12 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     options,
   ) =>
     withCompletionClaims(ids, false, (claim) =>
-      use({
-        observations: claim.selected.map((record) =>
-          observeRecord(record, claim.claimToken, options),
+      // observeRecord reads record state, so it runs under the lock like the await loop.
+      withLock(
+        Effect.sync(() =>
+          claim.selected.map((record) => observeRecord(record, claim.claimToken, options)),
         ),
-        missingIds: claim.missingIds,
-      }),
+      ).pipe(Effect.flatMap((observations) => use({ observations, missingIds: claim.missingIds }))),
     );
 
   return {

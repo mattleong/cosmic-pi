@@ -11,21 +11,27 @@ export function formatDiffPreview(
   limit: number,
   options: {
     totalLines: number;
-    hiddenLineNoun: string;
-    skipHighlightLabel: string;
     invalidate?: (() => void) | undefined;
-    lineNumbers?: boolean | undefined;
+    /** A proposed snippet's rows have no file positions, so they carry only +/- markers. */
+    proposed?: boolean;
   },
 ): string {
   const syntaxHighlightSkipped = shouldSkipHighlight(diff);
-  const lineNumbers = options.lineNumbers ?? true;
+  const lineNumbers = options.proposed !== true;
+  const noun = lineNumbers ? "diff" : "proposed diff";
   let text = syntaxHighlightSkipped
     ? renderPlainDiff(diff, theme, limit, lineNumbers)
     : renderSyntaxHighlightedDiff(diff, lang, theme, limit, options.invalidate, lineNumbers);
   if (options.totalLines > limit)
-    text += showingFooter(theme, limit, options.totalLines, options.hiddenLineNoun);
-  if (syntaxHighlightSkipped) text += previewFooter(theme, options.skipHighlightLabel);
+    text += showingFooter(theme, limit, options.totalLines, `${noun} lines`);
+  if (syntaxHighlightSkipped)
+    text += previewFooter(theme, `Syntax highlighting skipped for large ${noun}`);
   return text;
+}
+
+/** Added and removed line counts, as `+N -M`. */
+export function diffCounts(theme: Theme, counts: { additions: number; removals: number }): string {
+  return `${theme.fg("success", `+${counts.additions}`)} ${theme.fg("error", `-${counts.removals}`)}`;
 }
 
 /** A routine note where a size or complexity guard skipped a diff. */

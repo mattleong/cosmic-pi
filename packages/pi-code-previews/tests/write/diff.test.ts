@@ -1,6 +1,5 @@
 // Explicit test entry-point Effects drive the write diff boundaries.
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { it } from "@effect/vitest";
@@ -17,33 +16,49 @@ import {
   readExistingFileForPreviewEffect,
   shouldSkipWriteDiffComplexity,
 } from "../../src/write/diff";
-import { resolvePreviewPath } from "../../src/paths/resolve";
 
 // Raw Node builtin access for test scaffolding, mirroring pi-cosmic-core's platform boundary.
 const nodePathModule = process.getBuiltinModule("node:path");
-if (!nodePathModule) throw new Error("Node path builtin is unavailable.");
+const childProcessModule = process.getBuiltinModule("node:child_process");
+if (!nodePathModule || !childProcessModule) throw new Error("Node builtins are unavailable.");
 const { join } = nodePathModule;
 
 const previewFileLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 
-test("resolvePreviewPath mirrors pi path expansion", () => {
-  assert.equal(resolvePreviewPath("@src/file.ts", "/tmp/project"), "/tmp/project/src/file.ts");
-  assert.equal(resolvePreviewPath("src/file.ts", "/tmp/project"), "/tmp/project/src/file.ts");
-  assert.equal(resolvePreviewPath("@~/file.ts", "/tmp/project"), join(homedir(), "file.ts"));
-  assert.equal(resolvePreviewPath("~/file.ts", "/tmp/project"), join(homedir(), "file.ts"));
-});
-
-it.effect("write diff skip reasons only use threshold comparisons for size limits", () =>
+it.effect("previous content is bounded, exact and skipped with measured reasons", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-skip-reason-" });
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-" });
+    const read = (name: string) => readExistingFileForPreviewEffect(join(dir, name), "after");
+    yield* fs.writeFileString(join(dir, "small.txt"), "before");
+    assert.deepEqual(yield* read("small.txt"), { kind: "content", content: "before" });
+    // Pi writes verbatim, so removing a byte order mark is a change to show.
+    yield* fs.writeFileString(join(dir, "bom.txt"), "\uFEFFbefore");
+    assert.deepEqual(yield* read("bom.txt"), { kind: "content", content: "\uFEFFbefore" });
+
+    const maxBytes = defaultCodePreviewPerformanceConfig.maxWriteDiffBytes;
+    yield* fs.writeFileString(join(dir, "large.txt"), "x".repeat(maxBytes + 1));
+    const large = yield* read("large.txt");
+    assert.equal(large?.kind, "skipped");
+    assert.match(getWriteDiffSkipReason(large, "after") ?? "", /previous file too large/);
+
     yield* fs.makeDirectory(join(dir, "folder"));
-    const skippedDirectory = yield* readExistingFileForPreviewEffect("folder", dir, "after");
-    assert.equal(skippedDirectory?.kind, "skipped");
-    const reason = getWriteDiffSkipReason(skippedDirectory, "after") ?? "";
-    assert.match(reason, /previous path is not a regular file \([^>]+\)$/);
-    assert.doesNotMatch(reason, />/);
+    const folder = getWriteDiffSkipReason(yield* read("folder"), "after") ?? "";
+    // Only size limits compare against a threshold.
+    assert.match(folder, /previous path is not a regular file \([^>]+\)$/);
   }).pipe(provideBuiltLayer(previewFileLayer)),
+);
+
+it.effect.skipIf(process.platform === "win32")(
+  "a named pipe is skipped without waiting for a writer",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-fifo-" });
+      childProcessModule.execFileSync("mkfifo", [join(dir, "pipe")]);
+      const skipped = yield* readExistingFileForPreviewEffect(join(dir, "pipe"), "after");
+      assert.match(getWriteDiffSkipReason(skipped, "after") ?? "", /not a regular file/);
+    }).pipe(provideBuiltLayer(previewFileLayer)),
 );
 
 test("write diff skip reasons reject malformed or non-current skipped details", () => {
@@ -74,24 +89,6 @@ test("write diff skip reasons reject malformed or non-current skipped details", 
   assert.equal(hasWriteDiffSizeEvidence({ ...measured, byteLength: 100 }), false);
   assert.equal(hasWriteDiffSizeEvidence({ ...measured, unexpected: true }), false);
 });
-
-it.effect("readExistingFileForPreview returns bounded previous content", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-" });
-    yield* fs.writeFileString(join(dir, "small.txt"), "before");
-    assert.deepEqual(yield* readExistingFileForPreviewEffect("small.txt", dir, "after"), {
-      kind: "content",
-      content: "before",
-    });
-
-    const maxBytes = defaultCodePreviewPerformanceConfig.maxWriteDiffBytes;
-    yield* fs.writeFileString(join(dir, "large.txt"), "x".repeat(maxBytes + 1));
-    const skipped = yield* readExistingFileForPreviewEffect("large.txt", dir, "after");
-    assert.equal(skipped?.kind, "skipped");
-    assert.match(getWriteDiffSkipReason(skipped, "after") ?? "", /previous file too large/);
-  }).pipe(provideBuiltLayer(previewFileLayer)),
-);
 
 test("write diff guards prioritize measured UTF-8 size over rewrite complexity", () => {
   assert.equal(getWriteDiffGuard("旧\n", "新\n", 7, 0), "size");

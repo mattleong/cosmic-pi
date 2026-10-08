@@ -6,15 +6,14 @@ import * as Fiber from "effect/Fiber";
 import type * as Schema from "effect/Schema";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
-import { withLocalSupervisorInstructions } from "../../src/backend/local-supervisor-prompt.ts";
+import { withLocalSupervisorInstructions } from "../../src/backend/local-cli-driver.ts";
 import { canonicalResultJson, compileResultContract } from "../../src/domain/result-contract.ts";
-import type { RunRecord } from "../../src/run/internal.ts";
 import { makeRunStructuredResults } from "../../src/run/structured-result.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { backendLaunch } from "../fixtures/backend-supervisor.ts";
 import { view } from "../fixtures/run-view.ts";
-import { makeRunContext } from "./fixtures/run-context.ts";
+import { makeRunContext, partialRecord, runningAssignment } from "./fixtures/run-context.ts";
 import {
   localServiceFixture,
   nativeReportRequest,
@@ -235,27 +234,19 @@ describe("structured result admission", () => {
   it.effect("refuses submissions from an earlier assignment or an inactive run", () =>
     Effect.gen(function* () {
       const contract = yield* contractFor(FINDINGS);
-      const fields = {
+      // Result admission reads only these fields, the launch contract, and its own slot.
+      const record = partialRecord({
         view: view({ state: "running" }),
         stoppedByParent: false,
-        assignment: {
-          epoch: 2,
-          phase: "running" as const,
-          attemptToken: "current",
-          startedObserved: true,
-          outcomeUncertain: false,
-          pendingRunSettled: false as const,
-        },
-      } satisfies Pick<RunRecord, "view" | "stoppedByParent" | "assignment">;
-      // SAFETY: Result admission reads only these fields, the launch contract, and its own slot.
-      const record = { ...fields, launch: { resultContract: contract } } as RunRecord;
+        assignment: runningAssignment(2),
+        launch: { resultContract: contract },
+      });
       const answers: Array<{ readonly ok: boolean; readonly message?: string | undefined }> = [];
       const accept = makeRunStructuredResults(yield* makeRunContext());
       const submitted = (assignmentEpoch: number) =>
         accept(record, {
           type: "structured_result",
           assignmentEpoch,
-          requestId: `epoch-${assignmentEpoch}`,
           valueJson: canonicalResultJson(OK),
           respond: (ok, message) => Effect.sync(() => void answers.push({ ok, message })),
         });

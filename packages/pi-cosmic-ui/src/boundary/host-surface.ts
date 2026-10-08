@@ -18,7 +18,7 @@ import { createScreenViewport } from "./host-viewport.ts";
  * - `inline`: the editor slot; closes directly, with no overlay guard.
  * - `overlay`: a plain component-sized overlay.
  */
-export type OwnedSurfacePlacement = "screen" | "dock" | "inline" | "overlay";
+type OwnedSurfacePlacement = "screen" | "dock" | "inline" | "overlay";
 
 export type OwnedSurfaceComponent = Component & Partial<Focusable> & { dispose?(): void };
 
@@ -74,7 +74,7 @@ const attempt = (callback: (() => void) | undefined) =>
  * non-capturing guard, calling `done`, then hiding the guard. `settle` runs exactly once,
  * after the surface has closed. The returned `close` is synchronous and idempotent.
  */
-export function mountOwnedSurface<A>(
+function mountOwnedSurface<A>(
   ctx: { readonly ui: ExtensionUIContext },
   options: OwnedSurfaceOptions<A>,
   settle: (outcome: OwnedSurfaceOutcome<A>) => void,
@@ -237,4 +237,15 @@ export const openOwnedSurfacePromise = <A>(
     Effect.callback<OwnedSurfaceOutcome<A>>((resume) => {
       mountOwnedSurface(ctx, options, (outcome) => resume(Effect.succeed(outcome)));
     }),
+  );
+
+/** A command's view: settles once closed and, as Pi's own custom Promise does, rejects a failed opening. */
+export const openCommandSurface = (
+  ctx: { readonly ui: ExtensionUIContext },
+  options: Omit<OwnedSurfaceOptions<undefined>, "closedValue">,
+): Promise<void> =>
+  openOwnedSurfacePromise<undefined>(ctx, { ...options, closedValue: undefined }).then(
+    (outcome) => {
+      if (outcome._tag === "Failed") throw outcome.cause;
+    },
   );

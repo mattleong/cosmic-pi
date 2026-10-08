@@ -33,7 +33,7 @@ import { attentionRecoveryText } from "./format.ts";
 import { DESCENDANTS_OMITTED } from "./render-await.ts";
 import { renderResponsiveRunRows, type RunHierarchy } from "./render-run-rows.ts";
 
-export interface RunReportSection {
+interface RunReportSection {
   readonly name: string;
   readonly kind: "report" | "failure";
   readonly text: string;
@@ -49,13 +49,11 @@ const reportSection = (
   const truncated = kind === "report" ? run.finalTextTruncated : run.errorTruncated;
   if (text) return { name, kind, text: `${sanitizeTerminalText(text)}${truncated ? marker : ""}` };
   if (!truncated) return undefined;
+  const missing = kind === "report" ? "report content" : "failure detail";
   return {
     name,
     kind,
-    text:
-      kind === "report"
-        ? "This saved card does not include the report content; use subagent_status for this run."
-        : "This saved card does not include the failure detail; use subagent_status for this run.",
+    text: `This saved card does not include the ${missing}; use subagent_status for this run.`,
   };
 };
 
@@ -94,11 +92,6 @@ const reportAffordance = (
         ? countLabel(failureCount, "failure detail")
         : `${countLabel(reportCount, "report")} · ${countLabel(failureCount, "failure")}`;
   return renderExpansionAffordance(label, expanded, theme);
-};
-
-const runRetentionLabel = (run: SubagentRunCard): string => {
-  const assignment = (run.reportGeneration || 1) > 1 ? ` · assignment ${run.reportGeneration}` : "";
-  return `${run.closeOnReport === false ? "stays open after its report" : "closes after its report"}${assignment}`;
 };
 
 // Generic reasons restate the source; only a specific reason, such as a fallback, adds a fact.
@@ -151,7 +144,8 @@ const dimLines = (text: string, width: number, theme: Theme): string[] =>
 /** Identity, route choice, and controls: routine facts every expanded row states. */
 const routineRunDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const selection = runSelectionSummary(run);
-  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"} · ${runRetentionLabel(run)} · ${runControls(run)}`;
+  const assignment = (run.reportGeneration || 1) > 1 ? ` · assignment ${run.reportGeneration}` : "";
+  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"} · closes after its report${assignment} · ${runControls(run)}`;
   return [
     ...dimLines(`ID: ${run.id}`, width, theme),
     ...(selection ? dimLines(selection, width, theme) : []),
@@ -164,10 +158,7 @@ const exceptionalRunDiagnostics = (run: SubagentRunCard, width: number, theme: T
   const fallbackSelected =
     (run.selection.candidateIndex ?? 0) > 0 || run.selection.skippedCandidates.length > 0;
   const selection = runSelectionSummary(run);
-  return [
-    ...(fallbackSelected && selection ? dimLines(selection, width, theme) : []),
-    ...(run.closeOnReport === false ? dimLines(runRetentionLabel(run), width, theme) : []),
-  ];
+  return fallbackSelected && selection ? dimLines(selection, width, theme) : [];
 };
 
 /** Work state as labelled facts; the shell's issue lines say what needs attention. */
@@ -196,19 +187,6 @@ const runRouteDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
     ),
   ),
   ...(run.selection.warning ? dimLines(`Launch note: ${run.selection.warning}`, width, theme) : []),
-];
-
-const expandedRunDiagnostics = (
-  run: SubagentRunCard,
-  width: number,
-  theme: Theme,
-  includeRoutine: boolean,
-): string[] => [
-  ...(includeRoutine
-    ? routineRunDiagnostics(run, width, theme)
-    : exceptionalRunDiagnostics(run, width, theme)),
-  ...runStateDiagnostics(run, width, theme),
-  ...runRouteDiagnostics(run, width, theme),
 ];
 
 const REPORT_STATUS_TEXT = {
@@ -240,7 +218,7 @@ const reportStatusLines = (
       ),
     );
 
-export interface RunOverviewOptions {
+interface RunOverviewOptions {
   readonly expanded: boolean;
   readonly reportSections: ReadonlyArray<RunReportSection>;
   /** Routine counts, shown first as muted text. */
@@ -253,27 +231,17 @@ export interface RunOverviewOptions {
   readonly contentOnly?: boolean | undefined;
 }
 
-/** Retained runs ready for more work; once expanded, the agent's own recovery steps. */
+/** Once expanded, the agent's own recovery steps. */
 const nextStepLines = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
   width: number,
   options: RunOverviewOptions,
 ): string[] => {
-  const ready = runs
-    .filter((run) => run.state === "reported" && run.closeOnReport === false)
-    .map((run) =>
-      clipToWidth(
-        theme.fg("dim", `${sanitizeTerminalLine(run.name)} is ready for another assignment`),
-        width,
-      ),
-    );
   const notes = options.expanded && !options.contentOnly ? attentionRecoveryText(runs) : "";
-  if (!notes) return ready;
-  return [
-    ...ready,
-    ...expandedSection(theme, "Agent notes", new Text(theme.fg("dim", notes), 0, 0)).render(width),
-  ];
+  return notes
+    ? expandedSection(theme, "Agent notes", new Text(theme.fg("dim", notes), 0, 0)).render(width)
+    : [];
 };
 
 const expandedRowDiagnostics = (
@@ -282,16 +250,14 @@ const expandedRowDiagnostics = (
   theme: Theme,
   options: RunOverviewOptions,
 ): string[] => {
-  const isAwaitHierarchy = options.hierarchy?.awaitedRunIds !== undefined;
-  return runs.flatMap((run) =>
-    options.contentOnly
-      ? [
-          ...routineRunDiagnostics(run, width, theme),
-          ...runStateDiagnostics(run, width, theme),
-          ...runRouteDiagnostics(run, width, theme),
-        ]
-      : expandedRunDiagnostics(run, width, theme, !isAwaitHierarchy),
-  );
+  const routine = options.contentOnly || options.hierarchy?.awaitedRunIds === undefined;
+  return runs.flatMap((run) => [
+    ...(routine
+      ? routineRunDiagnostics(run, width, theme)
+      : exceptionalRunDiagnostics(run, width, theme)),
+    ...runStateDiagnostics(run, width, theme),
+    ...runRouteDiagnostics(run, width, theme),
+  ]);
 };
 
 export const runOverviewComponent = (
@@ -344,47 +310,53 @@ export const appendReportSections = (
   theme: Theme,
 ): void => {
   for (const [index, section] of sections.entries()) {
+    const report = section.kind === "report";
+    const heading = `${report ? "" : "Failure "}${index + 1}/${sections.length} · ${section.name}`;
     container.addChild(new Spacer(1));
-    const heading =
-      section.kind === "report"
-        ? `${index + 1}/${sections.length} · ${section.name}`
-        : `Failure ${index + 1}/${sections.length} · ${section.name}`;
     container.addChild(new Text(theme.fg("accent", heading), 0, 0));
-    if (section.kind === "report")
-      container.addChild(
-        new Markdown(section.text, 2, 0, getMarkdownTheme(), {
-          color: (text) => theme.fg("toolOutput", text),
-        }),
-      );
-    else container.addChild(new Text(theme.fg("toolOutput", section.text), 2, 0));
+    container.addChild(
+      report
+        ? new Markdown(section.text, 2, 0, getMarkdownTheme(), {
+            color: (text) => theme.fg("toolOutput", text),
+          })
+        : new Text(theme.fg("toolOutput", section.text), 2, 0),
+    );
   }
 };
 
-export const renderExpandedStartAwaitResult = (
+/** Expanded run rows with their diagnostics, then each run's report or failure. */
+export const renderExpandedRunsResult = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
-  counters?: string,
-  showReportOutcomes = true,
-  hierarchy?: RunHierarchy,
-  reportRuns: ReadonlyArray<SubagentRunCard> = runs,
-  reportsFirst = false,
+  counters: string,
+  showReportOutcomes: boolean,
+  hierarchy: RunHierarchy | undefined,
 ): Component => {
   const container = new Container();
-  const sections = showReportOutcomes ? expandedRunReportSections(reportRuns) : [];
-  if (!reportsFirst) {
-    container.addChild(
-      runOverviewComponent(runs, theme, {
-        expanded: true,
-        reportSections: sections,
-        counters,
-        showReportOutcomes,
-        hierarchy,
-      }),
-    );
-    appendReportSections(container, sections, theme);
-    return container;
-  }
+  const sections = showReportOutcomes ? expandedRunReportSections(runs) : [];
+  container.addChild(
+    runOverviewComponent(runs, theme, {
+      expanded: true,
+      reportSections: sections,
+      counters,
+      showReportOutcomes,
+      hierarchy,
+    }),
+  );
+  appendReportSections(container, sections, theme);
+  return container;
+};
 
+/** A settled await leads with its targets' reports, then every run's outcome. */
+export const renderExpandedAwaitResult = (
+  runs: ReadonlyArray<SubagentRunCard>,
+  targets: ReadonlyArray<SubagentRunCard>,
+  theme: Theme,
+  counters: string,
+  hierarchy: RunHierarchy,
+): Component => {
+  const container = new Container();
+  const sections = expandedRunReportSections(targets);
   container.addChild(
     runOverviewComponent(runs, theme, {
       expanded: false,
@@ -404,7 +376,6 @@ export const renderExpandedStartAwaitResult = (
     runOverviewComponent(runs, theme, {
       expanded: true,
       reportSections: [],
-      showReportOutcomes,
       hierarchy,
       showContextOmission: false,
     }),

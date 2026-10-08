@@ -3,15 +3,10 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback, isProjectTrusted } from "pi-cosmic-core";
-import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { hasCustomSurface, openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { SubagentConfigStoreError } from "../config/store.ts";
-import {
-  normalizeDeclaredProfileRoute,
-  supportsSubagentFastMode,
-  type ProfileCandidate,
-  type ProfileId,
-} from "../profiles/model.ts";
+import { normalizeDeclaredProfileRoute, type ProfileId } from "../profiles/model.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import {
   declaredRouteForDraft,
@@ -24,7 +19,7 @@ import {
   supportedPiEfforts,
 } from "./profile-model-catalog.ts";
 import type { ProfileWorkspaceOptions, ProfileWorkspaceSaveResult } from "./profile-workspace.ts";
-import { profileSetPatchBase, captureProjectWriteTrust } from "./profile-write-context.ts";
+import { profileSetPatchBase } from "./profile-write-context.ts";
 import { ProfileDashboardComponent } from "./profile-dashboard-component.ts";
 import type { ProfileEditRestore, ProfileEditCommitReceipt } from "./profile-edit-visit.ts";
 import type { FleetManagerActions } from "./controller.ts";
@@ -34,22 +29,13 @@ export type ProfileEditorPosition = Pick<
   "initialProfile" | "initialFocus"
 >;
 
-const fastModeAvailable = (
-  candidate: ProfileCandidate,
-  parentSelector: string | undefined,
-): boolean => {
-  if (candidate.runtime === "pi" && candidate.model === "parent")
-    return parentSelector ? supportsSubagentFastMode("pi", parentSelector) : false;
-  return supportsSubagentFastMode(candidate.runtime, candidate.model);
-};
-
 export function openProfileDashboard(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   actions: FleetManagerActions,
   position: ProfileEditorPosition,
 ): Promise<void> {
-  if (ctx.mode !== "tui" || !ctx.hasUI || !Predicate.isFunction(ctx.ui.custom)) {
+  if (!ctx.hasUI || !hasCustomSurface(ctx)) {
     if (ctx.hasUI)
       ctx.ui.notify(
         "Open Pi in an interactive terminal to change agent profiles with /subagents profiles.",
@@ -71,23 +57,15 @@ export function openProfileDashboard(
       );
       let requestWorkspaceRender: (() => void) | undefined;
       const modelRefreshController = new AbortController();
-      let refreshWarningSent = false;
       void refreshOwner.run(modelCatalog.refresh(), modelRefreshController.signal).then(
         (result) => {
-          if (!refreshOwner.isCurrent()) return;
-          if (result === "updated" && !modelRefreshController.signal.aborted)
-            requestWorkspaceRender?.();
-          if (
-            result === "failed" &&
-            !modelRefreshController.signal.aborted &&
-            !refreshWarningSent
-          ) {
-            refreshWarningSent = true;
+          if (!refreshOwner.isCurrent() || modelRefreshController.signal.aborted) return;
+          if (result === "updated") requestWorkspaceRender?.();
+          if (result === "failed")
             ctx.ui.notify(
               "Could not refresh Pi models. Showing the last available list.",
               "warning",
             );
-          }
         },
         () => undefined,
       );
@@ -147,14 +125,13 @@ export function openProfileDashboard(
               },
             );
         const scope = editorTarget.set.scope;
-        const writeTrust = captureProjectWriteTrust(
-          ctx,
-          scope,
-          "This project is no longer trusted. Nothing was saved.",
-        );
-        if (!writeTrust) return refreshInspection();
+        const projectTrusted = isProjectTrusted(ctx);
+        if (scope === "project" && !projectTrusted) {
+          ctx.ui.notify("This project is no longer trusted. Nothing was saved.", "warning");
+          return refreshInspection();
+        }
         const base = {
-          ...profileSetPatchBase(inspection, scope, writeTrust.projectTrusted),
+          ...profileSetPatchBase(inspection, scope, projectTrusted),
           profileSet: editorTarget.set.name,
           profile,
         };
@@ -225,15 +202,14 @@ export function openProfileDashboard(
                 piCatalog: modelCatalog.capture(),
                 parentSelector: parentModel,
               }),
-            fastModeAvailable: (candidate) => fastModeAvailable(candidate, parentModel),
             parentModel,
-            onDispose: release,
           };
           dashboard = new ProfileDashboardComponent({
             workspace,
             ctx,
             actions,
             isCurrent,
+            onDispose: release,
             onInspection: (next) => {
               if (isCurrent()) inspection = next;
             },
@@ -267,6 +243,8 @@ export function openProfileDashboard(
         .finally(release);
     },
     (error) => {
+      // A replaced activation's inspection fails with that replacement; its stale ctx stays quiet.
+      if (!refreshOwner.isCurrent()) return;
       ctx.ui.notify(
         error instanceof Error ? error.message : "Could not inspect profile settings.",
         "error",

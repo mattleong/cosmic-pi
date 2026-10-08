@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
-import { invokeHostCallback } from "../host-session.ts";
+import { invokeBestEffort } from "../host-session.ts";
 import type { PiApi } from "./pi-api.ts";
 import type { PiManagedRuntime } from "./runtime.ts";
 
@@ -13,7 +13,7 @@ export class PiSessionRuntimeError extends Schema.TaggedError<PiSessionRuntimeEr
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue = void> {
+interface PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue = void> {
   readonly makeRuntime: (input: Input) => PiManagedRuntime<R, RuntimeError>;
   readonly startup: (input: Input) => Effect.Effect<StartupValue, StartupError, PiApi | R>;
   readonly onActivated?: (input: Input, token: number, value: StartupValue) => void;
@@ -40,10 +40,9 @@ type Active<Input, R, RuntimeError> = {
   readonly runtime: PiManagedRuntime<R, RuntimeError>;
   readonly removeAbort: () => void;
   activated: boolean;
+  /** Memoized so each runtime is disposed exactly once. */
+  disposal?: Promise<void>;
 };
-
-/** Host callbacks cannot take ownership away from the runtime slot. */
-const runBestEffort = (operation: () => void): void => invokeHostCallback(operation, undefined);
 
 /**
  * The minimal imperative island that owns the runtime which cannot own its own creation.
@@ -61,40 +60,31 @@ export function makePiSessionRuntimeSlot<
   let generation = 0;
   let active: Active<Input, R, RuntimeError> | undefined;
   let transition: Promise<unknown> = Promise.resolve();
-  const disposals = new WeakMap<PiManagedRuntime<R, RuntimeError>, Promise<void>>();
 
-  const dispose = (runtime: PiManagedRuntime<R, RuntimeError> | undefined): Promise<void> => {
-    if (!runtime) return Promise.resolve();
-    const existing = disposals.get(runtime);
-    if (existing) return existing;
-    const next = Promise.resolve()
+  const dispose = (runtime: PiManagedRuntime<R, RuntimeError>): Promise<void> =>
+    Promise.resolve()
       .then(() => runtime.dispose())
       .catch(() => undefined);
-    disposals.set(runtime, next);
-    return next;
-  };
 
   const removeActive = (expected?: Active<Input, R, RuntimeError>): Promise<void> => {
     const current = active;
     if (!current || (expected && current !== expected)) return Promise.resolve();
     active = undefined;
-    runBestEffort(current.removeAbort);
-    runBestEffort(() => hooks.onDeactivated?.(current.input, current.token));
-    return dispose(current.runtime);
+    invokeBestEffort(current.removeAbort);
+    invokeBestEffort(() => hooks.onDeactivated?.(current.input, current.token));
+    current.disposal ??= dispose(current.runtime);
+    return current.disposal;
   };
 
   const serialize = <A>(operation: () => Promise<A>): Promise<A> => {
     const result = transition.then(operation, operation);
-    transition = result.then(
-      () => undefined,
-      () => undefined,
-    );
+    transition = result.catch(() => undefined);
     return result;
   };
 
   const notifyStartFailure = (input: Input, token: number): void => {
     if (token !== generation) return;
-    runBestEffort(() => hooks.onStartFailure?.(input, token));
+    invokeBestEffort(() => hooks.onStartFailure?.(input, token));
   };
 
   const failStart = (current: Active<Input, R, RuntimeError>): Promise<undefined> =>
@@ -105,8 +95,7 @@ export function makePiSessionRuntimeSlot<
 
   const start = (input: Input, signal?: AbortSignal): Promise<number | undefined> => {
     const token = ++generation;
-    const previous = active;
-    const previousDisposal = removeActive(previous);
+    const previousDisposal = removeActive();
     return serialize(() =>
       previousDisposal.then(() => {
         if (token !== generation) return undefined;
@@ -131,7 +120,8 @@ export function makePiSessionRuntimeSlot<
           signal?.addEventListener("abort", abort, { once: true });
           if (signal?.aborted) {
             abort();
-            return dispose(runtime).then(() => undefined);
+            current.disposal ??= dispose(runtime);
+            return current.disposal.then(() => undefined);
           }
         } catch {
           return failStart(current);
@@ -149,7 +139,7 @@ export function makePiSessionRuntimeSlot<
           (value) => {
             if (active !== current || token !== generation) return undefined;
             current.activated = true;
-            runBestEffort(() => hooks.onActivated?.(input, token, value));
+            invokeBestEffort(() => hooks.onActivated?.(input, token, value));
             return active === current && token === generation ? token : undefined;
           },
           () => failStart(current),
@@ -175,9 +165,8 @@ export function makePiSessionRuntimeSlot<
 
   const shutdown = (): Promise<void> => {
     ++generation;
-    const current = active;
-    const immediate = removeActive(current);
-    return serialize(() => immediate);
+    const removal = removeActive();
+    return serialize(() => removal);
   };
 
   return {

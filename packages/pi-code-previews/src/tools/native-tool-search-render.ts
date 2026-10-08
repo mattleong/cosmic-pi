@@ -2,15 +2,14 @@ import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { countLabel, invokeHostCallback } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import { renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
-import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
-import { withCodePreviewRenderers, type CodePreviewShellOptions } from "./cooperative-tools";
+import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
-import { plainRows, safeContent } from "./native-safe-content";
+import { plainRows, runningLine, safeContent } from "./native-safe-content";
 import {
   nativeToolSearchReceipt,
   nativeToolSearchSubject,
@@ -32,8 +31,7 @@ function section(theme: Theme, title: string, text: string): Component {
 
 /** Renderer-only native search presentation; it never discovers or activates tools itself. */
 export function createNativeToolSearchRenderers(
-  appearance: Pick<CodePreviewRendererAppearance, "scheduleAnimation"> &
-    Partial<CodePreviewRendererAppearance>,
+  appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
   const renderArguments = <Args>(args: Args, theme: Theme): Component =>
     section(theme, "Arguments", argumentsText(args));
@@ -75,16 +73,7 @@ export function createNativeToolSearchRenderers(
   ) => {
     if (options.expanded) return renderOutput(result, options, theme, context);
     if (options.isPartial)
-      return safeContent(
-        () => ({
-          render: (width) =>
-            new Text(toolRunningLine(theme, getCodePreviewAnimationFrame(context)), 0, 0).render(
-              width,
-            ),
-          invalidate() {},
-        }),
-        plainRows("Running…", 1),
-      );
+      return safeContent(() => runningLine(theme, context), plainRows("Running…", 1));
     const receipt = context.isError ? undefined : nativeToolSearchReceipt(result.details);
     const label = receipt
       ? `${countLabel(receipt.loaded.length, "tool")} listed`
@@ -96,16 +85,15 @@ export function createNativeToolSearchRenderers(
       plainRows(`${label} · expand`, 1),
     );
   };
-  const options: CodePreviewShellOptions = {
-    preserveSelfShell: false,
-    displayName: DISPLAY_NAME,
-    compactSummary: nativeToolSearchSummary,
-    animateProgress: true,
-    scheduleAnimation: appearance.scheduleAnimation,
-    expandedContent: { renderCall: renderArguments, renderResult: renderOutput },
-  };
-  if (appearance.selfShell !== undefined) options.selfShell = appearance.selfShell;
-  if (appearance.mode !== undefined) options.mode = appearance.mode;
-  if (appearance.collapsedStyle !== undefined) options.collapsedStyle = appearance.collapsedStyle;
-  return withCodePreviewRenderers({ name: "tool_search" }, { renderCall, renderResult }, options);
+  return withCodePreviewRenderers(
+    { name: "tool_search" },
+    { renderCall, renderResult },
+    {
+      ...appearance,
+      displayName: DISPLAY_NAME,
+      compactSummary: nativeToolSearchSummary,
+      animateProgress: true,
+      expandedContent: { renderCall: renderArguments, renderResult: renderOutput },
+    },
+  );
 }

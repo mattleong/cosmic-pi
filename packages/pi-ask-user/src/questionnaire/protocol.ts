@@ -131,14 +131,12 @@ const captureArray = <Input>(input: Input, maximum = MAX_QUESTIONS): unknown[] |
   if (!Array.isArray(input)) return undefined;
   const length: unknown = input.length;
   if (!Schema.is(SmallLength)(length) || length > maximum) return undefined;
-  const result: unknown[] = [];
-  for (let i = 0; i < length; i++) result.push(input[i]);
-  return result;
+  return Array.from({ length }, (_, index) => input[index]);
 };
 export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest | undefined => {
   try {
     const root = Schema.decodeUnknownSync(RawRequest)(input);
-    const questions = captureArray(root?.questions);
+    const questions = captureArray(root.questions);
     if (!questions) return undefined;
     const captured = questions.map((input) => {
       const question = Schema.decodeUnknownSync(RawQuestion)(input);
@@ -149,19 +147,9 @@ export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest 
         choices: choices?.map((choice) => Schema.decodeUnknownSync(RawChoice)(choice)),
       };
     });
-    const value = Schema.decodeUnknownSync(QuestionnaireRequestSchema)({ questions: captured });
-    const request = normalizeAskUserRequest({
-      questions: value.questions.map((question) =>
-        question.mode === "text"
-          ? {
-              key: question.key,
-              title: question.title,
-              prompt: question.prompt,
-              mode: question.mode,
-            }
-          : { ...question, choices: question.choices.map((choice) => ({ ...choice })) },
-      ),
-    });
+    const request = normalizeAskUserRequest(
+      Schema.decodeUnknownSync(QuestionnaireRequestSchema)({ questions: captured }),
+    );
     return validateAskUserRequest(request) ? undefined : request;
   } catch {
     return undefined;
@@ -170,15 +158,15 @@ export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest 
 export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome | undefined => {
   try {
     const root = Schema.decodeUnknownSync(RawOutcome)(input);
-    const answers = captureArray(root?.answers);
-    if (!root || !answers) return undefined;
+    const answers = captureArray(root.answers);
+    if (!answers) return undefined;
     const captured = answers.map((input) => {
       const answer = Schema.decodeUnknownSync(RawAnswer)(input);
       if (answer.kind === "text" && Schema.is(Schema.String)(answer.text)) {
         const checked = validateQuestionnaireInput(answer.text, "text");
         return checked.error === undefined ? { ...answer, text: checked.value } : undefined;
       }
-      return answer?.kind === "choices"
+      return answer.kind === "choices"
         ? {
             ...answer,
             values: captureArray(answer.values, MAX_CHOICES),

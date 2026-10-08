@@ -1,26 +1,19 @@
 import {
-  applyPresentationSettings,
-  captureRegistrations,
   galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
+  withPresentationSettings,
   writeGallerySection,
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { registerExtensionCommand } from "pi-cosmic-core";
-import { registerOpenAIImage, registerOpenAIImageMessageRenderer } from "../src/image/register.ts";
+import { imageResultText } from "../src/image/result-text.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
+import { registerImagePresentation, textPart } from "./image-fixtures.ts";
 
-const noExecution = () => {
-  throw new Error("Rendering must not execute");
-};
-const noContext = () => {
-  throw new Error("Rendering must not update context");
-};
-const text = (value: string) => [{ type: "text" as const, text: value }];
+const text = (value: string) => [textPart(value)];
 const image = {
   type: "image" as const,
   data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -41,18 +34,8 @@ const details = (status: string, request = prompt): CodexImageDetails => ({
   action: "generate",
   outputFormat: "png",
 });
-// The same agent-facing text the tool and command attach beside the image.
-const resultText = (record: CodexImageDetails) =>
-  [
-    `Generated image using OpenAI image_generation tool via openai-codex/${record.model}.`,
-    `Action: ${record.action}.`,
-    `Prompt: ${record.prompt}`,
-    ...(record.imageModel ? [`Image model: ${record.imageModel}.`] : []),
-    ...(record.revisedPrompt ? [`Revised prompt: ${record.revisedPrompt}`] : []),
-    ...(record.savedPath ? [`Saved: ${record.savedPath}`] : []),
-  ].join("\n");
 const imageResult = (status: string, request = prompt) => ({
-  content: [...text(resultText(details(status, request))), image],
+  content: [...text(imageResultText(details(status, request))), image],
   details: details(status, request),
 });
 // Pi turns a rejected tool execution into text content with empty details.
@@ -77,7 +60,7 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
   {
     title: "completed without an image",
     args,
-    result: { content: text(resultText(details("completed"))), details: details("completed") },
+    result: { content: text(imageResultText(details("completed"))), details: details("completed") },
   },
   { title: "failed", args, result: imageResult("failed") },
   { title: "cancelled", args, result: imageResult("cancelled") },
@@ -106,7 +89,7 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
 const message = (status: string): GalleryMessageScenario["message"] => ({
   role: "custom",
   customType: "openai-image",
-  content: [...text(resultText(details(status))), image],
+  content: [...text(imageResultText(details(status))), image],
   display: true,
   details: details(status),
   timestamp: 0,
@@ -123,39 +106,21 @@ describe.skipIf(!directory)("presentation gallery", () => {
   it.effect("renders image tool calls and messages in both collapsed styles", () =>
     Effect.gen(function* () {
       const lines: string[] = [];
-      for (const style of ["compact", "preview"] as const) {
-        const restore = applyPresentationSettings({
-          toolCallCollapsedStyle: style,
-          toolCallTiming: false,
-        });
-        try {
-          const { tools, messageRenderers } = captureRegistrations((pi) => {
-            const noteCwd = registerOpenAIImageMessageRenderer(pi);
-            registerOpenAIImage(
-              pi,
-              registerExtensionCommand(pi, { name: "openai", description: "OpenAI" }),
-              noExecution,
-              noContext,
-              { noteCwd },
-            );
-          });
-          const tool = tools.find((entry) => entry.name === "openai_image")!;
-          const renderer = messageRenderers.get("openai-image")!;
+      for (const style of ["compact", "preview"] as const)
+        withPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false }, () => {
+          const { tool, message } = registerImagePresentation();
           for (const scenario of toolScenarios)
             lines.push(
               ...galleryFrames(tool, { ...scenario, title: `${style} · ${scenario.title}` }),
             );
           for (const scenario of messageScenarios)
             lines.push(
-              ...galleryMessageFrames(renderer, {
+              ...galleryMessageFrames(message, {
                 ...scenario,
                 title: `${style} · ${scenario.title}`,
               }),
             );
-        } finally {
-          restore();
-        }
-      }
+        });
       yield* writeGallerySection(directory, "pi-better-openai", lines);
     }),
   );

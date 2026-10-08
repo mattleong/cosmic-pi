@@ -27,10 +27,8 @@ import {
   registerAsyncAskUserMessageRenderer,
   registerAsyncAskUserTools,
 } from "../src/tools/ask-user-async.ts";
+import { noExecution } from "./support/questionnaire.ts";
 
-const noExecution = () => {
-  throw new Error("Rendering must not execute");
-};
 const text = (value: string) => [{ type: "text" as const, text: value }];
 
 const environment: AskUserQuestion = {
@@ -252,6 +250,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
         live("ask_user_async", "opening the questionnaire", asyncRequest),
         started("questionnaire open", open),
         started("questionnaire queued behind another", queued),
+        controlled("questionnaire hidden by the user", { action: "status", requestId: "ask-1" }, [
+          { ...open, presentation: "hidden" },
+        ]),
         live("ask_user_async_control", "awaiting answers", { action: "await", requestId: "ask-1" }),
         live(
           "ask_user_async_control",

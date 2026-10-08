@@ -1,3 +1,5 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { describe, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
@@ -8,6 +10,29 @@ import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 
 const context = (setStatus: (key: string, value: string | undefined) => void) =>
   extensionContextFixture({ mode: "tui", ui: { setStatus } });
+
+setFlagsFromString("--expose-gc");
+const gc: () => void = runInNewContext("gc");
+
+// The gate outlives sessions, so every waiter it retained would pin its old session's fiber.
+it.live("forgets each waiter once the gate reopens", () =>
+  Effect.gen(function* () {
+    const gate = makeAskUserPromptGate();
+    // Each waiter lives only in this generator, so nothing else retains it once it returns.
+    const waitOnce = Effect.gen(function* () {
+      const release = gate.enter();
+      const waiter = yield* Effect.forkChild(gate.awaitOpen, { startImmediately: true });
+      release();
+      yield* Fiber.join(waiter);
+      return new WeakRef(waiter);
+    });
+    const references = yield* Effect.replicateEffect(waitOnce, 5);
+    // WeakRef targets stay alive until the current job ends.
+    yield* Effect.sleep("1 millis");
+    gc();
+    expect(references.filter((reference) => reference.deref() !== undefined)).toEqual([]);
+  }),
+);
 
 it.effect(
   "queued mount waits for coalesced unrelated prompts, not just the owned overlay cleanup",

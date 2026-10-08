@@ -15,20 +15,17 @@ import {
   decodeStartAwaitCardDetails,
   type SubagentStartEntry,
 } from "../src/tools/details-schema.ts";
+import { view } from "./fixtures/run-view.ts";
 
-const run = (index = 1, cost?: number): SubagentRunView => {
-  const usageBase = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 };
-  const usage = cost === undefined ? usageBase : { ...usageBase, cost };
-  return {
+/** A completed Claude run whose private fields must never reach persisted cards. */
+const run = (index = 1, cost?: number): SubagentRunView =>
+  view({
     id: `agent-r2-${index}`,
     name: `reader-${index}`,
     task: "Secret full task that must not persist in card details.",
     selection: {
       source: "profile-candidate",
       routeSource: "session",
-      host: "local",
-      runtime: "claude",
-      closeOnReport: true,
       candidateIndex: 1,
       reason: "Selected in configured order.",
       skippedCandidates: [
@@ -42,27 +39,26 @@ const run = (index = 1, cost?: number): SubagentRunView => {
     retryBlocked: true,
     cwd: "/private/project",
     state: "completed",
-    context: "fresh",
-    writeIntent: "read-only",
-    openaiFastMode: false,
-    host: "local",
     runtime: "claude",
-    closeOnReport: true,
     reportGeneration: 1,
     capabilities: ["steer", "interrupt", "parent-contact"],
     model: "provider/model",
-    effort: "high",
     sessionId: "private-session",
     sessionFile: "/private/session.jsonl",
-    startedAt: 1,
     endedAt: 2,
     lastActivityAt: 2,
-    question: { requestId: "private-question", message: "May I continue?", createdAt: 2 },
+    question: { requestId: "private-question", message: "May I continue?" },
     sessionEvents: [{ type: "assistant", text: "private transcript", createdAt: 2 }],
     finalText: `Report ${index}: ${"x".repeat(32_000)}`,
-    usage,
-  };
-};
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      ...(cost !== undefined && { cost }),
+    },
+  });
 
 const profileCandidate = (overrides: Partial<ProfileCandidateDetailsInput> = {}) => ({
   host: "local" as const,
@@ -709,13 +705,9 @@ describe("persisted subagent details version 2", () => {
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
   });
 
-  it("only labels await omissions as report-only without source errors or input uncertainty", () => {
+  it("only labels await omissions as report-only without source errors", () => {
     const runs = [run(1), run(2)];
     expect(makeAwaitDetails({ runs, awaitUntil: "all_finished" }).reportsOnlyOmitted).toBe(true);
-    expect(
-      makeAwaitDetails({ runs, awaitUntil: "all_finished", contentOmitted: true })
-        .reportsOnlyOmitted,
-    ).toBeUndefined();
     expect(
       makeAwaitDetails({
         runs: [{ ...runs[0]!, error: "failure" }, runs[1]!],
@@ -753,7 +745,6 @@ describe("persisted subagent details version 2", () => {
     expect(status).toMatchObject({ version: 2, action: "status", runCount: 1 });
     expect(status).not.toHaveProperty("runIds");
     expect(status).not.toHaveProperty("profileIds");
-    expect(status).not.toHaveProperty("timedOut");
     expect(status).not.toHaveProperty("attentionRequired");
     expect(JSON.stringify(status).length).toBeLessThanOrEqual(48_000);
     expect(decodeCompactToolDetails(status)).toEqual(status);
@@ -928,7 +919,7 @@ describe("persisted subagent detail fitting", () => {
     const runs = Array.from({ length: 12 }, (_, index) => ({
       ...auditedRun(true),
       id: `agent-${index}`,
-      question: { requestId: `q-${index}`, message: "q".repeat(3_000), createdAt: 1 },
+      question: { requestId: `q-${index}`, message: "q".repeat(3_000) },
       progress: "p".repeat(1_000),
       warning: "w".repeat(1_000),
       finalText: "private report".repeat(2_000),

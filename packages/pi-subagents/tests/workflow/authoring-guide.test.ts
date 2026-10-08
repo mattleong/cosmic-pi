@@ -3,11 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import { SubagentBackendRegistry } from "../../src/backend/service.ts";
 import {
   runWorkflowSandbox,
   type WorkflowHostFailure,
   type WorkflowSandboxHost,
 } from "../../src/boundary/codemode-sandbox.ts";
+import { makeWorkflowHost } from "../../src/boundary/host-workflow.ts";
 import { workflowAuthoringGuidePath } from "../../src/boundary/workflow-authoring-guide.ts";
 import { decodeJsonRecord, type JsonRecord } from "../../src/domain/json-schema.ts";
 import {
@@ -15,17 +17,14 @@ import {
   decodeResultValue,
   resultValueSchema,
 } from "../../src/domain/result-contract.ts";
-import { normalizeWriteClaims } from "../../src/domain/write-claims.ts";
-import { BUILTIN_PROFILE_ROUTES } from "../../src/profiles/definitions.ts";
-import { isProfileId } from "../../src/profiles/model.ts";
+import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { workflowToolExample } from "../../src/tools/workflow.ts";
-import {
-  decodeWorkflowAgentOptions,
-  workflowAgentProfile,
-  type WorkflowAgentOptions,
-} from "../../src/workflow/options.ts";
+import type { WorkflowHost } from "../../src/workflow/agent.ts";
+import { decodeWorkflowAgentOptions } from "../../src/workflow/options.ts";
 import { parseWorkflowScript } from "../../src/workflow/script.ts";
+import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { nodeFsPromises } from "../support/node-builtins.ts";
+import { context, profileServiceFor, testBackendRegistry } from "../tools/fixtures/tool-harness.ts";
 
 /** A `js` block in the guide; a `js fragment` block assumes definitions from the blocks around it. */
 interface GuideExample {
@@ -123,23 +122,14 @@ function sampleValue(schema: Schema.Json, answers: StubAnswers): Schema.Json {
 
 const invalid = (message: string): WorkflowHostFailure => ({ _tag: "InvalidAgentCall", message });
 
-const writerProfile = (profile: string): boolean =>
-  isProfileId(profile) &&
-  BUILTIN_PROFILE_ROUTES[profile].candidates.some(
-    (candidate) => candidate.writeIntent === "writer",
-  );
-
-/** The profile and claim checks a session's built-in profiles apply to a call. */
-const checkRoute = (options: WorkflowAgentOptions): Effect.Effect<void, WorkflowHostFailure> => {
-  const profile = workflowAgentProfile(options.profile);
-  if (!isProfileId(profile)) return Effect.fail(invalid(`Unknown agent() profile "${profile}".`));
-  const claims = normalizeWriteClaims(options.writes);
-  if (!claims.ok) return Effect.fail(invalid(claims.message));
-  const writerOption = options.writes !== undefined || options.isolation !== undefined;
-  return writerOption && !writerProfile(profile)
-    ? Effect.fail(invalid(`Profile "${profile}" is read-only but got writer options.`))
-    : Effect.void;
-};
+/** The host's own call checks, over the built-in profiles. */
+const workflowHost = makeWorkflowHost(extensionApiFixture({}), context, {
+  cwd: "/project",
+  projectTrusted: true,
+}).pipe(
+  Effect.provideService(SubagentProfileService, profileServiceFor(undefined)),
+  Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+);
 
 const decodeCall = Schema.decodeUnknownEffect(
   Schema.Tuple([Schema.String, Schema.Json, Schema.optionalKey(Schema.String)]),
@@ -149,7 +139,7 @@ const decodeCall = Schema.decodeUnknownEffect(
  * Answers one agent() call after the real option, schema and claim checks: text without a schema,
  * else a value the compiled schema accepts.
  */
-const answer = (call: Schema.Json, answers: StubAnswers) =>
+const answer = (host: WorkflowHost, call: Schema.Json, answers: StubAnswers) =>
   Effect.gen(function* () {
     const [prompt, raw] = yield* decodeCall(call).pipe(
       Effect.mapError(() => invalid("agent() arguments don't decode.")),
@@ -157,7 +147,7 @@ const answer = (call: Schema.Json, answers: StubAnswers) =>
     const options = yield* decodeWorkflowAgentOptions(raw).pipe(
       Effect.mapError((error) => invalid(error.message)),
     );
-    yield* checkRoute(options);
+    yield* host.checkAgent(options).pipe(Effect.mapError((error) => invalid(error.message)));
     if (options.schema === undefined) return `A report for: ${prompt.slice(0, 80)}`;
     const contract = yield* compileResultContract(options.schema).pipe(
       Effect.mapError((error) => invalid(`Invalid agent() schema: ${error.message}`)),
@@ -184,6 +174,7 @@ const runProblems = (name: string, source: string, answers: StubAnswers) =>
   Effect.gen(function* () {
     const at = `${name} (${answers.name})`;
     const script = yield* parseWorkflowScript(source);
+    const checks = yield* workflowHost;
     const calls = yield* Ref.make(0);
     const warnings = yield* Ref.make<ReadonlyArray<string>>([]);
     const host: WorkflowSandboxHost<never> = {
@@ -192,7 +183,7 @@ const runProblems = (name: string, source: string, answers: StubAnswers) =>
           Effect.flatMap((count) =>
             count > CALL_LIMIT
               ? Effect.fail(invalid(`More than ${CALL_LIMIT} agent() calls.`))
-              : answer(call, answers),
+              : answer(checks, call, answers),
           ),
           Effect.map((result) => ({ result, outputTokens: 1 })),
         ),

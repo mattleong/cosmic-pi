@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { ProfileCandidate } from "../../src/profiles/model.ts";
+import type { SessionProfileOverrideSeed } from "../../src/profiles/session-overrides.ts";
 import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
@@ -13,6 +14,29 @@ import { profileCandidate } from "./profiles.ts";
 export const settleTurn = (): Promise<void> =>
   Effect.runPromise(Effect.yieldNow.pipe(Effect.andThen(Effect.yieldNow)));
 
+/** A trusted inspection whose Global default set declares nothing. */
+export const workspaceInspection = (seed?: SessionProfileOverrideSeed) =>
+  makeProfileSettingsInspection(
+    {
+      globalDocument: {
+        version: 6,
+        defaultProfileSet: "default",
+        profileSets: { default: { profiles: {} } },
+      },
+      projectTrusted: true,
+    },
+    seed,
+  );
+
+/** Opens a shortcut's selector page, searches it, and chooses the first match. */
+export const chooseFromPage = (
+  component: { readonly handleInput: (data: string) => void },
+  shortcut: string,
+  query: string,
+): void => {
+  for (const key of [shortcut, "/", ...query, "\r"]) component.handleInput(key);
+};
+
 /** A Current Session generalist workspace whose saves replace its session route. */
 export const workspaceHarness = (
   overrides: Partial<ProfileWorkspaceOptions> = {},
@@ -23,17 +47,7 @@ export const workspaceHarness = (
 ) => {
   let candidates = initial;
   const inspection = () =>
-    makeProfileSettingsInspection(
-      {
-        globalDocument: {
-          version: 6,
-          defaultProfileSet: "default",
-          profileSets: { default: { profiles: {} } },
-        },
-        projectTrusted: true,
-      },
-      { revision: 1, overrides: { generalist: { candidates } } },
-    );
+    workspaceInspection({ revision: 1, overrides: { generalist: { candidates } } });
   const close = vi.fn();
   const saveSession = vi.fn();
   const saveDraft = vi.fn<ProfileWorkspaceOptions["saveDraft"]>((_target, _profile, draft) => {
@@ -50,7 +64,7 @@ export const workspaceHarness = (
           fastModeAvailable: false,
         })),
         current: candidate.model,
-        context: { profile, candidateIndex, host: candidate.host, runtime: candidate.runtime },
+        context: { profile, candidateIndex, runtime: candidate.runtime },
       }),
   );
   const component = new ProfileWorkspaceComponent({
@@ -66,7 +80,6 @@ export const workspaceHarness = (
     saveDraft,
     loadModelPicker,
     supportedPiEfforts: () => ["low", "high"],
-    fastModeAvailable: () => false,
     ...overrides,
   });
   return {

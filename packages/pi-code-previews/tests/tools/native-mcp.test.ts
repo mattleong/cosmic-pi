@@ -1,20 +1,15 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
-import { afterEach, test } from "vitest";
+import { failingTheme, opaqueFixture } from "pi-cosmic-core/testing";
+import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
+  applyPresentationSettings,
   createToolPresentationHarness,
   issueMessageStyleProblems,
   renderContextFixture,
 } from "pi-code-previews/testing";
-import { applyPresentationSettings } from "pi-code-previews/testing";
-let restoreSettings = () => {};
-const setPresentation = (overrides: Parameters<typeof applyPresentationSettings>[0]) => {
-  restoreSettings();
-  restoreSettings = applyPresentationSettings(overrides);
-};
 import { compactStatus, type CompactSummary } from "pi-code-previews";
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
@@ -80,15 +75,9 @@ const result = <Details>(text: string, details: Details): AgentToolResult<unknow
 });
 const docs = { server: "docs", tool: "lookup" };
 
-function settings(style: "compact" | "preview", background: "off" | "on" | "border" = "off") {
-  setPresentation({
-    syntaxHighlighting: false,
-    toolCallTiming: false,
-    toolCallCollapsedStyle: style,
-    toolCallBackground: background,
-  });
-}
-afterEach(() => restoreSettings());
+const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
+  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
+beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
 interface NativeArguments {
   readonly query?: string;
@@ -179,7 +168,7 @@ test("punctuated, dashed, long and colliding aliases never invent pending remote
   assert.ok(stripAnsi(resource.render(100).join("\n")).includes("docs://guide/start"));
 });
 
-test("settled native dispatch is neutral; only native evidence raises warnings", () => {
+test("settled native dispatch and resource delivery are neutral", () => {
   const tool = dynamicTool();
   const returned = summarize(tool, result("done", docs), {});
   assert.equal(returned?.outcome, "returned");
@@ -200,33 +189,6 @@ test("settled native dispatch is neutral; only native evidence raises warnings",
     );
     assert.equal(status(resource), "returned", name);
   }
-
-  const envelope =
-    "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
-  const saved = summarize(
-    tool,
-    result(`${envelope}head…tail\n\n[Full output: /tmp/pi-mcp-1.txt (read it with offset/limit)]`, {
-      ...docs,
-      fullOutputPath: "/tmp/pi-mcp-1.txt",
-    }),
-    {},
-  );
-  assert.equal(status(saved), "returned");
-  assert.ok(
-    saved?.issues?.some(
-      (issue) => issue.severity === "info" && issue.detail?.includes("/tmp/pi-mcp-1.txt"),
-    ),
-  );
-  const unsaved = summarize(
-    tool,
-    result(`${envelope}head…tail\n\n[Could not save the full output: ENOSPC: disk full]`, docs),
-    {},
-  );
-  const warnings = unsaved?.issues?.filter((issue) => issue.severity === "warning") ?? [];
-  assert.equal(warnings.length, 2);
-  assert.ok(warnings.some((issue) => issue.detail?.includes("ENOSPC")));
-  for (const issue of [...(saved?.issues ?? []), ...warnings])
-    assert.deepEqual(issueMessageStyleProblems(issue.message), []);
 });
 
 for (const style of ["compact", "preview"] as const)
@@ -477,15 +439,7 @@ test("theme failures keep collapsed previews bounded while expansion preserves c
     { length: 12 },
     (_, index) => `${index}: ${"long-output-".repeat(100)}`,
   ).join("\n");
-  const theme: Theme = opaqueFixture({
-    ...plainTheme,
-    fg: () => {
-      throw new Error("theme unavailable");
-    },
-    bold: () => {
-      throw new Error("theme unavailable");
-    },
-  });
+  const theme = failingTheme({ bold: true });
   const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()), { theme });
   h.call({ query });
   h.result(result(output, docs));
@@ -506,13 +460,7 @@ test("preview issues survive a theme failure in the argument preview", () => {
   const value = result("short output", { ...docs, fullOutputPath: "/tmp/full-output.txt" });
   const issues = summarize(dynamicTool(), value, {})?.issues ?? [];
   assert.ok(issues.length > 0);
-  const theme: Theme = opaqueFixture({
-    ...plainTheme,
-    fg: (_token: string, text: string) => {
-      if (text.includes("theme-draw-query")) throw new Error("theme unavailable");
-      return text;
-    },
-  });
+  const theme = failingTheme({ when: (_token, text) => text.includes("theme-draw-query") });
   const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()), { theme });
   h.call({ query: "theme-draw-query" });
   h.result(value);
@@ -553,13 +501,18 @@ test("aggregate listings report bounded server failures, pagination, and unreada
 
   const templates = summarize(
     resourceTool("list_mcp_resource_templates"),
-    result(JSON.stringify({ resourceTemplates: [], errors: [failures[1]] }), {
-      server: "",
-      tool: "list_mcp_resource_templates",
-    }),
+    // A server name with nothing visible is not shown as invented text.
+    result(
+      JSON.stringify({ resourceTemplates: [], errors: [{ ...failures[1], server: "\u0007" }] }),
+      {
+        server: "",
+        tool: "list_mcp_resource_templates",
+      },
+    ),
     {},
   );
   assert.equal(status(templates), "warning");
+  assert.equal(templates?.issues?.[0]?.message.includes("Unknown error"), false);
 
   const page = summarize(
     list,
@@ -593,7 +546,8 @@ for (const style of ["compact", "preview"] as const)
     const probe = animationSchedulerProbe();
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool(), probe.schedule));
     h.call({ query: "effect" }, { executionStarted: true });
-    h.result(result("Indexing 3/10", docs), { isPartial: true });
+    // A line with nothing visible, such as a terminal clear, is not the progress message.
+    h.result(result("\u001b[2K\nIndexing 3/10", docs), { isPartial: true });
     assert.ok(stripAnsi(h.render(100).join("\n")).includes("Indexing 3/10"));
     assert.ok(probe.scheduled > 0);
     h.result(result("done", docs));

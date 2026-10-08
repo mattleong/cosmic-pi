@@ -5,7 +5,7 @@ import type * as Schema from "effect/Schema";
 import { WORKFLOW_RETAINED_RUNS, type WorkflowEndedState, type WorkflowSource } from "./model.ts";
 
 /** Sessions whose journals one Pi process keeps. */
-export const WORKFLOW_JOURNAL_SESSIONS = 16;
+const WORKFLOW_JOURNAL_SESSIONS = 16;
 /**
  * Total result text one session's journals may hold before the oldest runs are dropped, and what
  * a resume reads from one run's files.
@@ -30,7 +30,7 @@ export interface WorkflowReplay {
 }
 
 /** What a run starts again from: its source, and its private script copy once saved. */
-export interface WorkflowRunOrigin {
+interface WorkflowRunOrigin {
   readonly source: WorkflowSource;
   readonly scriptPath?: string | undefined;
 }
@@ -117,13 +117,10 @@ interface JournalGlobalState {
   [JOURNAL_SLOT]?: JournalSlot;
 }
 
-// SAFETY: This process-owned symbol slot is the sole property this module adds to globalThis.
-// It survives extension reloads so a session can resume a run from before /reload.
-const processState = (): typeof globalThis & JournalGlobalState =>
-  globalThis as typeof globalThis & JournalGlobalState;
-
 const slot = (): JournalSlot => {
-  const state = processState();
+  // SAFETY: This process-owned symbol slot is the sole property this module adds to globalThis.
+  // It survives extension reloads so a session can resume a run from before /reload.
+  const state = globalThis as typeof globalThis & JournalGlobalState;
   const current = state[JOURNAL_SLOT];
   if (current?.version === 3 && current.sessions instanceof Map) return current;
   const created: JournalSlot = { version: 3, sessions: new Map() };
@@ -190,11 +187,6 @@ export const makeWorkflowReplay = (
   return { take: (key) => queues.get(key)?.shift() };
 };
 
-const localJournals = (): (() => SessionJournals) => {
-  const journals: SessionJournals = new Map();
-  return () => journals;
-};
-
 /**
  * Session-scoped memory of agent() results, keyed by the Pi session that ran them. It outlives
  * reloads but not the Pi process; a run's files cover a restart.
@@ -205,11 +197,13 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
   static readonly layer = (sessionKey: string | undefined): Layer.Layer<WorkflowJournal> =>
     Layer.sync(this, () => {
       // Without a stable session id, journals still work within this activation.
-      const journals = sessionKey ? () => sessionJournals(sessionKey) : localJournals();
-      const withRun = (runId: string, change: (run: RunJournal) => void) =>
+      const local: SessionJournals = new Map();
+      const journals = sessionKey ? () => sessionJournals(sessionKey) : () => local;
+      const withRun = (runId: string, change: (run: RunJournal, runs: SessionJournals) => void) =>
         Effect.sync(() => {
-          const run = journals().get(runId);
-          if (run) change(run);
+          const runs = journals();
+          const run = runs.get(runId);
+          if (run) change(run, runs);
         });
       return WorkflowJournal.of({
         open: (runId, name, origin) =>
@@ -228,10 +222,7 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
             trim(runs);
           }),
         record: (runId, entry) =>
-          Effect.sync(() => {
-            const runs = journals();
-            const run = runs.get(runId);
-            if (!run) return;
+          withRun(runId, (run, runs) => {
             run.entries.push(entry);
             if (entry.workspaceId !== undefined) run.workspaces.add(entry.workspaceId);
             trim(runs);
@@ -249,10 +240,8 @@ export class WorkflowJournal extends Context.Service<WorkflowJournal, WorkflowJo
             run.ended = state;
           }),
         finish: (runId) =>
-          Effect.sync(() => {
-            const runs = journals();
-            const run = runs.get(runId);
-            if (run) close(runs, run);
+          withRun(runId, (run, runs) => {
+            close(runs, run);
             trim(runs);
           }),
         replay: (runId) =>

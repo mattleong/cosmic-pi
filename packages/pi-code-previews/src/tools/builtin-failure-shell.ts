@@ -7,20 +7,27 @@ const EXITED = /^Command exited with code -?\d+$/u;
 const ABORTED = "Command aborted";
 const TIMED_OUT = /^Command timed out after \d+(?:\.\d+)? seconds$/u;
 
+/** Lines before the final one, without the blank lines Pi puts before its closing status. */
+const beforeLast = (lines: string[]): string[] => {
+  let end = lines.length - 1;
+  while (end > 0 && lines[end - 1]?.trim() === "") end -= 1;
+  return lines.slice(0, end);
+};
+
 /**
  * Output without the status line Pi appends to a failed command, and the blank lines before it.
  * The shell's issue line already states that status.
  */
 export function withoutShellStatus(lines: string[]): string[] {
   const last = lines.at(-1) ?? "";
-  if (!EXITED.test(last) && last !== ABORTED && !TIMED_OUT.test(last)) return lines;
-  let end = lines.length - 1;
-  while (end > 0 && lines[end - 1]?.trim() === "") end -= 1;
-  return lines.slice(0, end);
+  return EXITED.test(last) || last === ABORTED || TIMED_OUT.test(last) ? beforeLast(lines) : lines;
 }
 
-/** Classify only the terminal status appended by the builtin, never stdout alone. */
-export function shellFailure(details: string, lines: string[]) {
+/**
+ * Classify only the terminal status appended by the builtin, never stdout alone. `retained`
+ * says structured details already name the saved full output.
+ */
+export function shellFailure(details: string, lines: string[], retained: boolean) {
   const last = lines.at(-1) ?? details;
   const issues: CompactIssue[] = [];
   let outcome: "error" | "cancelled" = "error";
@@ -46,11 +53,11 @@ export function shellFailure(details: string, lines: string[]) {
       code: "failure",
       message: firstLineMessage(details, "Command failed"),
     });
-  // Thrown bash errors lose structured details. Keep the retained-output location.
-  for (const line of lines) {
-    const retained = /^\[(Showing .+\. Full output: .+)\]$/u.exec(line);
-    if (retained?.[1])
-      issues.push({ severity: "info", code: "shell-retained-output", message: retained[1] });
-  }
+  // Thrown bash errors lose structured details. Keep the retained-output location from Pi's
+  // footer, which directly precedes the closing status.
+  const footer = retained
+    ? undefined
+    : /^\[(Showing .+\. Full output: .+)\]$/u.exec(beforeLast(lines).at(-1) ?? "")?.[1];
+  if (footer) issues.push({ severity: "info", code: "shell-retained-output", message: footer });
   return { outcome, issues };
 }

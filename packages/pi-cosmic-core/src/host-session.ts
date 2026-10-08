@@ -1,30 +1,31 @@
+import { constVoid } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { notificationText } from "./message-text.ts";
 /** Pure, best-effort reads of Pi session host fields shared by provider extensions. */
 
-export type HostUiContext = {
+type HostUiContext = {
   readonly mode?: unknown;
   readonly hasUI?: unknown;
 };
 
-export type HostTrustContext = {
+type HostTrustContext = {
   readonly isProjectTrusted?: unknown;
 };
 
-export type HostSessionContext = {
+type HostSessionContext = {
   readonly cwd?: unknown;
   readonly signal?: unknown;
 };
 
 export type HostNotificationLevel = "info" | "warning" | "error";
 
-export type HostNotifierContext = {
+type HostNotifierContext = {
   readonly ui: {
     readonly notify: (message: string, level: HostNotificationLevel) => void;
   };
 };
 
-export type HostModelRegistry<Model> = {
+type HostModelRegistry<Model> = {
   readonly isUsingOAuth: (model: Model) => boolean;
 };
 
@@ -32,7 +33,7 @@ export type CapturedHostSignal =
   | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
   | { readonly _tag: "Unavailable" };
 
-export type CapturedSessionHost =
+type CapturedSessionHost =
   | {
       readonly _tag: "Captured";
       readonly cwd: string;
@@ -76,17 +77,12 @@ export function notifyAtHostBoundary(
  * Attaches no-op settlement handlers to an object or callable thenable, reading `then` exactly
  * once. Inspection failures are contained: there is no resource to manage or await.
  */
-export function containThenable<Value>(value: Value): void {
+function containThenable<Value>(value: Value): void {
   try {
     if (!Predicate.isObjectOrArray(value) && !Predicate.isFunction(value)) return;
     // SAFETY: The value is narrowed to an object or function before its optional then is read.
     const then = (value as { readonly then?: unknown }).then;
-    if (Predicate.isFunction(then))
-      then.call(
-        value,
-        () => undefined,
-        () => undefined,
-      );
+    if (Predicate.isFunction(then)) then.call(value, constVoid, constVoid);
   } catch {
     // A hostile thenable cannot escape a best-effort boundary.
   }

@@ -1,6 +1,7 @@
 import type {
   AgentToolResult,
   Theme,
+  ToolInfo,
   ToolRenderers,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
@@ -14,16 +15,13 @@ import {
   toolRunningLine,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import type {
-  CodePreviewRendererAppearance,
-  PreviewToolInfo,
-} from "../application/renderer-contract";
+import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { escapeControlChars } from "../shared/terminal-text";
-import { withCodePreviewRenderers, type CodePreviewShellOptions } from "./cooperative-tools";
+import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
 import type { ToolRenderContext } from "./renderers/shared/types";
 import {
@@ -86,19 +84,13 @@ function renderOutput(
   context: Context,
 ): Component {
   const raw = getFallbackResultText(result.content, context.showImages);
-  const saved = nativeMcpEvidence(result.details)?.fullOutputPath;
-  const recovery =
-    saved && !raw.includes(saved) ? `Saved output\n${sanitizeDiagnosticContent(saved)}` : "";
+  const path = nativeMcpEvidence(result.details)?.fullOutputPath;
+  const saved = path && !raw.includes(path) ? sanitizeDiagnosticContent(path) : undefined;
+  const recovery = saved === undefined ? "" : `Saved output\n${saved}`;
   return safeContent(() => {
     const body = new Container();
-    if (saved && !raw.includes(saved))
-      body.addChild(
-        expandedSection(
-          theme,
-          "Saved output",
-          textBlock(theme, sanitizeDiagnosticContent(saved), "muted"),
-        ),
-      );
+    if (saved !== undefined)
+      body.addChild(expandedSection(theme, "Saved output", textBlock(theme, saved, "muted")));
     if (raw)
       body.addChild(
         expandedSection(
@@ -179,10 +171,9 @@ function renderOutputPreview(
  */
 export function createNativeMcpRenderers(
   name: string,
-  tool: Pick<PreviewToolInfo, "namespace"> | undefined,
+  tool: Pick<ToolInfo, "namespace"> | undefined,
   downstream: ToolRenderers | undefined,
-  appearance: Pick<CodePreviewRendererAppearance, "scheduleAnimation"> &
-    Partial<CodePreviewRendererAppearance>,
+  appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
   const identity = nativeMcpIdentity(name, tool);
   // Without an exact public remote identity, a collapsed call keeps the entire native call
@@ -283,19 +274,15 @@ export function createNativeMcpRenderers(
       );
     return renderOutputPreview(result, theme, context);
   };
-  const options: CodePreviewShellOptions = {
-    preserveSelfShell: false,
-    displayName: DISPLAY_NAME,
-    compactSummary: nativeMcpSummary(identity),
-    animateProgress: true,
-    scheduleAnimation: appearance.scheduleAnimation,
-    expandedContent: {
-      renderCall: (args, theme) => renderArguments(args, theme),
-      renderResult: renderExpandedOutput,
+  return withCodePreviewRenderers(
+    { name },
+    { renderCall, renderResult },
+    {
+      ...appearance,
+      displayName: DISPLAY_NAME,
+      compactSummary: nativeMcpSummary(identity),
+      animateProgress: true,
+      expandedContent: { renderCall: renderArguments, renderResult: renderExpandedOutput },
     },
-  };
-  if (appearance.selfShell !== undefined) options.selfShell = appearance.selfShell;
-  if (appearance.mode !== undefined) options.mode = appearance.mode;
-  if (appearance.collapsedStyle !== undefined) options.collapsedStyle = appearance.collapsedStyle;
-  return withCodePreviewRenderers({ name }, { renderCall, renderResult }, options);
+  );
 }

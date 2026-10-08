@@ -179,32 +179,32 @@ export const makeLocalClaudeInputDelivery = (
           Effect.andThen(publish(input, "pending")),
           Effect.andThen(nativeSend),
           Effect.andThen(Deferred.await(input.acknowledgement)),
-          Effect.timeout(operation === "steer" ? STEERING_ACK_WATCHDOG : START_REPLAY_DEADLINE),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.gen(function* () {
-              if (pending !== input || closedError())
-                return yield* Deferred.await(input.acknowledgement);
-              if (
-                operation === "steer" &&
-                (yield* observers.preserveReport?.(epoch) ?? Effect.succeed(false))
-              )
-                return yield* Deferred.await(input.acknowledgement);
-              // The exact owner may have changed while report evidence was queried.
-              if (pending !== input || closedError())
-                return yield* Deferred.await(input.acknowledgement);
-              return yield* failUncertainDelivery(
-                input,
-                processError(
-                  operation,
-                  `${operation}_outcome_uncertain`,
-                  operation === "steer"
-                    ? "Claude guidance native replay remained unconfirmed at the absolute five-minute acknowledgement watchdog. The backend is closing; delivery and incorporation remain unknown. Do not resend or retry this run."
-                    : "Claude stream input was sent but native replay confirmation did not arrive within 60 seconds; the backend is closing to prevent ambiguous retry correlation.",
-                ),
-                operation === "steer" ? "steering-watchdog" : "replay-deadline",
-              );
-            }),
-          ),
+          Effect.timeoutOrElse({
+            duration: operation === "steer" ? STEERING_ACK_WATCHDOG : START_REPLAY_DEADLINE,
+            orElse: () =>
+              Effect.gen(function* () {
+                const stillOwned = () => pending === input && !closedError();
+                if (
+                  !stillOwned() ||
+                  (operation === "steer" &&
+                    (yield* observers.preserveReport?.(epoch) ?? Effect.succeed(false))) ||
+                  // The exact owner may have changed while report evidence was queried.
+                  !stillOwned()
+                )
+                  return yield* Deferred.await(input.acknowledgement);
+                return yield* failUncertainDelivery(
+                  input,
+                  processError(
+                    operation,
+                    `${operation}_outcome_uncertain`,
+                    operation === "steer"
+                      ? "Claude guidance native replay remained unconfirmed at the absolute five-minute acknowledgement watchdog. The backend is closing; delivery and incorporation remain unknown. Do not resend or retry this run."
+                      : "Claude stream input was sent but native replay confirmation did not arrive within 60 seconds; the backend is closing to prevent ambiguous retry correlation.",
+                  ),
+                  operation === "steer" ? "steering-watchdog" : "replay-deadline",
+                );
+              }),
+          }),
           Effect.catchIf(
             (error) =>
               error instanceof SubagentProcessError && error.code === "transport_outcome_uncertain",
@@ -274,7 +274,6 @@ export const makeLocalClaudeInputDelivery = (
     get failure() {
       return failure;
     },
-    clear,
     confirm,
     acceptReport,
     send,

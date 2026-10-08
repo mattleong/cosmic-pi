@@ -243,23 +243,16 @@ export const requireWorkflowArgs = (
   name: string,
   args: Schema.Json,
 ): Effect.Effect<void, WorkflowRequestError> =>
-  contract === undefined
-    ? Effect.void
-    : contract
-        .check(args)
-        .pipe(
-          Effect.flatMap((problems) =>
-            problems.length === 0
-              ? Effect.void
-              : Effect.fail(
-                  workflowRequestError(
-                    "args_mismatch",
-                    mismatchText(name, problems, contract.summary),
-                    problems,
-                  ),
-                ),
-          ),
-        );
+  Effect.gen(function* () {
+    if (contract === undefined) return;
+    const problems = yield* contract.check(args);
+    if (problems.length > 0)
+      return yield* workflowRequestError(
+        "args_mismatch",
+        mismatchText(name, problems, contract.summary),
+        problems,
+      );
+  });
 
 /** Checks a start's args: their size as JSON, then the script's `meta.args` schema. */
 export const requireStartArgs = (
@@ -268,10 +261,8 @@ export const requireStartArgs = (
   args: Schema.Json,
 ): Effect.Effect<void, WorkflowRequestError> =>
   Option.getOrElse(encodeJson(args), () => "").length > WORKFLOW_ARGS_MAX_CHARS
-    ? Effect.fail(
-        workflowRequestError(
-          "args_too_large",
-          `Workflow args are limited to ${WORKFLOW_ARGS_MAX_CHARS} characters of JSON; pass file paths for larger inputs.`,
-        ),
+    ? workflowRequestError(
+        "args_too_large",
+        `Workflow args are limited to ${WORKFLOW_ARGS_MAX_CHARS} characters of JSON; pass file paths for larger inputs.`,
       )
     : requireWorkflowArgs(contract, name, args);

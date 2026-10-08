@@ -11,7 +11,7 @@ import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import type { BackgroundTaskSnapshot } from "../task/model.ts";
-import { quotedWaitText } from "../ui/compact-summary.ts";
+import { quotedWaitText, resultSnapshot } from "../ui/compact-summary.ts";
 import { taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
 import { backgroundLogLines, type BackgroundTaskToolDetails } from "./command.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
@@ -51,15 +51,6 @@ function taskPreviewLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): str
 export function taskProcessLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): string {
   const pid = task.pid === undefined ? [] : [`pid ${task.pid}`];
   return theme.fg("muted", [sanitizeTerminalLine(task.cwd), ...pid].join(" · "));
-}
-
-/** The one snapshot a single-task result carries. */
-export function resultSnapshot(
-  details: BackgroundTaskToolDetails,
-): BackgroundTaskSnapshot | undefined {
-  if (details.action === "start" || details.action === "status" || details.action === "stop")
-    return details.snapshot;
-  return details.action === "wait" ? details.wait.snapshot : undefined;
 }
 
 /** A row that is clipped to one line collapsed and wrapped once expanded. */

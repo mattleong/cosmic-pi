@@ -16,53 +16,43 @@ const windowsAbsolutePath = /^[a-zA-Z]:\//;
 const claimKey = (claim: string): string => claim.normalize("NFC").toLocaleLowerCase("en-US");
 const outsideWorkspaceMarkerKey = claimKey(OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER);
 
+const invalid = (code: string, message: string): WriteClaimNormalizationResult => ({
+  ok: false,
+  code,
+  message,
+});
+
 export const normalizeWriteClaim = (input: string): WriteClaimNormalizationResult => {
   const value = input.trim().normalize("NFC");
-  if (!value)
-    return { ok: false, code: "write_claim_required", message: "Write claims must be nonblank." };
+  if (!value) return invalid("write_claim_required", "Write claims must be nonblank.");
   if (value.length > MAX_WRITE_CLAIM_CHARS)
-    return {
-      ok: false,
-      code: "write_claim_too_large",
-      message: `Write claims may contain at most ${MAX_WRITE_CLAIM_CHARS} characters.`,
-    };
-  if (
-    [...value].some((character) => {
-      const code = character.charCodeAt(0);
-      return code < 32 || (code >= 127 && code <= 159);
-    })
-  )
-    return {
-      ok: false,
-      code: "write_claim_invalid",
-      message: "Write claims may not contain control characters.",
-    };
+    return invalid(
+      "write_claim_too_large",
+      `Write claims may contain at most ${MAX_WRITE_CLAIM_CHARS} characters.`,
+    );
+  if (/\p{Cc}/u.test(value))
+    return invalid("write_claim_invalid", "Write claims may not contain control characters.");
   if (value.includes("\\"))
-    return {
-      ok: false,
-      code: "write_claim_invalid",
-      message: `Write claim "${value}" must use workspace-relative POSIX separators.`,
-    };
-  if (value.startsWith("/") || value.startsWith("//") || windowsAbsolutePath.test(value))
-    return {
-      ok: false,
-      code: "write_claim_absolute",
-      message: `Write claim "${value}" must be relative to the workspace.`,
-    };
+    return invalid(
+      "write_claim_invalid",
+      `Write claim "${value}" must use workspace-relative POSIX separators.`,
+    );
+  if (value.startsWith("/") || windowsAbsolutePath.test(value))
+    return invalid(
+      "write_claim_absolute",
+      `Write claim "${value}" must be relative to the workspace.`,
+    );
   if (claimKey(value) === outsideWorkspaceMarkerKey)
-    return {
-      ok: false,
-      code: "write_claim_outside_workspace",
-      message: "The outside-workspace audit marker cannot become a file claim.",
-    };
-  const segments = value.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === ".."))
-    return {
-      ok: false,
-      code: "write_claim_invalid",
-      message: `Write claim "${value}" must be a normalized file path without empty, dot, or parent segments.`,
-    };
-  return { ok: true, claims: [segments.join("/")] };
+    return invalid(
+      "write_claim_outside_workspace",
+      "The outside-workspace audit marker cannot become a file claim.",
+    );
+  if (value.split("/").some((segment) => segment === "" || segment === "." || segment === ".."))
+    return invalid(
+      "write_claim_invalid",
+      `Write claim "${value}" must be a normalized file path without empty, dot, or parent segments.`,
+    );
+  return { ok: true, claims: [value] };
 };
 
 export const normalizeWriteClaims = (
@@ -70,30 +60,24 @@ export const normalizeWriteClaims = (
 ): WriteClaimNormalizationResult => {
   if (inputs === undefined) return { ok: true, claims: [] };
   if (inputs.length === 0)
-    return {
-      ok: false,
-      code: "write_claims_required",
-      message: "When writes is present it must contain at least one exact file path.",
-    };
+    return invalid(
+      "write_claims_required",
+      "When writes is present it must contain at least one exact file path.",
+    );
   if (inputs.length > MAX_WRITE_CLAIMS)
-    return {
-      ok: false,
-      code: "too_many_write_claims",
-      message: `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
-    };
-  const claims: string[] = [];
-  const keys = new Set<string>();
+    return invalid(
+      "too_many_write_claims",
+      `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
+    );
+  // Keyed case-insensitively, keeping each path's first spelling in input order.
+  const claims = new Map<string, string>();
   for (const input of inputs) {
     const normalized = normalizeWriteClaim(input);
     if (!normalized.ok) return normalized;
-    const claim = normalized.claims[0];
-    if (!claim) continue;
-    const key = claimKey(claim);
-    if (keys.has(key)) continue;
-    keys.add(key);
-    claims.push(claim);
+    for (const claim of normalized.claims)
+      if (!claims.has(claimKey(claim))) claims.set(claimKey(claim), claim);
   }
-  return { ok: true, claims };
+  return { ok: true, claims: [...claims.values()] };
 };
 
 export const firstWriteClaimConflict = (

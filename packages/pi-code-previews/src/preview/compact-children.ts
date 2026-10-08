@@ -1,8 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
 import { layoutCompactRow } from "./compact-row";
-import { compactIssueLabel, renderCompactIssues } from "./compact-issues";
+import { compactIssueLabel, renderCompactIssues, wrapHanging } from "./compact-issues";
 import { formatDuration } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
@@ -15,11 +15,14 @@ const priority = (child: CompactChild): number =>
       : 1;
 
 /** Prefer active/problem calls, then recent completions; keep their admission order. */
-export function selectCompactChildren(children: NonNullable<CompactSummary["children"]>) {
+export function selectCompactChildren(
+  children: NonNullable<CompactSummary["children"]>,
+  limit = MAX_CHILDREN,
+) {
   const entries = children.entries
     .map((entry, index) => ({ entry, index }))
     .toSorted((a, b) => priority(a.entry) - priority(b.entry) || b.index - a.index)
-    .slice(0, MAX_CHILDREN)
+    .slice(0, limit)
     .toSorted((a, b) => a.index - b.index)
     .map(({ entry }) => entry);
   const shown = new Set(entries);
@@ -38,8 +41,8 @@ export function renderCompactChildren(
   theme: Theme,
   width: number,
   options: {
-    animationFrame?: number;
-    timingEnabled?: boolean;
+    animationFrame?: number | undefined;
+    timingEnabled?: boolean | undefined;
     layout?: "tree" | "flat";
     /** Show every retained call instead of the five most relevant. */
     all?: boolean;
@@ -47,24 +50,18 @@ export function renderCompactChildren(
 ): string[] {
   if (!children || width <= 0) return [];
   const flat = options.layout === "flat";
-  const { entries, omitted, hiddenFailed } = options.all
-    ? {
-        entries: children.entries,
-        omitted: Math.max(0, children.total - children.entries.length),
-        hiddenFailed: 0,
-      }
-    : selectCompactChildren(children);
-  const rows: string[] = [];
+  const { entries, omitted, hiddenFailed } = selectCompactChildren(
+    children,
+    options.all ? Infinity : MAX_CHILDREN,
+  );
   // Omitted calls may be older rows that were evicted or calls never tracked, so say neither.
-  if (flat && omitted > 0)
-    rows.push(clipToWidth(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, ""));
+  const rows =
+    flat && omitted > 0
+      ? wrapHanging(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, "", "", 0)
+      : [];
   entries.forEach((entry, index) => {
-    const branch = index === entries.length - 1 && (flat || omitted === 0) ? "╰─" : "├─";
+    const branch = index === entries.length - 1 && omitted === 0 ? "╰─" : "├─";
     const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
-    const duration =
-      entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0
-        ? formatDuration(entry.durationMs)
-        : undefined;
     const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
     const { row, issueShown } = layoutCompactRow(
       {
@@ -72,12 +69,10 @@ export function renderCompactChildren(
         phase: entry.status === "pending" || entry.status === "running" ? entry.status : "settled",
         status: entry.status,
         returnedCheckmark: entry.returnedCheckmark,
-        summary: {
-          ...entry,
-          subject: entry.subject ?? "",
-        },
+        summary: { ...entry, subject: entry.subject ?? "" },
         issueLabel: issueLabel || undefined,
-        duration,
+        // The row shows a duration only for a finite, non-negative measurement.
+        duration: entry.durationMs === undefined ? undefined : formatDuration(entry.durationMs),
         elapsedMs: entry.durationMs,
         timingEnabled: options.timingEnabled ?? true,
         animationFrame: options.animationFrame ?? 0,
@@ -91,9 +86,7 @@ export function renderCompactChildren(
     // A reason that does not fit on its row moves beneath it rather than disappearing.
     else if (issueLabel && !issueShown) {
       const rail = theme.fg("dim", branch === "├─" ? "  │    " : "       ");
-      const indent = width - visibleWidth(rail) >= 8 ? visibleWidth(rail) : 0;
-      for (const line of wrapTextWithAnsi(issueLabel, width - indent))
-        rows.push(clipToWidth(`${indent ? rail : ""}${line}`, width, ""));
+      rows.push(...wrapHanging(issueLabel, width, rail, rail, 8));
     }
   });
   if (!flat && omitted > 0) rows.push(...omissionRows(omitted, hiddenFailed, theme, width));
@@ -114,19 +107,10 @@ function omissionRows(
   const failed = hiddenFailed > 0 ? theme.fg("error", `${hiddenFailed} failed`) : "";
   const single = branch + more + (failed ? ` (${failed})` : "");
   if (visibleWidth(single) <= width) return [single];
-
-  const rows: string[] = [];
-  const branchWidth = visibleWidth(branch);
-  const indent = width - branchWidth >= 8 ? branchWidth : 0;
-  for (const [index, line] of wrapTextWithAnsi(more, width - indent).entries())
-    rows.push(
-      clipToWidth(`${indent ? (index === 0 ? branch : " ".repeat(indent)) : ""}${line}`, width, ""),
-    );
-  if (failed) {
-    // Drop decoration before splitting a complete failure fact that fits unadorned.
-    const failureIndent = width - branchWidth >= visibleWidth(failed) ? branchWidth : 0;
-    for (const line of wrapTextWithAnsi(failed, width - failureIndent))
-      rows.push(clipToWidth(`${" ".repeat(failureIndent)}${line}`, width, ""));
-  }
-  return rows;
+  const spaces = " ".repeat(visibleWidth(branch));
+  const rows = wrapHanging(more, width, branch, spaces, 8);
+  // Drop decoration before splitting a complete failure fact that fits unadorned.
+  return failed
+    ? rows.concat(wrapHanging(failed, width, spaces, spaces, visibleWidth(failed)))
+    : rows;
 }

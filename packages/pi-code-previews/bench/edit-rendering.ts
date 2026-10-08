@@ -22,7 +22,16 @@ const {
   setCodePreviewPerformanceConfig,
   setCodePreviewSettings,
 } = await import("../src/config/state");
-const { createEditPreviewTool } = await import("../src/tools/renderers/edit");
+const { createBuiltinPreviewRenderers } = await import("../src/tools/renderers/registration");
+// A no-op session scheduler, as live sessions always pass one. Older runs rendered without a
+// scheduler, so their shell and timing-only numbers are not strictly comparable with these.
+const createEditPreviewTool = (cwd: string) =>
+  createBuiltinPreviewRenderers("edit", {
+    cwd,
+    selfShell: false,
+    scheduleAnimation: () => () => undefined,
+    enabledTools: ["edit"],
+  })!;
 const { startBenchmarkShikiSession } = await import("./shiki-session");
 
 const WIDTH = 120;

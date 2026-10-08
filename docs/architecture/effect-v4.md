@@ -149,7 +149,7 @@ Compiler tooling lives at the workspace root. Runtime dependencies are declared 
 - `tsconfig.effect.json` enables the workspace's Effect-native diagnostics. `strictEffectProvide` applies to production `src/**/*.ts`; tests are Effect entry points that intentionally provide complete test Layers.
 - Each package declares the official `effect-tsgo diagnostics` command, and the root `pnpm effect:diagnostics` command runs those package scripts recursively. TypeScript typechecking and Effect diagnostics stay as separate gates so Effect messages are not emitted twice.
 - Oxlint, package tests, packaging smoke tests, and code review cover the remaining correctness and integration concerns.
-- Narrow repository guards complement these tools: `pnpm layout:check` checks package/test placement and declared nested packages; `pnpm diagnostics:guard` rejects source suppressions and disabled diagnostic configuration. Other architecture conventions remain documented guidance, not a custom architecture analyzer.
+- Narrow repository guards complement these tools: `pnpm layout:check` checks package/test placement and rejects nested package manifests; `pnpm diagnostics:guard` rejects source suppressions and disabled diagnostic configuration. Other architecture conventions remain documented guidance, not a custom architecture analyzer.
 
 ## Upgrade procedure
 

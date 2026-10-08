@@ -1,39 +1,28 @@
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
-import { executeNativeWrite } from "../boundary/host-write";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   captureCodePreviewSessionCapability,
-  hasCodePreviewSessionCapability,
   rejectInactiveCodePreviewSession,
-  runCodePreviewSessionEffect,
 } from "../application/capability";
-import { resolvePreviewPath } from "../paths/resolve";
+import { executeNativeWrite } from "../boundary/host-write";
 import { getObjectValue } from "../shared/helpers";
 import { readExistingFileForPreviewEffect, type ExistingFilePreview } from "./diff";
-import { lookupBeforeWrite } from "./projection";
+import { lookupBeforeWrite, type CodePreviewBeforeWrite } from "./projection";
 import { CodePreviewWriteService } from "./service";
 
 const CODE_PREVIEW_BEFORE_WRITE_DETAIL = "codePreviewBeforeWrite";
-export type CodePreviewBeforeWrite = ExistingFilePreview | undefined;
 type RedactedCodePreviewBeforeWrite =
   | Exclude<ExistingFilePreview, { kind: "content" }>
   | { kind: "content"; byteLength: number }
   | undefined;
-export interface CodePreviewWriteDetails {
-  readonly codePreviewBeforeWrite: RedactedCodePreviewBeforeWrite;
-}
-type WithCodePreviewWriteDetails<T extends { details?: unknown }> = Omit<T, "details"> & {
-  readonly details: T["details"] extends object
-    ? T["details"] & CodePreviewWriteDetails
-    : CodePreviewWriteDetails;
-};
+/** Pi reads only the message of a rejected tool call. */
 class CodePreviewWriteError extends Schema.TaggedError<CodePreviewWriteError>()(
   "CodePreviewWriteError",
-  { operation: Schema.String, path: Schema.String, message: Schema.String },
+  { message: Schema.String },
 ) {}
 
 export function getCodePreviewBeforeWrite<DetailsInput>(
@@ -51,7 +40,7 @@ export function getCodePreviewBeforeWrite<DetailsInput>(
  * JSON replay drops that property, so missing history must remain unknown.
  */
 export function isKnownNewWrite<Before, Details>(before: Before, details: Details): boolean {
-  if (before !== undefined || details === null || !hasObjectRuntimeType(details)) return false;
+  if (before !== undefined || !Predicate.isObjectOrArray(details)) return false;
   try {
     const field = Object.getOwnPropertyDescriptor(details, CODE_PREVIEW_BEFORE_WRITE_DETAIL);
     return field !== undefined && "value" in field && field.value === undefined;
@@ -67,8 +56,6 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   cwd: string,
   ctx?: ExtensionToolContext,
 ) {
-  const executionCwd = ctx?.cwd || cwd;
-  const absolutePath = resolvePreviewPath(path, executionCwd);
   const writeService = yield* CodePreviewWriteService;
   const fs = yield* FileSystem.FileSystem;
   let before: CodePreviewBeforeWrite;
@@ -76,16 +63,12 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   const failure = <Cause>(cause: Cause) =>
     cause instanceof CodePreviewWriteError
       ? cause
-      : new CodePreviewWriteError({
-          operation: "write",
-          path: absolutePath,
-          message: nativeErrorMessage(cause),
-        });
+      : new CodePreviewWriteError({ message: nativeErrorMessage(cause) });
   const result = yield* executeNativeWrite(
     toolCallId,
     path,
     content,
-    executionCwd,
+    cwd,
     {
       mkdir: (directory) =>
         fs
@@ -94,7 +77,7 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
       writeFile: (target, next, signal) =>
         Effect.gen(function* () {
           // Pi already holds the canonical mutation queue. Read only after admission.
-          before = yield* readExistingFileForPreviewEffect(target, executionCwd, next);
+          before = yield* readExistingFileForPreviewEffect(target, next);
           yield* Effect.uninterruptible(
             Effect.gen(function* () {
               if (signal.aborted) return yield* Effect.interrupt;
@@ -136,24 +119,8 @@ function nativeErrorMessage<Failure>(error: Failure): string {
   return source instanceof Error ? source.message : String(source);
 }
 
+/** Result details keep the previous content's size, not the content itself. */
 function redactedBeforeWriteDetail(before: CodePreviewBeforeWrite): RedactedCodePreviewBeforeWrite {
   if (!before || before.kind !== "content") return before;
   return { kind: "content", byteLength: Buffer.byteLength(before.content, "utf8") };
-}
-export function withCodePreviewBeforeWrite<T extends { details?: unknown }>(
-  result: T,
-  before: CodePreviewBeforeWrite,
-  toolCallId?: string,
-): Promise<WithCodePreviewWriteDetails<T>> {
-  const details: object =
-    result.details !== null && hasObjectRuntimeType(result.details) ? result.details : {};
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const enriched = {
-    ...result,
-    details: { ...details, [CODE_PREVIEW_BEFORE_WRITE_DETAIL]: redactedBeforeWriteDetail(before) },
-  } as WithCodePreviewWriteDetails<T>;
-  if (!toolCallId || !hasCodePreviewSessionCapability()) return Promise.resolve(enriched);
-  return runCodePreviewSessionEffect(
-    CodePreviewWriteService.use((service) => service.rememberBeforeWrite(toolCallId, before)),
-  ).then(() => enriched);
 }

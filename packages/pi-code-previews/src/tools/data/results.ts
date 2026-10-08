@@ -38,10 +38,11 @@ export function getFallbackResultText(
   return [text, ...images].filter(Boolean).join("\n");
 }
 
+const MAX_BOUNDED_TEXT_CHARS = 128 * 1024;
+
 /** Decline summary parsing rather than silently dropping output outside the budget. */
 export function getBoundedTextContent(
   content: Array<{ type: string; text?: string }> | undefined,
-  maxChars = 128 * 1024,
 ): string | undefined {
   if (!content) return "";
   if (content.length > 128) return undefined;
@@ -51,7 +52,7 @@ export function getBoundedTextContent(
     if (part.type !== "text") continue;
     const text = part.text ?? "";
     chars += text.length + (texts.length > 0 ? 1 : 0);
-    if (chars > maxChars) return undefined;
+    if (chars > MAX_BOUNDED_TEXT_CHARS) return undefined;
     texts.push(text);
   }
   return texts.join("\n");

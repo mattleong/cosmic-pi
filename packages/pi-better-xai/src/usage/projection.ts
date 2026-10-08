@@ -18,25 +18,23 @@ export interface XaiProjection extends UsageProjectionBase<ResolvedConfig, Usage
   readonly teamId: string | undefined;
 }
 
-type XaiProjectionExtras = Pick<XaiProjection, "teamId">;
-
-const initialExtras = (): XaiProjectionExtras => ({ teamId: undefined });
-
 export const initialXaiProjection = (): XaiProjection => ({
   ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
-  ...initialExtras(),
+  teamId: undefined,
 });
 
-export const makeProjection = (): MutableRef.MutableRef<XaiProjection> =>
-  makeFrozenUsageProjection<ResolvedConfig, UsageSnapshot, XaiProjectionExtras>(initialExtras());
+export const makeProjection = () => makeFrozenUsageProjection(initialXaiProjection);
 
-export function resetProjection(projection: MutableRef.MutableRef<XaiProjection>): void {
-  resetFrozenUsageProjection(projection, initialExtras);
-}
+export const resetProjection = (projection: MutableRef.MutableRef<XaiProjection>): void =>
+  resetFrozenUsageProjection(projection, initialXaiProjection);
 
+/** Total eligibility: a throwing host model, provider, or registry read hides usage. */
 export function isXaiSubscriptionModel(ctx: ExtensionContext, cfg: ResolvedConfig): boolean {
-  const model = ctx.model;
-  if (!model || model.provider !== "xai") return false;
+  const model = invokeHostCallback(() => {
+    const current = ctx.model;
+    return current?.provider === "xai" ? current : undefined;
+  }, undefined);
+  if (!model) return false;
   return (
     !cfg.usage.showOnlyOnSubscriptionModels ||
     invokeHostCallback(() => ctx.modelRegistry.isUsingOAuth(model), false)

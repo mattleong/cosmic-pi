@@ -27,13 +27,12 @@ test("line counters preserve file, preview, and mixed newline semantics", () => 
   assert.equal(selectPreviewTextLines("one\n\ntwo", 0).total, 3);
 });
 
+const line = (index: number, text = `line ${index}`) =>
+  ({ kind: "line", line: text, index }) as const;
+
 test("text preview selection preserves head and split window behavior", () => {
   assert.deepEqual(selectPreviewTextLines("zero\none\ntwo\nthree\nfour", 3), {
-    entries: [
-      { kind: "line", line: "zero", index: 0 },
-      { kind: "line", line: "one", index: 1 },
-      { kind: "line", line: "two", index: 2 },
-    ],
+    entries: [line(0, "zero"), line(1, "one"), line(2, "two")],
     shown: 3,
     hidden: 2,
     total: 5,
@@ -42,29 +41,27 @@ test("text preview selection preserves head and split window behavior", () => {
   const twelveLines = Array.from({ length: 12 }, (_, index) => `line ${index}`).join("\n");
   assert.deepEqual(selectPreviewTextLines(twelveLines, 8), {
     entries: [
-      { kind: "line", line: "line 0", index: 0 },
-      { kind: "line", line: "line 1", index: 1 },
-      { kind: "line", line: "line 2", index: 2 },
-      { kind: "line", line: "line 3", index: 3 },
-      { kind: "line", line: "line 4", index: 4 },
-      { kind: "line", line: "line 5", index: 5 },
+      ...[0, 1, 2, 3, 4, 5].map((index) => line(index)),
       { kind: "hidden", hidden: 5 },
-      { kind: "line", line: "line 11", index: 11 },
+      line(11),
     ],
     shown: 7,
     hidden: 5,
     total: 12,
   });
+  // The split begins at a limit of eight; seven still shows only the head.
+  const headOnly = selectPreviewTextLines(twelveLines, 7);
+  assert.deepEqual(
+    headOnly.entries,
+    [0, 1, 2, 3, 4, 5, 6].map((index) => line(index)),
+  );
+  assert.deepEqual({ shown: headOnly.shown, hidden: headOnly.hidden }, { shown: 7, hidden: 5 });
 });
 
 test("text preview selection retains all lines when unlimited or within the limit", () => {
   for (const limit of [3, 0, Number.MAX_SAFE_INTEGER])
     assert.deepEqual(selectPreviewTextLines("one\n\ntwo", limit), {
-      entries: [
-        { kind: "line", line: "one", index: 0 },
-        { kind: "line", line: "", index: 1 },
-        { kind: "line", line: "two", index: 2 },
-      ],
+      entries: [line(0, "one"), line(1, ""), line(2, "two")],
       shown: 3,
       hidden: 0,
       total: 3,
@@ -81,16 +78,4 @@ test("streaming text selection matches array selection across split boundaries",
       assert.deepEqual(fromText, { ...fromArray, total }, `limit ${limit} of ${total} lines`);
     }
   }
-});
-
-test("split window boundary stays head-only at a limit of seven", () => {
-  const headOnly = selectPreviewLines(
-    Array.from({ length: 20 }, (_, index) => `line ${index}`),
-    7,
-  );
-  assert.deepEqual(
-    headOnly.entries.map((entry) => entry.kind),
-    Array.from({ length: 7 }, () => "line"),
-  );
-  assert.deepEqual({ shown: headOnly.shown, hidden: headOnly.hidden }, { shown: 7, hidden: 13 });
 });

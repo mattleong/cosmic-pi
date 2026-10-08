@@ -4,9 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
 import { makeRunCompletionObservations } from "../../src/run/completion-observations.ts";
-import type { RunRecord } from "../../src/run/internal.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
-import { makeRunContext } from "./fixtures/run-context.ts";
+import { makeRunContext, partialRecord } from "./fixtures/run-context.ts";
+import { useProbe } from "./fixtures/service-harness.ts";
 
 describe("completion admission", () => {
   for (const operation of ["await", "status"] as const)
@@ -15,28 +15,15 @@ describe("completion admission", () => {
         const runLock = yield* Semaphore.make(1);
         const completionGate = yield* Semaphore.make(1);
         const enteredGate = yield* Deferred.make<void>();
-        const recordFields = {
+        // The observation boundary reads only the completion fields and the view.
+        const record = partialRecord({
           view: view({ state: "completed", reportGeneration: 1, finalText: "Report" }),
           completionGeneration: 1,
           completionGenerations: new Map([
-            [
-              1,
-              {
-                generation: 1,
-                outcome: "completed" as const,
-                finalText: "Report",
-                retained: false,
-              },
-            ],
+            [1, { generation: 1, outcome: "completed" as const, finalText: "Report" }],
           ]),
           completionClaims: new Map<number, string>(),
-        } satisfies Pick<
-          RunRecord,
-          "view" | "completionGeneration" | "completionGenerations" | "completionClaims"
-        >;
-        // SAFETY: This owned observation boundary reads only the completion fields and view.
-        // No backend, process, or run-lifecycle operation receives this record.
-        const record = recordFields as RunRecord;
+        });
         let token = 0;
         const observations = makeRunCompletionObservations({
           ...(yield* makeRunContext({
@@ -58,26 +45,22 @@ describe("completion admission", () => {
             releaseQuestionClaimsLocked: () => undefined,
           },
         });
-        let enteredUse = false;
-        const use = () =>
-          Effect.sync(() => {
-            enteredUse = true;
-          });
+        const probe = useProbe();
         const observe =
           operation === "await"
             ? observations.withAwaitTerminalObservations(
                 [record.view.id],
                 "all_finished",
                 undefined,
-                use,
+                probe.use,
               )
-            : observations.withStatusObservations([record.view.id], use);
+            : observations.withStatusObservations([record.view.id], probe.use);
         yield* runLock.take(1);
         yield* Effect.gen(function* () {
           const waiter = yield* observe.pipe(Effect.forkScoped);
           yield* Deferred.await(enteredGate);
           yield* Effect.yieldNow;
-          expect(enteredUse).toBe(false);
+          expect(probe.entered).toBe(false);
           expect(record.completionClaims.size).toBe(0);
           let cancelled = false;
           const cancellation = yield* Fiber.interrupt(waiter).pipe(
@@ -90,7 +73,7 @@ describe("completion admission", () => {
           );
           for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
           expect(cancelled).toBe(true);
-          expect(enteredUse).toBe(false);
+          expect(probe.entered).toBe(false);
           expect(record.completionClaims.size).toBe(0);
           let gateReusable = false;
           const gateProbe = yield* completionGate
@@ -121,7 +104,7 @@ describe("completion admission", () => {
         );
         expect(record.completionClaims.size).toBe(0);
         expect(record.completionGenerations.size).toBe(0);
-        expect(enteredUse).toBe(false);
+        expect(probe.entered).toBe(false);
       }),
     );
 });

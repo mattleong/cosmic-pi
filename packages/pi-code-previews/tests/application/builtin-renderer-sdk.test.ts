@@ -1,25 +1,16 @@
 // Public Pi SDK integration boundary; native executions use real local files and shell settings.
 import assert from "node:assert/strict";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { makePiManagedRuntime, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { codePreviewsWithDependencies } from "../../src/application/lifecycle";
-import { codePreviewApplicationLayer } from "../../src/layer";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { createToolPresentationHarness } from "../../testing";
-import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { setCodePreviewSettings } from "../../src/config/state";
 import { CORE_CODE_PREVIEW_TOOLS } from "../../src/tools/names";
 import { registerWritePreviewTool } from "../../src/tools/renderers/registration";
 import { step } from "../support/effect-test";
+import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
+import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 
 for (const activeWrite of [false, true])
   it.live(
@@ -32,98 +23,39 @@ for (const activeWrite of [false, true])
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1kAAAAASUVORK5CYII=";
         yield* fs.writeFile(`${directory}/image.png`, Buffer.from(imageData, "base64"));
         yield* fs.writeFileString(`${directory}/source.txt`, "NATIVE_READ_CONTENT");
-        const models = yield* step(() =>
-          ModelRuntime.create({
-            authPath: `${directory}/auth.json`,
-            modelsPath: null,
-            modelsStorePath: `${directory}/models-cache.json`,
-            refreshOnCreate: false,
-            allowModelNetwork: false,
-          }),
-        );
-        const settings = SettingsManager.inMemory({
+        const models = yield* offlineModels(directory);
+        const settings = quietSettings({
           defaultTools: activeWrite ? ["read", "bash", "write"] : ["read", "bash"],
           shellPath: "/bin/sh",
           shellCommandPrefix: "export PREVIEW_NATIVE_PREFIX=kept;",
           images: { autoResize: false },
-          compaction: { enabled: false },
-          retry: { enabled: false },
         });
         const registrations: ToolDefinition<any, any, any>[] = [];
-        const loader = new DefaultResourceLoader({
+        const factory = codePreviewsUnderTest(
+          directory,
+          {
+            tools: [...CORE_CODE_PREVIEW_TOOLS],
+            syntaxHighlighting: false,
+            toolCallTiming: false,
+            toolCallCollapsedStyle: "compact",
+          },
+          {
+            api: (pi) => ({
+              registerTool(tool) {
+                registrations.push(tool);
+                pi.registerTool(tool);
+              },
+            }),
+            registerRenderers: registerWritePreviewTool,
+          },
+        );
+        const loader = yield* quietLoader({
           cwd: directory,
           agentDir: directory,
           settingsManager: settings,
-          noSkills: true,
-          noPromptTemplates: true,
-          noThemes: true,
-          noContextFiles: true,
-          extensionFactories: [
-            {
-              name: "code-previews",
-              factory(pi) {
-                return codePreviewsWithDependencies(
-                  {
-                    ...pi,
-                    registerTool(tool) {
-                      registrations.push(tool);
-                      pi.registerTool(tool);
-                    },
-                  },
-                  {
-                    makeRuntime: (api) =>
-                      makePiManagedRuntime(api, codePreviewApplicationLayer, {
-                        agentDirectory: () => directory,
-                        packageName: "pi-code-previews",
-                      }),
-                    registerCommands: (api) =>
-                      api.registerCommand("code-previews", {
-                        description: "Presentation fixture",
-                        handler: () => Promise.resolve(),
-                      }),
-                    loadSettings: () =>
-                      Effect.sync(() => {
-                        const previewSettings = {
-                          ...defaultCodePreviewSettings,
-                          tools: [...CORE_CODE_PREVIEW_TOOLS],
-                          syntaxHighlighting: false,
-                          toolCallTiming: false,
-                          toolCallCollapsedStyle: "compact" as const,
-                        };
-                        setCodePreviewSettings(previewSettings);
-                        return previewSettings;
-                      }),
-                    initializeSyntax: () => Effect.void,
-                    registerRenderers: registerWritePreviewTool,
-                  },
-                );
-              },
-            },
-          ],
+          extensionFactories: [{ name: "code-previews", factory }],
         });
-        yield* step(() => loader.reload());
-        const { session } = yield* step(() =>
-          createAgentSession({
-            cwd: directory,
-            agentDir: directory,
-            modelRuntime: models,
-            settingsManager: settings,
-            sessionManager: SessionManager.inMemory(directory),
-            resourceLoader: loader,
-          }),
-        );
-        yield* Effect.addFinalizer(() =>
-          step(() =>
-            session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-          ).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                session.dispose();
-                setCodePreviewSettings(defaultCodePreviewSettings);
-              }),
-            ),
-          ),
-        );
+        const session = yield* scopedSession({ cwd: directory, models, settings, loader });
         const before = new Map(
           ["bash", "read", "edit", "grep", "find", "ls"].map((name) => [
             name,
@@ -183,12 +115,8 @@ for (const activeWrite of [false, true])
         );
         assert.ok(renderers);
         const harness = createToolPresentationHarness(renderers);
-        for (const expanded of [false, true, false, true]) {
-          harness.call({ path: "image.png" }, { expanded });
-          harness.result(image, { expanded });
-          const text = harness.render(80).join("\n");
+        for (const { text } of harness.cycle({ path: "image.png" }, image))
           assert.equal(text.includes(imageData), false);
-        }
         assert.deepEqual(image, original);
         assert.equal(
           image.content.find((part) => part.type === "image"),

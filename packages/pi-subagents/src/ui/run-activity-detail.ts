@@ -14,7 +14,7 @@ const section = (title: string, body: string, maximumLength: number): string =>
   body.trim() ? `${title}:\n${bounded(body, maximumLength)}` : "";
 
 /** Where a run sits in Activity: under its workflow, or as a root run that has its call settled. */
-export interface RunActivityPlacement {
+interface RunActivityPlacement {
   /** The member's settled agent() call, while it still describes the run. */
   readonly call?: WorkflowAgentView | undefined;
   /** Whether Activity shows the run under its workflow, whose breadcrumb then names it. */
@@ -106,10 +106,7 @@ const technical = (run: SubagentRunView): string =>
  * its outcome, task, recent activity and usage, then technical facts. The whole detail is clipped
  * to the protocol's bound, which drops technical facts before anything else.
  */
-export const runActivityDetail = (
-  run: SubagentRunView,
-  placement: RunActivityPlacement = { nested: false },
-): string =>
+export const runActivityDetail = (run: SubagentRunView, placement: RunActivityPlacement): string =>
   bounded(
     [
       bounded(

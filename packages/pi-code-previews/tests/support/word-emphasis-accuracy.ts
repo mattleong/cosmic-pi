@@ -1,8 +1,7 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import { renderSyntaxHighlightedDiff } from "../../src/diff/render";
-import { collectChangedDiffBlock, isChangedDiffLine, parseDiffLine } from "../../src/diff/parse";
-import { analyzeChangedLineBlock } from "../../src/diff/word/change-block";
-import { shouldEmphasizeChangedPair } from "../../src/diff/word/emphasis";
+import { parseDiffLine } from "../../src/diff/parse";
+import { emphasizedChangedPairs } from "../../src/diff/word/change-block";
 import { wordEmphasisAccuracyCases } from "./word-fixtures/emphasis-accuracy";
 import type { WordEmphasisGoldenCase } from "./word-fixtures/emphasis-golden";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
@@ -45,19 +44,17 @@ type WordEmphasisAccuracyReport = {
 type Range = [start: number, end: number];
 type LinePair = [removedLine: number, addedLine: number];
 
-export function evaluateWordEmphasisAccuracy(
-  cases: readonly WordEmphasisGoldenCase[] = wordEmphasisAccuracyCases,
-): Promise<WordEmphasisAccuracyReport> {
+export function evaluateWordEmphasisAccuracy(): Promise<WordEmphasisAccuracyReport> {
   const previousSettings = { ...codePreviewSettings };
   let prepared: Promise<void> = Promise.resolve();
-  if (cases.some((accuracyCase) => accuracyCase.lang)) {
+  if (wordEmphasisAccuracyCases.some((accuracyCase) => accuracyCase.lang)) {
     setCodePreviewSettings({ ...previousSettings, syntaxHighlighting: true });
     prepared = initializeShiki(previousSettings.shikiTheme);
   }
   return prepared
     .then(() => {
       const results: WordEmphasisAccuracyCaseResult[] = [];
-      for (const accuracyCase of cases) {
+      for (const accuracyCase of wordEmphasisAccuracyCases) {
         setCodePreviewSettings({
           ...previousSettings,
           syntaxHighlighting: true,
@@ -177,22 +174,10 @@ function rangesForExpectedSpans(
 }
 
 function emphasizedLinePairs(accuracyCase: WordEmphasisGoldenCase): LinePair[] {
-  const parsedLines = accuracyCase.diff.map(parseDiffLine);
-  const pairs: LinePair[] = [];
-
-  for (let index = 0; index < parsedLines.length; index++) {
-    const parsed = parsedLines[index];
-    if (!parsed || !isChangedDiffLine(parsed)) continue;
-    const { block, end } = collectChangedDiffBlock(parsedLines, index);
-    const analysis = analyzeChangedLineBlock(block, accuracyCase.mode ?? "all");
-    for (const { pair, ranges } of analysis.ranges) {
-      if (!shouldEmphasizeChangedPair(ranges, pair.confidence)) continue;
-      pairs.push([index + pair.removedIndex, index + pair.addedIndex]);
-    }
-    index = end - 1;
-  }
-
-  return pairs;
+  return Array.from(
+    emphasizedChangedPairs(accuracyCase.diff.map(parseDiffLine), accuracyCase.mode ?? "all"),
+    (pair): LinePair => [pair.removedIndex, pair.addedIndex],
+  );
 }
 
 function pairAccuracyCounts(

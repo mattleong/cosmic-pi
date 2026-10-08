@@ -1,20 +1,25 @@
-import type { PreviewToolInfo } from "../../application/renderer-contract";
+import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 
-export const WEB_ACCESS_TOOLS = [
-  "web_enable",
-  "web_search",
-  "source_check",
-  "fetch_content",
-  "get_search_content",
-] as const;
-export type WebAccessTool = (typeof WEB_ACCESS_TOOLS)[number];
+/** The adapter's default tool names, in gallery order, and their display labels. */
+export const WEB_ACCESS_LABELS = {
+  web_enable: "web tools",
+  web_search: "web search",
+  source_check: "source check",
+  fetch_content: "fetch content",
+  get_search_content: "stored content",
+} as const;
+export type WebAccessTool = keyof typeof WEB_ACCESS_LABELS;
 
 export function isWebAccessTool(name: string): name is WebAccessTool {
-  return WEB_ACCESS_TOOLS.some((candidate) => candidate === name);
+  return Object.hasOwn(WEB_ACCESS_LABELS, name);
 }
 
+export const WEB_ACCESS_TOOLS: readonly WebAccessTool[] = Object.freeze(
+  Object.keys(WEB_ACCESS_LABELS).filter(isWebAccessTool),
+);
+
 /** Exact public npm package identity and known entrypoints; never basename/suffix discovery. */
-export function admitsWebAccessSource(tool: PreviewToolInfo): boolean {
+export function admitsWebAccessSource(tool: ToolInfo): boolean {
   const { sourceInfo } = tool;
   if (
     !isWebAccessTool(tool.name) ||
@@ -27,11 +32,3 @@ export function admitsWebAccessSource(tool: PreviewToolInfo): boolean {
   const path = sourceInfo.path.replaceAll("\\", "/");
   return path === `${root}/dist/index.js` || path === `${root}/index.ts`;
 }
-
-export const WEB_ACCESS_LABELS = {
-  web_enable: "web tools",
-  web_search: "web search",
-  source_check: "source check",
-  fetch_content: "fetch content",
-  get_search_content: "stored content",
-} satisfies Record<WebAccessTool, string>;

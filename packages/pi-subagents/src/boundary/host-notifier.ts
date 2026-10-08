@@ -1,5 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine, clipText } from "pi-cosmic-core";
+import * as Predicate from "effect/Predicate";
+import {
+  clipText,
+  invokeHostCallback,
+  sanitizeDiagnosticContent,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 import type { SubagentWorkflowMembership } from "../run/model.ts";
 
 export interface SubagentCompletionNotification {
@@ -10,7 +16,6 @@ export interface SubagentCompletionNotification {
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
-  readonly retained?: boolean | undefined;
   readonly retryAvailable?: boolean | undefined;
   readonly profile?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
@@ -112,14 +117,12 @@ const completionBody = (run: SubagentCompletionNotification): string => {
     warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
     retry,
   ]
-    .filter((value): value is string => value !== undefined)
+    .filter(Predicate.isNotUndefined)
     .join("\n\n");
 };
 
 const completionHeading = (run: SubagentCompletionNotification): string =>
-  run.outcome === "failed"
-    ? `failed outcome ${run.generation}`
-    : `report ${run.generation}${run.retained ? " · retained" : ""}`;
+  run.outcome === "failed" ? `failed outcome ${run.generation}` : `report ${run.generation}`;
 
 const completionSection = (run: SubagentCompletionNotification): string =>
   `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n${completionBody(run)}`;
@@ -143,9 +146,7 @@ const completionChunks = (
     const prefix =
       run.outcome === "failed"
         ? `Background subagent ${run.name} (${run.id}) failed.`
-        : run.retained
-          ? `Background subagent ${run.name} (${run.id}) reported generation ${run.generation} and remains available for guidance.`
-          : `Background subagent ${run.name} (${run.id}) completed.`;
+        : `Background subagent ${run.name} (${run.id}) completed.`;
     const maximumBodyLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
     const content = `${prefix}\n\n${boundedCompletion(run, completionBody(run), maximumBodyLength)}`;
     return [{ content: clip(content), runs: [run] }];
@@ -155,16 +156,14 @@ const completionChunks = (
   let chunkRuns: SubagentCompletionNotification[] = [];
   let sections: string[] = [];
   const failed = runs.filter((run) => run.outcome === "failed").length;
-  const retained = runs.filter((run) => run.outcome !== "failed" && run.retained).length;
-  const closed = runs.length - retained - failed;
+  const completed = runs.length - failed;
   const headerFor = (chunkIndex: number): string => {
     const continuation = chunkIndex === 0 ? "" : ` (continued ${chunkIndex + 1})`;
     const outcomes = [
-      closed > 0 ? `${closed} completed` : undefined,
+      completed > 0 ? `${completed} completed` : undefined,
       failed > 0 ? `${failed} failed` : undefined,
-      retained > 0 ? `${retained} reported and retained` : undefined,
     ]
-      .filter((value): value is string => value !== undefined)
+      .filter(Predicate.isNotUndefined)
       .join(" · ");
     return `${runs.length} background subagents finished${continuation} · ${outcomes}.`;
   };
@@ -176,29 +175,18 @@ const completionChunks = (
     sections = [];
   };
 
+  /** What the current chunk can still hold after its header, sections and one more separator. */
+  const room = () =>
+    MAX_NOTIFICATION_CHARS -
+    headerFor(chunks.length).length -
+    2 -
+    sections.join("\n\n").length -
+    (sections.length > 0 ? 2 : 0);
   for (const run of runs) {
-    let header = headerFor(chunks.length);
-    const unboundedSection = completionSection(run);
-    const occupied = header.length + 2 + sections.join("\n\n").length;
-    const separator = sections.length > 0 ? 2 : 0;
-    if (
-      sections.length > 0 &&
-      occupied + separator + unboundedSection.length > MAX_NOTIFICATION_CHARS
-    ) {
-      flush();
-      header = headerFor(chunks.length);
-    }
-    const currentSectionsLength = sections.join("\n\n").length;
-    const maximumSectionLength = Math.max(
-      0,
-      MAX_NOTIFICATION_CHARS -
-        header.length -
-        2 -
-        currentSectionsLength -
-        (sections.length ? 2 : 0),
-    );
+    const section = completionSection(run);
+    if (sections.length > 0 && section.length > room()) flush();
     chunkRuns.push(run);
-    sections.push(boundedCompletion(run, unboundedSection, maximumSectionLength));
+    sections.push(boundedCompletion(run, section, Math.max(0, room())));
   }
   flush();
   return chunks;
@@ -226,44 +214,53 @@ export const workflowNotificationWakesAgent = (
   notification: SubagentWorkflowNotification,
 ): boolean => notification.outcome === "completed" || notification.outcome === "failed";
 
+/**
+ * Steers a displayed message into the parent session: it joins an active run or wakes an idle
+ * parent when `triggerTurn` holds. Host acceptance is synchronous; model consumption may occur
+ * later. A replaced or closing session can throw before or after accepting, so false leaves the
+ * notification for its service to retry.
+ */
+const steer = (
+  pi: ExtensionAPI,
+  message: Omit<Parameters<ExtensionAPI["sendMessage"]>[0], "display">,
+  triggerTurn = true,
+): boolean =>
+  invokeHostCallback(() => {
+    pi.sendMessage({ ...message, display: true }, { deliverAs: "steer", triggerTurn });
+    return true;
+  }, false);
+
 const sendWorkflow = (
   pi: ExtensionAPI,
   notification: SubagentWorkflowNotification,
-): SubagentNotificationDelivery => {
-  try {
-    pi.sendMessage(
-      {
-        customType: "pi-subagents-workflow",
-        content: clip(notification.content),
-        details: {
-          version: 1,
-          kind: "workflow",
-          name: displayName(notification.name),
-          outcome: notification.outcome,
-          durationMs: Math.max(0, Math.round(notification.durationMs)),
-          ...(notification.usage !== undefined && {
-            totalTokens: Math.max(0, Math.round(notification.usage.totalTokens)),
-          }),
-          ...(notification.usage?.cost !== undefined && {
-            cost: Math.max(0, notification.usage.cost),
-          }),
-          agents: notification.agents.total,
-          failed: notification.agents.failed,
-          stopped: notification.agents.stopped,
-          skipped: notification.agents.skipped,
-          reused: notification.agents.reused,
-        },
-        display: true,
+): SubagentNotificationDelivery => ({
+  actionAccepted: steer(
+    pi,
+    {
+      customType: "pi-subagents-workflow",
+      content: clip(notification.content),
+      details: {
+        version: 1,
+        kind: "workflow",
+        name: displayName(notification.name),
+        outcome: notification.outcome,
+        durationMs: Math.max(0, Math.round(notification.durationMs)),
+        ...(notification.usage !== undefined && {
+          totalTokens: Math.max(0, Math.round(notification.usage.totalTokens)),
+        }),
+        ...(notification.usage?.cost !== undefined && {
+          cost: Math.max(0, notification.usage.cost),
+        }),
+        agents: notification.agents.total,
+        failed: notification.agents.failed,
+        stopped: notification.agents.stopped,
+        skipped: notification.agents.skipped,
+        reused: notification.agents.reused,
       },
-      // A result joins an active turn or wakes an idle parent, like completions.
-      { deliverAs: "steer", triggerTurn: workflowNotificationWakesAgent(notification) },
-    );
-    return { actionAccepted: true };
-  } catch {
-    // A replaced or closing session leaves the result for the workflow service to retry.
-    return { actionAccepted: false };
-  }
-};
+    },
+    workflowNotificationWakesAgent(notification),
+  ),
+});
 
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   return (notification) => {
@@ -271,50 +268,31 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
     if (notification.type === "completed") {
       const deliveredCompletionKeys: string[] = [];
       for (const chunk of completionChunks(notification.runs)) {
-        try {
-          pi.sendMessage(
-            {
-              customType: "pi-subagents-completed",
-              content: chunk.content,
-              details: {
-                version: 1,
-                kind: "completed",
-                total: chunk.runs.length,
-                failed: chunk.runs.filter((run) => run.outcome === "failed").length,
-                warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
-                ...(chunk.runs.length === 1 && { name: displayName(chunk.runs[0]!.name) }),
-              },
-              display: true,
-            },
-            // Terminal outcomes intentionally join an active orchestration run or wake an idle
-            // parent. Host acceptance is synchronous; model consumption may occur later.
-            { deliverAs: "steer", triggerTurn: true },
-          );
-          for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
-        } catch {
-          // Host acceptance may have happened before a throw. Leave this chunk and later chunks
-          // unacknowledged so the service owns the uncertain retry.
-          break;
-        }
+        const accepted = steer(pi, {
+          customType: "pi-subagents-completed",
+          content: chunk.content,
+          details: {
+            version: 1,
+            kind: "completed",
+            total: chunk.runs.length,
+            failed: chunk.runs.filter((run) => run.outcome === "failed").length,
+            warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
+            ...(chunk.runs.length === 1 && { name: displayName(chunk.runs[0]!.name) }),
+          },
+        });
+        // A throw may follow host acceptance. Leave this chunk and later chunks unacknowledged
+        // so the service owns the uncertain retry.
+        if (!accepted) break;
+        for (const run of chunk.runs) deliveredCompletionKeys.push(`${run.id}:${run.generation}`);
       }
       return { deliveredCompletionKeys };
     }
-
-    const content = clip(questionContent(notification));
-    try {
-      pi.sendMessage(
-        {
-          customType: "pi-subagents-question",
-          details: { version: 1, kind: "question", name: displayName(notification.name) },
-          content,
-          display: true,
-        },
-        { deliverAs: "steer", triggerTurn: true },
-      );
-      return { actionAccepted: true };
-    } catch {
-      // Session shutdown can race with an actionable notification. The service retains it.
-      return { actionAccepted: false };
-    }
+    return {
+      actionAccepted: steer(pi, {
+        customType: "pi-subagents-question",
+        details: { version: 1, kind: "question", name: displayName(notification.name) },
+        content: clip(questionContent(notification)),
+      }),
+    };
   };
 }

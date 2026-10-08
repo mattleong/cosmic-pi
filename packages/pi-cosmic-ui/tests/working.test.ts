@@ -2,7 +2,6 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, it } from "vitest";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { makeWorkingRow } from "../src/working/row.ts";
 
 /** A bound working row over a scriptable host context, a manual clock, and a manual ticker pool. */
@@ -31,7 +30,6 @@ function workingHarness() {
     }),
   );
   const row = makeWorkingRow({
-    callbacks: makeHostCallbackBoundary(),
     now: () => time,
     every: (_intervalMs, tick) => {
       const subscription = () => tick();

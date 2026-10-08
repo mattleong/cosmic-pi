@@ -4,7 +4,7 @@ import * as Scope from "effect/Scope";
 import type { CanonicalWriterCwd, WriterLease } from "../boundary/writer-lease.ts";
 import type { SubagentError } from "./errors.ts";
 
-export type WriterPoolState =
+type WriterPoolState =
   | "pending"
   | "preparing"
   | "held"
@@ -23,7 +23,7 @@ export interface WriterPoolEntry {
   readonly leaseScope: Scope.Closeable;
   readonly releaseState: { authorized: boolean };
   readonly preparationSettled: Deferred.Deferred<void, SubagentError>;
-  readonly members: Map<string, ReadonlyArray<string> | undefined>;
+  readonly members: Set<string>;
   readonly violationRunIds: Set<string>;
   state: WriterPoolState;
   lease?: WriterLease | undefined;
@@ -37,7 +37,6 @@ export const addWriterPoolMemberLocked = (
   pools: Map<string, WriterPoolEntry>,
   cwd: CanonicalWriterCwd,
   runId: string,
-  claims: ReadonlyArray<string> | undefined,
 ): Effect.Effect<WriterPoolEntry> =>
   Effect.gen(function* () {
     let pool = pools.get(cwd.digest);
@@ -46,15 +45,15 @@ export const addWriterPoolMemberLocked = (
         cwd,
         leaseScope: yield* Scope.make(),
         releaseState: { authorized: false },
-        preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
-        members: new Map(),
+        preparationSettled: yield* Deferred.make<void, SubagentError>(),
+        members: new Set(),
         violationRunIds: new Set(),
         state: "pending",
         admissionPaused: false,
       };
       pools.set(cwd.digest, pool);
     }
-    pool.members.set(runId, claims);
+    pool.members.add(runId);
     return pool;
   });
 

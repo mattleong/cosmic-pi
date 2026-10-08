@@ -1,39 +1,36 @@
-import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 
 /** Pi coalesces nested prompts into one start/end pair, not one pair per dialog. */
 export const makeAskUserPromptGate = () => {
   let promptActive = false;
   let own = false;
-  const waiting = new Set<() => void>();
+  // Open exactly while canOpen(); opening releases and forgets every current waiter.
+  const open = Latch.makeUnsafe(true);
   const canOpen = () => !promptActive && !own;
-  const wake = () => {
-    if (canOpen()) for (const resume of waiting) resume();
+  const update = () => {
+    if (canOpen()) open.openUnsafe();
+    else open.closeUnsafe();
   };
   return {
     started: () => {
       promptActive = true;
+      update();
     },
     ended: () => {
       promptActive = false;
-      wake();
+      update();
     },
     canOpen,
     // Admission does not grant mount authority. A coalesced nested prompt can
     // still own input after our overlay closes, until the public end event.
     canQueue: () => own || canOpen(),
-    awaitOpen: Effect.callback<void>((resume) => {
-      const ready = () => resume(Effect.void);
-      if (canOpen()) ready();
-      else waiting.add(ready);
-      return Effect.sync(() => {
-        waiting.delete(ready);
-      });
-    }),
+    awaitOpen: open.await,
     enter: () => {
       own = true;
+      update();
       return () => {
         own = false;
-        wake();
+        update();
       };
     },
   };

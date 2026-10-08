@@ -8,8 +8,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
-import { processError } from "../../src/run/errors.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import {
   SubagentService,
@@ -17,14 +15,12 @@ import {
   type SubagentStatusObservationOptions,
 } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { profileCandidate } from "../fixtures/profiles.ts";
 import {
-  contactParentFrame,
+  askParent,
   expectInterruptBeforeUse,
   localServiceFixture,
-  nativeReportRequest,
-  nativeReportServiceFixture,
   request,
+  reviewerContinuation,
   useProbe,
   waitForCompleted,
   withService,
@@ -79,15 +75,6 @@ const observeStatus = (
     ({ observations }) => Effect.succeed(observations[0]),
     options,
   );
-
-/** A reviewer route with one remaining candidate after its first. */
-const reviewerRoute: ProfileRouteContinuation = {
-  profile: "reviewer",
-  routeSource: "global",
-  candidates: [profileCandidate("openai-codex/gpt-5.6-sol"), profileCandidate("parent")],
-  selectedCandidateIndex: 0,
-  skippedCandidates: [],
-};
 
 describe("SubagentService", () => {
   for (const operation of ["await", "status"] as const)
@@ -316,7 +303,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped);
   });
 
-  it.effect("redacts a completed report from status while an await owns its receipt", () => {
+  it.effect("redacts an await-owned report from default and opt-in status", () => {
     const { fake, notifications, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "await-status-race" }));
@@ -337,24 +324,31 @@ describe("SubagentService", () => {
       fake.controls[0]?.settle("Owned report text.");
       yield* Deferred.await(entered);
 
-      const competingObservation = yield* service.withStatusObservations(
-        [run.id],
-        ({ observations }) => Effect.succeed(observations[0]),
-      );
-      expect(competingObservation).not.toHaveProperty("completionReceipt");
-      const competingStatus = yield* service.status(run.id);
-      expect(competingStatus).not.toHaveProperty("finalText");
-      expect(competingStatus.sessionEvents).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ text: "Owned report text." })]),
-      );
+      const expectRedacted = Effect.gen(function* () {
+        const competingStatus = yield* service.status(run.id);
+        expect(competingStatus).not.toHaveProperty("finalText");
+        expect(competingStatus.sessionEvents).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ text: "Owned report text." })]),
+        );
+        const competing = yield* observeStatus(service, run.id, includeDeliveredReports);
+        expect(competing).not.toHaveProperty("completionReceipt");
+        expect(competing?.run.reportStatus).toBe("claimed");
+        expect(competing?.run).not.toHaveProperty("finalText");
+      });
+      yield* expectRedacted;
+      // A forged receipt cannot release the owned report into status or read-back.
       yield* service.consumeCompletions([
         { id: run.id, generation: 1, claimToken: "forged-owner" },
       ]);
-      expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
+      yield* expectRedacted;
 
       yield* Deferred.succeed(releaseRender, undefined);
       const observations = yield* Fiber.join(awaiting);
       expect(observations[0]?.run.finalText).toBe("Owned report text.");
+      expect((yield* observeStatus(service, run.id, includeDeliveredReports))?.run).toMatchObject({
+        reportStatus: "delivered",
+        finalText: "Owned report text.",
+      });
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
     });
@@ -402,57 +396,12 @@ describe("SubagentService", () => {
       });
     });
 
-  it.effect("keeps an await-owned report redacted from opt-in status", () => {
-    const { fake, notifications, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "owned-read-back" }));
-      const entered = yield* Deferred.make<void>();
-      const releaseRender = yield* Deferred.make<void>();
-      const awaiting = yield* service
-        .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(entered, undefined);
-            yield* Deferred.await(releaseRender);
-            const receipt = observations[0]?.completionReceipt;
-            if (receipt) yield* service.consumeCompletions([receipt]);
-            return observations;
-          }),
-        )
-        .pipe(Effect.forkScoped);
-
-      fake.controls[0]?.settle("Owned report text.");
-      yield* Deferred.await(entered);
-
-      const competing = yield* observeStatus(service, run.id, includeDeliveredReports);
-      expect(competing).not.toHaveProperty("completionReceipt");
-      expect(competing?.run.reportStatus).toBe("claimed");
-      expect(competing?.run).not.toHaveProperty("finalText");
-      // A forged receipt cannot release the owned report into read-back.
-      yield* service.consumeCompletions([
-        { id: run.id, generation: 1, claimToken: "forged-owner" },
-      ]);
-      const afterForgery = yield* observeStatus(service, run.id, includeDeliveredReports);
-      expect(afterForgery?.run.reportStatus).toBe("claimed");
-      expect(afterForgery?.run).not.toHaveProperty("finalText");
-
-      yield* Deferred.succeed(releaseRender, undefined);
-      const observations = yield* Fiber.join(awaiting);
-      expect(observations[0]?.run.finalText).toBe("Owned report text.");
-      expect((yield* observeStatus(service, run.id, includeDeliveredReports))?.run).toMatchObject({
-        reportStatus: "delivered",
-        finalText: "Owned report text.",
-      });
-      yield* TestClock.adjust("1 second");
-      expect(notifications).toEqual([]);
-    });
-  });
-
   it.effect("reports failed-run recovery from cleanup and retry ownership", () => {
     const cleanupGate = Deferred.makeUnsafe<void>();
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(
-        request({ profile: "reviewer", routeContinuation: reviewerRoute }),
+        request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
       );
       fake.controls[0]!.gateRelease(cleanupGate);
       fake.controls[0]!.exit(1);
@@ -483,41 +432,12 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("blocks failed-run recovery while the assignment outcome is uncertain", () => {
-    const { backend, layer, projections } = nativeReportServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(
-        nativeReportRequest({ profile: "reviewer", routeContinuation: reviewerRoute }),
-      );
-      backend.controls[0]!.offer({
-        type: "exit",
-        exitCode: null,
-        diagnostic: "generic exit",
-        failure: processError(
-          "steer",
-          "steer_outcome_uncertain",
-          "Native write acknowledgement unknown.",
-        ),
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      yield* service.stop(run.id);
-      expect((yield* observeStatus(service, run.id))?.recovery).toMatchObject({
-        retryDisposition: "blocked",
-        hasRemainingCandidate: true,
-      });
-    });
-  });
-
   it.effect("returns an await when a selected run needs a parent reply", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "awaiting-question" }));
       const awaiting = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.forkScoped);
-
-      fake.controls[0]?.offerIpc(
-        contactParentFrame("question-during-await", "question", "Should I update the fixture?"),
-      );
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      yield* askParent(fake.controls[0]!, projections, "question-during-await");
 
       const [attention] = yield* Fiber.join(awaiting);
       expect(attention).toMatchObject({

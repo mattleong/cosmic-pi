@@ -6,10 +6,12 @@ import {
   redactDiagnosticValue,
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
-  sanitizeTerminalStyledFragments,
-  sanitizeTerminalStyledText,
   stripTerminalControls,
-} from "../index.ts";
+} from "../src/security.ts";
+import { sanitizeTerminalStyledFragments } from "../src/security/terminal-styled.ts";
+
+const sanitizeTerminalStyledText = (text: string) =>
+  sanitizeTerminalStyledFragments([{ channel: "text", text }])[0]?.text ?? "";
 
 describe("JWT payload decoding", () => {
   const unpaddedPayload = "eyJzdWIiOiJvbmUifQ";
@@ -59,6 +61,15 @@ describe("security formatting", () => {
     expect(message).not.toContain("abcdefgh");
     expect(message).not.toContain("123456789");
     expect(message).toContain("[REDACTED]");
+  });
+
+  it("clips diagnostics without splitting a surrogate pair", () => {
+    const text = `${"a".repeat(9)}😀b`;
+    expect(sanitizeDiagnosticError(text, { maximumLength: 11 })).toBe(`${"a".repeat(9)}…`);
+    expect(sanitizeDiagnosticContent(text, { maximumLength: 11 })).toBe(`${"a".repeat(9)}…`);
+    // A limit too small to keep any text still marks the clip.
+    expect(sanitizeDiagnosticError("abc", { maximumLength: 0 })).toBe("…");
+    expect(sanitizeDiagnosticContent("abc", { maximumLength: -1 })).toBe("…");
   });
 
   it("preserves Markdown whitespace while redacting content", () => {
@@ -159,6 +170,9 @@ describe("security formatting", () => {
     expect(
       redactDiagnosticValue({ auth: "secret", nested: { refresh_token: "token", ok: 1 } }),
     ).toEqual({ auth: "[REDACTED]", nested: { refresh_token: "[REDACTED]", ok: 1 } });
+    const sparse = [1];
+    sparse[2] = 3;
+    expect(redactDiagnosticValue({ sparse })).toEqual({ sparse: [1, null, 3] });
     expect(maskIdentifier("account-123456789")).toBe("acco...6789");
   });
 });

@@ -1,40 +1,31 @@
 // Test-only runner verifies the installed session capability contract.
 import assert from "node:assert/strict";
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { afterEach, test } from "vitest";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
-  type CodePreviewSessionCapability,
 } from "../../src/application/capability";
-import { previewScheduleEffect } from "../../src/application/scheduler";
 import { plainTheme } from "../support/render";
 import { cachedDeferredPreview } from "../../src/tools/renderers/shared/cache";
 import { eventLoopTurn } from "../support/effect-test";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
+/** Deferred previews only defer; their cancellation interrupts the deferred fiber. */
 function installTestCapability(): void {
-  // SAFETY: This test double intentionally implements the host contract surface exercised by this scenario.
-  const capability = {
-    run: <A, E>(effect: Effect.Effect<A, E, never>, signal?: AbortSignal) =>
-      Effect.runPromise(effect, signal ? { signal } : undefined),
-    defer: (task: () => void) => {
+  installCodePreviewSessionCapability({
+    run: () => Promise.reject(new Error("not used")),
+    defer: (task) => {
       const fiber = Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
       return () => fiber.interruptUnsafe();
     },
-    schedule: (interval: number, task: () => void) => {
-      const fiber = Effect.runFork(previewScheduleEffect(interval, task));
-      return () => fiber.interruptUnsafe();
-    },
-  } as CodePreviewSessionCapability;
-  installCodePreviewSessionCapability(capability);
+    schedule: () => () => undefined,
+  });
 }
 
-const component = (text: string, theme: Theme = plainTheme) =>
-  new Text(theme.fg("toolOutput", text), 0, 0);
+const component = (text: string) => new Text(plainTheme.fg("toolOutput", text), 0, 0);
 
 type PreviewArgs = Parameters<typeof cachedDeferredPreview>;
 const preview = (

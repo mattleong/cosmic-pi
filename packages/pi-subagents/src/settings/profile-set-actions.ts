@@ -86,15 +86,13 @@ export function runProfileSetAction(
         });
       });
     }
-    const target =
-      action.action === "copy"
-        ? action.source
-        : action.action === "clear-scope-default"
-          ? undefined
-          : action.target;
-    const scope = action.action === "clear-scope-default" ? action.scope : target!.scope;
+    const scope =
+      action.action === "clear-scope-default"
+        ? action.scope
+        : (action.action === "copy" ? action.source : action.target).scope;
     guard(scope);
-    const base = profileSetPatchBase(inspection, scope, host.trusted());
+    // Every write expects the displayed document and carries trust as of that write.
+    const base = () => profileSetPatchBase(inspection, scope, host.trusted());
     if (action.action === "use-current" || action.action === "make-default") {
       const resolved = resolvedSet(inspection, action.target);
       if (resolved.status !== "resolved" || resolved.invalidProfiles.length > 0)
@@ -133,17 +131,13 @@ export function runProfileSetAction(
         if (valid.status !== "resolved" || valid.invalidProfiles.length > 0)
           throw new Error("Fix this invalid saved set before making it default.");
         return host.actions
-          .patchDefaultProfileSet({
-            ...base,
-            projectTrusted: host.trusted(),
-            defaultProfileSet: action.target.name,
-          })
+          .patchDefaultProfileSet({ ...base(), defaultProfileSet: action.target.name })
           .then(() => finish(`Default updated for ${scope}. Current Session unchanged.`));
       });
     }
     if (action.action === "clear-scope-default")
       return host.actions
-        .patchDefaultProfileSet(base)
+        .patchDefaultProfileSet(base())
         .then(() => finish(`${scope} default cleared. Current Session unchanged.`));
     if (action.action === "copy" || action.action === "rename") {
       const source = action.action === "copy" ? action.source : action.target;
@@ -157,20 +151,10 @@ export function runProfileSetAction(
           if (!name) return;
           if (action.action === "copy")
             return host.actions
-              .copyProfileSet({
-                ...base,
-                projectTrusted: host.trusted(),
-                sourceProfileSet: source.name,
-                profileSet: name,
-              })
+              .copyProfileSet({ ...base(), sourceProfileSet: source.name, profileSet: name })
               .then(() => finish(`Created ${scope}/${name}. Current Session unchanged.`));
           return host.actions
-            .renameProfileSet({
-              ...base,
-              projectTrusted: host.trusted(),
-              profileSet: source.name,
-              nextProfileSet: name,
-            })
+            .renameProfileSet({ ...base(), profileSet: source.name, nextProfileSet: name })
             .then(() =>
               finish(`Renamed ${scope}/${name}. Current Session unchanged.`, (next) =>
                 host.renamed(
@@ -194,11 +178,7 @@ export function runProfileSetAction(
           return;
         }
         return host.actions
-          .deleteProfileSet({
-            ...base,
-            projectTrusted: host.trusted(),
-            profileSet: action.target.name,
-          })
+          .deleteProfileSet({ ...base(), profileSet: action.target.name })
           .then(() => {
             guard();
             host.deleted({ kind: "profile-set", set: action.target });

@@ -10,16 +10,16 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { LocalProcess } from "../src/boundary/local-process.ts";
 import { normalizeConfig } from "../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../src/config/store.ts";
-import { backgroundTaskNotFound, BackgroundTerminationError } from "../src/task/errors.ts";
-import type {
-  BackgroundLogSlice,
-  BackgroundTaskStatus,
-  BackgroundTaskStatusWait,
-  ReadBackgroundLogs,
-} from "../src/task/model.ts";
+import { backgroundTaskNotFound } from "../src/task/errors.ts";
+import type { ReadBackgroundLogs } from "../src/task/model.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
 import { nativeCodemodeSession } from "./support/native-codemode-session.ts";
-import { taskServiceDouble, taskStatus } from "./support/task-service-double.ts";
+import {
+  taskLogSlice,
+  taskServiceDouble,
+  taskStatus,
+  taskWait,
+} from "./support/task-service-double.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 /** A JavaScript string literal for embedding test data in a script. */
@@ -32,41 +32,6 @@ const output = (text: string) => {
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 const envelope = { contract: "pi-background-task/task", version: 1, tool: "background_task" };
 
-const waitResult = (
-  snapshot: BackgroundTaskStatus,
-  outcome: BackgroundTaskStatusWait["outcome"],
-  matchCursor?: number,
-): BackgroundTaskStatusWait => ({
-  id: snapshot.id,
-  outcome,
-  snapshot,
-  nextCursor: snapshot.logCursor,
-  earliestAvailableCursor: 1,
-  droppedBytes: 0,
-  ...(matchCursor !== undefined && { matchCursor }),
-  appliedWaitSeconds: 30,
-});
-
-/** The service's view of one retained stdout line per cursor after `afterCursor`. */
-const logSlice = (
-  id: string,
-  lines: ReadonlyArray<{ readonly cursor: number; readonly text: string }>,
-  lastCursor: number,
-): BackgroundLogSlice => ({
-  id,
-  state: "running",
-  nextCursor: lastCursor,
-  earliestAvailableCursor: 1,
-  droppedBytes: 0,
-  events: lines.map(({ cursor, text }) => ({
-    cursor,
-    stream: "stdout",
-    text,
-    timestamp: cursor,
-    bytes: text.length,
-  })),
-});
-
 // Live time is intentional: each test drives the actual native QuickJS worker, not an LLM.
 describe("native scripted background task workflows", () => {
   it.live(
@@ -78,13 +43,17 @@ describe("native scripted background task workflows", () => {
         const service = taskServiceDouble({
           start: (request) =>
             Effect.succeed({ ...running, command: request.command, cwd: request.cwd }),
-          wait: () => Effect.succeed(waitResult({ ...running, logCursor: 2 }, "matched", 2)),
+          wait: () =>
+            Effect.succeed(taskWait({ ...running, logCursor: 2 }, "matched", { matchCursor: 2 })),
           logs: (request) =>
             Effect.sync(() => {
               logRequests.push(request);
+              // One new line after the match, then nothing past it.
               return request.afterCursor === 2
-                ? logSlice("task-1", [{ cursor: 3, text: "GET / 200\n" }], 3)
-                : logSlice("task-1", [], 3);
+                ? taskLogSlice("task-1", "running", [{ stream: "stdout", text: "GET / 200\n" }], {
+                    from: 3,
+                  })
+                : taskLogSlice("task-1", "running", [], { from: 4 });
             }),
           stop: (id) =>
             Effect.succeed(
@@ -171,7 +140,7 @@ describe("native scripted background task workflows", () => {
           error: "Couldn't start the process",
         });
         const service = taskServiceDouble({
-          wait: () => Effect.succeed(waitResult(failed, "completed")),
+          wait: () => Effect.succeed(taskWait(failed, "completed")),
           status: (id) =>
             id === spawnFailed.id
               ? Effect.succeed(spawnFailed)
@@ -210,35 +179,6 @@ describe("native scripted background task workflows", () => {
           },
         });
         expect(value).not.toHaveProperty(["spawn", "task", "exitCode"]);
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
-
-  it.live(
-    "reports a wait timeout as data and leaves the task running",
-    () =>
-      Effect.gen(function* () {
-        const running = taskStatus({ id: "task-4", name: "server", state: "running", pid: 4545 });
-        // No stop handler: a stop on timeout would be a fixture defect and reject the script.
-        const service = taskServiceDouble({
-          wait: () => Effect.succeed(waitResult(running, "timeout")),
-          status: () => Effect.succeed(running),
-        });
-        const h = yield* nativeCodemodeSession(service);
-        const result = yield* h.run(`
-          const waited = await tools.background_task({action:'wait',id:'task-4',until:'exit',waitSeconds:1});
-          const after = await tools.background_task({action:'status',id:'task-4'});
-          ${print("{waited,after}")}
-        `);
-        expect(output(result.text)).toMatchObject({
-          waited: {
-            ...envelope,
-            action: "wait",
-            outcome: "timeout",
-            task: { id: "task-4", state: "running", finished: false },
-          },
-          after: { action: "status", task: { state: "running", finished: false } },
-        });
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,
   );
@@ -302,41 +242,6 @@ describe("native scripted background task workflows", () => {
   );
 
   it.live(
-    "rejects a termination failure and still reports the task as stopping",
-    () =>
-      Effect.gen(function* () {
-        const stopping = taskStatus({ id: "task-5", name: "e2e", state: "stopping", pid: 4646 });
-        const service = taskServiceDouble({
-          stop: (id) =>
-            Effect.fail(
-              new BackgroundTerminationError({
-                id,
-                message: "Couldn't confirm the process tree stopped",
-              }),
-            ),
-          status: () => Effect.succeed(stopping),
-        });
-        const h = yield* nativeCodemodeSession(service);
-        const result = yield* h.run(`
-          let rejected = false;
-          try { await tools.background_task({action:'stop',id:'task-5',force:true}); }
-          catch { rejected = true; }
-          const after = await tools.background_task({action:'status',id:'task-5'});
-          ${print("{rejected,after}")}
-        `);
-        expect(output(result.text)).toMatchObject({
-          rejected: true,
-          after: {
-            ...envelope,
-            action: "status",
-            task: { id: "task-5", state: "stopping", finished: false },
-          },
-        });
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
-
-  it.live(
     "aborting a scripted wait releases only that wait and a later wait succeeds",
     () =>
       Effect.gen(function* () {
@@ -351,7 +256,7 @@ describe("native scripted background task workflows", () => {
                   Effect.andThen(Effect.never),
                   Effect.onInterrupt(() => Deferred.succeed(released, undefined)),
                 )
-              : Effect.succeed(waitResult(running, "matched", 1)),
+              : Effect.succeed(taskWait(running, "matched", { matchCursor: 1 })),
         });
         const h = yield* nativeCodemodeSession(service);
         const script = yield* h

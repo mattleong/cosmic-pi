@@ -6,10 +6,13 @@
 import { StringDecoder } from "node:string_decoder";
 import {
   effectProcessExit,
+  nodeFilePlatformLayer,
   nodeProcessLayer,
   signalProcess,
   signalProcessGroup,
   terminateWindowsProcessTree,
+  utf8ByteLength,
+  utf8Suffix,
   type ProcessTreeTerminatorSpawn,
 } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
@@ -17,6 +20,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -28,11 +32,6 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type { BackgroundLogStream } from "../task/model.ts";
-import { utf8ByteLength, utf8Tail } from "../task/utf8.ts";
-
-const nodeFsModule = process.getBuiltinModule("node:fs");
-if (!nodeFsModule) throw new Error("Node fs builtin is unavailable.");
-const { stat } = nodeFsModule.promises;
 
 const INGRESS_CHUNKS = 32;
 const GROUP_EXIT_POLL = "20 millis";
@@ -255,16 +254,11 @@ const makePosixGroupTermination = (pid: number, child: GroupLeader) =>
     } satisfies ProcessTreeTermination;
   });
 
-const verifyCwd = (
-  cwd: string,
-  inspect: (path: string) => Promise<{ isDirectory(): boolean }> = stat,
-) =>
-  Effect.tryPromise({
-    try: () => inspect(cwd),
-    catch: () => processError("cwd", cwd),
-  }).pipe(
+const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
+  fs.stat(cwd).pipe(
+    Effect.mapError(() => processError("cwd", cwd)),
     Effect.flatMap((info) =>
-      info.isDirectory()
+      info.type === "Directory"
         ? Effect.void
         : Effect.fail(
             new LocalProcessError({
@@ -316,13 +310,14 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
-    const tail = utf8Tail(original, ingressBufferBytes);
-    totalDroppedBytes += utf8ByteLength(original) - tail.bytes;
-    if (!tail.text) return;
+    const tail = utf8Suffix(original, ingressBufferBytes);
+    const tailBytes = utf8ByteLength(tail);
+    totalDroppedBytes += utf8ByteLength(original) - tailBytes;
+    if (!tail) return;
 
     // Make room by bytes and count. Eviction also restores any dropped-byte delta carried
     // only by the removed event so a later event reports it.
-    while (Queue.isFullUnsafe(outputQueue) || queuedBytes + tail.bytes > ingressBufferBytes) {
+    while (Queue.isFullUnsafe(outputQueue) || queuedBytes + tailBytes > ingressBufferBytes) {
       const evicted = Queue.takeUnsafe(outputQueue);
       if (evicted?._tag !== "Success") break;
       const evictedBytes = utf8ByteLength(evicted.value.text);
@@ -330,20 +325,20 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
       totalDroppedBytes += evictedBytes;
       reportedDroppedBytes = Math.max(0, reportedDroppedBytes - evicted.value.droppedBytes);
     }
-    if (Queue.isFullUnsafe(outputQueue) || queuedBytes + tail.bytes > ingressBufferBytes) {
-      totalDroppedBytes += tail.bytes;
+    if (Queue.isFullUnsafe(outputQueue) || queuedBytes + tailBytes > ingressBufferBytes) {
+      totalDroppedBytes += tailBytes;
       return;
     }
     const event = {
       stream,
-      text: tail.text,
+      text: tail,
       droppedBytes: totalDroppedBytes - reportedDroppedBytes,
     } satisfies LocalProcessOutput;
     if (Queue.offerUnsafe(outputQueue, event)) {
-      queuedBytes += tail.bytes;
+      queuedBytes += tailBytes;
       reportedDroppedBytes = totalDroppedBytes;
     } else {
-      totalDroppedBytes += tail.bytes;
+      totalDroppedBytes += tailBytes;
     }
   };
   const closeOutput = () => {
@@ -359,9 +354,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     source: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
   ) =>
     source.pipe(
-      Stream.runForEach((chunk) =>
-        Effect.sync(() => offer(stream, decoder.write(Buffer.from(chunk)))),
-      ),
+      Stream.runForEach((chunk) => Effect.sync(() => offer(stream, decoder.write(chunk)))),
       Effect.catch(() =>
         Effect.sync(() => {
           offer("stderr", `\nLocal process ${stream} stream failed.\n`);
@@ -415,18 +408,17 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
 export class LocalProcess extends Context.Service<LocalProcess, LocalProcessContract>()(
   "pi-background-task/boundary/local-process/LocalProcess",
 ) {
-  /** Owned filesystem inspection seam; production supplies Node stat. */
-  static readonly layerWithInspection = (
-    inspect: (path: string) => Promise<{ isDirectory(): boolean }>,
-  ) =>
+  /** Node process spawning; `fileSystem` inspects each working directory first. */
+  static readonly layerWith = (fileSystem: Layer.Layer<FileSystem.FileSystem>) =>
     Layer.effect(
       this,
       Effect.gen(function* () {
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const fs = yield* FileSystem.FileSystem;
         return LocalProcess.of({
-          // Inspection owns no resource. Do not mask a noncooperative filesystem Promise.
+          // Inspection owns no resource. Do not mask a noncooperative filesystem call.
           spawn: (request) =>
-            verifyCwd(request.cwd, inspect).pipe(
+            verifyCwd(fs, request.cwd).pipe(
               Effect.andThen(
                 Effect.acquireRelease(acquireProcess(spawner, request), (handle) => handle.release),
               ),
@@ -434,7 +426,7 @@ export class LocalProcess extends Context.Service<LocalProcess, LocalProcessCont
             ),
         });
       }),
-    ).pipe(Layer.provide(nodeProcessLayer));
+    ).pipe(Layer.provide(Layer.merge(nodeProcessLayer, fileSystem)));
 
-  static readonly layer = this.layerWithInspection(stat);
+  static readonly layer = this.layerWith(nodeFilePlatformLayer);
 }

@@ -1,5 +1,5 @@
 // The registered tool and managed runtime are the Promise-shaped Pi host boundary.
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -18,28 +18,29 @@ import {
   nativeReportServiceFixture,
   awaitRuns,
 } from "../run/fixtures/service-harness.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
+import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { step } from "../support/effect-test.ts";
 import { executeTool } from "./fixtures/tool-harness.ts";
 
+/** The real service in a managed runtime, before any tools are registered against it. */
+const managedTools = Effect.gen(function* () {
+  const fixture = nativeReportServiceFixture();
+  const { pi, tools } = recordingExtensionHost();
+  const runtime = yield* Effect.acquireRelease(
+    Effect.sync(() => makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer))),
+    (owned) => step(() => owned.dispose()),
+  );
+  const service = yield* step(() => runtime.run(SubagentService));
+  return { fixture, tools, pi, runtime, service };
+});
+
 it.live("returns a parent question in the await result without a second notification", () =>
   Effect.gen(function* () {
-    const fixture = nativeReportServiceFixture();
-    const tools = new Map<string, ToolDefinition>();
-    const pi = extensionApiFixture({
-      registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-    });
-    const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
-      ),
-      (owned) => step(() => owned.dispose()),
-    );
+    const { fixture, tools, pi, runtime, service } = yield* managedTools;
     registerSubagentTools(pi, {
       environment: { cwd: "/project", projectTrusted: true },
       run: (effect, signal) => runtime.run(effect, signal),
     });
-    const service = yield* step(() => runtime.run(SubagentService));
     const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
     const progress = Deferred.makeUnsafe<void>();
     const pending = executeTool(
@@ -70,18 +71,7 @@ it.live("returns a parent question in the await result without a second notifica
 
 it.live("keeps late-abort delivery uncertain and recoverable after consumption", () =>
   Effect.gen(function* () {
-    const fixture = nativeReportServiceFixture();
-    const tools = new Map<string, ToolDefinition>();
-    const pi = extensionApiFixture({
-      registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-    });
-    const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
-      ),
-      (owned) => step(() => owned.dispose()),
-    );
-    const service = yield* step(() => runtime.run(SubagentService));
+    const { fixture, tools, pi, runtime, service } = yield* managedTools;
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const intercepted = {
@@ -130,7 +120,7 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
       targets: [{ runId: child.id, report: { status: "unknown" } }],
     });
     expect(
-      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(result.structuredContent),
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(result.structuredContent),
     ).not.toContain("Recover after late abort");
     const observations = yield* step(() =>
       runtime.run(
@@ -152,17 +142,7 @@ it.live(
   "cancels a registered root await on the real revision stream without stopping its child",
   () =>
     Effect.gen(function* () {
-      const fixture = nativeReportServiceFixture();
-      const tools = new Map<string, ToolDefinition>();
-      const pi = extensionApiFixture({
-        registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-      });
-      const runtime = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
-        ),
-        (owned) => step(() => owned.dispose()),
-      );
+      const { fixture, tools, pi, runtime, service } = yield* managedTools;
       const exits: Exit.Exit<unknown, unknown>[] = [];
       const rejections: unknown[] = [];
       const run: SubagentToolRuntime["run"] = (effect, signal) =>
@@ -176,12 +156,14 @@ it.live(
             throw error;
           });
       let activePresentations = 0;
+      const awaitLeases: unknown[] = [];
       registerSubagentTools(pi, {
         environment: { cwd: "/project", projectTrusted: true },
         run,
         toolPresentation: {
           beginStart: () => () => undefined,
-          beginAwait: () => {
+          beginAwait: (ids, until) => {
+            awaitLeases.push([ids, until]);
             activePresentations += 1;
             return () => {
               activePresentations -= 1;
@@ -190,7 +172,6 @@ it.live(
           isLiveHierarchyAvailable: () => true,
         },
       });
-      const service = yield* step(() => runtime.run(SubagentService));
       const child = yield* step(() =>
         runtime.run(service.startSessionOwned(nativeReportRequest())),
       );
@@ -213,6 +194,7 @@ it.live(
       );
       yield* Deferred.await(progress);
       expect(activePresentations).toBe(1);
+      expect(awaitLeases).toEqual([[[child.id], "all_finished"]]);
       // The real service owns the claim while waiting on the SubscriptionRef revision source.
       const conflict = yield* step(() =>
         runtime.run(awaitRuns(service, [child.id], "all_finished").pipe(Effect.flip)),

@@ -8,7 +8,6 @@ test("getObjectValue reads only own properties from plain object values", () => 
 
   assert.equal(getObjectValue({ value: "own" }, "value"), "own");
   assert.equal(getObjectValue(ownUndefined, "value"), undefined);
-  assert.equal(Object.hasOwn(ownUndefined, "value"), true);
   assert.equal(getObjectValue(inherited, "value"), undefined);
 });
 

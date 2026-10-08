@@ -130,6 +130,40 @@ describe("OpenAIImageService", () => {
     }).pipe(provideBuiltLayer(serviceLayer));
   });
 
+  it.effect("rejects unknown or unreadable parameters before any request", () => {
+    const requests: StreamingHttpTestRequest[] = [];
+    const hostile = new Proxy(
+      { prompt: "hostile keys" },
+      {
+        ownKeys: () => {
+          throw new Error("hostile");
+        },
+      },
+    );
+    const throwingPrompt = Object.defineProperty({}, "prompt", {
+      enumerable: true,
+      get: () => {
+        throw new Error("hostile");
+      },
+    });
+    const context = testContext({ token: registryToken });
+    const layer = imageServiceLayer({
+      context,
+      config: makeResolvedConfig(),
+      body: responseBody,
+      requests,
+    });
+    return Effect.gen(function* () {
+      const service = yield* OpenAIImageService;
+      for (const params of [{ prompt: "extra key", detail: "high" }, hostile, throwingPrompt])
+        expect(yield* service.generate(params).pipe(Effect.flip)).toMatchObject({
+          _tag: "OpenAIImageError",
+          operation: "params",
+        });
+      expect(requests).toEqual([]);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
   it.effect("returns a typed timeout and finalizes the interrupted response stream", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();

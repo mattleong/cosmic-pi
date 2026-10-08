@@ -33,7 +33,7 @@ const discardLogger = Logger.make<unknown, void>(() => {});
  * The directory is a thunk because the Pi host resolves it lazily and may throw;
  * resolution happens inside the layer's fail-safe region.
  */
-export interface PiHostLogTarget {
+interface PiHostLogTarget {
   readonly agentDirectory: () => string;
   readonly packageName: string;
 }
@@ -45,12 +45,12 @@ const MAX_HOST_LOG_BYTES = 1_000_000;
  * Rotates at session start rather than per write: `Logger.toFile` has no size bound, and a
  * once-per-runtime check keeps growth bounded without adding work to the logging path.
  *
- * Failure is absorbed separately from the open below. Concurrent sessions of the same package
- * can race here, and a lost race must not cost that session its log sink.
+ * Failure, such as a missing log, is absorbed separately from the open below. Concurrent
+ * sessions of the same package can race here, and a lost race must not cost that session its
+ * log sink.
  */
 const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
   Effect.gen(function* () {
-    if (!(yield* fs.exists(logPath))) return;
     const info = yield* fs.stat(logPath);
     if (ByteSize.toBigInt(info.size) < BigInt(MAX_HOST_LOG_BYTES)) return;
     const previous = `${logPath}.1`;
@@ -90,13 +90,8 @@ export const piHostFileLoggerLayer = (target: PiHostLogTarget): Layer.Layer<neve
 
 declare const PiManagedRuntimeRuntimeError: unique symbol;
 
-interface OwnedAbortSignal {
-  readonly signal: AbortSignal;
-  readonly release: () => void;
-}
-
 /** Never exposes a guarded host signal to Effect's runner after the fiber has started. */
-const ownAbortSignal = (source: AbortSignal): OwnedAbortSignal => {
+const ownAbortSignal = (source: AbortSignal) => {
   const controller = new AbortController();
   const abort = () => controller.abort();
   let removePending = true;

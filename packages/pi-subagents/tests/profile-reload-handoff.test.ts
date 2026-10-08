@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   IncompatibleProfileReloadHandoffError,
-  makeProfileReloadHandoff,
+  profileReloadHandoff as handoff,
   profileReloadSessionKey,
 } from "../src/application/profile-reload-handoff.ts";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { completeBaseline, profileCandidate as candidate } from "./fixtures/profiles.ts";
 
-const handoff = makeProfileReloadHandoff();
 const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
 interface TestReloadGlobalState {
   [reloadSlot]?: object;
@@ -19,6 +18,10 @@ const processState = globalThis as typeof globalThis & TestReloadGlobalState;
 afterEach(() => handoff.clear());
 
 const slotPresent = () => Object.prototype.hasOwnProperty.call(processState, reloadSlot);
+/** Leaves `seed` in the process slot, as an earlier module instance's shutdown would. */
+const install = <Seed>(seed: Seed, version = 2) => {
+  processState[reloadSlot] = { version, sessionKey: "session-one", seed };
+};
 const completeSeed = (revision = 0) => ({
   revision,
   overrides: {},
@@ -45,14 +48,14 @@ describe("profile reload handoff", () => {
         const envelope = { version, sessionKey: "session-one", seed };
         processState[reloadSlot] = envelope;
         for (let replacement = 0; replacement < 3; replacement += 1) {
-          expect(() => makeProfileReloadHandoff().capture("session-one")).toThrow(
+          expect(() => handoff.capture("session-one")).toThrow(
             IncompatibleProfileReloadHandoffError,
           );
           expect(processState[reloadSlot]).toBe(envelope);
-          makeProfileReloadHandoff().clear("session-one");
+          handoff.clear("session-one");
           expect(processState[reloadSlot]).toBe(envelope);
         }
-        expect(makeProfileReloadHandoff().capture("session-two")).toBeUndefined();
+        expect(handoff.capture("session-two")).toBeUndefined();
         expect(slotPresent()).toBe(false);
       }
     },
@@ -83,20 +86,12 @@ describe("profile reload handoff", () => {
   });
 
   it("still decodes the version-1 envelope and old seed shape", () => {
-    processState[reloadSlot] = {
-      version: 1,
-      sessionKey: "session-one",
-      seed: { revision: 2, overrides: {} },
-    };
+    install({ revision: 2, overrides: {} }, 1);
     expect(handoff.capture("session-one")).toEqual({ revision: 2, overrides: {} });
   });
 
   it("rejects a version-2 envelope without its complete baseline", () => {
-    processState[reloadSlot] = {
-      version: 2,
-      sessionKey: "session-one",
-      seed: { revision: 2, overrides: {} },
-    };
+    install({ revision: 2, overrides: {} });
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(slotPresent()).toBe(true);
   });
@@ -123,11 +118,7 @@ describe("profile reload handoff", () => {
       },
     },
   ])("keeps an undecodable matching $label handoff fail-closed", ({ seed }) => {
-    processState[reloadSlot] = {
-      version: 2,
-      sessionKey: "session-one",
-      seed,
-    };
+    install(seed);
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(slotPresent()).toBe(true);
   });
@@ -147,11 +138,7 @@ describe("profile reload handoff", () => {
       overrides: { reviewer: { candidates: [accessorCandidate] } },
       baseline: completeBaseline("global"),
     };
-    processState[reloadSlot] = {
-      version: 2,
-      sessionKey: "session-one",
-      seed: accessorSeed,
-    };
+    install(accessorSeed);
 
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(candidateReads).toBe(0);
@@ -176,15 +163,11 @@ describe("profile reload handoff", () => {
         },
       },
     );
-    processState[reloadSlot] = {
-      version: 2,
-      sessionKey: "session-one",
-      seed: {
-        revision: 1,
-        overrides: {},
-        baseline: { ...baseline, profiles: { ...baseline.profiles, reviewer: { candidates } } },
-      },
-    };
+    install({
+      revision: 1,
+      overrides: {},
+      baseline: { ...baseline, profiles: { ...baseline.profiles, reviewer: { candidates } } },
+    });
 
     expect(() => handoff.capture("session-one")).toThrow(IncompatibleProfileReloadHandoffError);
     expect(candidateElementReads).toBe(0);

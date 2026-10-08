@@ -75,8 +75,7 @@ function simpleEntry(
 ): string | undefined {
   const fullLeft = `${prefix}${entryText(entry, theme, compact, withMeter)}`;
   const right = entry.kind === "window" ? entry.resetText : undefined;
-  if (right && visibleWidth(fullLeft) + visibleWidth(right) + 2 > width) return undefined;
-  if (!right && visibleWidth(fullLeft) > width) return undefined;
+  if (visibleWidth(fullLeft) + (right ? visibleWidth(right) + 2 : 0) > width) return undefined;
   return right
     ? alignSides(fullLeft, theme.fg("mdLink", right), width)
     : clipToWidth(fullLeft, width, "");
@@ -122,16 +121,11 @@ export function renderProviderUsageLines(
   const prefixWidth = Math.min(visibleWidth(fullPrefix), Math.max(0, width - 1));
   const firstPrefix = clipToWidth(fullPrefix, prefixWidth, "");
   const continuation = " ".repeat(prefixWidth);
-  const lines: string[] = [];
-  let first = true;
-  for (const entry of entries) {
-    const prefix = first ? firstPrefix : continuation;
-    const full = simpleEntry(entry, prefix, width, theme, compact, true);
-    const noMeter = full ?? simpleEntry(entry, prefix, width, theme, compact, false);
-    lines.push(
-      ...(noMeter ? [noMeter] : wrappedEntry(entry, prefix, continuation, width, theme, compact)),
-    );
-    first = false;
-  }
-  return lines;
+  return entries.flatMap((entry, index) => {
+    const prefix = index === 0 ? firstPrefix : continuation;
+    const simple =
+      simpleEntry(entry, prefix, width, theme, compact, true) ??
+      simpleEntry(entry, prefix, width, theme, compact, false);
+    return simple ? [simple] : wrappedEntry(entry, prefix, continuation, width, theme, compact);
+  });
 }

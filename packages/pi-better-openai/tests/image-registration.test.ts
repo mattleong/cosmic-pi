@@ -1,19 +1,21 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import type { ExtensionCommand, ExtensionSubcommand } from "pi-cosmic-core";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
-import { registerOpenAIImage } from "../src/image/register.ts";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import { OPENAI_IMAGE_TOOL, registerOpenAIImage } from "../src/image/register.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
 
 const image: CodexImageResult = {
   id: "image-1",
   status: "completed",
   prompt: "draw a comet",
+  revisedPrompt: "Draw a bright comet.",
   data: "aW1hZ2U=",
   mimeType: "image/png",
+  savedPath: "/tmp/generated-comet.png",
   model: "image-model",
   action: "generate",
   outputFormat: "png",
@@ -22,7 +24,6 @@ const image: CodexImageResult = {
 function fixture() {
   let handler: ExtensionSubcommand["handler"] = () => undefined;
   let current = true;
-  let tool: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
   const sendMessage = vi.fn();
   const notify = vi.fn();
   const updateContext = vi.fn();
@@ -32,14 +33,10 @@ function fixture() {
       handler = subcommand.handler;
     },
   };
-  const pi = extensionApiFixture({
-    registerTool(value: Parameters<ExtensionAPI["registerTool"]>[0]) {
-      tool = value;
-    },
-    sendMessage,
-  });
-  const runFixture = vi.fn().mockResolvedValue(Option.some(image));
-  // SAFETY: This owned runner seam returns the image-command's Option result.
+  const { pi, tools } = recordingExtensionHost({}, { sendMessage });
+  // The command's contained request resolves an Option; the tool's resolves the image itself.
+  const runFixture = vi.fn().mockResolvedValueOnce(Option.some(image)).mockResolvedValue(image);
+  // SAFETY: This owned runner seam returns the result each path expects, in call order.
   const run = runFixture as Parameters<typeof registerOpenAIImage>[2];
   registerOpenAIImage(pi, command, run, updateContext, { noteCwd, isCurrent: () => current });
   const controller = new AbortController();
@@ -50,8 +47,10 @@ function fixture() {
   });
   return {
     invoke: () => handler("draw a comet", ctx),
-    execute: (onUpdate: Parameters<NonNullable<typeof tool>["execute"]>[3]) =>
-      tool!.execute("call", { prompt: "draw a comet" }, undefined, onUpdate, ctx),
+    execute: (onUpdate: Parameters<ToolDefinition["execute"]>[3]) =>
+      tools
+        .get(OPENAI_IMAGE_TOOL)!
+        .execute("call", { prompt: "draw a comet" }, undefined, onUpdate, ctx),
     replace: () => {
       current = false;
     },
@@ -114,18 +113,26 @@ describe("image command delivery authority", () => {
     }),
   );
 
-  it.effect("current successful delivery preserves image content and details", () =>
+  it.effect("command messages and tool results each keep exactly one base64 payload", () =>
     Effect.gen(function* () {
       const h = fixture();
       yield* Effect.promise(() => Promise.resolve(h.invoke()));
       expect(h.sendMessage).toHaveBeenCalledOnce();
-      const { data: _data, ...details } = image;
       expect(h.sendMessage.mock.calls[0]?.[0]).toMatchObject({
-        details,
-        content: expect.arrayContaining([
-          { type: "image", data: image.data, mimeType: image.mimeType },
-        ]),
+        customType: "openai-image",
+        display: true,
       });
+      const toolResult = yield* Effect.promise(() => h.execute(undefined));
+      const { data, ...details } = image;
+      for (const delivered of [h.sendMessage.mock.calls[0]?.[0], toolResult]) {
+        expect(delivered.details).toEqual(details);
+        const parts: ReadonlyArray<{ type: string; text?: string }> = delivered.content;
+        expect(parts.filter((part) => part.type === "image")).toEqual([
+          { type: "image", data, mimeType: image.mimeType },
+        ]);
+        expect(parts.some((part) => part.type === "text")).toBe(true);
+        expect(parts.some((part) => part.text?.includes(data))).toBe(false);
+      }
     }),
   );
 });

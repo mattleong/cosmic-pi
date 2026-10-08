@@ -1,18 +1,14 @@
 import * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  makeWorkflowReplay,
-  WORKFLOW_JOURNAL_MAX_CHARS,
-  WorkflowJournal,
-  type WorkflowJournalContract,
-} from "../../src/workflow/journal.ts";
+import { makeWorkflowReplay, WORKFLOW_JOURNAL_MAX_CHARS } from "../../src/workflow/journal.ts";
 import {
   WORKFLOW_AGENT_LABEL_MAX_CHARS,
   WORKFLOW_PHASE_TITLE_MAX_CHARS,
   WORKFLOW_RETAINED_RUNS,
 } from "../../src/workflow/model.ts";
 import { decodeWorkflowAgentOptions, workflowAgentJournalKey } from "../../src/workflow/options.ts";
+import { withJournal, workflowSessionKey } from "./fixtures/workflow-harness.ts";
 
 /** Where an inline script without a saved copy restarts from. */
 const inlineOrigin = { source: { kind: "inline" } } as const;
@@ -123,32 +119,23 @@ describe("workflow journal", () => {
 
   it.live("finds runs recorded by an earlier activation of the same session", () =>
     Effect.gen(function* () {
-      const session = `session-${process.hrtime.bigint()}`;
-      yield* WorkflowJournal.use((journal) =>
+      const session = workflowSessionKey();
+      yield* withJournal(session, (journal) =>
         Effect.andThen(
           journal.open("wf-1", "review", inlineOrigin),
           journal.record("wf-1", entry("k", "kept")),
         ),
-      ).pipe(Effect.provide(WorkflowJournal.layer(session)));
-      const replay = yield* WorkflowJournal.use((journal) => journal.replay("wf-1")).pipe(
-        Effect.provide(WorkflowJournal.layer(session)),
       );
+      const replay = yield* withJournal(session, (journal) => journal.replay("wf-1"));
       expect(replay?.take("k")?.result).toBe("kept");
-      const other = yield* WorkflowJournal.use((journal) => journal.replay("wf-1")).pipe(
-        Effect.provide(WorkflowJournal.layer(`${session}-other`)),
-      );
+      const other = yield* withJournal(`${session}-other`, (journal) => journal.replay("wf-1"));
       expect(other).toBeUndefined();
     }),
   );
 
-  const withJournal = <A>(
-    session: string,
-    use: (journal: WorkflowJournalContract) => Effect.Effect<A>,
-  ) => WorkflowJournal.use(use).pipe(Effect.provide(WorkflowJournal.layer(session)));
-
   it.live("keeps a running run's journal however many later runs finish", () =>
     Effect.gen(function* () {
-      const session = `session-${process.hrtime.bigint()}`;
+      const session = workflowSessionKey();
       yield* withJournal(session, (journal) =>
         Effect.gen(function* () {
           yield* journal.open("wf-long", "long", inlineOrigin);
@@ -168,7 +155,7 @@ describe("workflow journal", () => {
 
   it.live("keeps the newest finished run resumable however large it is", () =>
     Effect.gen(function* () {
-      const session = `session-${process.hrtime.bigint()}`;
+      const session = workflowSessionKey();
       const large = { ...entry("big", "kept"), chars: WORKFLOW_JOURNAL_MAX_CHARS + 1 };
       yield* withJournal(session, (journal) =>
         Effect.gen(function* () {
@@ -191,7 +178,7 @@ describe("workflow journal", () => {
 
   it.live("reports runs an earlier activation left open until their notice is accepted", () =>
     Effect.gen(function* () {
-      const session = `session-${process.hrtime.bigint()}`;
+      const session = workflowSessionKey();
       yield* withJournal(session, (journal) =>
         Effect.gen(function* () {
           yield* journal.open("wf-done", "done", inlineOrigin);

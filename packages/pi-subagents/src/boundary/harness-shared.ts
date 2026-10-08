@@ -1,51 +1,23 @@
 // Shared private-filesystem and harness helpers for boundary services.
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import { hasControlCharacter, hasObjectRuntimeType } from "pi-cosmic-core";
 import { homedir } from "node:os";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
+import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 const { isAbsolute, join, resolve } = nodePath;
 
-export const MAX_AUTH_BYTES = 64 * 1024;
-export const MAX_PATH_CHARS = 4_096;
+const MAX_AUTH_BYTES = 64 * 1024;
+const MAX_PATH_CHARS = 4_096;
 
-/** Quotes a value as a TOML basic string (Codex config.toml / channel connection.toml). */
+/** Quotes a value as a TOML basic string for the Codex config.toml MCP fragment. */
 export const tomlString = (value: string): string => JSON.stringify(value);
-
-export const CODEX_DISABLED_FEATURES =
-  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies".split(
-    " ",
-  );
-
-/** The Codex `[features]` table: every reviewed feature off except opted-in fast mode. */
-export const codexFeatureLines = (openaiFastMode: boolean): ReadonlyArray<string> => [
-  "[features]",
-  ...CODEX_DISABLED_FEATURES.map(
-    (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
-  ),
-  "multi_agent = true",
-  "hooks = false",
-];
 
 export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
   error && hasObjectRuntimeType(error) && "code" in error && Predicate.isString(error.code)
     ? error.code
     : undefined;
-
-export { hasControlCharacter };
-
-/** Frozen copy of the defined `keys` of `source`, in allowlist order. */
-export const pickEnvironment = (
-  source: NodeJS.ProcessEnv,
-  keys: ReadonlyArray<string>,
-): NodeJS.ProcessEnv =>
-  Object.freeze(
-    Object.fromEntries(
-      keys.flatMap((key) => (source[key] === undefined ? [] : ([[key, source[key]]] as const))),
-    ),
-  );
 
 export const ensurePrivateDirectory = (path: string): Promise<void> =>
   fs
@@ -75,7 +47,6 @@ export const writeExclusive = (path: string, source: string): Promise<void> => {
 export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
   if (
     !isAbsolute(agentDirectory) ||
-    agentDirectory.length < 1 ||
     agentDirectory.length > MAX_PATH_CHARS ||
     hasControlCharacter(agentDirectory)
   )
@@ -104,7 +75,7 @@ export const removePrivateDirectory = (directory: string): Promise<void> =>
     return fs.rm(directory, { recursive: true, force: false });
   });
 
-export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
+const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
   if (depth > 16) return false;
   if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
@@ -121,13 +92,6 @@ export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): bool
   );
 };
 
-export const safeCodexSourceHome = (
-  sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> =>
-  safeAgentDirectory(
-    sourceEnvironment.CODEX_HOME ?? join(sourceEnvironment.HOME || homedir(), ".codex"),
-  ).catch(() => undefined);
-
 const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | undefined> => {
   const path = join(sourceHome, "auth.json");
   return fs
@@ -141,25 +105,19 @@ const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | un
     .then((bytes) => {
       if (bytes === undefined || bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES)
         return undefined;
-      const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(
-        bytes.toString("utf8"),
-      );
-      if (Option.isNone(decoded)) return undefined;
-      const value = decoded.value;
-      if (
-        !value ||
-        !hasObjectRuntimeType(value) ||
-        Array.isArray(value) ||
-        !boundedJsonValue(value)
-      )
-        return undefined;
-      return `${JSON.stringify(value)}\n`;
+      const decoded = decodeUnknownJsonOption(bytes.toString("utf8"));
+      return Option.isSome(decoded) &&
+        Predicate.isObject(decoded.value) &&
+        boundedJsonValue(decoded.value)
+        ? `${JSON.stringify(decoded.value)}\n`
+        : undefined;
     });
 };
 
+/** Bounded, validated auth from a safe Codex home; an unsafe or missing home yields none. */
 export const readValidatedCodexAuth = (
   sourceEnvironment: NodeJS.ProcessEnv,
 ): Promise<string | undefined> =>
-  safeCodexSourceHome(sourceEnvironment).then((sourceHome) =>
-    sourceHome ? readValidatedCodexAuthFromHome(sourceHome) : undefined,
-  );
+  safeAgentDirectory(
+    sourceEnvironment.CODEX_HOME ?? join(sourceEnvironment.HOME || homedir(), ".codex"),
+  ).then(readValidatedCodexAuthFromHome, () => undefined);
