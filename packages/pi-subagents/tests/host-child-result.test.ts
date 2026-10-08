@@ -1,6 +1,6 @@
 // Public SDK host boundary: the real agent loop runs the local Pi child bridge; no inference.
 import { fauxAssistantMessage, fauxToolCall, type AssistantMessage } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { createCodemodeExtension, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -45,6 +45,7 @@ const encodeContractDocument = Schema.encodeEffect(
 
 interface ChildSessionOptions {
   readonly schema?: Schema.Json | undefined;
+  readonly codemode?: "on" | "only";
   /** The parent's rejection message for a submission, or undefined to accept it. */
   readonly reject?: ((valueJson: string) => string | undefined) | undefined;
 }
@@ -81,12 +82,17 @@ const childSession = (options: ChildSessionOptions = {}) =>
       },
     };
 
-    const settings = quietSettings();
+    const settings = quietSettings(
+      options.codemode ? { defaultTools: ["+codemode"], codemode: { mode: options.codemode } } : {},
+    );
     const loader = yield* quietLoader({
       cwd: directory,
       agentDir: directory,
       settingsManager: settings,
       extensionFactories: [
+        ...(options.codemode
+          ? [{ name: "codemode", builtin: true, factory: createCodemodeExtension() }]
+          : []),
         {
           name: "subagent-child-result-test",
           factory: (pi) =>
@@ -188,6 +194,28 @@ describe("local Pi child result tool", () => {
       expect(outcome).toMatchObject({ requests: 2, unused: 1, reminders: 0 });
     },
   );
+
+  for (const mode of ["on", "only"] as const) {
+    childTest(`keeps final submission model-only with codemode ${mode}`, function* () {
+      const child = yield* childSession({ schema: VERDICT, codemode: mode });
+      const outcome = yield* child.run([
+        fauxAssistantMessage(
+          fauxToolCall("codemode", {
+            code: `await tools.${SUBAGENT_RESULT_TOOL_NAME}({ verdict: "bad" });`,
+          }),
+          { stopReason: "toolUse" },
+        ),
+        callResult({ verdict: "ok" }),
+        fauxAssistantMessage("A request after acceptance must not happen."),
+      ]);
+      const script = child.session.agent.state.messages.find(
+        (message) => message.role === "toolResult" && message.toolName === "codemode",
+      );
+      expect(script).toMatchObject({ isError: true });
+      expect(outcome.submissions).toEqual([canonicalResultJson({ verdict: "ok" })]);
+      expect(outcome).toMatchObject({ requests: 2, unused: 1, reminders: 0 });
+    });
+  }
 
   childTest("returns the parent's rejection to the model, which can submit again", function* () {
     let rejections = 0;

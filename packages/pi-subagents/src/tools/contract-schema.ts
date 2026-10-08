@@ -21,6 +21,7 @@ import {
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { MAX_CARD_QUESTION_CHARS, MAX_FAILURE_CODE_CHARS, NonEmptyText } from "./details-schema.ts";
+import { ModelsContractFields } from "./discovery-contract-schema.ts";
 import type { ActionFailureDisposition } from "./outcome.ts";
 import { AWAIT_UNTIL, type SubagentLifecycleInput } from "./schema.ts";
 
@@ -216,12 +217,47 @@ const LifecycleContractSchema = Schema.Struct({
   ).check(Schema.isMaxLength(MAX_TARGET_RUNS)),
 });
 
+const ListContractSchema = Schema.Struct({
+  ...envelope(SUBAGENT_TOOL_NAME.list),
+  /** Complete visible registry, not the bounded targeted-action or display-card set. */
+  runs: Schema.Array(
+    Schema.Struct({
+      ...WithheldRunTargetSchema.fields,
+      parentRunId: RunIdSchema,
+      depth: count,
+    }),
+  ),
+});
+const ModelsContractSchema = Schema.Struct({
+  ...envelope(SUBAGENT_TOOL_NAME.models),
+  ...ModelsContractFields,
+});
+const renameFields = {
+  ...envelope(SUBAGENT_TOOL_NAME.rename),
+  requestedRunId: RunIdSchema,
+};
+const RenameContractSchema = Schema.Union([
+  Schema.Struct({
+    ...renameFields,
+    outcome: Schema.Literal("succeeded"),
+    target: WithheldRunTargetSchema,
+  }),
+  Schema.Struct({
+    ...renameFields,
+    outcome: Schema.Literal("failed"),
+    failure: FailureSchema,
+  }),
+]);
+
 /** The one contract catalog, keyed by exact public tool name. */
 export const CONTRACT_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.start]: StartContractSchema,
   [SUBAGENT_TOOL_NAME.await]: AwaitContractSchema,
   [SUBAGENT_TOOL_NAME.status]: StatusContractSchema,
   [SUBAGENT_TOOL_NAME.lifecycle]: LifecycleContractSchema,
+  [SUBAGENT_TOOL_NAME.list]: ListContractSchema,
+  [SUBAGENT_TOOL_NAME.models]: ModelsContractSchema,
+  [SUBAGENT_TOOL_NAME.rename]: RenameContractSchema,
 } as const;
 
 export type SubagentContractTool = keyof typeof CONTRACT_SCHEMAS;
@@ -231,7 +267,11 @@ export type SubagentStartContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.s
 export type SubagentAwaitContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.await>;
 export type SubagentStatusContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.status>;
 export type SubagentLifecycleContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.lifecycle>;
+export type SubagentListContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.list>;
+export type SubagentModelsContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.models>;
+export type SubagentRenameContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.rename>;
 export type ContractRunTarget = typeof RunTargetSchema.Type;
+export type ContractWithheldRunTarget = typeof WithheldRunTargetSchema.Type;
 export type ContractReport = typeof ReportSchema.Type;
 export type ContractWithheldReport = typeof WithheldReportSchema.Type;
 export type ContractAttention = typeof AttentionSchema.Type;
@@ -249,6 +289,9 @@ export const SubagentContractSchema = Schema.Union([
   AwaitContractSchema,
   StatusContractSchema,
   LifecycleContractSchema,
+  ListContractSchema,
+  ModelsContractSchema,
+  RenameContractSchema,
 ]);
 export const encodeSubagentContract = Schema.encodeSync(
   Schema.toCodecJson(SubagentContractSchema),

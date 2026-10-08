@@ -32,6 +32,7 @@ import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch } from "./execute-start.ts";
 import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
 import { awaitContract, statusContract, startContract, lifecycleContract } from "./contract.ts";
+import { listContract, renameContract } from "./discovery-contract.ts";
 import {
   attentionRecoveryText,
   formatActionFailures,
@@ -285,10 +286,10 @@ export const executeSubagentActionEffect = (
           contract: startContract(input.args.agents, result.startOutcomes),
         });
       }
-      case SUBAGENT_TOOL_NAME.list:
-        return present({
-          runs: yield* callerRunId ? service.visibleList(callerRunId) : service.list,
-        });
+      case SUBAGENT_TOOL_NAME.list: {
+        const runs = yield* callerRunId ? service.visibleList(callerRunId) : service.list;
+        return present({ runs, contract: listContract(runs) });
+      }
       case SUBAGENT_TOOL_NAME.status:
         return yield* finishStatus(yield* requiredTargetIds(action, input.args.runIds));
       case SUBAGENT_TOOL_NAME.await: {
@@ -392,9 +393,11 @@ export const executeSubagentActionEffect = (
       case SUBAGENT_TOOL_NAME.rename: {
         const id = yield* required(action, "runId", input.args.runId);
         yield* authorize([id]);
-        return present(
-          yield* forEachOutcome([id], (runId) => service.rename(runId, input.args.name.trim())),
+        const result = yield* forEachOutcome([id], (runId) =>
+          service.rename(runId, input.args.name.trim()),
         );
+        // One validated target produces exactly one settled domain outcome.
+        return present({ ...result, contract: renameContract(result.outcomes[0]!) });
       }
       case SUBAGENT_TOOL_NAME.claims: {
         const operation = input.args;

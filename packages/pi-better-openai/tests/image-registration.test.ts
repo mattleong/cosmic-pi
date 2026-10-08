@@ -113,26 +113,37 @@ describe("image command delivery authority", () => {
     }),
   );
 
-  it.effect("command messages and tool results each keep exactly one base64 payload", () =>
-    Effect.gen(function* () {
-      const h = fixture();
-      yield* Effect.promise(() => Promise.resolve(h.invoke()));
-      expect(h.sendMessage).toHaveBeenCalledOnce();
-      expect(h.sendMessage.mock.calls[0]?.[0]).toMatchObject({
-        customType: "openai-image",
-        display: true,
-      });
-      const toolResult = yield* Effect.promise(() => h.execute(undefined));
-      const { data, ...details } = image;
-      for (const delivered of [h.sendMessage.mock.calls[0]?.[0], toolResult]) {
-        expect(delivered.details).toEqual(details);
-        const parts: ReadonlyArray<{ type: string; text?: string }> = delivered.content;
-        expect(parts.filter((part) => part.type === "image")).toEqual([
-          { type: "image", data, mimeType: image.mimeType },
-        ]);
-        expect(parts.some((part) => part.type === "text")).toBe(true);
-        expect(parts.some((part) => part.text?.includes(data))).toBe(false);
-      }
-    }),
+  it.effect(
+    "keeps one image in content and byte-free details, with transient structured tool data",
+    () =>
+      Effect.gen(function* () {
+        const h = fixture();
+        yield* Effect.promise(() => Promise.resolve(h.invoke()));
+        expect(h.sendMessage).toHaveBeenCalledOnce();
+        expect(h.sendMessage.mock.calls[0]?.[0]).toMatchObject({
+          customType: "openai-image",
+          display: true,
+        });
+        const toolResult = yield* Effect.promise(() => h.execute(undefined));
+        const { data, ...details } = image;
+        // The transient result also carries the script image; native-codemode.test.ts checks the
+        // actual persisted Pi transcript, which does not store this structured payload a second time.
+        expect(toolResult.structuredContent).toMatchObject({
+          contract: "pi-better-openai/image",
+          version: 1,
+          tool: OPENAI_IMAGE_TOOL,
+          image: { type: "image", data, mimeType: image.mimeType },
+        });
+        expect(h.sendMessage.mock.calls[0]?.[0]).not.toHaveProperty("structuredContent");
+        for (const delivered of [h.sendMessage.mock.calls[0]?.[0], toolResult]) {
+          expect(delivered.details).toEqual(details);
+          const parts: ReadonlyArray<{ type: string; text?: string }> = delivered.content;
+          expect(parts.filter((part) => part.type === "image")).toEqual([
+            { type: "image", data, mimeType: image.mimeType },
+          ]);
+          expect(parts.some((part) => part.type === "text")).toBe(true);
+          expect(parts.some((part) => part.text?.includes(data))).toBe(false);
+        }
+      }),
   );
 });

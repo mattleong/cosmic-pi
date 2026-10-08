@@ -8,6 +8,8 @@ import {
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
 import { startContract } from "../src/tools/contract.ts";
+import { listContract, modelsContract, renameContract } from "../src/tools/discovery-contract.ts";
+import { profileCandidate } from "./fixtures/profiles.ts";
 import { view } from "./fixtures/run-view.ts";
 
 const proxyRoundTripCases: ReadonlyArray<SubagentToolInput> = [
@@ -42,6 +44,67 @@ const proxyRoundTripCases: ReadonlyArray<SubagentToolInput> = [
 ];
 
 describe("nested Pi proxy protocol", () => {
+  it("round-trips discovery and rename contracts while rejecting report-text injection", () => {
+    const run = view({
+      id: "a",
+      state: "completed",
+      finalText: "PRIVATE-REPORT",
+      reportStatus: "available",
+    });
+    const contracts = [
+      listContract(Array.from({ length: 64 }, (_, index) => ({ ...run, id: `run-${index}` }))),
+      modelsContract(
+        [
+          {
+            id: "scout",
+            description: "Inspect code",
+            source: "builtin",
+            isDefault: false,
+            defaultContext: "fresh",
+            defaultWriteIntent: "read-only",
+            candidates: [
+              {
+                ...profileCandidate(),
+                status: "eligible",
+                reason: "Static adapter eligibility only",
+              },
+            ],
+          },
+        ],
+        "generalist",
+      ),
+      renameContract({ runId: "a", run }),
+      renameContract({
+        runId: "missing",
+        failure: { id: "missing", code: "rename_outcome_uncertain", message: "Outcome unknown" },
+      }),
+    ];
+    for (const structuredContent of contracts) {
+      const result = {
+        content: [{ type: "text", text: "Existing human output" }],
+        details: { unchanged: true },
+        structuredContent,
+        ...(structuredContent.tool === "subagent_rename" &&
+          structuredContent.outcome === "failed" && { isError: true }),
+      };
+      expect(decodeSubagentProxyResult(JSON.stringify(result))).toEqual(result);
+      expect(JSON.stringify(result)).not.toContain("PRIVATE-REPORT");
+    }
+    const list = listContract([run]);
+    expect(
+      decodeSubagentProxyResult(
+        JSON.stringify({
+          content: [],
+          details: {},
+          structuredContent: {
+            ...list,
+            runs: [{ ...list.runs[0], report: { status: "delivered", text: "PRIVATE-REPORT" } }],
+          },
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
   it("round-trips machine-readable outcomes without losing partial failure evidence", () => {
     const contract = startContract(
       [{ task: "Inspect" }, { task: "Unavailable" }],

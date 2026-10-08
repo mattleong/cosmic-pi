@@ -127,10 +127,6 @@ const detailsOf = (result: AgentToolResult<WorkflowToolDetails>) => {
 };
 
 describe("subagent_workflow tool", () => {
-  it("is model-only so codemode scripts can't start workflows", () => {
-    expect(registeredTool().exposure).toBe("model-only");
-  });
-
   it.live("starts a background run and reports its progress and result", () =>
     Effect.gen(function* () {
       const { execute, dispose } = liveTool();

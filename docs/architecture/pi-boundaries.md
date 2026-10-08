@@ -24,7 +24,7 @@ Pi owns native `codemode` execution, tool dispatch, cancellation, and result han
 
 Native `tool_search` presentation requires exact `builtin:tool-search` public source metadata and its captured preview-tools selection, independent of activation. Bounded own-data `details.loaded` receipts supply neutral listing counts, not current availability or domain success. Expansion keeps all arguments and output/recovery text; Pi keeps native images. The renderer reuses first-ready replay and the originating scheduler, never registers execution, reads artifacts, searches tools, or activates matches. Native search alone owns discovery and activation.
 
-`pi-subagents` runs dynamic workflow scripts in an in-process `CodemodeSandbox` from `@earendil-works/pi-codemode` (`src/boundary/codemode-sandbox.ts`). Pi's package owns that VM; the runner applies Pi's own 256 MiB codemode memory bound. Scripts get no Pi tools; the sandbox exposes only the runner's `__workflow.agent`, `event`, and `load` members, and the runner owns cancellation through the run's scope.
+`pi-subagents` runs dynamic workflow scripts in an in-process `CodemodeSandbox` from `@earendil-works/pi-codemode` (`src/boundary/codemode-sandbox.ts`). Pi's package owns that VM; the runner applies Pi's own 256 MiB codemode memory bound. Workflow scripts get no Pi tools; the sandbox exposes only the runner's `__workflow.agent`, `event`, and `load` members, and the runner owns cancellation through the run's scope. An outer native codemode script may call `subagent_workflow` only while Ultracode activates its direct registration. Its separate success-only `pi-subagents/workflow` v1 contract preserves start receipts and authoritative status/list/stop observations. Workflow agents retain ordinary writer authorization, claims and worktree-review requirements, unlike native `subagent_start`'s read-only tree policy. Ending or aborting the outer script does not undo an admitted workflow; start is not completion, and terminal workflow state is not child-cleanup confirmation.
 
 ### Synchronous TUI rendering
 
@@ -56,7 +56,7 @@ Built-in compact summaries apply to eligible `read`, `bash`, `write`, `edit`, `g
 
 ### Tool schemas
 
-Pi tool parameter declarations may use TypeBox or literal JSON Schema. Tool output declarations are generated from authoritative Effect Schema contracts; producers encode structured results with the matching codec. Core's shared pure adapter, `toPiToolOutputSchema`, makes that generated JSON Schema self-contained for Pi; pi-subagents and pi-background-task use it rather than package-local copies. The Effect schema remains authoritative, and the generated JSON Schema is only its declaration for Pi. Tool execution delegates to Effect immediately. This exception applies to schema representation, not implementation logic.
+Pi tool parameter declarations may use TypeBox or literal JSON Schema. Tool output declarations are generated from authoritative Effect Schema contracts; producers encode structured results with the matching codec. Core's shared pure adapter, `toPiToolOutputSchema`, makes that generated JSON Schema self-contained for Pi; Subagents, Background Tasks, Ask User, and Better OpenAI use it rather than package-local copies. The Effect schema remains authoritative, and the generated JSON Schema is only its declaration for Pi. Tool execution delegates to Effect immediately. This exception applies to schema representation, not implementation logic.
 
 ### Third-party libraries
 

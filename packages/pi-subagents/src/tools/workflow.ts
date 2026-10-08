@@ -8,7 +8,7 @@ import {
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
-import { clipText, failureMessage } from "pi-cosmic-core";
+import { clipText, failureMessage, toPiToolOutputSchema } from "pi-cosmic-core";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import { makeWorkflowHost } from "../boundary/host-workflow.ts";
@@ -23,6 +23,14 @@ import type {
 } from "../workflow/errors.ts";
 import type { WorkflowScriptError } from "../workflow/script.ts";
 import { WorkflowService, type WorkflowToolStatus } from "../workflow/service.ts";
+import {
+  withWorkflowContract,
+  workflowListContract,
+  workflowStartContract,
+  workflowStatusContract,
+  workflowStopContract,
+} from "./workflow-contract.ts";
+import { WorkflowContractSchema } from "./workflow-contract-schema.ts";
 import {
   savedWorkflowFiles,
   WorkflowStore,
@@ -305,26 +313,35 @@ const executeWorkflowTool = <Args>(
       case "start": {
         const host = yield* makeWorkflowHost(pi, ctx, environment);
         const run = yield* workflows.start(request.start, host);
-        return succeed("start", workflowStartText(run), { run: workflowRunSummary(run) });
-      }
-      case "status":
-        return statusResult(
-          yield* workflows.toolStatus(request.runId),
-          yield* Clock.currentTimeMillis,
+        return withWorkflowContract(
+          succeed("start", workflowStartText(run), { run: workflowRunSummary(run) }),
+          () => workflowStartContract(run),
         );
+      }
+      case "status": {
+        const status = yield* workflows.toolStatus(request.runId);
+        return withWorkflowContract(statusResult(status, yield* Clock.currentTimeMillis), () =>
+          workflowStatusContract(status),
+        );
+      }
       case "stop": {
         const run = yield* workflows.stop(request.runId, "tool");
         const text = workflowStopText(run, yield* Clock.currentTimeMillis);
-        return succeed("stop", text, { run: workflowRunSummary(run) });
+        return withWorkflowContract(succeed("stop", text, { run: workflowRunSummary(run) }), () =>
+          workflowStopContract(run),
+        );
       }
       case "list": {
         const listing = yield* WorkflowStore.use((store) => store.list);
         const runs = yield* workflows.list;
-        return succeed("list", workflowListText(listing, runs), {
-          saved: listing.workflows.length,
-          diagnostics: listing.diagnostics.length,
-          runs: runs.length,
-        });
+        return withWorkflowContract(
+          succeed("list", workflowListText(listing, runs), {
+            saved: listing.workflows.length,
+            diagnostics: listing.diagnostics.length,
+            runs: runs.length,
+          }),
+          () => workflowListContract(listing, runs),
+        );
       }
     }
   }).pipe(
@@ -333,7 +350,7 @@ const executeWorkflowTool = <Args>(
   );
 
 /**
- * Registers the root-only, model-only workflow runner tool, inactive: the application activates
+ * Registers the root-only workflow runner tool, inactive: the application activates
  * it only while the user has opted into workflows with ultracode. `shell` is the application's
  * replay-staging wrapper, which stages history presentation without touching activation.
  */
@@ -354,10 +371,14 @@ export function registerWorkflowTool(
     promptGuidelines: [
       "For planned fan-out or multi-stage work that needs more than a few subagents, write one subagent_workflow script instead of starting and awaiting agents one by one. After starting it, finish any unrelated work and end your turn: its notification starts your next turn with the result. Don't poll status or stop the run to finish sooner.",
       "For a runtime failure, follow the supplied recovery guidance rather than editing the script. To fix a script error, adjust a workflow you stopped yourself, or extend a completed one, edit its script and start it again with resumeFromRunId so unchanged agents are reused. A run the user stopped stays stopped unless they ask for it again.",
+      "Native codemode may call subagent_workflow only while Ultracode makes it active. Starting a workflow authorizes its ordinary agents, including writers: use only the user-authorized task, with normal writer mode, claims and worktree review. Questions, claim recovery and workspace integration remain main-agent decisions, not scripted approvals.",
+      "Native codemode receives success-only pi-subagents/workflow version-1 envelopes. Check contract, version, tool and action, and print a start's run.id immediately. A start is a receipt, not completion; end the turn for the notification, never poll status. Status kind distinguishes a live view, unchanged live view, and recorded summary; recorded finished counts agent results. Terminal workflow state does not prove child process cleanup, and result is bounded text with clipped and optional path, not a parsed full value. Rejected or cancelled calls do not roll back admitted effects: hand uncertainty to the main agent to inspect existing runs, never replay a start blindly.",
     ],
-    exposure: "model-only",
+    // Direct exposure is callable only while active, preserving the Ultracode opt-in.
+    exposure: "direct",
     defaultActive: false,
     parameters: WorkflowToolParameters,
+    outputSchema: toPiToolOutputSchema(WorkflowContractSchema),
     execute: (_id, args, signal, _onUpdate, ctx) =>
       runtime.run(executeWorkflowTool(pi, ctx, runtime.environment, args), signal),
     renderCall: renderWorkflowCall,

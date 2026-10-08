@@ -4,6 +4,7 @@ import {
   type CompactAnimationScheduler,
 } from "pi-code-previews";
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { toPiToolOutputSchema } from "pi-cosmic-core";
 import {
   AskUserAsyncParameters,
   AskUserAsyncControlParameters,
@@ -24,6 +25,18 @@ import {
   renderAsyncContent,
 } from "../ui/async-tool-render.ts";
 import { argumentsSection } from "../ui/tool-body.ts";
+import {
+  AskUserAsyncContractSchema,
+  AskUserAsyncControlContractSchema,
+} from "./contract-schema.ts";
+import {
+  askUserAsyncContract,
+  askUserAsyncControlContract,
+  questionnaireToolResult,
+} from "./contract.ts";
+
+const START_OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserAsyncContractSchema);
+const CONTROL_OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserAsyncControlContractSchema);
 
 /**
  * Register once at factory time: Pi draws historical answers before session_start.
@@ -68,18 +81,23 @@ export function registerAsyncAskUserTools(
           "After ask_user_async returns, do the declared independentWork. Never guess answers or start blockedWork before submission. Use ask_user_async_control await when independent work is exhausted; do not poll status.",
           "Apply ask_user's question batching, text, choice, recommendation, and credential-safety rules to ask_user_async. Cancellation is not approval; do not repeat a cancelled questionnaire immediately.",
           "Async answer messages and control results carry stable delivery IDs. Treat repeated IDs as the same decision. Runtime shutdown, reload, replacement, and tree navigation revoke pending questionnaires.",
+          "Native codemode receives structured pi-ask-user/questionnaire version-1 results. Check contract, version, and tool; print the admitted request.requestId immediately. Admission is not an answer. A rejected or cancelled script can leave an admitted questionnaire open: recover through status instead of blindly retrying start.",
         ],
         renderCall(args, theme, context) {
           return renderAsyncCall(args, theme, context);
         },
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncParameters,
+        outputSchema: START_OUTPUT_SCHEMA,
         executionMode: "sequential",
         execute(_id, input, signal) {
-          return start(input, signal).then((snapshot) => ({
-            content: [{ type: "text" as const, text: formatAsyncSnapshot(snapshot) }],
-            details: snapshot,
-          }));
+          return start(input, signal).then((snapshot) =>
+            questionnaireToolResult(
+              formatAsyncSnapshot(snapshot),
+              snapshot,
+              askUserAsyncContract(snapshot),
+            ),
+          );
         },
       }),
       presentation,
@@ -94,24 +112,27 @@ export function registerAsyncAskUserTools(
           "Inspect, await, or cancel a session-local async questionnaire. status returns the full request result, or metadata for all retained requests when requestId is omitted. await and cancel require requestId. Await interruption leaves the questionnaire open and restores automatic delivery. Cancel still closes it while another caller owns await delivery. Status is non-consuming. Results carry stable delivery IDs; sent means host call returned, not model acknowledgement. Delivery failures retain the answer for status/await recovery.",
         promptSnippet:
           "Await async answers when independent work is exhausted, or inspect/cancel a questionnaire",
+        promptGuidelines: [
+          "Native codemode receives structured pi-ask-user/questionnaire version-1 results. Check contract, version, and tool before reading requests. Status without requestId is metadata-only; use await at a dependency barrier, not polling.",
+          "Branch on the returned outcome, not the requested action: cancel can return submitted when completion won. sent is not model acknowledgement. Script interruption cancels its wait, not the async questionnaire; do not blindly retry admission or assume cancellation rolled back an answer.",
+        ],
         renderCall(args, theme, context) {
           return renderAsyncCall(args, theme, context, true);
         },
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncControlParameters,
+        outputSchema: CONTROL_OUTPUT_SCHEMA,
         executionMode: "sequential",
         execute(_id, input, signal) {
-          return control(input, signal).then((result) => ({
-            content: [
-              {
-                type: "text" as const,
-                text: result.requests.length
-                  ? result.requests.map(formatAsyncSnapshot).join("\n\n")
-                  : "No async questionnaires are retained in this runtime.",
-              },
-            ],
-            details: result,
-          }));
+          return control(input, signal).then((result) =>
+            questionnaireToolResult(
+              result.requests.length
+                ? result.requests.map(formatAsyncSnapshot).join("\n\n")
+                : "No async questionnaires are retained in this runtime.",
+              result,
+              askUserAsyncControlContract(input, result),
+            ),
+          );
         },
       }),
       presentation,

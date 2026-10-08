@@ -8,6 +8,8 @@ import * as Effect from "effect/Effect";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { profileCandidateLabel, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
+import { encodeSubagentContract } from "./contract-schema.ts";
+import { modelsContract } from "./discovery-contract.ts";
 import { makeCompactToolDetails } from "./details.ts";
 import { boundToolOutput } from "./format.ts";
 import type { ProfileCandidateDiscovery, SubagentProfileView } from "./model.ts";
@@ -90,5 +92,6 @@ export const executeModelsAction = (
         },
       ],
       details: makeCompactToolDetails({ action: "models", profiles, fallbackProfile }),
+      structuredContent: encodeSubagentContract(modelsContract(profiles, fallbackProfile)),
     };
   });

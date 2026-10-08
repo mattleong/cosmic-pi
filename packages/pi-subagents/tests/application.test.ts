@@ -625,7 +625,7 @@ describe("subagent Pi registration", () => {
     const ultracodeOn = () => scriptable() && activeTools.active().includes("subagent_workflow");
     const ultracodeOff = () =>
       scriptable() &&
-      registered.get("subagent_workflow")?.exposure === "model-only" &&
+      registered.get("subagent_workflow")?.exposure === "direct" &&
       !activeTools.active().includes("subagent_workflow");
     let app = registerFreshApplication();
     const reload = function* () {

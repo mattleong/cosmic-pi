@@ -78,7 +78,7 @@ describe("native scripted subagent workflows", () => {
     );
 
     nativeTest(
-      `lists runs as text without consuming reports with ${callId === undefined ? "generated" : "empty"} caller ID`,
+      `lists structured runs without consuming reports with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
           const run = view({
@@ -88,61 +88,104 @@ describe("native scripted subagent workflows", () => {
             reportStatus: "available",
             reportGeneration: 1,
           });
-          const service = subagentServiceDouble({ list: Effect.succeed([run]) });
+          const service = subagentServiceDouble({
+            list: Effect.succeed([run]),
+            consumeCompletions: () => Effect.die("List must not consume reports"),
+          });
           const h = yield* nativeCodemodeSession(service);
-          const result = yield* h.run(print("await tools.subagent_list({})"), callId);
+          const result = yield* h.run(
+            `
+            const listed = await tools.subagent_list({});
+            ${print("{contract:listed.contract,version:listed.version,runs:listed.runs.map(r=>({id:r.runId,parent:r.parentRunId,depth:r.depth,report:r.report}))}")}
+          `,
+            callId,
+          );
           expect(result.isError).toBe(false);
-          const listed = output(result.text);
+          expect(output(result.text)).toEqual({
+            contract: "pi-subagents/orchestration",
+            version: 1,
+            runs: [{ id: run.id, parent: "root", depth: 1, report: { status: "deferred" } }],
+          });
+          expect(result.text).not.toContain(run.finalText);
           const direct = yield* h.call("subagent_list", {}, callId);
           expect(direct.isError).toBe(false);
-          expect(listed).toBe(direct.text);
-          expect(listed).toContain(run.id);
-          expect(listed).not.toContain(run.finalText);
+          expect(direct.text).toContain(run.id);
+          expect(direct.text).not.toContain(run.finalText);
         }),
     );
 
     nativeTest(
-      `inspects profile routes as text without launching runs with ${callId === undefined ? "generated" : "empty"} caller ID`,
+      `consumes static profile routes without launching runs with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
           const h = yield* nativeCodemodeSession(subagentServiceDouble({}));
           const result = yield* h.run(
-            print("await tools.subagent_models({profile:'scout'})"),
+            `
+            const routes = await tools.subagent_models({profile:'scout'});
+            const profile = routes.profiles[0];
+            ${print("{fallback:routes.fallbackProfile,id:profile.id,candidates:profile.candidates.map(c=>({runtime:c.runtime,model:c.model,status:c.status,fast:c.openaiFastMode,close:c.closeOnReport}))}")}
+          `,
             callId,
           );
           expect(result.isError).toBe(false);
+          expect(output(result.text)).toEqual({
+            fallback: "generalist",
+            id: "scout",
+            candidates: [
+              { runtime: "claude", model: "sonnet", status: "eligible", fast: false, close: true },
+            ],
+          });
           const direct = yield* h.call("subagent_models", { profile: "scout" }, callId);
           expect(direct.isError).toBe(false);
-          expect(output(result.text)).toBe(direct.text);
-          expect(output(result.text)).toContain("scout");
+          expect(direct.text).toContain("scout");
         }),
     );
 
     nativeTest(
-      `renames runs and surfaces failed renames with ${callId === undefined ? "generated" : "empty"} caller ID`,
+      `chains list, rename, and status and handles domain failure with ${callId === undefined ? "generated" : "empty"} caller ID`,
       () =>
         Effect.gen(function* () {
           let run = view({ id: "rename-target", name: "original-name" });
           const service = subagentServiceDouble({
+            list: Effect.sync(() => [run]),
+            status: () => Effect.sync(() => run),
             rename: (id, name) =>
               id === run.id
                 ? Effect.sync(() => {
                     run = { ...run, name };
                     return run;
                   })
-                : Effect.fail(new SubagentNotFoundError({ id, message: "Run not found" })),
+                : id === "interrupted"
+                  ? Effect.interrupt
+                  : Effect.fail(new SubagentNotFoundError({ id, message: "Run not found" })),
           });
           const h = yield* nativeCodemodeSession(service);
           const result = yield* h.run(
-            print("await tools.subagent_rename({runId:'rename-target',name:'entry-map'})"),
+            `
+            const listed = await tools.subagent_list({});
+            const renamed = await tools.subagent_rename({runId:listed.runs[0].runId,name:'entry-map'});
+            if (renamed.outcome !== 'succeeded') throw new Error(renamed.failure.code);
+            const status = await tools.subagent_status({runIds:[renamed.target.runId]});
+            const failed = await tools.subagent_rename({runId:'missing',name:'not-applied'});
+            const rejected = await Promise.allSettled([
+              tools.subagent_rename({runId:renamed.target.runId,name:''}),
+              tools.subagent_rename({runId:'interrupted',name:'not-applied'})
+            ]);
+            ${print("{requested:renamed.requestedRunId,name:status.targets[0].name,failed:failed.outcome==='failed'?failed.failure.code:'unexpected',validation:rejected[0].status,interruption:rejected[1].status}")}
+          `,
             callId,
           );
           expect(result.isError).toBe(false);
-          expect(run.name).toBe("entry-map");
-          expect(output(result.text)).toContain(run.id);
-          expect(output(result.text)).toContain(run.name);
-          const failed = yield* h.run(
-            "await tools.subagent_rename({runId:'missing',name:'not-applied'});",
+          expect(output(result.text)).toEqual({
+            requested: run.id,
+            name: "entry-map",
+            failed: "SubagentNotFoundError",
+            validation: "rejected",
+            interruption: "rejected",
+          });
+          const failed = yield* h.call(
+            "subagent_rename",
+            { runId: "missing", name: "not-applied" },
             callId,
           );
           expect(failed.isError).toBe(true);

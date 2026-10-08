@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import { toPiToolOutputSchema } from "pi-cosmic-core";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
@@ -29,6 +30,11 @@ import {
   titlesByKey,
 } from "../ui/tool-render-projection.ts";
 
+import { AskUserContractSchema } from "./contract-schema.ts";
+import { askUserContract, questionnaireToolResult } from "./contract.ts";
+
+const OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserContractSchema);
+
 export function registerAskUserTool(
   pi: ExtensionAPI,
   ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
@@ -50,14 +56,15 @@ export function registerAskUserTool(
       "Every ask_user choice needs a stable value, concise label, and useful trade-off description. Use previews only for concrete artifacts that benefit from visual comparison.",
       "When ask_user offers alternatives and one choice is the main agent's recommendation, place it first, append (Recommended) to its label, and explain why in its description; do not force a recommendation for preference-only choices.",
       "Never ask users to enter passwords, API keys, tokens, private keys, or other credentials through ask_user.",
+      "Native codemode receives structured pi-ask-user/questionnaire version-1 results. Check contract, version, tool, and outcome before branching on answers. Rejected or cancelled scripts do not undo answers; do not blindly retry a questionnaire.",
     ],
     parameters: AskUserParameters,
+    outputSchema: OUTPUT_SCHEMA,
     executionMode: "sequential",
     execute(_toolCallId, input, signal) {
-      return ask(input, signal).then((outcome) => ({
-        content: [{ type: "text" as const, text: formatAskUserOutcome(outcome) }],
-        details: outcome satisfies AskUserOutcome,
-      }));
+      return ask(input, signal).then((outcome) =>
+        questionnaireToolResult(formatAskUserOutcome(outcome), outcome, askUserContract(outcome)),
+      );
     },
     renderCall(args, theme, context) {
       return callBody({ title: "Ask user", subtitle: callTitles(args) }, args, theme, context);

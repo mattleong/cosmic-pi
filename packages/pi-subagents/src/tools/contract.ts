@@ -37,6 +37,7 @@ import {
   type ContractRunTarget,
   type ContractStartLaunch,
   type ContractWithheldReport,
+  type ContractWithheldRunTarget,
   type SubagentAwaitContract,
   type SubagentContractTool,
   type SubagentLifecycleContract,
@@ -49,14 +50,14 @@ import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome 
 import { actionFailureDisposition } from "./outcome.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 
-const envelope = <Tool extends SubagentContractTool>(tool: Tool) =>
+export const envelope = <Tool extends SubagentContractTool>(tool: Tool) =>
   ({ contract: SUBAGENT_CONTRACT_ID, version: SUBAGENT_CONTRACT_VERSION, tool }) as const;
 
 const batchOutcome = <Success extends string>(succeeded: number, total: number, success: Success) =>
   succeeded === 0 ? ("failed" as const) : succeeded === total ? success : ("partial" as const);
 
 /** Redacted, single-line, bounded metadata; blank or control-only text is absent. */
-const metadata = (value: string | undefined, maximum: number): string | undefined => {
+export const metadata = (value: string | undefined, maximum: number): string | undefined => {
   const line = value === undefined ? "" : sanitizeTerminalLine(value);
   return line ? sanitizeDiagnosticError(line, { maximumLength: maximum }) : undefined;
 };
@@ -74,7 +75,7 @@ const projectRecovery = (recovery: FailedStartRecovery): ContractRecovery => ({
   remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
 });
 
-const projectFailure = (
+export const projectFailure = (
   action: string,
   failure: Pick<SubagentActionFailure, "code" | "message" | "pendingDelivery">,
 ): ContractFailure => {
@@ -176,6 +177,12 @@ const targetFields = (
     ...(error !== undefined && { error }),
   };
 };
+
+/** Report-free target facts for discovery and management receipts. */
+export const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
+  ...targetFields(run),
+  report: withheldReport(run),
+});
 
 const observedTarget = (
   observation: SubagentRunObservation,
@@ -327,7 +334,7 @@ export const lifecycleContract = (
         ? {
             requestedRunId: outcome.runId,
             status: "succeeded",
-            target: { ...targetFields(outcome.run), report: withheldReport(outcome.run) },
+            target: withheldTarget(outcome.run),
           }
         : {
             requestedRunId: outcome.runId,

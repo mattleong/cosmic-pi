@@ -28,17 +28,11 @@ import {
 import { imageResultText } from "./result-text.ts";
 import { OpenAIImageService } from "./service.ts";
 import { sessionNotStarted } from "../usage/controller.ts";
-import {
-  TOOL_PARAMS,
-  type CodexImageDetails,
-  type CodexImageResult,
-  type ToolParams,
-} from "./types.ts";
+import { IMAGE_OUTPUT_SCHEMA, imageDetails, imageToolResult } from "./tool-result.ts";
+import { TOOL_PARAMS, type CodexImageDetails, type ToolParams } from "./types.ts";
 
 export const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_MESSAGE = "openai-image";
-
-const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails => details;
 
 /** Records the working directory that image messages display saved paths against. */
 export type NoteImageCwd = (source: { readonly cwd: string }) => void;
@@ -156,8 +150,11 @@ export function registerOpenAIImage(
     promptGuidelines: [
       "Use openai_image when the user asks to generate or edit a raster image.",
       "Pass the user's image prompt verbatim. Do not embellish or rewrite it unless explicitly requested.",
+      "Native codemode receives a version-1 pi-better-openai/image result. Show its required image block with image(result.image); send only metadata to text(), never base64 to text(), console, return, or store().",
+      "Use save:project and pass the returned savedPath in images for a later edit; edit inputs must remain workspace-contained. save:none skips Better OpenAI file saving, not Pi history.",
     ],
     parameters: TOOL_PARAMS,
+    outputSchema: IMAGE_OUTPUT_SCHEMA,
     renderCall: (args, theme, context) => renderImageCall(args, theme, context),
     renderResult: (result, options, theme, context) =>
       renderImageResult(result, options, theme, context),
@@ -169,13 +166,7 @@ export function registerOpenAIImage(
       // Progress is a host callback: recheck authority before the context write.
       if (!isCurrent()) return retired();
       updateContext(ctx);
-      return run(generateEffect(params), signal).then((result) => ({
-        content: [
-          { type: "text", text: imageResultText(result) },
-          { type: "image" as const, data: result.data, mimeType: result.mimeType },
-        ],
-        details: imageDetails(result),
-      }));
+      return run(generateEffect(params), signal).then(imageToolResult);
     },
   });
   pi.registerTool(

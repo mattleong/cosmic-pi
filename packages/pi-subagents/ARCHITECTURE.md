@@ -29,18 +29,20 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 - `src/workspace/` and `boundary/git-worktree*.ts` own isolated-writer artifacts and Git I/O; root workspace operations queue on one lock.
 - `src/backend/` holds the local Pi, Claude, and Codex drivers; `src/boundary/` and `src/supervisor/` hold host, process, filesystem, lease, and supervisor adapters.
 - `src/tools/` owns schemas, execution, persisted details, and compact renderers for the 11 coordinator tools, `subagent_workflow`, and child-only tools; `src/ui/` holds pure projections.
+  `contract-schema.ts` and `discovery-contract-schema.ts` declare the version-1 orchestration contracts; `contract.ts` and `discovery-contract.ts` project domain values independently of human text and persisted display details. Core's `toPiToolOutputSchema` declares all seven root tools (start, await, status, lifecycle, list, models, rename) to native callers. List preserves the complete visible hierarchy; list and rename never carry report text, and models reports ordered static eligibility rather than launch readiness.
 - `boundary/host-activity.ts` registers the root's Cosmic UI Activity provider for runs and workflows, whose items and details pure `ui/run-activity.ts` projects; actions recheck session, revision, and capabilities before reaching `SubagentService` or `WorkflowService`.
 - `src/settings/` owns `/subagents`, its settings, and the profile dashboard; `application/commands.ts` registers it and `/ultracode` over the current activation.
-- Workflows are opt-in: `subagent_workflow` always registers inactive, and `application/ultracode.ts` alone adds it to or removes it from Pi's active tools, touching no other tool.
+- Workflows are opt-in: `subagent_workflow` registers with direct exposure and `defaultActive: false`, and `application/ultracode.ts` alone adds it to or removes it from Pi's active tools, touching no other tool.
   It is active while the `ultracode` switch (Session, Global, or trusted Project, default off) is on or the one-off `/ultracode` window is open; it also owns the footer marker and the `before_agent_start` guidance, a system-prompt section of its own.
   The window is pure state in `application/ultracode-window.ts`, moved by `/ultracode` requests, Pi's `before_agent_start`, `agent_start` and `agent_settled`, and `WorkflowService`'s run observer (`workflow/run-observer.ts`), which opens a run at start or when its interrupted notice is posted and closes it once Pi accepts its notification, saying whether the current or the next agent run handles it; session boundaries reset it.
   Between an activation and the next agent run the controller only adds the tool, so Pi's pending restore list survives.
-  Native codemode can always call the seven root tools; ultracode gates only `subagent_workflow`.
+  Native codemode can always call the seven root tools; ultracode gates only `subagent_workflow`, for both direct and native calls. An active workflow start authorizes ordinary agents including writers, preserving the owned-run path rather than applying `subagent_start`'s script-origin read-only policy. Questions, claims and worktree integration remain main-agent decisions.
 - `skills/workflow-authoring/SKILL.md` is the main agent's workflow authoring guide. It isn't a declared Pi skill (`pi.skills` is empty), so it stays out of the skill list while workflows are off; the tool description and the ultracode guidance name its path, which `boundary/workflow-authoring-guide.ts` resolves.
 - `src/workflow/` owns dynamic workflow runs: `service.ts` starts and stops them and forks one fiber per run, `skip.ts` skips their planned, queued, and running agents, and `runs.ts` holds their views and coalesces Activity publishes.
 
 ## Workflow runs
 
+- `tools/workflow-contract-schema.ts` and `workflow-contract.ts` own the success-only `pi-subagents/workflow` version-1 contract: strict Effect JSON encoding, explicit authoritative projections, detached frozen snapshots and core-derived Pi output schema. Start is a receipt; status distinguishes full live, unchanged live and recorded summaries; stop keeps actual state; list keeps complete saved metadata and compact run references/counts. Renderer limits never clip this channel, execution args/private state stay out, and results stay bounded text with clipping/path evidence. Typed failures reject native calls without structured content; encoding failure retains the original receipt and uncertainty, not a rollback claim. Terminal state does not prove child cleanup. Scripts end the turn for notification, never poll or automatically replay uncertain calls.
 - Scripts run in a fresh in-process `CodemodeSandbox` with only `agent`, `event`, and `load` host members, whose calls are fibers of the run's scope.
   Failed views retain sandbox/script/timeout provenance, with runner defects classified separately, so shared recovery guidance never diagnoses infrastructure failure from a foreign error name.
 - Each `agent()` call is an owned run admitted through its run's own FIFO slots, `min(16, CPUs - 2)` of them, as in Claude Code.
@@ -50,7 +52,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
 - Admission: workflow starts are exempt from the root's direct-child limit, and runs a workflow still owns, or its writers' worktree launches, hold none of its slots, so that limit governs only the main agent's own subagents.
   A queued writer waits behind a conflicting writer on `run/admission-signal.ts`, which advances a revision only when a holding that can end a writer conflict is released.
 - What persists where: the resume journal lives in process memory per Pi session and survives `/reload` and `/tree`; run files (script copy, results journal, full results) live under `<agent-dir>/subagents/workflow-runs`; `run.json` lets a later Pi process of the same session resume, announce, or describe a run.
-- Structured results: `domain/result-contract.ts` compiles the schema on `domain/json-schema.ts`, which workflow `meta.args` schemas share, local Pi children submit through `subagent_result`, Claude and Codex through the supervisor report, and `run/settlement.ts` decides precedence.
+- Structured results: `domain/result-contract.ts` compiles the schema on `domain/json-schema.ts`, which workflow `meta.args` schemas share, local Pi children submit through model-only `subagent_result` (never native codemode, in either `on` or `only` mode), Claude and Codex through the supervisor report, and `run/settlement.ts` decides precedence.
 - A worktree writer that made no changes is discarded through `workspaceDiscardUnchanged`, which holds its binding like any root workspace operation.
 
 ## Invariants
@@ -85,7 +87,7 @@ This file covers ownership, boundaries, and lifecycle; topic documents hold deta
   A worktree launch holds a direct-child slot from its capacity check until admission, an eviction claim, or failure, never alongside the claim that replaces it.
 - Retry claim transfer is acknowledged only after the session-owned commit fiber is forked, within the same interruption mask.
   Cancellation before transfer releases the caller's claim; cancellation afterward stops only the waiter, leaving the commit to release its claim.
-- Root scripted admission seeds immutable record-only `scriptOrigin`, inherited from authenticated parents and retry predecessors, never request fields or serialized views.
+- Root scripted `subagent_start` admission seeds immutable record-only `scriptOrigin`, inherited from authenticated parents and retry predecessors, never request fields or serialized views. Workflow owned starts are unchanged and do not acquire this restriction merely because their workflow was started through native codemode.
   Service validation rejects writers before workspace acquisition; locked launch admission rechecks before eviction or writer-pool creation.
   Resume/respawn keeps the same record restriction; workspace revise is writer-only, and no script-origin writer can own a binding.
   Model-started trees and separately authorized root writer launches stay unchanged.

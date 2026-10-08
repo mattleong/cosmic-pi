@@ -1448,9 +1448,17 @@ const galleryWorkflowStatus: WorkflowServiceContract["status"] = (runId) => {
       run: stuckWorkflow,
       attention: stuckAttention,
     });
-  const found = [workflowRun(), budgetedWorkflow, budgetFailedWorkflow, ...workflowRuns].find(
-    (run) => run.id === runId,
-  );
+  const found = [
+    workflowRun(),
+    workflowRun({
+      id: "wf-contract-unavailable",
+      // The display receipt stays valid, but the native producer violates its finite count.
+      usage: { ...emptyWorkflowUsage(), input: Number.NaN },
+    }),
+    budgetedWorkflow,
+    budgetFailedWorkflow,
+    ...workflowRuns,
+  ].find((run) => run.id === runId);
   if (found) return Effect.succeed<WorkflowStatus>({ kind: "view", run: found, attention: [] });
   const recorded = [recordedWorkflow, recordedElsewhere].find((run) => run.id === runId);
   if (recorded) return Effect.succeed<WorkflowStatus>({ kind: "recorded", run: recorded });
@@ -1623,6 +1631,10 @@ const workflowScenarios = Effect.gen(function* () {
     yield* execute("status of a run another Pi process runs", {
       action: "status",
       runId: recordedElsewhere.id,
+    }),
+    yield* execute("status receipt retained when structured encoding fails", {
+      action: "status",
+      runId: "wf-contract-unavailable",
     }),
     yield* execute("unknown run", { action: "status", runId: "wf-old-3" }),
     yield* execute("stop", { action: "stop", runId: "wf-mg3k2l-1" }),

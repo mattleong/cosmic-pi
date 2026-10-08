@@ -92,6 +92,51 @@ With no earlier questionnaire, the tool opens and focuses the overlay and return
 
 Answer delivery, waiter ownership, retention, retries, and the shared queue are described in [ARCHITECTURE.md](../ARCHITECTURE.md#async-ownership-and-delivery); revocation and history receipts across reload, replacement, and tree navigation are in [its session lifecycle section](../ARCHITECTURE.md#session-lifecycle-and-history).
 
+## Native codemode results
+
+All three tools declare an output schema. Native `tools.ask_user(...)`, `tools.ask_user_async(...)`, and `tools.ask_user_async_control(...)` resolve to objects, not formatted text:
+
+| Tool                     | Version-1 fields                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `ask_user`               | `contract`, `version`, `tool`, `outcome`, `answers`                                                            |
+| `ask_user_async`         | `contract`, `version`, `tool`, `request: AsyncSnapshot`                                                        |
+| `ask_user_async_control` | `contract`, `version`, `tool`, `action`, optional echoed `requestId`, `requests: AsyncSnapshot[]` (at most 16) |
+
+Every envelope has `contract: "pi-ask-user/questionnaire"`, `version: 1`, and `tool` equal to the exact called name. Blocking outcomes and nested async outcomes use the answer shapes above. Cancellation has no answers or drafts. Submitted decisions are copied losslessly: keys, values, labels, text and notes are never redacted, clipped or normalized by this result boundary.
+
+`AsyncSnapshot` contains only:
+
+- `requestId` (1–100 code units), `deliveryId` (1–120).
+- `status`: `pending | submitted | cancelled | failed`.
+- Optional `presentation`: `queued | opening | open | hidden | settled`.
+- `independentWork` and `blockedWork`: nonblank, at most 500 code units each.
+- `delivery`: `pending | sending | sent | failed | waiter | none`.
+- Optional `outcome`: the submitted/cancelled decision. ID-free status never includes it.
+
+Check the envelope before using a value, then branch on the actual outcome:
+
+```js
+const result = await tools.ask_user({
+  questions: [
+    { key: "wording", title: "Wording", prompt: "What wording should we use?", mode: "text" },
+  ],
+});
+if (
+  result.contract !== "pi-ask-user/questionnaire" ||
+  result.version !== 1 ||
+  result.tool !== "ask_user"
+)
+  throw new Error("Unsupported questionnaire contract");
+if (result.outcome === "submitted") text(result.answers);
+else text("No decision submitted");
+```
+
+For async workflows, check the same envelope with `tool === "ask_user_async"`, print `result.request.requestId` immediately, and do the declared independent work. At the dependency barrier, pass that ID to `tools.ask_user_async_control({ action: "await", requestId })`; check its envelope before reading `requests[0].outcome`. Admission is not an answer. A cancel operation may return a submitted outcome if completion won the race. `delivery: "sent"` means the host call returned, not model acknowledgement; deduplicate by delivery ID.
+
+Service/validation errors and interrupted calls reject rather than becoming cancelled decisions. If result encoding fails after an action, the error retains the original receipt text and display details but has no structured result or codec diagnostics. Read that evidence; do not blindly retry. Script failure does not roll back answers, admitted async requests, or cancellation signals. Interrupting an async await leaves its presenter open; recover an uncertain admission with one ID-free status call rather than another start. Pending script calls are cancelled when the script ends, so await every intended call. Discard saved IDs across runtime replacement, reload and tree navigation.
+
+This is an additive tool-result boundary: normal text, persisted details, rendering, mode gates and tool exposure are unchanged. Codemode does not enable questionnaire tools in modes where they are unavailable.
+
 ## Activity view and child questions
 
 In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Run cancellation or session replacement cancels a child's waiting or mounted requests. Activity rows, hide/resume, and the authenticated child relay are described in [ARCHITECTURE.md](../ARCHITECTURE.md#tui-lifecycle-and-pinned-host-workaround).

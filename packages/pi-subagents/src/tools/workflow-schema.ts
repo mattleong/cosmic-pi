@@ -7,7 +7,7 @@ import { WORKFLOW_SCRIPT_MAX_CHARS } from "../workflow/script.ts";
 import type { WorkflowStartRequest } from "../workflow/service.ts";
 import type { WorkflowSourceRequest } from "../workflow/source.ts";
 
-/** Root-only and model-only; never part of the child proxy catalog. */
+/** Root-only, active only under Ultracode; never part of the child proxy catalog. */
 export const WORKFLOW_TOOL_NAME = "subagent_workflow";
 export const WORKFLOW_TOOL_ACTIONS = ["start", "status", "stop", "list"] as const;
 export type WorkflowToolAction = (typeof WORKFLOW_TOOL_ACTIONS)[number];

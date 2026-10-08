@@ -83,6 +83,8 @@ export const subagentResultTool = (
       ...resultToolRenderers,
       name: SUBAGENT_RESULT_TOOL_NAME,
       label: RESULT_TOOL_LABEL,
+      // Final submission must end the child turn; nested codemode calls cannot carry terminate.
+      exposure: "model-only" as const,
       description:
         "Return your final result to the program that started you. The arguments are your return value. Call once, after all work is done.",
       promptGuidelines: [
