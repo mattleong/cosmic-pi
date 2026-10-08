@@ -80,9 +80,9 @@ export interface UsageRefreshControllerOptions<
   EI,
   R,
 > {
-  /** Span prefix, e.g. "pi-better-xai.usage" (refresh span becomes `${spanPrefix}.refresh`). */
+  /** Span prefix, e.g. "pi-better-openai.usage" (refresh span becomes `${spanPrefix}.refresh`). */
   readonly spanPrefix: string;
-  /** Human-readable label used in recovery log messages, e.g. "Better xAI". */
+  /** Human-readable label used in recovery log messages, e.g. "Better OpenAI". */
   readonly logLabel: string;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;

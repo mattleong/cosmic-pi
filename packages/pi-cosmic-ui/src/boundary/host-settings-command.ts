@@ -31,10 +31,10 @@ interface SettingsCommandScope {
 }
 
 export interface SettingsCommandOptions<Config> {
-  /** The extension's command without its slash, such as `xai`; settings live at `/xai settings`. */
+  /** The extension's command without its slash, such as `openai`; settings live at `/openai settings`. */
   readonly root: string;
   readonly description: string;
-  /** The extension name used in messages, such as `Better xAI`. */
+  /** The extension name used in messages, such as `Better OpenAI`. */
   readonly title: string;
   /** Captured originating invocation/session authority; defaults to always current. */
   readonly isCurrent?: () => boolean;

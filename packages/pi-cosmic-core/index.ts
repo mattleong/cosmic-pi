@@ -37,7 +37,7 @@ export {
   isStrictlyInsidePathWith,
 } from "./src/platform/paths.ts";
 export { isInteractiveShellProcessName } from "./src/platform/shell-process-names.ts";
-export { JsonHttpClient, type JsonHttpResponseSchema } from "./src/platform/json-http.ts";
+export { JsonHttpClient } from "./src/platform/json-http.ts";
 export {
   CrossProcessLock,
   CrossProcessLockError,
@@ -109,7 +109,6 @@ export {
   formatUsageDebugReport,
   makeUsageRefreshController,
   timedDiagnosticResult,
-  type UsageFetchOutcome,
   type SubscriptionUsageConfig,
 } from "./src/usage-controller.ts";
 export { freezeSnapshot, makeFrozenProjection, ProjectionError } from "./src/projection.ts";
@@ -170,11 +169,9 @@ export {
 export { dispatchSettingsCommand } from "./src/settings-dispatch.ts";
 export {
   clampPercent,
-  formatCompactReset,
   formatPercent,
   formatTimestamp,
   formatTokens,
   formatWindowedUsageLine,
-  remainingResetSeconds,
   usedToLeftPercent,
 } from "./src/subscription-format.ts";

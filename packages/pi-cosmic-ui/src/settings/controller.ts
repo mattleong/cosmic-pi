@@ -28,7 +28,6 @@ const footerLabels = {
   session: "Session",
   metrics: "Token and cost metrics",
   "openai.usage": "OpenAI usage",
-  "xai.usage": "xAI usage",
   extensions: "Extension status",
 } satisfies Record<(typeof DEFAULT_FOOTER_ORDER)[number], string>;
 
@@ -66,7 +65,7 @@ const settingDescriptors = [
   },
   ...DEFAULT_FOOTER_ORDER.map((item) => {
     // Usage rows say automatic/hidden for the same visibility preference.
-    const usage = item === "openai.usage" || item === "xai.usage";
+    const usage = item === "openai.usage";
     const schema = usage ? UsageSettingSchema : BooleanSettingSchema;
     const [shown, hidden] = schema.literals;
     return {

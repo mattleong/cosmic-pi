@@ -4,7 +4,7 @@ Shared, responsive UI for Pi: a composable footer, a unified Activity view for w
 
 ## Features
 
-- **Custom footer** combining location, Git branch and pull request, session, tokens, context, model, and thinking level with contributions from other extensions such as OpenAI and xAI usage.
+- **Custom footer** combining location, Git branch and pull request, session, tokens, context, model, and thinking level with contributions from other extensions such as OpenAI usage.
 - **Responsive layout** with density, ordering, and per-item visibility settings.
 - **Working indicator** with elapsed time and estimated output speed, such as `Working · 2m 14s · ~18.4 tok/s`.
 - **Activity view** that shows workflows, subagents, background tasks, and questions in one place, as a compact live panel above the editor and a full-screen manager.
@@ -50,7 +50,6 @@ Settings live in `~/.pi/agent/extensions/pi-cosmic-ui.json`, and a project's `.p
       "session",
       "metrics",
       "openai.usage",
-      "xai.usage",
       "extensions"
     ],
     "hidden": []

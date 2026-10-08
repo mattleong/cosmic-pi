@@ -7,7 +7,6 @@ This is a pnpm workspace. Shared configuration lives at the root; package source
 - `packages/pi-ask-user/`: structured user questionnaires.
 - `packages/pi-background-task/`: session-scoped background tasks.
 - `packages/pi-better-openai/`: Better OpenAI extension.
-- `packages/pi-better-xai/`: Better xAI subscription usage.
 - `packages/pi-code-previews/`: builtin, native codemode, and native MCP presentation plus the cooperative tool-rendering shell.
 - `packages/pi-cosmic-core/`: shared Effect runtime and platform code.
 - `packages/pi-cosmic-ui/`: shared UI components and responsive footer.

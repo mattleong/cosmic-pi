@@ -33,7 +33,6 @@ export const DEFAULT_FOOTER_ORDER = [
   "session",
   "metrics",
   "openai.usage",
-  "xai.usage",
   "extensions",
 ] as const;
 

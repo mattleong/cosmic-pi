@@ -24,29 +24,6 @@ function resetAt(seconds: number | null, now: number) {
     : undefined;
 }
 
-const LOCAL_DAY = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
-
-export function formatCompactReset(
-  label: string,
-  seconds: number | null,
-  options: { readonly includeDate?: boolean } | undefined,
-  now: number,
-): string | null {
-  const at = resetAt(seconds, now);
-  const current = DateTime.make(now);
-  if (at === undefined || Option.isNone(current)) return null;
-  const time = DateTime.formatLocal(at.reset, { hour: "numeric", minute: "2-digit" });
-  const weekday = DateTime.formatLocal(at.reset, { weekday: "short" });
-  let clock = `${weekday} ${time}`;
-  if (options?.includeDate)
-    clock = `${weekday} ${DateTime.formatLocal(at.reset, { month: "numeric", day: "numeric" })} ${time}`;
-  else if (
-    DateTime.formatLocal(at.reset, LOCAL_DAY) === DateTime.formatLocal(current.value, LOCAL_DAY)
-  )
-    clock = time;
-  return `${label} ↺ ${at.countdown} - ${clock}`;
-}
-
 /** Formats a reset with a compact local date/time while retaining its countdown. */
 function formatShortReset(label: string, seconds: number | null, now: number): string | null {
   const at = resetAt(seconds, now);
@@ -99,7 +76,7 @@ export function formatPercent(value: number | null): string {
 }
 
 /** Convert a snapshot-relative reset countdown into seconds remaining from `now`. */
-export function remainingResetSeconds(
+function remainingResetSeconds(
   seconds: number | null,
   capturedAt: number,
   now: number,

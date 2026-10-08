@@ -6,7 +6,6 @@ A pnpm workspace for Pi extensions.
 
 - [`pi-ask-user`](packages/pi-ask-user) — structured, responsive questionnaires for decisions the agent should not guess.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
-- [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool and full-screen `/tasks` manager.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted builtin previews, native codemode/MCP presentation, and a reusable tool shell.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
@@ -32,7 +31,6 @@ pnpm install
 pi install "$PWD/packages/pi-ask-user"
 pi install "$PWD/packages/pi-background-task"
 pi install "$PWD/packages/pi-better-openai"
-pi install "$PWD/packages/pi-better-xai"
 pi install "$PWD/packages/pi-code-previews"
 pi install "$PWD/packages/pi-cosmic-ui"
 pi install "$PWD/packages/pi-directory-models"
@@ -77,7 +75,6 @@ pnpm --filter pi-subagents test
 pi -e ./packages/pi-ask-user
 pi -e ./packages/pi-background-task
 pi -e ./packages/pi-better-openai
-pi -e ./packages/pi-better-xai
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models

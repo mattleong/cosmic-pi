@@ -9,7 +9,6 @@ const expectedEffectVersion = /\n  effect: ([^\n]+)/.exec(workspace)?.[1];
 if (!expectedEffectVersion) throw new Error("Missing Effect version from the pnpm catalog.");
 const extensionPackages = [
   "pi-ask-user",
-  "pi-better-xai",
   "pi-better-openai",
   "pi-cosmic-ui",
   "pi-code-previews",
@@ -177,7 +176,7 @@ try {
     const load = (specifier) => jiti.import(specifier);
     const api = await load("pi-cosmic-core");
     const testing = await load("pi-cosmic-core/testing");
-    for (const packageName of ["pi-ask-user","pi-better-xai","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-background-task","pi-subagents"]) {
+    for (const packageName of ["pi-ask-user","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-background-task","pi-subagents"]) {
       const extension = await load(packageName);
       if (typeof extension.default !== "function") throw new Error("missing " + packageName + " extension export");
     }

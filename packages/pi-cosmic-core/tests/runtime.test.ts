@@ -60,7 +60,7 @@ it.effect("keeps Effect log output off the TTY console", () =>
       (runtime) => Effect.promise(() => runtime.dispose()),
     );
     yield* Effect.promise(() =>
-      runtime.run(Effect.logWarning("Better xAI usage recovery: refresh_failed.")),
+      runtime.run(Effect.logWarning("Subscription usage recovery: refresh_failed.")),
     );
     // Standalone runners share the same exported host logger layer.
     yield* Effect.logWarning("standalone host logger must stay off the TTY").pipe(
