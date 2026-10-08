@@ -13,8 +13,10 @@ This page describes behavior and limits; [Authoring guidance](#authoring-guidanc
 
 `subagent_workflow` is always registered, but it stays out of the main agent's tools until the user opts in, so the model never sees the tool or the saved workflows its description lists before then. Pi's active tool set does the switching: Subagents adds or removes only `subagent_workflow` and leaves every other tool alone. Its direct exposure and `defaultActive: false` preserve this gate in native codemode's `on` and `only` modes too; registered but inactive does not mean callable. There are two ways in.
 
-- **The `ultracode` setting** is a standing opt-in, off by default. `/ultracode on` and `/ultracode off` set it for the session, and `/subagents settings` saves it for new sessions (see [Settings](#settings)). While it is on, the footer shows `ultracode`, `subagent_workflow` is active, and the system prompt of each agent run started from a prompt, in a section of its own that a custom system prompt (`SYSTEM.md` or `--system-prompt`) keeps, mirrors Claude Code's ultracode guidance: it asks the main agent to run every substantive task as a workflow by default, to aim for the most exhaustive, correct answer, with token cost no constraint except a budget the user gives, to run multi-phase work (understand, design, implement, review) as several workflows in sequence, one per phase, to pick from the guide's quality patterns, to lean toward orchestrating and adversarially verifying findings unless the work is trivial or already verified, and to work solo only on conversational turns, trivial mechanical edits and checks small enough to verify completely itself, such as a diff of about ten changed lines or fewer; it also asks it to end its turn after starting a workflow and report when its notification arrives instead of polling status or stopping the run, and to read the workflow authoring guide (`skills/workflow-authoring/SKILL.md` in this package) before writing a script.
-- **`/ultracode [+budget] <task>`** opts in for one request: it sends the task to the main agent as a user message with a note that opts it into workflows the way standing ultracode does (the main agent scouts first and answers a task small enough to verify completely itself, such as a diff of about ten changed lines or fewer, directly), that points at the authoring guide, that asks for the most exhaustive, correct answer, with token cost no constraint unless the request states a limit, scaled to the request with the guide's quality patterns and adversarial verification, and that asks the main agent to end its turn once the workflow started and report from its notification, without polling status or stopping the run to finish sooner. While the agent is working, the request follows the current work as a follow-up; while Pi compacts, it waits until compaction finishes, because Pi refuses prompts during compaction. A leading `+500k`, `+1.5m` or `+200000` is a token budget, as in Claude Code, and the note asks the main agent to pass it as the start's `budget` (see [Token budget](#token-budget)); a prefix that isn't a positive whole number of tokens followed by a space stays part of the task.
+- **The `ultracode` setting** is a standing opt-in, off by default. `/ultracode on` and `/ultracode off` set it for the session, and `/subagents settings` saves it for new sessions (see [Settings](#settings)). While on, the footer shows `ultracode`, `subagent_workflow` is active, and prompt-started runs receive a system-prompt section preserved by custom system prompts. It asks the main agent to use workflows for substantive work when parallel or staged work helps, not to maximize effort. Intent determines scope; independent areas determine breadth; requested assurance and uncertainty determine depth; consequences, reversibility and evidence determine verification. It names the authoring guide and asks the agent to report from the notification rather than polling or stopping useful work.
+- **`/ultracode [+budget] <task>`** opts in for one request with the same scaling policy and guide. The main agent scouts before fan-out and may answer directly when it can fully verify the task itself; there is no line-count threshold or default agent quota. While the agent is working, the request follows the current work as a follow-up; while Pi compacts, it waits until compaction finishes, because Pi refuses prompts during compaction. A leading `+500k`, `+1.5m` or `+200000` is a token budget, and the note asks the main agent to pass it as the start's `budget` (see [Token budget](#token-budget)); a prefix that isn't a positive whole number of tokens followed by a space stays part of the task.
+
+The agent clarifies material requirements or consequential trade-offs before fan-out; cheap reversible ambiguities can use an explicit assumption. Before launch, it briefly states scope, why parallel or staged work helps, and the evidence or stopping condition that will finish the task—not a routine approval request. New waves require concrete relevant gaps. Stop scheduling when acceptance is supported, no justified gap remains, progress stalls or resources bind; await every started call and disclose limitations. Opt-in is not a request for maximal effort, and a budget is not a spending target.
 
 A one-off request opens a window. While it is open, `subagent_workflow` is active and the system prompt of each agent run started from a prompt carries a short note about the request, or about the runs that keep the window open. It stays open:
 
@@ -30,10 +32,10 @@ Bare `/ultracode`, like `/ultracode help` or `/ultracode status`, shows whether 
 
 The main agent learns workflows from two sources.
 
-- **The `subagent_workflow` description** is the API reference: when to use a workflow rather than `subagent_start` or working solo (conversational turns, trivial mechanical edits, and checks small enough to verify completely, such as a diff of about ten changed lines or fewer), a sizing rule tuned against Claude Code's observed workflows ("find any bugs" or a diff review: read it first, then a few finders with checklists and one skeptic per candidate; "thoroughly audit" or "be comprehensive": a wide finder pool, a three-lens panel per finding and gap rounds a completeness critic proposes; a multi-file implementation: the core built first, four to six writers on disjoint files, then a review workflow), Claude Code's default size guideline of under 10 agents unless the request calls for more, pipelines by default with a barrier only when a stage needs every earlier result, the script format, hooks, options, limits and rules, saved workflows, resume, the results journal, and a focused-check example: a few `reviewer` finders, a barrier that deduplicates their reports by file and nearby line, and one skeptic per bug. It tells the main agent to end its turn after a start, since the run's notification starts its next turn, to pass one-off scripts inline, and to stop a run only when the user asks or the run is clearly broken. It keeps status, stop and list to a sentence or two each. What this page describes beyond that, such as what status lists, interrupted-run notices or usage lines, stays out of it, because those results explain themselves when they arrive.
-- **The workflow authoring guide**, [`skills/workflow-authoring/SKILL.md`](../skills/workflow-authoring/SKILL.md), follows Claude Code's workflow-authoring reference, in its section order and as much of its wording as fits, translated to Pi's API (profiles instead of agent types and models, Pi's budget, file claims as well as worktrees for parallel writers): when a workflow is worth it and scouting first, the common single-phase workflows, ultracode, pipelines by default and when a barrier is justified, the concurrency limits, loops until a count or a budget, the composed exhaustive review (a first round with one finder per area and per cross-cutting lens, deduplication against everything seen, a three-lens panel per new finding running alongside later rounds, and up to three rounds in all, the later ones of four to six angles a completeness critic proposes, with budget checks that log and return what they cut short) as the complete example for thorough audits, the quality patterns (adversarial and perspective-diverse verification, judge panels, loop until dry, multi-modal sweeps, completeness critics, no silent caps), scaling to the request, with a focused-check example that verifies the main agent's own candidates alongside its finders', and what agents return. Shorter sections then cover what only Pi has: claims-first implementations (the main agent builds the core, an implement workflow runs writers on disjoint claimed files, the main agent runs its checks, then a review workflow verifies the change, with an example of each workflow), budget planning (depth scaled to the budget with room kept to verify and finish, guarded calls, waves against overshoot), Pi's specifics such as the prompt-size limit, planned agents and resume, and running the workflow: one-off scripts inline and saved workflows only for reuse, ending the turn after the start, and stopping a run only when the user asks or it is clearly broken. The tool description, the ultracode system-prompt section and each `/ultracode` request name its absolute path and ask the main agent to read it before writing a non-trivial script.
+- **The `subagent_workflow` description** is the API reference: script format, hooks, options, limits, saved workflows, resume and results. Its concise scaling policy separates breadth, depth and verification instead of prescribing a pool size. Its focused-review example preserves confirmed, refuted and unverified findings with evidence, and failed finder scopes as uncovered work. Pipelines are the default unless a stage needs cross-item context, such as deduplication. One-off scripts stay inline; the main agent ends its turn after a start and reports from the notification, stopping only on user request or a clearly broken run.
+- **The workflow authoring guide**, [`skills/workflow-authoring/SKILL.md`](../skills/workflow-authoring/SKILL.md), adapts Claude Code's workflow patterns to Pi's profiles, budgets, claims and worktrees. It covers scouting, intent-first scope, adaptive waves, pipelines and justified barriers, finite user-requested counts (never bug quotas), budget reserves and exhaustive reviews. The exhaustive recipe starts from a coverage map, verifies with concrete evidence, and follows only justified new gaps; round bounds are illustrative safety backstops, not completion goals. Failed finders and critics, missing assessments, disagreement and budget omissions remain explicit. Optional perspective-diverse verification and plan panels are selected for relevant uncertainty or trade-offs, never mandatory votes per finding. Claims-first implementation follows independent ownership and dependencies rather than writer/reviewer quotas. Quick broad checks disclose limited depth; tiny high-risk changes may need narrow, deep verification; comprehensive work tracks coverage and justified gap rounds. The guide also covers Pi's unchanged prompt limits, planned agents, questions, resume and notification lifecycle.
 
-The guide uses the Agent Skills format but isn't declared as a Pi skill, so Pi never lists it while workflows are off; it ships with the package. The test suite parses every example in it, wrapping those marked `fragment` in a `meta` header, and runs the complete ones, and the description's example, in the sandbox against the real option, profile, claim and schema checks with stubbed agents.
+The guide uses the Agent Skills format but isn't declared as a Pi skill, so Pi never lists it while workflows are off; it ships with the package. The test suite parses every example in it, wrapping those marked `fragment` in a `meta` header, and runs the complete ones, and the description's example, in the sandbox against the real option, profile, claim and schema checks with stubbed agents. Behavioral sandbox tests also protect evidence classification, uncovered work, panel uncertainty and adaptive stopping; they do not test exact prose or simulate LLM quality.
 
 ## Dynamic workflows
 
@@ -60,12 +62,17 @@ The script is plain JavaScript (not TypeScript) of at most 262,144 characters. A
 export const meta = {
   name: "review-changes",
   description: "Review the diff by dimension, then verify each finding",
-  args: { type: "object", properties: { scope: { type: "string" } }, required: ["scope"] },
-  phases: [
-    {
-      title: "Review",
-      agents: ["review:correctness", "review:concurrency", "review:error handling"],
+  args: {
+    type: "object",
+    properties: {
+      scope: { type: "string" },
+      dimensions: { type: "array", items: { type: "string" }, minItems: 1 },
     },
+    required: ["scope", "dimensions"],
+    additionalProperties: false,
+  },
+  phases: [
+    { title: "Review", detail: "independent dimensions selected from scouting" },
     { title: "Verify", detail: "independent re-check" },
   ],
 };
@@ -81,8 +88,9 @@ const FINDINGS = {
           file: { type: "string" },
           line: { type: "integer" },
           claim: { type: "string" },
+          evidence: { type: "string" },
         },
-        required: ["file", "claim"],
+        required: ["file", "claim", "evidence"],
         additionalProperties: false,
       },
     },
@@ -91,37 +99,52 @@ const FINDINGS = {
   additionalProperties: false,
 };
 
-const dimensions = ["correctness", "concurrency", "error handling"];
-const verified = await pipeline(
-  dimensions,
+const VERDICT = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["confirmed", "refuted", "unverified"] },
+    evidence: { type: "string" },
+  },
+  required: ["status", "evidence"],
+  additionalProperties: false,
+};
+const reviewed = await pipeline(
+  args.dimensions,
   (dimension) =>
-    agent(`Review ${args.scope} for ${dimension} bugs. Read the code; report only real defects.`, {
+    agent(`Review ${args.scope} for ${dimension} bugs. Report concrete scenarios and evidence.`, {
       label: `review:${dimension}`,
       phase: "Review",
       profile: "reviewer",
       schema: FINDINGS,
     }),
-  (review) =>
-    parallel(
-      (review?.findings ?? []).map(
+  async (review, dimension) => {
+    if (!review) return { dimension, uncovered: true, findings: [] };
+    const verdicts = await parallel(
+      review.findings.map(
         (finding) => () =>
           agent(
-            `Try to refute this finding. Default to refuted if unsure: ${JSON.stringify(finding)}`,
-            {
-              phase: "Verify",
-              profile: "reviewer",
-              schema: {
-                type: "object",
-                properties: { refuted: { type: "boolean" } },
-                required: ["refuted"],
-                additionalProperties: false,
-              },
-            },
-          ).then((verdict) => (verdict && !verdict.refuted ? finding : null)),
+            `Check this candidate with a trace, reproduction or counterevidence. Uncertainty is unverified.\n${JSON.stringify(finding)}`,
+            { phase: "Verify", profile: "reviewer", schema: VERDICT },
+          ),
       ),
-    ),
+    );
+    return {
+      dimension,
+      uncovered: false,
+      findings: review.findings.map((finding, index) => {
+        const verification = verdicts[index] ?? null;
+        const status =
+          verification?.evidence?.trim() && ["confirmed", "refuted"].includes(verification.status)
+            ? verification.status
+            : "unverified";
+        return { finding, status, verification };
+      }),
+    };
+  },
 );
-return verified.flat().filter(Boolean);
+return reviewed.map(
+  (result, index) => result ?? { dimension: args.dimensions[index], uncovered: true, findings: [] },
+);
 ```
 
 `meta` has a `name` (up to 80 characters), a `description` (up to 1,000), an optional `whenToUse` (up to 1,000), an optional `args` schema (see [Args schema](#args-schema)) and optional `phases`: up to 64 `{ title, detail?, agents? }` entries with titles of 1 to 160 characters once trimmed. Titles are trimmed when the script is parsed, as `phase()` titles are, so `phase(" Review ")` is the meta phase `"Review"`. The script can read `meta`. It returns a JSON value; `undefined` becomes `null`.
@@ -194,17 +217,11 @@ A workflow agent can still ask the main agent a question. The question notice na
 
 ### Token budget
 
-`budget` on start is a hard ceiling on the output tokens the run's agents produce, the unit `budget.spent()` counts; the tool asks the main agent to pass it whenever the user states a token limit for the work, such as 500,000 for "cap this at 500k". The run counts what its finished agents spent, including agents that failed, were stopped or were skipped, plus the live usage of agents still running. Each agent's count includes the subagents it starts itself through its own `subagent_*` tools, at every depth. Once that reaches the budget, every `agent()` call whose agent hasn't started throws a budget error, as in Claude Code: a call made after that point, which never queues and gets no view, and every queued call, including one whose start is still under way, whose agent is stopped before it runs (a queued agent's view shows it as skipped with the reason `budget exhausted`). The error is named `WorkflowBudgetError`; its message names what was spent of the total and tells the script to check `budget.remaining()` before calling `agent()`. Uncaught, it fails the run; the script can catch it, telling it from other errors by its name (`if (error.name !== "WorkflowBudgetError") throw error;`), and inside `parallel()` or `pipeline()` the item becomes `null`. The run logs one warning for the first refusal, not one per call, and counts every refusal. A budget error isn't an invalid call, but each refused call still counts toward the run's limit of 1,000 `agent()` calls, and a call past that limit fails the run even when the script catches its error, so a loop that retries refused calls until it gets results, even one that catches every error, fails the run at that limit. Agents already running aren't stopped: they finish and report, so the run can overshoot the budget by what they spend after it is reached. Results reused on resume cost nothing.
+`budget` on start is an admission ceiling, not a guaranteed hard spending cap, on the output tokens the run's agents produce, the unit `budget.spent()` counts; the tool asks the main agent to pass it whenever the user states a token limit for the work, such as 500,000 for "cap this at 500k". The run counts what its finished agents spent, including agents that failed, were stopped or were skipped, plus the live usage of agents still running. Each agent's count includes the subagents it starts itself through its own `subagent_*` tools, at every depth. Once that reaches the budget, every `agent()` call whose agent hasn't started throws a budget error, as in Claude Code: a call made after that point, which never queues and gets no view, and every queued call, including one whose start is still under way, whose agent is stopped before it runs (a queued agent's view shows it as skipped with the reason `budget exhausted`). The error is named `WorkflowBudgetError`; its message names what was spent of the total and tells the script to check `budget.remaining()` before calling `agent()`. Uncaught, it fails the run; the script can catch it, telling it from other errors by its name (`if (error.name !== "WorkflowBudgetError") throw error;`), and inside `parallel()` or `pipeline()` the item becomes `null`. The run logs one warning for the first refusal, not one per call, and counts every refusal. A budget error isn't an invalid call, but each refused call still counts toward the run's limit of 1,000 `agent()` calls, and a call past that limit fails the run even when the script catches its error, so a loop that retries refused calls until it gets results, even one that catches every error, fails the run at that limit. Agents already running aren't stopped: they finish and report, so the run can overshoot the budget by what they spend after it is reached. Results reused on resume cost nothing.
 
-`budget.spent()` in the script is what the run counted for its finished agents, their own subagents included, so a sequential loop guarded by `budget.remaining()` never hits the error:
+`budget.spent()` counts only finished agents, their own subagents included; it excludes running calls whose live usage admission also counts. Resuming reuses results without spending. A guarded sequential call avoids admission after the completed usage reaches the ceiling, but even one running call can overshoot. Concurrency increases that uncertainty.
 
-```js
-while (budget.total && budget.remaining() > 50_000) {
-  // one agent() call at a time
-}
-```
-
-It excludes agents still running, whose live usage the ceiling counts, so calls made while others run, such as a concurrent fan-out, can still overshoot and see budget errors.
+Plan bounded, justified waves with capacity reserved for verification and the ending. Stop scheduling on supported acceptance, no justified gap, failed/no-progress work or a resource bound; don't loop until the balance is spent. Await started calls and return failed, skipped, budget-limited and unverified work. No-budget `remaining()` is `Infinity`, so it is never a termination condition by itself.
 
 Status, the notification and the Activity detail show the budget: output tokens spent of the total, and how many calls it refused. Status and the notification give the main agent exact counts, such as `512340 of 500000`, to compare with `budget.spent()`; the Activity detail rounds them for people, such as `512k of 500k`. While agents run, the spent count includes their live usage, refreshed whenever it grows by a twentieth of the total.
 

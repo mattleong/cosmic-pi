@@ -132,7 +132,7 @@ describe("ultracode tool activation", () => {
     expect(fixture.workflowActive()).toBe(false);
     expect(fixture.othersKept()).toBe(true);
 
-    // The standing guidance asks for more than the one-off note does.
+    // The standing guidance covers more scope than the one-off note does.
     fixture.controller.setEnabled(true);
     const standing = yield* fixture.promptRun();
     expect(standing).toBeDefined();

@@ -1,7 +1,8 @@
+import { WORKFLOW_SCALING_GUIDANCE } from "./guidance.ts";
+
 /**
  * A one-off `/ultracode <task>` request: the task, an optional output-token budget written as
- * Claude Code's `+500k` prefix, and the user message that asks the main agent to run it as a
- * workflow.
+ * Claude Code's `+500k` prefix, and the user message that opts it into workflows.
  */
 export interface UltracodeRequest {
   readonly task: string;
@@ -36,11 +37,11 @@ const REQUEST_NOTE = "The user opted this request into multi-agent workflows (/u
 
 /** The user message for the request, with the note that opts it into a workflow. */
 export const ultracodeRequestMessage = (request: UltracodeRequest, guidePath: string): string => {
-  const note = `${REQUEST_NOTE} Read the workflow authoring guide (${guidePath}) first, then scout the request yourself, reading the diff, code or docs it names. If the task is small enough to verify completely yourself, such as a diff of about ten changed lines or fewer, verify it yourself: trace each change through its callers, and once nothing is ambiguous, answer directly and say it needed no workflow. Independent agents verify findings you couldn't settle yourself, not ones you already confirmed. Otherwise write a workflow and start it with subagent_workflow. The goal is the most exhaustive, correct answer you can produce: token cost is not a constraint unless the request states a limit. Scale to what the request asks for (a diff review or "find any bugs" is a focused check: read it yourself first, then a few finders with concrete checklists that report every candidate they can back with a failing scenario, and one skeptic per distinct candidate, yours included; a thorough audit is a wide finder pool, a three-lens panel per finding and critic-proposed gap rounds; a multi-file implementation is the core built yourself, then four to six writers on disjoint files, then a review workflow of three to five lens reviewers with two skeptics per finding), pick the guide's quality patterns that fit, adversarially verify findings unless they are trivial or already verified, keep one task in one workflow (finding and verifying in the same script), and for multi-phase work run one workflow per phase, reading each result before the next. After starting a workflow, end your turn: its notification starts your next turn, and you report from it then. Don't poll status or stop the run to finish sooner.`;
+  const note = `${REQUEST_NOTE} ${WORKFLOW_SCALING_GUIDANCE} Read the workflow authoring guide (${guidePath}) before writing a script. After starting a workflow, end your turn: its notification starts your next turn, and you report from it then. Don't poll status or stop the run to finish sooner.`;
   const budget =
     request.budget === undefined
       ? ""
-      : `\nToken budget: ${request.budget} output tokens, the one limit on token cost: pass budget: ${request.budget} to subagent_workflow start and plan the run inside it.`;
+      : `\nToken budget: ${request.budget} output tokens: pass budget: ${request.budget} to subagent_workflow start and plan within it, allowing for already-running agents to overshoot.`;
   return `${request.task}\n\n${note}${budget}`;
 };
 

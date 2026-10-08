@@ -42,7 +42,7 @@ describe("/ultracode request message", () => {
     const plain = ultracodeRequestMessage({ task: "review the parser" }, guide);
     expect(plain.startsWith("review the parser")).toBe(true);
     expect(plain).toContain(guide);
-    expect(plain).not.toMatch(/budget/iu);
+    expect(plain).not.toMatch(/budget:\s*\d/iu);
 
     const budgeted = ultracodeRequestMessage({ task: "review the parser", budget: 500_000 }, guide);
     expect(budgeted).toContain("budget: 500000");
