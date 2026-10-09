@@ -41,7 +41,7 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
   no runtime error may be defaulted or asserted to `never`.
 - Dispose runtimes and close session resources explicitly.
 - Effect services own state transitions in `Ref` or `SynchronizedRef`. When Pi requires synchronous rendering, services atomically publish immutable snapshots to a boundary `MutableRef`; renderers only read those snapshots.
-- Cosmic UI has one narrow synchronous-state exception: its footer contribution registry and working row are presentation state driven only by synchronous Pi events, and their only effect is a guarded host UI write. They may hold plain state instead of an Effect service, but they read time only through core `synchronousNow` and repaint only through the shared host ticker pool.
+- Cosmic UI has one narrow synchronous-state exception: its footer contribution registry and working row are presentation state driven only by synchronous Pi events, and their only effect is a guarded host UI write. They may hold plain state instead of an Effect service, but they read time only through core's synchronous clock boundaries (`synchronousNow` for wall timestamps, `synchronousMonotonicNow` for durations) and repaint only through the shared host ticker pool.
 - A service may instead hold plain mutable state (`Map`, counters) behind a `Semaphore`
   when the state is a keyed registry that a single `Ref` would serialize too coarsely.
   That choice carries one invariant the type system cannot enforce: **every read-modify-write

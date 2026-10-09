@@ -14,6 +14,13 @@ const AssistantUsageSchema = Schema.Struct({
   cost: Schema.Struct({ total: NonNegativeFiniteNumberSchema }),
 });
 
+const CompletedAssistantOutputSchema = Schema.Struct({
+  role: Schema.Literal("assistant"),
+  stopReason: Schema.Literals(["stop", "toolUse", "length"]),
+  // Adapters initialize missing usage to zero; it cannot establish a measured sample.
+  usage: Schema.Struct({ output: Schema.Int.check(Schema.isGreaterThan(0)) }),
+});
+
 const FooterTotalsSchema = Schema.Struct({
   ...AssistantUsageSchema.fields,
   cost: NonNegativeFiniteNumberSchema,
@@ -33,6 +40,12 @@ export type DecodedContextUsage = typeof ContextUsageSchema.Type;
 export const decodeAssistantUsage = <ValueInput>(
   value: ValueInput,
 ): DecodedAssistantUsage | undefined => decodeUnknownOrUndefined(AssistantUsageSchema, value);
+
+/** Final output already includes reasoning; costs, cache and nested-tool usage are unrelated. */
+export const decodeCompletedAssistantOutput = <MessageInput>(
+  message: MessageInput,
+): number | undefined =>
+  decodeUnknownOrUndefined(CompletedAssistantOutputSchema, message)?.usage.output;
 
 /**
  * Adds a decoded usage record only when every aggregate remains non-negative and finite.

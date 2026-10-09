@@ -1,5 +1,5 @@
 /**
- * Pi's live working row, for example `Working · 2m 14s · ~18.4 tok/s`.
+ * Pi's live working row, with separate live estimates and completed-call throughput.
  *
  * Plain presentation state under the effect-v4 synchronous-state exception: every Pi event changes
  * it in the call that observed it, and its only effect is a guarded `setWorkingMessage` write
@@ -7,29 +7,27 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { formatElapsed, invokeHostCallback, synchronousNow } from "pi-cosmic-core";
+import { formatElapsed, invokeHostCallback, synchronousMonotonicNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "../boundary/host-status.ts";
+import { makeThroughputMeter, type ThroughputRate } from "./throughput.ts";
 
 const WAITING_MESSAGE = "Waiting for you";
 
-/** The rate uses Pi's four-characters-per-token heuristic over the output clock. */
-const formatWorkingMessage = (
-  milliseconds: number,
-  outputCharacters: number,
-  outputMilliseconds: number,
-): string => {
+/** Only the current-call character estimate is approximate; completed samples use reported tokens. */
+const formatWorkingMessage = (milliseconds: number, rate: ThroughputRate | undefined): string => {
   const message = `Working · ${formatElapsed(milliseconds)}`;
-  if (outputCharacters <= 0 || outputMilliseconds < 1_000) return message;
-  return `${message} · ~${(outputCharacters / 4 / (outputMilliseconds / 1_000)).toFixed(1)} tok/s`;
+  if (!rate) return message;
+  const value = rate.tokensPerSecond.toFixed(1);
+  return `${message} · ${rate.kind === "live" ? "~" : ""}${value} tok/s`;
 };
 
-interface WorkingRowOptions {
+export interface WorkingRowOptions {
   readonly now?: () => number;
   readonly every?: (intervalMs: number, tick: () => void) => () => void;
 }
 
 export const makeWorkingRow = ({
-  now = synchronousNow,
+  now = synchronousMonotonicNow,
   every = startHostUiTicker,
 }: WorkingRowOptions = {}) => {
   let context: MutableRef.MutableRef<ExtensionContext> | undefined;
@@ -40,22 +38,13 @@ export const makeWorkingRow = ({
   let halt: (() => void) | undefined;
   let workStartedAt: number | undefined;
   let workMilliseconds = 0;
-  let outputStartedAt: number | undefined;
-  let outputMilliseconds = 0;
-  let outputCharacters = 0;
+  const throughput = makeThroughputMeter();
 
   const workAt = (at: number) =>
     workMilliseconds + (workStartedAt === undefined ? 0 : at - workStartedAt);
-  const outputAt = (at: number) =>
-    outputMilliseconds + (outputStartedAt === undefined ? 0 : at - outputStartedAt);
-  const pauseOutput = (at: number) => {
-    outputMilliseconds = outputAt(at);
-    outputStartedAt = undefined;
-  };
-  const pauseClocks = (at: number) => {
+  const pauseWork = (at: number) => {
     workMilliseconds = workAt(at);
     workStartedAt = undefined;
-    pauseOutput(at);
   };
   const stopTicking = () => {
     halt?.();
@@ -79,12 +68,13 @@ export const makeWorkingRow = ({
     return writable;
   };
 
-  /** Writes the row as of `at`; when the host has no row, both clocks freeze there. */
+  /** Presentation can pause, but prompts and missing UI never pause the provider's call clock. */
   const render = (at: number): void => {
     const message = prompting
       ? WAITING_MESSAGE
-      : formatWorkingMessage(workAt(at), outputCharacters, outputAt(at));
-    if (!show(message)) pauseClocks(at);
+      : formatWorkingMessage(workAt(at), throughput.rate(at));
+    if (!show(message)) pauseWork(at);
+    else if (!prompting && workStartedAt === undefined) workStartedAt = at;
   };
 
   function tick(): void {
@@ -98,6 +88,7 @@ export const makeWorkingRow = ({
     prompting = false;
     writable = false;
     stopTicking();
+    throughput.reset();
     write();
   };
   const canPrompt = () => running && !prompting;
@@ -119,20 +110,18 @@ export const makeWorkingRow = ({
       running = true;
       writable = true;
       workMilliseconds = 0;
-      outputStartedAt = undefined;
-      outputMilliseconds = 0;
-      outputCharacters = 0;
+      throughput.reset();
       const at = now();
       workStartedAt = at;
       render(at);
     },
     agentEnd,
     canPrompt,
-    /** Freezes both clocks and shows the waiting message; output is dropped until the prompt ends. */
+    /** Freezes elapsed work and shows the waiting message; provider measurement continues. */
     promptStart: (): void => {
       if (!canPrompt()) return;
       const at = now();
-      pauseClocks(at);
+      pauseWork(at);
       prompting = true;
       render(at);
     },
@@ -143,17 +132,20 @@ export const makeWorkingRow = ({
       prompting = false;
       const at = now();
       render(at);
-      if (writable) workStartedAt = at;
+    },
+    /** Called only at the main agent's pre-provider context boundary. */
+    callStart: (): void => {
+      if (running) throughput.start(now());
     },
     output: (characters: number): void => {
-      const increment = Math.max(0, Math.floor(characters));
-      if (increment === 0 || !running || prompting || !writable) return;
-      outputStartedAt ??= now();
-      outputCharacters += increment;
+      if (running) throughput.output(characters);
     },
-    /** Tool execution and message end pause the output-rate clock, not the elapsed time. */
-    pauseOutput: (): void => {
-      if (outputStartedAt !== undefined) pauseOutput(now());
+    /** Only assistant completions close a call. Undefined usage discards that sample. */
+    callEnd: (outputTokens: number | undefined): void => {
+      if (!running) return;
+      const at = now();
+      throughput.finish(at, outputTokens);
+      render(at);
     },
   };
 };

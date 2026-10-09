@@ -6,7 +6,7 @@ Shared, responsive UI for Pi: a composable footer, a unified Activity view for w
 
 - **Custom footer** combining location, Git branch and pull request, session, tokens, context, model, and thinking level with contributions from other extensions such as OpenAI usage.
 - **Responsive layout** with density, ordering, and per-item visibility settings.
-- **Working indicator** with elapsed time and estimated output speed, such as `Working · 2m 14s · ~18.4 tok/s`.
+- **Working indicator** with elapsed time, a current-call estimate (`~18.4 tok/s`), or a reported completed-call average (`24.1 tok/s`).
 - **Activity view** that shows workflows, subagents, background tasks, and questions in one place, as a compact live panel above the editor and a full-screen manager.
 - **Shared manager chrome** for other extensions: Vim-style navigation, list/detail layouts, status glyphs, settings commands, and full-screen surfaces.
 
@@ -28,6 +28,17 @@ Other Cosmic Pi extensions detect it automatically. Without it, they fall back t
 | `/activity`           | Open the Activity manager                            |
 
 `/subagents` and `/tasks` open the same manager focused on their section. In the manager, use `j`/`k` or the arrows to move, `h`/`l` to collapse or expand, Enter to inspect, `?` for help, and `q` to close. Number keys and letter shortcuts such as `x` (stop) run the selected item's actions; destructive actions ask for confirmation.
+
+### What tok/s measures
+
+The row uses `~` for estimates, with no extra live/completed labels.
+
+- **Live:** the current main-agent call's streamed text, thinking and tool-argument UTF-16 units divided by four, divided by time since Pi's pre-provider context boundary. It appears after one second of observation. This is only a heuristic: language, tokenizer, buffering and hidden reasoning affect it.
+- **Completed:** the sum of eligible calls' provider-reported `usage.output` divided by the sum of those same calls' durations. Output already includes reported reasoning tokens. Only successful, tool-use or length-limited completions with positive, valid usage and duration contribute. Missing/zero usage and failed/aborted calls contribute neither tokens nor time. Zero is ambiguous because providers can initialize missing usage to zero.
+
+Both use monotonic time from the main agent's `context_with_system` event to assistant `message_end`. This includes subsequent preparation/authentication, initial latency, hidden reasoning, network stalls and retries—not just model decoding. Tool time, gaps between calls, input/cache tokens and subagent/nested-tool usage are excluded. Completed samples never mix with live estimates; their average is shown whenever no live estimate is available, and resets each agent run.
+
+Prompts freeze the displayed working elapsed time, not provider measurement: a provider may keep generating while a dialog or unavailable UI hides the row. Neither the live estimate nor completed average is a server-side decoding-speed benchmark.
 
 ## Configuration
 

@@ -1,7 +1,14 @@
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as MutableRef from "effect/MutableRef";
 import { stripTerminalControls } from "pi-cosmic-core";
-import { galleryDirectory, plainTheme, writeGallerySection } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  galleryDirectory,
+  plainTheme,
+  writeGallerySection,
+} from "pi-cosmic-core/testing";
+import { makeWorkingRow } from "../src/working/row.ts";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
@@ -564,6 +571,53 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
   ];
 };
 
+const workingFrames = () => {
+  let time = 0;
+  let message: string | undefined;
+  let tick = () => {};
+  const row = makeWorkingRow({
+    now: () => time,
+    every: (_interval, callback) => {
+      tick = callback;
+      return () => {};
+    },
+  });
+  row.activate(
+    MutableRef.make(
+      extensionContextFixture({
+        mode: "tui",
+        ui: {
+          setWorkingMessage: (value?: string) => {
+            message = value;
+          },
+        },
+      }),
+    ),
+  );
+  const lines: string[] = [];
+  const capture = (label: string) =>
+    lines.push(`── Working row · ${label}`, message ?? "(cleared)", "");
+  row.agentStart();
+  capture("no measured output");
+  row.callStart();
+  row.output(400);
+  time = 2_000;
+  tick();
+  capture("current-call estimate");
+  row.callEnd(240);
+  capture("reported completed-call average");
+  row.callStart();
+  row.promptStart();
+  capture("waiting while provider measurement continues");
+  time = 4_000;
+  row.promptEnd();
+  row.callEnd(undefined);
+  capture("unavailable completion leaves prior measured average intact");
+  row.agentEnd();
+  capture("settled");
+  return lines;
+};
+
 describe.skipIf(!directory)("presentation gallery", () => {
   it.effect("renders grouped Activity states without source execution", () =>
     Effect.gen(function* () {
@@ -589,6 +643,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       }
       for (const [title, rows, key] of footerScenarios)
         lines.push(`── Footer · ${title}`, ...footerFrames(rows, key), "");
+      lines.push(...workingFrames());
       yield* writeGallerySection(
         directory,
         "pi-cosmic-ui",

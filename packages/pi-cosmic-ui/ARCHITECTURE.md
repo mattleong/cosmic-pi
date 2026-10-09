@@ -58,9 +58,11 @@ Workflows travel through the same snapshots. A producer publishes one `kind: "wo
 
 ## Working row and prompt identity
 
-`src/working/row.ts` owns Pi's working row: its run and prompt state, elapsed and output-rate clocks, and ticker. It is plain presentation state under the effect-v4 exception and feature-local host I/O, whose only effect is a guarded `setWorkingMessage` write. `application.ts` calls it directly from its Pi event handlers, so each event changes the row within the call that observed it. Activation binds the row to the session's context `MutableRef` without writing. Deactivation, including abort and shutdown, clears a running row through that context, stops its ticker, and unbinds it; idle deactivation writes nothing, because Pi resets the row when it rebinds extension UI.
+`src/working/row.ts` owns Pi's working row: its run and prompt state, monotonic elapsed clock, `throughput.ts` measurement state, and ticker. It is plain presentation state under the effect-v4 exception and feature-local host I/O, whose only effect is a guarded `setWorkingMessage` write. `application.ts` calls it directly from its Pi event handlers, so each event changes the row within the call that observed it. Activation binds the row to the session's context `MutableRef` without writing. Deactivation, including abort and shutdown, clears a running row through that context, stops its ticker, and unbinds it; idle deactivation writes nothing, because Pi resets the row when it rebinds extension UI.
 
-A writable run repaints each second from the shared host ticker pool. A failed write keeps the row writable and retries on the next tick. An unavailable host stops the ticker and freezes both clocks until a later write succeeds. Tool execution and message end pause only the output clock. The outer prompt freezes both clocks and drops output; prompt end restores prior elapsed time. Duplicate agent starts and prompt events do nothing.
+A writable run repaints each second from the shared host ticker pool. A failed write keeps the row writable and retries on the next tick. An unavailable host stops the ticker and freezes displayed elapsed work. The outer prompt likewise freezes elapsed work; prompt end restores it. Neither pauses provider measurement or drops its output. Duplicate agent starts and prompt events do nothing.
+
+`throughput.ts` holds one current main-agent call and a weighted completed-call aggregate. `application.ts` begins measurement at `context_with_system`, before provider work, and closes it only at assistant `message_end`. Provider hooks are deliberately unused because cache warming can also invoke them. Live estimates use current-call UTF-16 units / 4 over observed call time; `boundary/host-usage.ts` validates eligible final output counts, already including reasoning, before they enter the completed aggregate. Unknown/zero usage, failed/aborted/deferred calls and invalid durations contribute neither tokens nor time. Tool/user message ends cannot settle a call. Prompts and unavailable UI do not pause a provider's clock. Both metrics include initial latency and stream stalls, not just decoding. Core's separate `synchronousMonotonicNow` supplies elapsed readings without changing persisted wall-clock semantics. Reset/deactivation discards unfinished measurements; no metrics are persisted.
 
 A prompt opens only inside a running agent run, and a prompt end applies only while that prompt is open. Agent settlement and deactivation clear both. Pi prompt events have neither prompt nor session identity. A stale start first arriving after replacement while the new agent is active is indistinguishable from a current prompt and is attributed to the replacement session.
 
@@ -69,8 +71,9 @@ A prompt opens only inside a running agent run, and a prompt end applies only wh
 ```text
 protocol events -> synchronous registry -> frozen snapshot -> active footer render request
 session_start -> application -> layer -> services -> footer installation
-agent_start + streaming deltas -> working row clocks -> setWorkingMessage on pool ticks -> agent_end clear
-ui_prompt_start -> freeze row clocks -> ui_prompt_end -> resume elapsed
+agent_start -> context_with_system + deltas + assistant message_end -> working row measurements -> agent_end clear
+pool ticks -> setWorkingMessage
+ui_prompt_start -> freeze displayed elapsed (not provider time) -> ui_prompt_end -> resume elapsed
 Pi changes -> service refresh -> frozen projection -> render request
 session_shutdown -> subscriptions/footer/runtime disposed -> ticker pool rotated and awaited
 ```

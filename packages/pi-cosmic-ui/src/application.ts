@@ -20,6 +20,7 @@ import { snapshotHostAbortSignal } from "./boundary/host-abort-signal.ts";
 import {
   addAssistantUsage,
   decodeAssistantUsage,
+  decodeCompletedAssistantOutput,
   type FooterTotals,
 } from "./boundary/host-usage.ts";
 import { shutdownHostUiTickers, startHostUiTicker } from "./boundary/host-status.ts";
@@ -49,7 +50,7 @@ import {
 } from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
-import { makeWorkingRow } from "./working/row.ts";
+import { makeWorkingRow, type WorkingRowOptions } from "./working/row.ts";
 import { ActivityService, type ActivityServiceContract } from "./activity/service.ts";
 import { makeActivityHost } from "./boundary/host-activity.ts";
 
@@ -57,16 +58,17 @@ const TOTAL_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as con
 
 export interface CosmicUiApplicationDependencies {
   readonly shutdownHostUiTickers?: () => Promise<void>;
+  readonly workingRow?: WorkingRowOptions;
 }
 
-/** `dependencies` is an internal seam for host-lifecycle cleanup tests. */
+/** `dependencies` supplies owned clock/ticker and host-cleanup boundaries in tests. */
 export function registerCosmicUiApplication(
   pi: ExtensionAPI,
   dependencies: CosmicUiApplicationDependencies = {},
 ): void {
   const shutdownTickers = dependencies.shutdownHostUiTickers ?? shutdownHostUiTickers;
   const projection = makeProjection();
-  const workingRow = makeWorkingRow();
+  const workingRow = makeWorkingRow(dependencies.workingRow);
   let activatedToken: number | undefined;
   let lifecycleGeneration = 0;
   let stopUsageTicker: (() => void) | undefined;
@@ -389,7 +391,6 @@ export function registerCosmicUiApplication(
   pi.on("model_select", invalidateContextUsage);
   pi.on("tool_execution_start", (_event, ctx) => {
     updateContext(ctx);
-    workingRow.pauseOutput();
   });
   pi.on("tool_execution_end", (event, ctx) => {
     updateContext(ctx);
@@ -415,6 +416,10 @@ export function registerCosmicUiApplication(
     updateContext(ctx);
     workingRow.promptEnd();
   });
+  // This main-agent-only boundary precedes provider work. Provider hooks also see cache warming.
+  pi.on("context_with_system", () => {
+    workingRow.callStart();
+  });
   pi.on("message_start", invalidateContextUsage);
   pi.on("message_update", (event, ctx) => {
     invalidateContextUsage(event, ctx);
@@ -429,8 +434,10 @@ export function registerCosmicUiApplication(
     workingRow.output(update.delta.length);
   });
   pi.on("message_end", (event, ctx) => {
+    updateContext(ctx);
+    if (event.message?.role === "assistant")
+      workingRow.callEnd(decodeCompletedAssistantOutput(event.message));
     invalidateContextUsage(event, ctx);
-    workingRow.pauseOutput();
   });
   pi.on("session_shutdown", () => {
     const generation = beginLifecycle();

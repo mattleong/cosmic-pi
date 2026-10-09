@@ -8,3 +8,8 @@ const nativeClock = Clock.Clock.defaultValue();
 export function synchronousNow(): number {
   return nativeClock.currentTimeMillisUnsafe();
 }
+
+/** Monotonic milliseconds for synchronous elapsed-time measurements, never persisted timestamps. */
+export function synchronousMonotonicNow(): number {
+  return Number(nativeClock.monotonicTimeNanosUnsafe()) / 1_000_000;
+}

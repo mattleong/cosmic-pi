@@ -82,7 +82,7 @@ describe("working row", () => {
     expect(h.tickers.size).toBe(0);
   });
 
-  it("an unavailable tick freezes the clocks until a later write succeeds", () => {
+  it("an unavailable tick freezes elapsed work until a later write succeeds", () => {
     const h = workingHarness();
     h.row.agentStart();
     h.advance(2);
@@ -98,6 +98,25 @@ describe("working row", () => {
     expect(h.delivered.at(-1)).toBe("Working · 3s");
     h.advance(1);
     expect(h.delivered.at(-1)).toBe("Working · 4s");
+  });
+
+  it("resumes elapsed work when a completion restores an unavailable UI", () => {
+    const h = workingHarness();
+    const elapsedSeconds = () => Number(h.delivered.at(-1)?.match(/\b(\d+)s\b/u)?.[1]);
+    h.row.agentStart();
+    h.row.callStart();
+    h.advance(2);
+    h.setMode("rpc");
+    h.advance(1);
+    h.advance(3);
+    h.setMode("tui");
+    h.row.callEnd(120);
+    expect(elapsedSeconds()).toBe(3);
+    h.advance(1);
+    expect(elapsedSeconds()).toBe(4);
+    h.row.callStart();
+    h.advance(1);
+    expect(elapsedSeconds()).toBe(5);
   });
 
   it("keeps ticking after a successful resume that follows an unavailable prompt write", () => {
@@ -134,32 +153,36 @@ describe("working row", () => {
     expect(h.delivered.at(-1)).toBe("Working · 5s");
   });
 
-  it("drops output while waiting and excludes the wait from throughput", () => {
+  it("keeps provider measurement intact while a prompt freezes elapsed work", () => {
     const h = workingHarness();
     h.row.agentStart();
+    h.row.callStart();
     h.row.output(40);
     h.advance(2);
-    expect(h.delivered.at(-1)).toBe("Working · 2s · ~5.0 tok/s");
+    expect(h.delivered.at(-1)).toContain("~5.0 tok/s");
 
     h.row.promptStart();
     h.row.output(400);
     h.advance(8);
     h.row.promptEnd();
-    expect(h.delivered.at(-1)).toBe("Working · 2s · ~5.0 tok/s");
+    expect(h.delivered.at(-1)).toContain("~11.0 tok/s");
 
     h.row.output(40);
     h.advance(2);
-    expect(h.delivered.at(-1)).toBe("Working · 4s · ~5.0 tok/s");
+    expect(h.delivered.at(-1)).toContain("~10.0 tok/s");
+    h.row.callEnd(240);
+    expect(h.delivered.at(-1)).toContain("20.0 tok/s");
   });
 
-  it("pauses only the output clock between messages", () => {
+  it("keeps the completed-call average unchanged between messages", () => {
     const h = workingHarness();
     h.row.agentStart();
+    h.row.callStart();
     h.row.output(40);
     h.advance(1);
-    h.row.pauseOutput();
+    h.row.callEnd(20);
     h.advance(3);
-    expect(h.delivered.at(-1)).toBe("Working · 4s · ~10.0 tok/s");
+    expect(h.delivered.at(-1)).toContain("20.0 tok/s");
   });
 
   it("keeps prompt timing active when transient host writes fail", () => {
