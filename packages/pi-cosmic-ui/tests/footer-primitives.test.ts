@@ -9,7 +9,7 @@ import {
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
 import { applyTextDecorations, orderedContributions } from "../src/footer/builtin-contributions.ts";
-import { contributionText } from "../src/footer/contributions.ts";
+import { contributionText, ranked } from "../src/footer/contributions.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 
 const footer = (options: {
@@ -123,6 +123,18 @@ it("copies configured orders using the last index and preserves unconfigured met
   expect(ordered.map((value) => value.order)).toEqual([1, 200, undefined]);
   expect(ordered.slice(1)).toEqual([values[0], values[2]]);
   expect(values).toEqual(originals);
+});
+
+it("orders an unordered contribution the same way on a line and across detail lines", () => {
+  const values: CosmicFooterTextContribution[] = [
+    { kind: "text", id: "unordered", region: "identity", text: "unordered" },
+    { kind: "text", id: "ordered", region: "identity", text: "ordered", order: 300 },
+  ];
+  const lineOrder = ranked(values).map((value) => value.id);
+  const passOrder = orderedContributions(values, makeDefaultResolvedCosmicUiConfig()).map(
+    (value) => value.id,
+  );
+  expect(lineOrder).toEqual(passOrder);
 });
 
 it.each([undefined, "", "short"])(

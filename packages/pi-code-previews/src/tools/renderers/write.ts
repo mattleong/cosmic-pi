@@ -103,7 +103,8 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
     },
 
     renderResult: (result, { expanded }, theme, renderContext) => {
-      const state = renderContext.state;
+      // A deferred render keeps only these, never the context and its prior components.
+      const { state, invalidate } = renderContext;
       setResultDiffShown(state, false);
       const firstText = getTextContent(result.content);
       if (renderContext.isError) {
@@ -129,7 +130,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       // Expansion keeps the exact written content above the diff.
       setResultDiffShown(state, !expanded);
       const render = () =>
-        renderWriteDiffPreview(previous, content, path, expanded, theme, renderContext.invalidate);
+        renderWriteDiffPreview(previous, content, path, expanded, theme, invalidate);
       const previewKey = previewCacheKey(
         [previous, content],
         path,
@@ -145,7 +146,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         "Rendering write diff…",
         theme,
         render,
-        renderContext.invalidate,
+        invalidate,
       );
     },
   };

@@ -85,7 +85,7 @@ export function injectVisibleRanges(
   let rangeIndex = 0;
   const sorted = ranges.filter(([start, end]) => end > start).toSorted((a, b) => a[0] - b[0]);
   for (let i = 0; i < ansi.length; i++) {
-    const sgr = extractSgr(ansi, i);
+    const sgr = matchSgrSequence(ansi, i);
     if (sgr) {
       out += active && options.reopenAfterSgr?.(sgr) ? `${sgr}${options.open}` : sgr;
       i += sgr.length - 1;
@@ -136,7 +136,7 @@ export function wrapAnsiToWidth(
   }
 
   while (index < text.length) {
-    const ansi = extractSgr(text, index);
+    const ansi = matchSgrSequence(text, index);
     if (ansi) {
       row += ansi;
       state = updateAnsiState(state, ansi);
@@ -195,14 +195,6 @@ function truncateLastRow(rows: string[], width: number): string[] {
   return rows;
 }
 
-function extractSgr(text: string, index: number): string | undefined {
-  if (text[index] !== "\x1b" || text[index + 1] !== "[") return undefined;
-  let end = index + 2;
-  while (end < text.length && text[end] !== "m") end++;
-  if (end >= text.length) return undefined;
-  return text.slice(index, end + 1);
-}
-
 /** Attribute groups the wrap state tracks: a set-code predicate and the code that resets it. */
 const ANSI_STATE_GROUPS: Array<{ isSet: (parameters: string) => boolean; reset: string }> = [
   { isSet: (parameters) => parameters.startsWith("38;") && parameters.length > 3, reset: "39" },
@@ -221,11 +213,8 @@ function updateAnsiState(current: string, sequence: string): string {
     (group) => group.isSet(parameters) || group.reset === parameters,
   );
   if (groups.length === 0) return current + sequence;
-  const kept = replaceSgrSequences(
-    current,
-    (existing, existingParameters) =>
-      groups.some((group) => group.isSet(existingParameters)) ? "" : existing,
-    extractSgr,
+  const kept = replaceSgrSequences(current, (existing, existingParameters) =>
+    groups.some((group) => group.isSet(existingParameters)) ? "" : existing,
   );
   return groups.some((group) => group.reset === parameters) ? kept : kept + sequence;
 }

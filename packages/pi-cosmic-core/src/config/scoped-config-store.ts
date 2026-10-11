@@ -199,7 +199,9 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
             ),
           ),
       );
-      globalExists = true;
+      // A failed read leaves existence to a fresh inspection: a raced document still counts,
+      // but an unreadable location never reports one that was not written.
+      globalExists = globalReadable || (yield* exists(paths.global));
     }
     const [project, global] = yield* Effect.all(
       [readIfPresent(paths.project, projectExists), readIfPresent(paths.global, globalReadable)],

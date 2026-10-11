@@ -26,6 +26,7 @@ beforeAll(() => initTheme(undefined, false));
 function settingsHarness(
   responses: Array<() => Promise<StubRunResult>>,
   hostCustom?: ExtensionUIContext["custom"],
+  captureAuthority?: () => () => boolean,
 ) {
   let currentConfig = makeResolvedConfig({
     configPath: "/tmp/openai-settings.json",
@@ -56,6 +57,7 @@ function settingsHarness(
       fastProjection: MutableRef.make(initialFastSnapshot()),
       resetFastRoutingTransport: vi.fn(),
       run,
+      ...(captureAuthority && { captureAuthority }),
     },
   );
 
@@ -127,6 +129,22 @@ describe("Better OpenAI settings controller", () => {
         component.handleInput?.(input.escape);
         yield* Effect.promise(() => closed);
       }),
+  );
+
+  it.effect("closes a picker whose session was replaced instead of accepting unsaved changes", () =>
+    Effect.gen(function* () {
+      let generation = 1;
+      const h = settingsHarness([() => Promise.resolve({})], undefined, () => {
+        const token = generation;
+        return () => token === generation;
+      });
+      const { closed } = yield* h.open;
+      generation++;
+      h.selectedComponent().handleInput?.(input.enter);
+      yield* Effect.promise(() => closed);
+      expect(h.surface.editor).toBeUndefined();
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
   );
 
   it.effect("warns and rolls back a failed optimistic value after the picker has closed", () =>

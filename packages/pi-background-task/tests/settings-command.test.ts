@@ -231,6 +231,23 @@ describe("/tasks settings", () => {
     }),
   );
 
+  it.effect("closes a picker whose authority check throws instead of trapping its keys", () =>
+    Effect.gen(function* () {
+      let failing = false;
+      const h = pickerHarness(true, undefined, () => () => {
+        if (failing) throw new Error("authority unavailable");
+        return true;
+      });
+      yield* macrotask;
+      expect(h.isOpen()).toBe(true);
+      failing = true;
+      h.close();
+      expect(h.isOpen()).toBe(false);
+      yield* Effect.promise(() => h.opened);
+      expect(h.write).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("does not open a picker after its originating read is retired", () =>
     Effect.gen(function* () {
       let current = true;

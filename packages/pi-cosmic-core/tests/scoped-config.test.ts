@@ -210,6 +210,30 @@ testLayer(Path.layer)("scoped config store", (it) => {
     );
   }
 
+  it.effect("does not report a seeded global document when its location cannot be read", () => {
+    const logger = makeCapturedLogger();
+    const documents = JsonDocumentStore.layer.pipe(
+      Layer.provide(
+        FileSystem.layerNoop({
+          exists: () => Effect.succeed(false),
+          readFileString: () =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "readFileString",
+              }),
+            ),
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const resolved = yield* testStore.resolveConfig("/project", "/agent");
+      expect(resolved).toMatchObject({ globalConfigExists: false, global: {} });
+      expect(logger.entries).toHaveLength(1);
+    }).pipe(Effect.provide(Layer.merge(documents, logger.layer)));
+  });
+
   for (const operation of ["inspect", "encode", "write"]) {
     it.effect(`does not tolerate a default seed ${operation} failure`, () => {
       let inspections = 0;

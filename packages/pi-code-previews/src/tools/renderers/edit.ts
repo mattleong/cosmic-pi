@@ -139,11 +139,13 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       }
       // Expansion keeps the exact proposed edits above the applied diff.
       setResultDiffShown(renderContext.state, !expanded);
+      // A deferred render keeps only this, never the context and its prior components.
+      const { invalidate } = renderContext;
       const render = () =>
         new FullWidthDiffText(
           formatDiffPreview(diff, pathPreviewLanguage(filePath), theme, limit, {
             totalLines: summary.totalLines,
-            invalidate: renderContext.invalidate,
+            invalidate,
           }),
           theme,
         );
@@ -162,7 +164,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
         "Rendering edit diff…",
         theme,
         render,
-        renderContext.invalidate,
+        invalidate,
       );
     },
   };

@@ -6,7 +6,11 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import {
+  expandedArguments,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
@@ -15,7 +19,6 @@ import { AskUserParameters, type AskUserRequest } from "../questionnaire/schema.
 import { askUserCompactSummary } from "../ui/compact-summary.ts";
 import {
   answersBody,
-  argumentsSection,
   callBody,
   cancelledLine,
   emptyBody,
@@ -89,7 +92,7 @@ export function registerAskUserTool(
     shell(tool, {
       compactSummary: askUserCompactSummary,
       expandedContent: {
-        renderCall: (args, theme) => argumentsSection(theme, args),
+        renderCall: (args, theme) => expandedArguments(theme, args),
         renderResult: (result, _options, theme, context) => expandedContent(result, theme, context),
       },
       scheduleAnimation,

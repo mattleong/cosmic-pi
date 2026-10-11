@@ -171,8 +171,9 @@ export const openSettingsList = (
         bridge: {
           invoke: invokeHostCallback,
           ...(isCurrent && {
+            // A throwing check counts as revoked, so the list still closes instead of trapping keys.
             admitInput: () => {
-              if (isCurrent()) return true;
+              if (invokeHostCallback(isCurrent, false)) return true;
               finish(undefined);
               return false;
             },

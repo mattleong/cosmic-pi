@@ -78,11 +78,16 @@ export function tone(
   return theme.fg(contributionColor(contribution), text);
 }
 
+/** A contribution without an `order` follows ordered ones; every footer ordering pass shares it. */
+export const DEFAULT_CONTRIBUTION_ORDER = 500;
+
 export function ranked(
   contributions: readonly CosmicFooterTextContribution[],
 ): CosmicFooterTextContribution[] {
   return [...contributions].sort(
-    (a, b) => (a.order ?? 100) - (b.order ?? 100) || (b.priority ?? 50) - (a.priority ?? 50),
+    (a, b) =>
+      (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER) ||
+      (b.priority ?? 50) - (a.priority ?? 50),
   );
 }
 

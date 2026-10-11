@@ -1,5 +1,6 @@
 import {
   captureCodePreviewPresentationPolicy,
+  expandedArguments,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
@@ -24,7 +25,6 @@ import {
   renderAsyncMessage,
   renderAsyncContent,
 } from "../ui/async-tool-render.ts";
-import { argumentsSection } from "../ui/tool-body.ts";
 import {
   AskUserAsyncContractSchema,
   AskUserAsyncControlContractSchema,
@@ -63,7 +63,7 @@ export function registerAsyncAskUserTools(
   const presentation = {
     compactSummary: asyncAskUserCompactSummary,
     expandedContent: {
-      renderCall: <Args>(args: Args, theme: Theme) => argumentsSection(theme, args),
+      renderCall: <Args>(args: Args, theme: Theme) => expandedArguments(theme, args),
       renderResult: renderAsyncContent,
     },
     scheduleAnimation,

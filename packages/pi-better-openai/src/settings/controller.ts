@@ -111,164 +111,168 @@ export function registerSettingsController(
             if (!initialConfig) return { _tag: "Blocked" } as const;
             // One snapshot per picker session, refreshed after each write.
             let cfg = initialConfig;
-            return openSettingsList(ctx, ({ tui, theme }) => {
-              let outerList: SettingsList | undefined;
-              const textPanel = (title: string, lines: string[], complete: () => void) =>
-                new TextPanelComponent({
-                  theme,
-                  title,
-                  lines,
-                  done: complete,
-                  dismiss: "back-keys",
-                });
-              const diagnosticItems = (): SettingItem[] => [
-                {
-                  id: "diagnostics",
-                  label: "Debug info",
-                  currentValue: "open",
-                  description: "Show Better OpenAI diagnostics.",
-                  submenu: (_value, complete) =>
-                    textPanel("Debug info", formatDebugStatus(ctx).split("\n"), complete),
-                },
-                {
-                  id: "config.paths",
-                  label: "Config paths",
-                  currentValue: cfg.configPath,
-                  description: `Selected: ${cfg.configPath}\nProject: ${cfg.projectConfigPath}\nGlobal: ${cfg.globalConfigPath}`,
-                  submenu: (_value, complete) =>
-                    textPanel(
-                      "Config paths",
-                      [
-                        `Selected: ${cfg.configPath}`,
-                        `Project:  ${cfg.projectConfigPath}`,
-                        `Global:   ${cfg.globalConfigPath}`,
-                      ],
-                      complete,
-                    ),
-                },
-                {
-                  id: "config.print",
-                  label: "Redacted config",
-                  currentValue: "open",
-                  description: "Show the selected raw config with sensitive fields redacted.",
-                  submenu: (_value, complete) =>
-                    textPanel(
-                      "Redacted config",
-                      JSON.stringify(redactedConfig, null, 2).split("\n"),
-                      complete,
-                    ),
-                },
-              ];
-              const groups = [
-                {
-                  id: "section.fast",
-                  label: "Fast mode",
-                  description: "Configure OpenAI fast mode and persistence.",
-                  submenuTitle: "Fast mode settings",
-                  items: () =>
-                    settingsItemsFromDescriptors(
-                      [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
-                      cfg,
-                    ),
-                  summary: () => settingsSummary(ctx, MutableRef.get(fastProjection)),
-                },
-                {
-                  id: "section.compaction",
-                  label: "Compaction",
-                  description: "Use OpenAI native compaction when Pi triggers compaction.",
-                  submenuTitle: "Compaction settings",
-                  items: () => settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
-                  summary: () => (cfg.compaction.enabled ? "OpenAI native" : "Pi default"),
-                },
-                {
-                  id: "section.usage",
-                  label: "Usage",
-                  description:
-                    "Configure usage refresh details. Footer visibility is in /cosmic-ui settings.",
-                  submenuTitle: "Usage settings",
-                  items: () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
-                  summary: () => `${formatDuration(cfg.usage.refreshIntervalMs)} refresh`,
-                },
-                {
-                  id: "section.image",
-                  label: "Image tool",
-                  description: "Configure OpenAI image generation defaults.",
-                  submenuTitle: "Image tool settings",
-                  items: () => settingsItemsFromDescriptors(IMAGE_SETTING_DESCRIPTORS, cfg),
-                  summary: () =>
-                    cfg.image.enabled
-                      ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`
-                      : "disabled",
-                },
-                {
-                  id: "section.diagnostics",
-                  label: "Diagnostics",
-                  description: "Show diagnostics, config paths, and redacted raw config.",
-                  submenuTitle: "Diagnostics",
-                  items: diagnosticItems,
-                  summary: () => "debug / config",
-                },
-              ];
-              const sections = () =>
-                groups.map(
-                  (group): SettingsSurfaceItem => ({
-                    kind: "group",
-                    id: group.id,
-                    label: group.label,
-                    currentValue: group.summary(),
-                    description: group.description,
+            return openSettingsList(
+              ctx,
+              ({ tui, theme }) => {
+                let outerList: SettingsList | undefined;
+                const textPanel = (title: string, lines: string[], complete: () => void) =>
+                  new TextPanelComponent({
+                    theme,
+                    title,
+                    lines,
+                    done: complete,
+                    dismiss: "back-keys",
+                  });
+                const diagnosticItems = (): SettingItem[] => [
+                  {
+                    id: "diagnostics",
+                    label: "Debug info",
+                    currentValue: "open",
+                    description: "Show Better OpenAI diagnostics.",
                     submenu: (_value, complete) =>
-                      createSettingsGroupSubmenu({
-                        title: group.submenuTitle,
-                        items: group.items,
-                        onChange: writeSetting,
-                        done: complete,
-                        summary: group.summary,
-                        listTheme: managerSettingsTheme(theme),
-                      }),
-                  }),
-                );
-              const reconcilePicker = () =>
-                invokeBestEffort(() => {
-                  if (!isCurrent()) return;
-                  cfg = session.config() ?? cfg;
-                  if (outerList)
-                    for (const section of sections())
-                      outerList.updateValue(section.id, section.currentValue);
-                  tui.requestRender();
-                });
-              function writeSetting(id: string, value: string): Promise<void> {
-                return session.apply(id, value).then(() => {
-                  if (!isCurrent()) return;
-                  reconcilePicker();
-                  void readRedactedConfig(ctx)
-                    .catch(() => redactedConfig)
-                    .then((nextRedactedConfig) => {
-                      if (!isCurrent()) return;
-                      redactedConfig = nextRedactedConfig;
-                      invokeBestEffort(() => tui.requestRender());
-                    })
-                    .catch(() => undefined);
-                });
-              }
-              return {
-                header: {
-                  render: () => [
-                    theme.fg("accent", theme.bold("Better OpenAI settings")),
-                    theme.fg("dim", cfg.configPath),
-                    "",
-                  ],
-                  invalidate() {},
-                },
-                items: sections(),
-                height: 8,
-                onChange: reconcilePicker,
-                afterInput: () => invokeBestEffort(() => tui.requestRender()),
-                onList: (list) => {
-                  outerList = list;
-                },
-              };
-            });
+                      textPanel("Debug info", formatDebugStatus(ctx).split("\n"), complete),
+                  },
+                  {
+                    id: "config.paths",
+                    label: "Config paths",
+                    currentValue: cfg.configPath,
+                    description: `Selected: ${cfg.configPath}\nProject: ${cfg.projectConfigPath}\nGlobal: ${cfg.globalConfigPath}`,
+                    submenu: (_value, complete) =>
+                      textPanel(
+                        "Config paths",
+                        [
+                          `Selected: ${cfg.configPath}`,
+                          `Project:  ${cfg.projectConfigPath}`,
+                          `Global:   ${cfg.globalConfigPath}`,
+                        ],
+                        complete,
+                      ),
+                  },
+                  {
+                    id: "config.print",
+                    label: "Redacted config",
+                    currentValue: "open",
+                    description: "Show the selected raw config with sensitive fields redacted.",
+                    submenu: (_value, complete) =>
+                      textPanel(
+                        "Redacted config",
+                        JSON.stringify(redactedConfig, null, 2).split("\n"),
+                        complete,
+                      ),
+                  },
+                ];
+                const groups = [
+                  {
+                    id: "section.fast",
+                    label: "Fast mode",
+                    description: "Configure OpenAI fast mode and persistence.",
+                    submenuTitle: "Fast mode settings",
+                    items: () =>
+                      settingsItemsFromDescriptors(
+                        [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
+                        cfg,
+                      ),
+                    summary: () => settingsSummary(ctx, MutableRef.get(fastProjection)),
+                  },
+                  {
+                    id: "section.compaction",
+                    label: "Compaction",
+                    description: "Use OpenAI native compaction when Pi triggers compaction.",
+                    submenuTitle: "Compaction settings",
+                    items: () => settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
+                    summary: () => (cfg.compaction.enabled ? "OpenAI native" : "Pi default"),
+                  },
+                  {
+                    id: "section.usage",
+                    label: "Usage",
+                    description:
+                      "Configure usage refresh details. Footer visibility is in /cosmic-ui settings.",
+                    submenuTitle: "Usage settings",
+                    items: () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
+                    summary: () => `${formatDuration(cfg.usage.refreshIntervalMs)} refresh`,
+                  },
+                  {
+                    id: "section.image",
+                    label: "Image tool",
+                    description: "Configure OpenAI image generation defaults.",
+                    submenuTitle: "Image tool settings",
+                    items: () => settingsItemsFromDescriptors(IMAGE_SETTING_DESCRIPTORS, cfg),
+                    summary: () =>
+                      cfg.image.enabled
+                        ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`
+                        : "disabled",
+                  },
+                  {
+                    id: "section.diagnostics",
+                    label: "Diagnostics",
+                    description: "Show diagnostics, config paths, and redacted raw config.",
+                    submenuTitle: "Diagnostics",
+                    items: diagnosticItems,
+                    summary: () => "debug / config",
+                  },
+                ];
+                const sections = () =>
+                  groups.map(
+                    (group): SettingsSurfaceItem => ({
+                      kind: "group",
+                      id: group.id,
+                      label: group.label,
+                      currentValue: group.summary(),
+                      description: group.description,
+                      submenu: (_value, complete) =>
+                        createSettingsGroupSubmenu({
+                          title: group.submenuTitle,
+                          items: group.items,
+                          onChange: writeSetting,
+                          done: complete,
+                          summary: group.summary,
+                          listTheme: managerSettingsTheme(theme),
+                        }),
+                    }),
+                  );
+                const reconcilePicker = () =>
+                  invokeBestEffort(() => {
+                    if (!isCurrent()) return;
+                    cfg = session.config() ?? cfg;
+                    if (outerList)
+                      for (const section of sections())
+                        outerList.updateValue(section.id, section.currentValue);
+                    tui.requestRender();
+                  });
+                function writeSetting(id: string, value: string): Promise<void> {
+                  return session.apply(id, value).then(() => {
+                    if (!isCurrent()) return;
+                    reconcilePicker();
+                    void readRedactedConfig(ctx)
+                      .catch(() => redactedConfig)
+                      .then((nextRedactedConfig) => {
+                        if (!isCurrent()) return;
+                        redactedConfig = nextRedactedConfig;
+                        invokeBestEffort(() => tui.requestRender());
+                      })
+                      .catch(() => undefined);
+                  });
+                }
+                return {
+                  header: {
+                    render: () => [
+                      theme.fg("accent", theme.bold("Better OpenAI settings")),
+                      theme.fg("dim", cfg.configPath),
+                      "",
+                    ],
+                    invalidate() {},
+                  },
+                  items: sections(),
+                  height: 8,
+                  onChange: reconcilePicker,
+                  afterInput: () => invokeBestEffort(() => tui.requestRender()),
+                  onList: (list) => {
+                    outerList = list;
+                  },
+                };
+              },
+              isCurrent,
+            );
           }),
     });
   command.add(withInvocationAuthority(options.captureAuthority, createCommand));

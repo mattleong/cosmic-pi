@@ -35,7 +35,8 @@ test("ANSI wrapping preserves short printable spans exactly", () => {
   const text = "\x1b[31mconst value = 1;\x1b[39m";
 
   assert.deepEqual(wrapAnsiToWidth(text, 80), [text]);
-  for (const malformed of ["hello\x1b", "hello\x1b[31", "hello\x1b]8;;url\x07"]) {
+  // A later "m" never turns a non-SGR control sequence into styling.
+  for (const malformed of ["hello\x1b", "hello\x1b[31", "hello\x1b]8;;url\x07", "x\x1b[2J hi m"]) {
     const rows = wrapAnsiToWidth(malformed, 5, 20, "> ");
     assert.equal(stripAnsi(rows.join("")).replaceAll("> ", ""), escapeControlChars(malformed));
     assert.ok(rows.every((row) => visibleWidth(row) <= 5));

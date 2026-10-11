@@ -4,7 +4,7 @@
  */
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { expandedSection, previewIssuesSlot } from "pi-code-previews";
+import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
@@ -115,21 +115,6 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
     new Text(theme.fg(isError ? "error" : "toolOutput", text), 0, 0),
   );
 
-/** The call's exact input, listed in full. */
-export function argumentsSection<Args>(theme: Theme, args: Args): Component {
-  let json = "";
-  try {
-    json = JSON.stringify(args, null, 2) ?? "";
-  } catch {
-    // Hostile replayed arguments leave the section empty rather than failing the row.
-  }
-  return expandedSection(
-    theme,
-    "Arguments",
-    new Text(theme.fg("toolOutput", stripTerminalControls(json)), 0, 0),
-  );
-}
-
 /** A call's heading; expanded, the shell's issue lines and then the full arguments follow. */
 export function callBody<Args>(
   header: ToolHeader,
@@ -139,7 +124,7 @@ export function callBody<Args>(
 ): Component {
   const heading = new Text(renderToolHeader(header, theme), 0, 0);
   if (!context.expanded) return heading;
-  return stacked([heading, previewIssuesSlot(context), argumentsSection(theme, args)]);
+  return stacked([heading, previewIssuesSlot(context), expandedArguments(theme, args)]);
 }
 
 /** Expanded results: the agent-facing text, or the answers when a replay has no text. */

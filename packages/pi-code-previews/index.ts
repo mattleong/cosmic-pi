@@ -81,5 +81,5 @@ export { captureBuiltinCompactPolicy } from "./src/tools/builtin-compact-summary
 
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
 export { renderCompactRow } from "./src/preview/compact-row";
-export { expandedSection } from "./src/preview/expanded-section";
+export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
 export { captureCodePreviewPresentationPolicy } from "./src/preview/presentation-policy";

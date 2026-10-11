@@ -5,6 +5,7 @@ import type {
   CosmicFooterStatusContribution,
   CosmicFooterTextContribution,
 } from "../protocol/protocol.ts";
+import { DEFAULT_CONTRIBUTION_ORDER } from "./contributions.ts";
 import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import type { FooterHostProjection } from "../boundary/host-footer-projection.ts";
 import type { FooterTotals } from "../boundary/host-usage.ts";
@@ -241,5 +242,7 @@ export function orderedContributions(
       const configuredOrder = order.get(value.id);
       return configuredOrder === undefined ? value : { ...value, order: configuredOrder };
     })
-    .sort((a, b) => (a.order ?? 500) - (b.order ?? 500));
+    .sort(
+      (a, b) => (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER),
+    );
 }
