@@ -89,17 +89,33 @@ const readContainedRegularFile = (paths: Path.Path) =>
           if (!visible.isFile() || visible.dev !== opened.dev || visible.ino !== opened.ino)
             return yield* failRead();
 
-          const bytes = yield* readStep(() => handle.readFile());
+          // Allocate from the inspected size, never from a file that can keep growing.
+          const bytes = yield* Effect.try({
+            try: () => new Uint8Array(Number(opened.size)),
+            catch: safeFileError("read", READ_FAILURE),
+          });
+          let offset = 0;
+          while (offset < bytes.byteLength) {
+            const { bytesRead } = yield* readStep(() =>
+              handle.read({
+                buffer: bytes,
+                offset,
+                length: bytes.byteLength - offset,
+                position: offset,
+              }),
+            );
+            if (bytesRead === 0) return yield* failRead();
+            offset += bytesRead;
+          }
+          // A fixed one-byte EOF probe detects growth without extending the result buffer.
+          const extra = yield* readStep(() =>
+            handle.read({ buffer: new Uint8Array(1), position: bytes.byteLength }),
+          );
+          if (extra.bytesRead !== 0) return yield* failRead();
           const after = yield* readStep(() => handle.stat({ bigint: true }));
-          if (
-            after.dev !== opened.dev ||
-            after.ino !== opened.ino ||
-            after.size !== opened.size ||
-            bytes.byteLength !== Number(opened.size) ||
-            bytes.byteLength > maximumBytes
-          )
+          if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size)
             return yield* failRead();
-          return { path: resolvedPath, bytes: new Uint8Array(bytes) } satisfies SafeFileResult;
+          return { path: resolvedPath, bytes } satisfies SafeFileResult;
         }),
       (handle) =>
         nodePromise("close", "Unable to close a stable regular file.", () => handle.close()).pipe(

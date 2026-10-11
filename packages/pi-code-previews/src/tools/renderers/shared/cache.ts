@@ -1,53 +1,47 @@
-import * as Predicate from "effect/Predicate";
-
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { hasCodePreviewSessionCapability } from "../../../application/capability";
 import { DeferredPreview, shouldRenderDeferred } from "../../../preview/deferred";
 import type { RendererState } from "./types";
 
+interface PreviewEntry {
+  readonly dependencies: readonly unknown[];
+  readonly component: Component;
+}
+
 export function cachedPreview(
   state: RendererState,
-  keyName: string,
-  componentName: string,
-  key: string,
+  slot: string,
+  dependencies: readonly unknown[],
   create: () => Component,
-  exactSource?: string,
 ): Component {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const cached = state[componentName] as (Component & { cancel?: () => void }) | undefined;
-  const sourceName = `${keyName}ExactSource`;
-  const sourceMatches = exactSource === undefined || state[sourceName] === exactSource;
-  if (state[keyName] !== key || !sourceMatches || !cached || !Predicate.isFunction(cached.render)) {
-    cached?.cancel?.();
-    state[keyName] = key;
-    if (exactSource !== undefined) state[sourceName] = exactSource;
-    state[componentName] = create();
-  }
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  return state[componentName] as Component;
+  // SAFETY: This slot is owned and populated only by this cache.
+  const cached = state[slot] as PreviewEntry | undefined;
+  if (
+    cached?.dependencies.length === dependencies.length &&
+    dependencies.every((value, index) => Object.is(value, cached.dependencies[index]))
+  )
+    return cached.component;
+  if (cached?.component instanceof DeferredPreview) cached.component.cancel();
+  delete state[slot];
+  const component = create();
+  state[slot] = { dependencies, component } satisfies PreviewEntry;
+  return component;
 }
 
 export function cachedDeferredPreview(
   state: RendererState,
-  keyName: string,
-  componentName: string,
-  key: string,
+  slot: string,
+  dependencies: readonly unknown[],
   source: string,
   loadingLabel: string,
   theme: Theme,
   render: () => Component,
   invalidate: () => void,
 ): Component {
-  return cachedPreview(
-    state,
-    keyName,
-    componentName,
-    key,
-    () =>
-      shouldRenderDeferred(source) && hasCodePreviewSessionCapability()
-        ? new DeferredPreview(loadingLabel, theme, render, invalidate)
-        : render(),
-    source,
+  return cachedPreview(state, slot, dependencies, () =>
+    shouldRenderDeferred(source) && hasCodePreviewSessionCapability()
+      ? new DeferredPreview(loadingLabel, theme, render, invalidate)
+      : render(),
   );
 }

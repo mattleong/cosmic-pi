@@ -12,6 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import {
   deferredPromise,
   extensionContextFixture,
+  macrotask,
   opaqueFixture,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
@@ -29,7 +30,7 @@ import {
   type BackgroundTaskApplicationBoundaries,
 } from "../src/application.ts";
 import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
-import { registerTasksCommand, type TaskManagerActions } from "../src/settings/controller.ts";
+import { registerTasksCommand, type TaskCommandActions } from "../src/settings/controller.ts";
 import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
@@ -86,7 +87,7 @@ const managerTask = (state: BackgroundTaskState): BackgroundTaskView => {
 
 function tasksCommandHarness(
   state: BackgroundTaskState = "exited",
-  actions: Partial<TaskManagerActions> = {},
+  actions: Partial<TaskCommandActions> = {},
 ) {
   const host = fakeCustomSurfaceHost({
     rows: 8,
@@ -103,9 +104,13 @@ function tasksCommandHarness(
     ui,
   });
   const extension = recordingExtensionHost();
+  const listeners = new Set<() => void>();
   const bridge: BackgroundTaskProjectionBridge = opaqueFixture({
     get: () => ({ tasks: [managerTask(state)] }),
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   });
   registerTasksCommand(extension.pi, bridge, {
     stop: () => Promise.resolve(),
@@ -122,6 +127,10 @@ function tasksCommandHarness(
     notify,
     run,
     host,
+    /** Notifies open managers, as a publish or a deactivation's clear does. */
+    publish: () => {
+      for (const listener of listeners) listener();
+    },
     open: (args = "") => {
       const opened = run(args);
       host.mount();
@@ -303,7 +312,7 @@ describe("background-task Pi lifecycle", () => {
   );
 
   it.effect.each(["session_start", "session_tree"] as const)(
-    "rejects a stale tool call while %s replacement settings are still loading",
+    "rejects retained tool calls during and after %s replacement",
     (event) =>
       Effect.gen(function* () {
         const entered = deferredPromise();
@@ -324,22 +333,28 @@ describe("background-task Pi lifecycle", () => {
         // already deactivated and the next one is not yet active, so the activation-1 tool
         // must fail typed instead of reaching the unactivated replacement runtime.
         yield* Effect.promise(() => entered.promise);
+        const staleCall = () =>
+          tool.execute(
+            "replacement-check",
+            { action: "list" },
+            new AbortController().signal,
+            undefined,
+            ctx,
+          );
         yield* Effect.promise(() =>
-          expect(
-            tool.execute(
-              "replacement-check",
-              { action: "list" },
-              new AbortController().signal,
-              undefined,
-              ctx,
-            ),
-          ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+          expect(staleCall()).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
         );
 
         replacement.resolve();
         yield* Effect.promise(() => replacing);
         // Tool activation still happens once settings resolve for the replacement generation.
         expect(app.tools.map((tool) => tool.name)).toEqual(["background_task", "background_task"]);
+        yield* Effect.promise(() =>
+          expect(staleCall()).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+        );
+        expect(yield* Effect.promise(() => app.execute({ action: "list" }, ctx))).toMatchObject({
+          details: { action: "list", tasks: [] },
+        });
         yield* Effect.promise(() => app.emit("session_shutdown", ctx));
       }),
   );
@@ -492,6 +507,66 @@ describe("/tasks command", () => {
 });
 
 describe("/tasks action feedback", () => {
+  it.effect.each([
+    { action: "stop", state: "running", key: "x" },
+    { action: "clear", state: "exited", key: "c" },
+  ] as const)(
+    "revokes old $action confirmations and notifications, not new openings",
+    ({ action, state, key }) =>
+      Effect.gen(function* () {
+        let generation = 1;
+        const pending = deferredPromise();
+        const mutate = vi.fn(() => pending.promise);
+        const command = tasksCommandHarness(state, {
+          [action]: mutate,
+          captureAuthority: () => {
+            const token = generation;
+            return () => token === generation;
+          },
+        });
+        const old = command.open();
+        old.surface.render(120);
+        old.surface.handleInput?.(key);
+        generation++; // Same task ID in a replacement registry must not inherit confirmation.
+        old.surface.handleInput?.(key);
+        expect(mutate).not.toHaveBeenCalled();
+        expect(old.isOpen()).toBe(false);
+        yield* old.close;
+
+        const current = command.open();
+        current.surface.render(120);
+        current.surface.handleInput?.(key);
+        current.surface.handleInput?.(key);
+        expect(mutate).toHaveBeenCalledTimes(1);
+        generation++;
+        pending.reject(new Error("retired action failed"));
+        yield* macrotask;
+        expect(command.notify).not.toHaveBeenCalled();
+        yield* current.close;
+      }),
+  );
+
+  it.effect("closes an open manager once its session is replaced", () =>
+    Effect.gen(function* () {
+      let generation = 1;
+      const command = tasksCommandHarness("running", {
+        captureAuthority: () => {
+          const token = generation;
+          return () => token === generation;
+        },
+      });
+      const manager = command.open();
+      manager.surface.render(120);
+      command.publish();
+      expect(manager.isOpen()).toBe(true);
+      // The bridge outlives the session; its next update must not show the replacement's tasks.
+      generation++;
+      command.publish();
+      expect(manager.isOpen()).toBe(false);
+      yield* manager.close;
+    }),
+  );
+
   it.effect.each([
     { action: "stop", state: "running", keys: ["x", "x"] },
     { action: "clear", state: "exited", keys: ["c", "c"] },

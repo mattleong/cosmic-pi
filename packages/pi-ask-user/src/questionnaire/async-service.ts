@@ -83,7 +83,7 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
   // Retries re-pend only below three attempts, so a claim never sees an exhausted request.
   const deliver = (id: string): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (yield* Ref.get(closed)) return;
+      if (!delivery || (yield* Ref.get(closed))) return;
       const claimed = yield* Ref.modify(state, (entries) => {
         const entry = entries.find((item) => item.snapshot.requestId === id);
         if (
@@ -100,7 +100,7 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
         };
         return [next, entries.map((item) => (item === entry ? next : item))] as const;
       });
-      if (!claimed || !delivery) return;
+      if (!claimed) return;
       const result = yield* Effect.exit(delivery(claimed.snapshot));
       yield* patch(id, () => ({ delivery: Exit.isSuccess(result) ? "sent" : "failed" }));
       if (Exit.isFailure(result) && claimed.deliveryAttempts < 3 && !(yield* Ref.get(closed))) {

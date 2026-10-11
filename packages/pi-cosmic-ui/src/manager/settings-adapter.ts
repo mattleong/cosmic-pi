@@ -163,6 +163,8 @@ export interface SettingsSurfaceBridgeOptions {
    * bridge only threads the guard through. Defaults to direct invocation.
    */
   readonly invoke?: (<A>(callback: () => A, fallback: A) => A) | undefined;
+  /** Caller-owned check before each input; false drops it, such as after authority is revoked. */
+  readonly admitInput?: (() => boolean) | undefined;
   /** Caller-owned follow-up (typically a guarded render request) after each input. */
   readonly afterInput?: (() => void) | undefined;
 }
@@ -194,6 +196,8 @@ export const settingsSurfaceBridge = (
     },
     invalidate: (): void => invoke(() => container.invalidate(), undefined),
     handleInput: (data: string): void => {
+      const { admitInput } = options;
+      if (admitInput && !invoke(admitInput, false)) return;
       invoke(() => adapter.handleInput(data), undefined);
       options.afterInput?.();
     },

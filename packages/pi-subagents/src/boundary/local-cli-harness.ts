@@ -186,9 +186,9 @@ export const removeLocalCliHarness = (
   Effect.tryPromise({ try: () => removePrivateDirectory(directory), catch: harnessCleanupFailed });
 
 /**
- * Owns one unique private harness directory: root preparation keeps the caller's
- * interruptibility, the exclusive directory and its build stay masked, and a failed build is
- * cleaned up before it is reported.
+ * Pre-ownership root preparation is interruptible even inside acquireRelease's mask.
+ * Exclusive directory creation, build and partial cleanup stay masked; callers retain the
+ * acquisition-to-finalizer mask so successful credential-bearing state cannot be abandoned.
  */
 const prepareOwnedHarness = <Harness>(
   agentDirectory: string,
@@ -197,14 +197,16 @@ const prepareOwnedHarness = <Harness>(
   build: (directory: string) => Effect.Effect<Harness, LocalCliHarnessError>,
   cleanup: (directory: string) => Effect.Effect<void, LocalCliHarnessError> = removeLocalCliHarness,
 ): Effect.Effect<Harness, LocalCliHarnessError> =>
-  Effect.uninterruptibleMask((restore) =>
+  Effect.uninterruptible(
     Effect.gen(function* () {
-      const safeDirectory = yield* restore(prepareStep(() => safeAgentDirectory(agentDirectory)));
+      const safeDirectory = yield* Effect.interruptible(
+        prepareStep(() => safeAgentDirectory(agentDirectory)),
+      );
       const packageRoot = join(safeDirectory, "subagents");
       const root = join(packageRoot, rootName);
       const directory = join(root, `${namePrefix}-${synchronousRandomHex(12)}`);
-      yield* restore(prepareStep(() => ensurePrivateDirectory(packageRoot)));
-      yield* restore(prepareStep(() => ensurePrivateDirectory(root)));
+      yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(packageRoot)));
+      yield* Effect.interruptible(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
       return yield* build(directory).pipe(
         Effect.catchCause((cause) =>
@@ -373,8 +375,8 @@ export const runIsolatedCodexAuthProbe = (
 ): Effect.Effect<ProbeResult, LocalCliHarnessError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      // Keep preparation masked until this owner can guarantee release; only the bounded probe
-      // itself is restored to interruptibility.
+      // Keep the owned-harness handoff masked until release is guaranteed. Preparation explicitly
+      // permits interruption before ownership; the bounded probe restores caller interruptibility.
       const harness = yield* prepareCodexCatalogHarness({ agentDirectory, environment });
       const result = yield* Effect.exit(
         restore(runProbeEffect(executable, ["login", "status"], harness.env)),

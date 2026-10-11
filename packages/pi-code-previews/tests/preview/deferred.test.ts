@@ -8,7 +8,8 @@ import {
   installCodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { plainTheme } from "../support/render";
-import { cachedDeferredPreview } from "../../src/tools/renderers/shared/cache";
+import { cachedDeferredPreview, cachedPreview } from "../../src/tools/renderers/shared/cache";
+import { codePreviewPerformanceConfig } from "../../src/config/state";
 import { eventLoopTurn } from "../support/effect-test";
 
 afterEach(() => clearCodePreviewSessionCapability());
@@ -30,17 +31,15 @@ const component = (text: string) => new Text(plainTheme.fg("toolOutput", text), 
 type PreviewArgs = Parameters<typeof cachedDeferredPreview>;
 const preview = (
   state: PreviewArgs[0],
-  key: string,
   source: string,
-  ...rest: [PreviewArgs[7], PreviewArgs[8]]
-) => cachedDeferredPreview(state, "key", "component", key, source, "loading", plainTheme, ...rest);
+  ...rest: [PreviewArgs[6], PreviewArgs[7]]
+) => cachedDeferredPreview(state, "preview", [source], source, "loading", plainTheme, ...rest);
 
 test("large previews remain synchronous before session acquisition", () => {
   const state = {};
   let computes = 0;
   const rendered = preview(
     state,
-    "hash",
     "a".repeat(20_000),
     () => {
       computes++;
@@ -60,7 +59,6 @@ test("cache replacement cancels obsolete deferred publication and compares exact
   let invalidations = 0;
   preview(
     state,
-    "colliding-hash-key",
     "a".repeat(20_000),
     () => {
       firstComputes++;
@@ -70,7 +68,6 @@ test("cache replacement cancels obsolete deferred publication and compares exact
   );
   const current = preview(
     state,
-    "colliding-hash-key",
     "b".repeat(20_000),
     () => {
       secondComputes++;
@@ -86,12 +83,52 @@ test("cache replacement cancels obsolete deferred publication and compares exact
   });
 });
 
+test("a failing replacement cannot reuse a cancelled deferred preview", () => {
+  installTestCapability();
+  const state = {};
+  const source = "a".repeat(20_000);
+  const obsolete = preview(
+    state,
+    source,
+    () => assert.fail("cancelled work ran"),
+    () => {},
+  );
+  assert.throws(() =>
+    cachedPreview(state, "preview", [], () => {
+      throw new Error("failed");
+    }),
+  );
+  const current = preview(
+    state,
+    source,
+    () => component("ready"),
+    () => {},
+  );
+  assert.notEqual(current, obsolete);
+  return eventLoopTurn().then(() => {
+    assert.match(current.render(80).join("\n"), /ready/);
+  });
+});
+
+test.each([0, 1])("defers only above the character budget: budget + %i", (extra) => {
+  installTestCapability();
+  const current = preview(
+    {},
+    "a".repeat(codePreviewPerformanceConfig.asyncRenderChars + extra),
+    () => component("ready"),
+    () => {},
+  );
+  assert.equal(current.render(80).join("\n").includes("ready"), extra === 0);
+  return eventLoopTurn().then(() => {
+    assert.match(current.render(80).join("\n"), /ready/);
+  });
+});
+
 test("deferred publication isolates a throwing host invalidation callback", () => {
   installTestCapability();
   const state = {};
   const current = preview(
     state,
-    "deferred-key",
     "x".repeat(20_000),
     () => component("ready"),
     () => {

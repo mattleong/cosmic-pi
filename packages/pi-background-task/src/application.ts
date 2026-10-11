@@ -66,6 +66,8 @@ export function registerBackgroundTaskApplication(
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   /** The settings this session started with; `/tasks settings` changes apply after /reload. */
   let currentConfig: BackgroundTaskConfig | undefined;
+  /** Advances on every activation and deactivation, so revoked command authority stays revoked. */
+  let authorityEpoch = 0;
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTaskSessionActivation,
@@ -99,12 +101,13 @@ export function registerBackgroundTaskApplication(
         };
       }),
     onActivated: ({ ctx, publishesReplay }, token, prepared) => {
+      authorityEpoch++;
       // Only the current-generation activation reaches this hook, and settings are already
       // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
       registerBackgroundTaskTool(
         pi,
         {
-          run,
+          run: runWhen(() => slot.isCurrent(token)),
           scheduleAnimation: (interval, tick) =>
             slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
         },
@@ -142,6 +145,7 @@ export function registerBackgroundTaskApplication(
     // Every start and shutdown removes the active runtime synchronously, so revocation runs here
     // before any replacement or disposal work.
     onDeactivated: (input) => {
+      authorityEpoch++;
       MutableRef.set(input.publicationOwner, false);
       currentConfig = undefined;
       openActivity = undefined;
@@ -154,21 +158,19 @@ export function registerBackgroundTaskApplication(
     },
   });
 
-  // Synchronous activation gate: while a replacement start is still loading settings, the
-  // slot already holds the unactivated next runtime, so stale callers must fail typed here
-  // instead of reaching it through the bare slot runner.
-  const run = <A, E>(
-    effect: Effect.Effect<A, E, BackgroundTaskApplication>,
-    signal?: AbortSignal,
-  ) =>
-    slot.isActive()
-      ? slot.run(effect, signal)
-      : Promise.reject(
-          new PiSessionRuntimeError({
-            operation: "run",
-            message: "Background Tasks isn't running in this session",
-          }),
-        );
+  // Check authority beside synchronous slot admission, never after dispatching to a replacement.
+  const runWhen =
+    (isCurrent: () => boolean) =>
+    <A, E>(effect: Effect.Effect<A, E, BackgroundTaskApplication>, signal?: AbortSignal) =>
+      isCurrent()
+        ? slot.run(effect, signal)
+        : Promise.reject(
+            new PiSessionRuntimeError({
+              operation: "run",
+              message: "Background Tasks isn't running in this session",
+            }),
+          );
+  const run = runWhen(() => slot.isActive());
   const stopTask = (id: string, signal?: AbortSignal) =>
     run(
       BackgroundTaskService.use((service) => Effect.asVoid(service.stop(id))),
@@ -181,6 +183,11 @@ export function registerBackgroundTaskApplication(
     );
 
   registerTasksCommand(pi, bridge, {
+    captureAuthority: () => {
+      const epoch = authorityEpoch;
+      // Help remains available before startup; any later activation or deactivation revokes it.
+      return () => epoch === authorityEpoch;
+    },
     openActivity: (signal) =>
       openActivity ? openActivity(signal) : Promise.reject(new Error(UNAVAILABLE)),
     stop: (id) => stopTask(id),

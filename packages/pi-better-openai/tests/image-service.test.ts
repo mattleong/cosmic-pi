@@ -112,14 +112,15 @@ describe("OpenAIImageService", () => {
         outputFormat: "webp",
         mimeType: "image/webp",
       });
-      expect(requests[0]?.encodedJsonBody).toMatchObject({
-        model: "default-image-model",
-        tools: [{ output_format: "png" }],
-      });
-      expect(requests[1]?.encodedJsonBody).toMatchObject({
-        model: "override-model",
-        tools: [{ output_format: "webp", action: "edit" }],
-      });
+      // Each request carries its own model and format, not just the reported summary.
+      const [defaultBody, overrideBody] = requests.map(({ encodedJsonBody }) =>
+        JSON.stringify(encodedJsonBody),
+      );
+      expect(defaultBody).toContain("default-image-model");
+      expect(defaultBody).not.toContain("webp");
+      expect(overrideBody).toContain("override-model");
+      expect(overrideBody).not.toContain("default-image-model");
+      expect(overrideBody).toContain("webp");
       const nextDefault = yield* service.generate({ prompt: "default after override" });
       expect(nextDefault.imageModel).toBe(DEFAULT_IMAGE_MODEL);
     }).pipe(provideBuiltLayer(serviceLayer));

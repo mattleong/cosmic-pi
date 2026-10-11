@@ -14,7 +14,7 @@ import { getEditPreviewOperations, getPathArg, type EditPreviewOperation } from 
 import { getEditDiff, getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { cachedDeferredPreview } from "./shared/cache";
-import type { PreviewRenderers, RendererArguments, RendererState } from "./shared/types";
+import type { PreviewRenderers, RendererState } from "./shared/types";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import { pathPreviewLanguage } from "./shared/preview-text";
 import {
@@ -25,6 +25,7 @@ import {
 } from "./shared/diff-preview";
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { renderPreviewError } from "./shared/result-prelude";
+import { stateHeading } from "./shared/state-heading";
 import { countLabel } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
@@ -38,69 +39,66 @@ type ProposedDiff =
 export function editPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
+      // Closures keep only these, never the context: its lastComponent links every prior call.
+      const { state, expanded, invalidate } = renderContext;
       const path = getPathArg(args);
       const operations = getEditPreviewOperations(args);
       const operationsSource = editOperationsSource(operations);
       // New arguments drop the old summary; the proposal's cache key already covers them.
-      if (
-        renderContext.state.editArgsPath !== path ||
-        renderContext.state.editArgsExactSource !== operationsSource
-      ) {
-        renderContext.state.editArgsPath = path;
-        renderContext.state.editArgsExactSource = operationsSource;
-        renderContext.state.editSummaryText = undefined;
+      if (state.editArgsPath !== path || state.editArgsExactSource !== operationsSource) {
+        state.editArgsPath = path;
+        state.editArgsExactSource = operationsSource;
+        state.editSummaryText = undefined;
       }
 
-      const text = new Text(
-        formatEditHeader(path, cwd, theme, renderContext.state.editSummaryText),
-        0,
-        0,
-      );
-      renderContext.state.editHeaderText = text;
-
+      const title = `${renderCodePreviewToolTitle("edit", theme)} ${renderDisplayPath(path, cwd, theme)}`;
+      const separator = diffSummarySeparator(theme);
       const preview = new Container();
-      preview.addChild(text);
+      // The result sets the summary after the call is built, before the row is drawn.
+      preview.addChild(
+        stateHeading(() => {
+          const summary = state.editSummaryText;
+          return Predicate.isString(summary) && summary ? title + separator + summary : title;
+        }),
+      );
       preview.addChild(previewIssuesSlot(renderContext));
       if (!renderContext.argsComplete || operations.length === 0) return preview;
 
-      if (!renderContext.expanded && !codePreviewSettings.editDiffPreview) {
-        preview.addChild(
-          renderHiddenPreviewExpandHint(renderContext.state, theme, "proposed edit"),
-        );
+      if (!expanded && !codePreviewSettings.editDiffPreview) {
+        preview.addChild(renderHiddenPreviewExpandHint(state, theme, "proposed edit"));
         return preview;
       }
 
       const previewKey = previewCacheKey(
-        "edit-call",
-        operationsSource,
+        [operationsSource],
         path,
-        renderContext.expanded,
+        expanded,
         theme,
         codePreviewSettings.editCollapsedLines,
       );
       const render = () =>
         renderEditCallPreview(
           operations,
-          proposedDiffs(renderContext.state, operationsSource),
+          proposedDiffs(state, operationsSource),
           path,
-          renderContext.expanded,
+          expanded,
           theme,
-          renderContext.invalidate,
+          invalidate,
         );
       const proposal = () =>
         cachedDeferredPreview(
-          renderContext.state,
-          "editCallPreviewKey",
-          "editCallPreviewComponent",
+          state,
+          "editCallPreview",
           previewKey,
-          operationsSource,
+          // Only a size input, never identity: preserve the existing deferred threshold.
+          operations.map(({ oldText, newText }) => `${oldText}\0${newText}`).join("\0\0"),
           "Rendering proposed edit diff…",
           theme,
           render,
-          renderContext.invalidate,
+          invalidate,
         );
       // The proposal stays until the applied diff replaces it.
-      preview.addChild(unlessResultDiffShown(renderContext.state, proposal));
+      preview.addChild(unlessResultDiffShown(state, proposal));
       return preview;
     },
 
@@ -111,14 +109,12 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       const firstText = getTextContent(result.content);
       if (renderContext.isError) {
         renderContext.state.editSummaryText = undefined;
-        updateEditHeader(renderContext, cwd, theme);
         return renderPreviewError(theme, expanded, firstText);
       }
 
       const diff = getEditDiff(result.details);
       if (!diff) {
         renderContext.state.editSummaryText = theme.fg("muted", "no diff");
-        updateEditHeader(renderContext, cwd, theme);
         return new Container();
       }
 
@@ -133,7 +129,6 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
             codePreviewSettings.editCollapsedLines,
           );
       renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
-      updateEditHeader(renderContext, cwd, theme);
       if (hidePreview) {
         // A call with a hidden proposal already offers expansion.
         const callHint =
@@ -153,8 +148,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           theme,
         );
       const previewKey = previewCacheKey(
-        "edit-result",
-        diff,
+        [diff],
         filePath,
         expanded,
         theme,
@@ -162,8 +156,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       );
       return cachedDeferredPreview(
         renderContext.state,
-        "editResultPreviewKey",
-        "editResultPreviewComponent",
+        "editResultPreview",
         previewKey,
         diff,
         "Rendering edit diff…",
@@ -176,7 +169,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
 }
 
 function editOperationsSource(operations: EditPreviewOperation[]): string {
-  return operations.map((operation) => `${operation.oldText}\0${operation.newText}`).join("\0\0");
+  return JSON.stringify(operations.map(({ oldText, newText }) => [oldText, newText]));
 }
 
 /** Proposed diffs per operation, kept across expansion toggles for the same arguments. */
@@ -247,30 +240,6 @@ function renderEditCallPreview(
   if (shown < operations.length)
     text += showingFooter(theme, shown, operations.length, "edit blocks");
   return new FullWidthDiffText(text, theme);
-}
-
-function formatEditHeader<SummaryTextInput>(
-  path: string,
-  cwd: string,
-  theme: Theme,
-  summaryText: SummaryTextInput,
-): string {
-  const base = `${renderCodePreviewToolTitle("edit", theme)} ${renderDisplayPath(path, cwd, theme)}`;
-  return Predicate.isString(summaryText) && summaryText
-    ? `${base}${diffSummarySeparator(theme)}${summaryText}`
-    : base;
-}
-
-function updateEditHeader(
-  context: { args: RendererArguments; state: RendererState },
-  cwd: string,
-  theme: Theme,
-): void {
-  const text = context.state.editHeaderText;
-  if (text instanceof Text)
-    text.setText(
-      formatEditHeader(getPathArg(context.args), cwd, theme, context.state.editSummaryText),
-    );
 }
 
 function formatEditSummary(summary: DiffSummary, limit: number, theme: Theme): string {

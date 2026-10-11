@@ -169,8 +169,10 @@ export function renderWithPreviewIssues(
 ): Component {
   const state = frameState(context);
   state.codePreviewFrameContext = context;
+  // Drawing never needs the prior component; holding it would chain every earlier frame.
+  const detached: Context = { ...context, lastComponent: undefined };
   const lines = composeToolComponent((width) => {
-    const current = latestContext(context);
+    const current = latestContext(detached);
     const { issues, cancelled } = previewIssues(provider, current);
     const draw = (style: Pick<Theme, "fg">) => {
       const rows = renderCompactIssues(issues, style, width, current.expanded, "");

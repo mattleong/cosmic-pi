@@ -331,33 +331,41 @@ it.effect("scope shutdown cancels scheduled retries without losing or publishing
   }),
 );
 
-it.effect("retention rejects capacity rather than discarding undelivered answers", () =>
-  Effect.gen(function* () {
-    const attempts = yield* Ref.make(0);
-    yield* Effect.gen(function* () {
-      const service = yield* AskUserService;
-      let oldest = "";
-      for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
-        const receipt = yield* service.startAsync(request);
-        if (!oldest) oldest = receipt.requestId;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
-      expect(yield* control(service, "status", oldest)).toMatchObject({
-        delivery: "failed",
-        outcome,
-      });
-      yield* control(service, "await", oldest);
-      yield* service.startAsync(request);
-      const missing = yield* Effect.flip(control(service, "status", oldest));
-      expect(missing).toMatchObject({ reason: "not-found" });
-      // The transcript's issue line is the error's first sentence, in plain words.
-      expect(
-        issueMessageStyleProblems(failureMessage(missing.message, ""), { forbidden: [oldest] }),
-      ).toEqual([]);
-    }).pipe(Effect.provide(AskUserService.layer(immediateHost, failingDelivery(attempts))));
-  }),
-);
+for (const deliveryMode of ["absent", "failing"] as const) {
+  it.effect(
+    `retains undelivered answers until await acknowledges them (${deliveryMode} delivery)`,
+    () =>
+      Effect.gen(function* () {
+        const attempts = yield* Ref.make(0);
+        const service = yield* acquireService(
+          immediateHost,
+          deliveryMode === "failing" ? failingDelivery(attempts) : undefined,
+        );
+        let oldest = "";
+        for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
+          const receipt = yield* service.startAsync(request);
+          if (!oldest) oldest = receipt.requestId;
+          yield* Effect.yieldNow;
+        }
+        expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
+        expect(yield* control(service, "status", oldest)).toMatchObject({
+          delivery: deliveryMode === "failing" ? "failed" : "pending",
+          outcome,
+        });
+        expect(yield* control(service, "await", oldest)).toMatchObject({
+          delivery: "waiter",
+          outcome,
+        });
+        yield* service.startAsync(request);
+        const missing = yield* Effect.flip(control(service, "status", oldest));
+        expect(missing).toMatchObject({ reason: "not-found" });
+        // The transcript's issue line is the error's first sentence, in plain words.
+        expect(
+          issueMessageStyleProblems(failureMessage(missing.message, ""), { forbidden: [oldest] }),
+        ).toEqual([]);
+      }),
+  );
+}
 
 it.effect("propagates opening failure and releases admission", () =>
   Effect.gen(function* () {

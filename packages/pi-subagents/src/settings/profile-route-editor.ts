@@ -6,7 +6,6 @@ import {
   cloneProfileCandidates as cloneCandidates,
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
-  normalizeDeclaredProfileRoute,
   profileCandidateValidationIssues,
   supportsSubagentFastMode,
   type DeclaredProfileRoute,
@@ -91,29 +90,6 @@ const declaredAt = (
 export const resolvedSet = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) =>
   resolveNamedProfileSet({ ...set, global: inspection.global, project: inspection.project });
 
-const scopeRouteInvalid = (
-  inspection: ProfileSettingsInspection,
-  set: PersistentProfileSetRef,
-  profile: ProfileId,
-): boolean => resolvedSet(inspection, set).invalidProfiles.includes(profile);
-
-const globalReferenceDraft = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-): ProfileRouteDraft => {
-  const name = inspection.global.file.defaultProfileSet;
-  if (inspection.global.invalidDefaultProfileSet) return { kind: "invalid", candidates: [] };
-  if (name === undefined)
-    return {
-      kind: "inherit",
-      candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates),
-    };
-  const resolved = resolvedSet(inspection, { scope: "global", name });
-  return resolved.invalidProfiles.includes(profile)
-    ? { kind: "invalid", candidates: [] }
-    : { kind: "inherit", candidates: cloneCandidates(resolved.profiles[profile].candidates) };
-};
-
 /** Whether resetting this route can remove an actual declaration, including a malformed one. */
 export const hasOwnProfileRouteDeclaration = (
   inspection: ProfileSettingsInspection,
@@ -148,14 +124,20 @@ export function loadProfileRouteDraft(
     };
   }
   const set = target.set;
-  if (scopeRouteInvalid(inspection, set, profile)) return { kind: "invalid", candidates: [] };
+  const resolved = resolvedSet(inspection, set);
+  if (resolved.invalidProfiles.includes(profile)) return { kind: "invalid", candidates: [] };
   const declared = declaredAt(inspection, set, profile);
-  if (declared === undefined)
-    return set.scope === "global"
-      ? { kind: "reset", candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates) }
-      : globalReferenceDraft(inspection, profile);
-  if (declared === "disabled") return { kind: "disabled", candidates: [] };
-  return { kind: "explicit", candidates: normalizeDeclaredProfileRoute(declared).candidates };
+  return {
+    kind:
+      declared === undefined
+        ? set.scope === "global"
+          ? "reset"
+          : "inherit"
+        : declared === "disabled"
+          ? "disabled"
+          : "explicit",
+    candidates: cloneCandidates(resolved.profiles[profile].candidates),
+  };
 }
 
 export const disableRouteDraft = (): ProfileRouteDraft => ({ kind: "disabled", candidates: [] });

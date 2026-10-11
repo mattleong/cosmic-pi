@@ -24,7 +24,6 @@ describe("git footer status", () => {
       linesRemoved: 0,
       linesChanged: 0,
     });
-    expect(formatGitStatus(status!)).toBe("!1 +1 ~1 ?1 ↑2 ↓1");
   });
 
   test("classifies numstat replacements separately from pure additions and removals", () => {

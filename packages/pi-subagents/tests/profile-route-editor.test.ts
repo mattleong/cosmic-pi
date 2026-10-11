@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentConfigScope } from "../src/config/store.ts";
+import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
@@ -74,6 +75,8 @@ describe("ordered profile-route editor state", () => {
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
     expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
+    Object.assign(draft.candidates[0]!, { model: "openai/edited" });
+    expect(load(value, "worker").candidates).toEqual(threeRoute);
   });
 
   it("normalizes omitted retention defaults without mutating the declaration", () => {
@@ -149,8 +152,12 @@ describe("ordered profile-route editor state", () => {
       { version: 4 },
     );
     expect(load(value, "scout")).toEqual({ kind: "disabled", candidates: [] });
+    expect(load(value, "scout", "project")).toEqual({ kind: "inherit", candidates: [] });
     expect(load(value, "reviewer", "project")).toEqual({ kind: "inherit", candidates: threeRoute });
-    expect(load(value, "planner").kind).toBe("reset");
+    expect(load(value, "planner")).toEqual({
+      kind: "reset",
+      candidates: BUILTIN_PROFILE_ROUTES.planner.candidates,
+    });
     expect(load(value, "worker")).toEqual({ kind: "invalid", candidates: [] });
     expect(declaredRouteForDraft(load(value, "worker"))).toMatchObject({ valid: false });
     expect(declaredRouteForDraft(disableRouteDraft())).toEqual({

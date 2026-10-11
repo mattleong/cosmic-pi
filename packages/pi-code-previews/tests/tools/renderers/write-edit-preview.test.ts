@@ -1,19 +1,26 @@
 // Preview-style write and edit rows rendered through Pi's own component, which renders the call
 // before the result on every update.
 import assert from "node:assert/strict";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import {
   generateDiffString,
   initTheme,
   type AgentToolResult,
   type ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
+import { it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { afterEach, beforeAll, test } from "vitest";
-import { hostToolRow } from "../../../testing";
+import { failingTheme, macrotask } from "pi-cosmic-core/testing";
+import { hostToolRow, renderContextFixture } from "../../../testing";
 import { defaultCodePreviewSettings } from "../../../src/config/defaults";
 import type { CodePreviewSettings } from "../../../src/config/schema";
 import { setCodePreviewSettings } from "../../../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../../src/tools/names";
-import { builtinRenderers, stripAnsi } from "../../support/render";
+import { builtinRenderers, renderComponent, stripAnsi } from "../../support/render";
+import { editPreviewRenderers } from "../../../src/tools/renderers/edit";
+import { writePreviewRenderers } from "../../../src/tools/renderers/write";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -99,8 +106,12 @@ test("a successful write without a diff adds no outcome rows", () => {
     assert.equal(rows(row), running);
   }
   const fresh = liveRow("write", { path: "/project/a.txt", content });
+  assert.doesNotMatch(text(fresh), /new file/iu);
+  // Pi draws a settled result without invalidating the call it already rendered.
   fresh.updateResult(result("Successfully wrote to a.txt", { codePreviewBeforeWrite: undefined }));
   assert.equal(count(text(fresh), /new file/giu), 1);
+  fresh.updateResult(result("Permission denied", undefined, true));
+  assert.doesNotMatch(text(fresh), /new file/iu);
 });
 
 test("the write heading counts lines the same way with the preview on or off", () => {
@@ -153,6 +164,97 @@ test("an edit keeps its proposal until the applied diff replaces it", () => {
   failed.updateResult(result("Could not find the exact text in /project/a.ts.", undefined, true));
   assert.match(text(failed), /BETA/u);
 });
+
+test("NUL-containing edits cannot reuse a different proposal", () => {
+  const first = { path: "/project/a.ts", edits: [{ oldText: "a\0b", newText: "c" }] };
+  const next = { ...first, edits: [{ oldText: "a", newText: "b\0c" }] };
+  const row = liveRow("edit", first);
+  const obsolete = text(row);
+  row.updateArgs(next);
+  row.setArgsComplete();
+  const updated = text(row);
+  assert.notEqual(updated, obsolete);
+  assert.equal(updated, text(liveRow("edit", next)));
+  row.setExpanded(true);
+  const fresh = liveRow("edit", next);
+  fresh.setExpanded(true);
+  assert.equal(text(row), text(fresh));
+});
+
+test.each([
+  ["edit", editPreviewRenderers, edit, /no diff/u],
+  ["write", writePreviewRenderers, { path: "/project/a.ts", content }, /new file/u],
+] as const)(
+  "%s retained headings read results while keeping their captured arguments",
+  (_, factory, args, marker) => {
+    setCodePreviewSettings({
+      ...defaultCodePreviewSettings,
+      writeContentPreview: false,
+      editDiffPreview: false,
+    });
+    let drawing = false;
+    const theme = failingTheme({ when: () => drawing });
+    const renderer = factory("/project");
+    const context = renderContextFixture({ args, isPartial: false });
+    const retained = renderer.renderCall(args, theme, context);
+    assert.doesNotMatch(renderComponent(retained), marker);
+    context.args = { ...args, path: "/project/b.ts" };
+    const latest = renderer.renderCall(context.args, theme, context);
+    const options = { expanded: false, isPartial: false };
+    renderer.renderResult(
+      result("done", { codePreviewBeforeWrite: undefined }),
+      options,
+      theme,
+      context,
+    );
+    drawing = true;
+    retained.invalidate();
+    assert.match(renderComponent(retained), /a\.ts/u);
+    assert.doesNotMatch(renderComponent(retained), /b\.ts/u);
+    for (const heading of [retained, latest]) assert.match(renderComponent(heading), marker);
+    drawing = false;
+    renderer.renderResult(result("failed", undefined), options, theme, {
+      ...context,
+      isError: true,
+    });
+    drawing = true;
+    for (const heading of [retained, latest]) assert.doesNotMatch(renderComponent(heading), marker);
+  },
+);
+
+it.effect.each([
+  {
+    name: "edit",
+    argsAt: (size: number): RowArguments => ({
+      path: "/project/a.ts",
+      edits: [{ oldText: "a", newText: "b".repeat(size) }],
+    }),
+  },
+  {
+    name: "write",
+    argsAt: (size: number): RowArguments => ({ path: "/project/a.ts", content: "c".repeat(size) }),
+  },
+] as const)("a $name row releases the render contexts of replaced arguments", ({ name, argsAt }) =>
+  Effect.gen(function* () {
+    setFlagsFromString("--expose_gc");
+    // SAFETY: --expose_gc makes every new context define `gc` as a function that collects.
+    const collectGarbage = runInNewContext("gc") as () => void;
+    let first: RowArguments | undefined = argsAt(1);
+    const released = new WeakRef(first);
+    const row = liveRow(name, first);
+    first = undefined;
+    // Pi passes the previous call component back as lastComponent on every update.
+    for (let size = 2; size <= 20; size++) {
+      row.updateArgs(argsAt(size));
+      row.render(120);
+    }
+    // A WeakRef target survives until the current job ends, so collect after a macrotask.
+    yield* macrotask;
+    collectGarbage();
+    assert.equal(released.deref(), undefined);
+    assert.match(text(row), /a\.ts/u);
+  }),
+);
 
 test("a proposed edit does not number its rows as file lines", () => {
   // The snippet's own line 2 is not line 2 of the file.

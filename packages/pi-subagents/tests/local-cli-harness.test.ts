@@ -1,16 +1,19 @@
 // Private harness lifecycle tests intentionally exercise real filesystem and process ownership.
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
-import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
+import { deferredPromise, temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import {
   prepareLocalCliHarness,
   sanitizeLocalCliEnvironment,
 } from "../src/boundary/local-cli-harness.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
+import * as localCliTransport from "../src/boundary/local-cli-transport.ts";
 import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
@@ -84,6 +87,48 @@ describe("local CLI harness ownership", () => {
       expect(error.reason).toBe(reason);
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toHaveLength(
         remaining,
+      );
+    }),
+  );
+
+  it.effect("interrupts spawn during agent-directory lookup before private ownership", () =>
+    Effect.gen(function* () {
+      const test = yield* setup;
+      const stat = yield* Effect.promise(() => fs.lstat(test.agentDirectory));
+      const entered = Deferred.makeUnsafe<void>();
+      const gate = deferredPromise();
+      const lookup = vi.spyOn(fs, "lstat").mockImplementationOnce(() => {
+        Deferred.doneUnsafe(entered, Effect.void);
+        return gate.promise.then(() => stat);
+      });
+      const spawn = vi.spyOn(localCliTransport, "acquireLocalCliTransport");
+      yield* Effect.gen(function* () {
+        const target = yield* makeLocalCliProcess({
+          agentDirectory: test.agentDirectory,
+          environment: test.environment,
+          executables: { claude: executable, codex: executable },
+        })
+          .spawn({
+            runtime: "claude",
+            launch: backendLaunch(),
+            supervisor: supervisor(test.directory),
+          })
+          .pipe(Effect.scoped, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        const interrupted = yield* Fiber.interrupt(target).pipe(Effect.forkScoped);
+        yield* yieldUntil(() => interrupted.pollUnsafe() !== undefined);
+        yield* Fiber.join(interrupted);
+        expect(Exit.hasInterrupts(yield* Fiber.await(target))).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+        expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            gate.resolve();
+            lookup.mockRestore();
+            spawn.mockRestore();
+          }),
+        ),
       );
     }),
   );

@@ -8,7 +8,8 @@ import {
 } from "pi-cosmic-core/testing";
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
-import { orderedContributions } from "../src/footer/builtin-contributions.ts";
+import { applyTextDecorations, orderedContributions } from "../src/footer/builtin-contributions.ts";
+import { contributionText } from "../src/footer/contributions.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 
 const footer = (options: {
@@ -123,6 +124,38 @@ it("copies configured orders using the last index and preserves unconfigured met
   expect(ordered.slice(1)).toEqual([values[0], values[2]]);
   expect(values).toEqual(originals);
 });
+
+it.each([undefined, "", "short"])(
+  "preserves consumed decorations with compact text %j without mutating inputs",
+  (compactText) => {
+    const target = Object.freeze({
+      kind: "text",
+      id: "target",
+      region: "identity",
+      text: "full",
+      compactText,
+    } satisfies CosmicFooterTextContribution);
+    const decorator = Object.freeze({
+      ...target,
+      id: "prefix",
+      text: "prefix:",
+      decorates: target.id,
+    });
+    const entries = Object.freeze([decorator, target]);
+    const decorated = applyTextDecorations(entries);
+    expect(decorated).toEqual([
+      {
+        ...target,
+        text: decorator.text + target.text,
+        compactText: compactText === undefined ? undefined : decorator.text + compactText,
+      },
+    ]);
+    expect(contributionText(decorated[0]!, true)).toBe(
+      decorator.text + (compactText ?? target.text),
+    );
+    expect(applyTextDecorations([decorator])).toEqual([decorator]);
+  },
+);
 
 it("uses compact text for labeled contributions in compact mode", () => {
   const defaults = makeDefaultResolvedCosmicUiConfig();

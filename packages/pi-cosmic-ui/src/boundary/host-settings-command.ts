@@ -136,14 +136,20 @@ interface SettingsListContent {
   readonly onList?: ((list: SettingsList) => void) | undefined;
 }
 
-/** Opens a settings list inline, containing every host callback it threads through. */
+/**
+ * Opens a settings list inline, containing every host callback it threads through. Once
+ * `isCurrent` reports the invocation revoked, the next input closes the list instead of
+ * changing a row nothing would save.
+ */
 export const openSettingsList = (
   ctx: ExtensionContext,
   content: (host: OwnedSurfaceHost<undefined>) => SettingsListContent,
+  isCurrent?: () => boolean,
 ): Promise<OwnedSurfaceOutcome<undefined>> =>
   openOwnedSurfacePromise<undefined>(ctx, {
     placement: "inline",
     closedValue: undefined,
+    ...(isCurrent && { isCurrent }),
     create: (host) => {
       const { tui, theme, keybindings, finish } = host;
       const { header, onCancel, afterInput, onList, ...list } = content(host);
@@ -162,7 +168,17 @@ export const openSettingsList = (
           : undefined,
         requestRender: () => invokeHostCallback(() => tui.requestRender(), undefined),
         dim: (text) => invokeHostCallback(() => theme.fg("dim", text), text),
-        bridge: { invoke: invokeHostCallback, afterInput },
+        bridge: {
+          invoke: invokeHostCallback,
+          ...(isCurrent && {
+            admitInput: () => {
+              if (isCurrent()) return true;
+              finish(undefined);
+              return false;
+            },
+          }),
+          afterInput,
+        },
       });
       onList?.(created.list);
       return created.surface;
@@ -288,29 +304,33 @@ export function settingsSubcommand<Config>(
     const picker: SettingsSession<Config>["picker"] = (items, maxHeight = 12) => {
       // Each row's newest change; an older apply settling later never overwrites it.
       const latest = new Map<string, object>();
-      return openSettingsList(ctx, ({ tui }) => ({
-        header: `${title} settings`,
-        items,
-        height: Math.min(maxHeight, items.length + 2),
-        onChange: (row, value, list) => {
-          const [scope, id] = rowSetting(row);
-          const change = {};
-          latest.set(row, change);
-          void apply(
-            id,
-            value,
-            (shown) => {
-              if (latest.get(row) !== change) return false;
-              invokeHostCallback(() => {
-                list.updateValue(row, shown);
-                tui.requestRender();
-              }, undefined);
-              return true;
-            },
-            scope,
-          );
-        },
-      }));
+      return openSettingsList(
+        ctx,
+        ({ tui }) => ({
+          header: `${title} settings`,
+          items,
+          height: Math.min(maxHeight, items.length + 2),
+          onChange: (row, value, list) => {
+            const [scope, id] = rowSetting(row);
+            const change = {};
+            latest.set(row, change);
+            void apply(
+              id,
+              value,
+              (shown) => {
+                if (latest.get(row) !== change) return false;
+                invokeHostCallback(() => {
+                  list.updateValue(row, shown);
+                  tui.requestRender();
+                }, undefined);
+                return true;
+              },
+              scope,
+            );
+          },
+        }),
+        isCurrent,
+      );
     };
     return options.open(ctx, { config: () => readConfig(ctx), apply, picker }).then((outcome) => {
       if (outcome._tag === "Blocked") notify(ctx, unavailable, "warning");

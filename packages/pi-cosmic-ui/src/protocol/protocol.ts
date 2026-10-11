@@ -1,6 +1,7 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import type * as Types from "effect/Types";
 import { decodeUnknownOrUndefined, sanitizeTerminalLine } from "pi-cosmic-core";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 2 as const;
@@ -11,8 +12,6 @@ export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v2:footer:remove";
 
 const Tone = Schema.Literals(["normal", "accent", "dim", "success", "warning", "error"]);
 const Region = Schema.Literals(["identity", "metrics", "details"]);
-type CosmicFooterTone = typeof Tone.Type;
-type CosmicFooterRegion = typeof Region.Type;
 const COSMIC_FOOTER_COLOR_TOKENS = [
   "accent",
   "border",
@@ -67,82 +66,9 @@ export type CosmicFooterColor = (typeof COSMIC_FOOTER_COLOR_TOKENS)[number];
 export interface CosmicFooterTheme {
   fg(color: CosmicFooterColor, value: string): string;
 }
-export interface CosmicFooterTextContribution {
-  kind: "text";
-  id: string;
-  region: CosmicFooterRegion;
-  text: string;
-  compactText?: string;
-  align?: "left" | "right";
-  tone?: CosmicFooterTone;
-  priority?: number;
-  order?: number;
-  /** Line label; details entries with a label render as their own labeled line. */
-  label?: string;
-  /** Valid Pi theme color token; tones warning/error still take precedence. */
-  color?: CosmicFooterColor;
-  /**
-   * Id of another text entry this one decorates: this entry's text is prefixed
-   * onto the target instead of rendering separately. Renders standalone when
-   * the target entry is absent.
-   */
-  decorates?: string;
-}
-/**
- * Declares footer placement for a host status entry published through
- * `ctx.ui.setStatus`. `id` is the host status key; the status text keeps
- * flowing through the host, so the status still renders without a Cosmic host.
- * Undeclared status entries fall back to generic defaults.
- */
-export interface CosmicFooterStatusContribution {
-  kind: "status";
-  id: string;
-  region: CosmicFooterRegion;
-  align?: "left" | "right";
-  priority?: number;
-  order?: number;
-}
-export type CosmicFooterContribution =
-  | CosmicFooterTextContribution
-  | CosmicFooterStatusContribution;
-
-const canonicalContributions = new WeakSet<CosmicFooterContribution>();
-
-/** Returns one detached, frozen contribution. Already-normalized values retain their identity. */
-export const detachCosmicFooterContribution = (
-  contribution: CosmicFooterContribution,
-): CosmicFooterContribution => {
-  if (canonicalContributions.has(contribution)) return contribution;
-  const detached = Object.freeze({ ...contribution });
-  canonicalContributions.add(detached);
-  return detached;
-};
-
-export interface CosmicUiHostState {
-  /** True only while Cosmic UI owns the live custom-footer slot. */
-  active: boolean;
-  /** Visibility preferences have loaded for the current session. */
-  ready: boolean;
-  /** Hidden contribution IDs, also respected by provider status fallback and polling. */
-  hidden: readonly string[];
-}
-
 export interface CosmicUiHostQuery {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
   respond(state: CosmicUiHostState): void;
-}
-export interface CosmicUiHostStateEvent extends CosmicUiHostState {
-  version: typeof COSMIC_UI_PROTOCOL_VERSION;
-}
-export interface CosmicFooterUpsertEvent {
-  version: typeof COSMIC_UI_PROTOCOL_VERSION;
-  owner: string;
-  contribution: CosmicFooterContribution;
-}
-export interface CosmicFooterRemoveEvent {
-  version: typeof COSMIC_UI_PROTOCOL_VERSION;
-  owner: string;
-  id?: string;
 }
 
 const Version = Schema.Literal(COSMIC_UI_PROTOCOL_VERSION);
@@ -150,8 +76,11 @@ const NonEmpty = Schema.String.check(Schema.isNonEmpty());
 const HostQueryData = Schema.Struct({ version: Version, respond: Schema.Unknown });
 const HostStateData = Schema.Struct({
   version: Version,
+  /** True only while Cosmic UI owns the live custom-footer slot. */
   active: Schema.Boolean,
+  /** Visibility preferences have loaded for the current session. */
   ready: Schema.Boolean,
+  /** Hidden contribution IDs, also respected by provider status fallback and polling. */
   hidden: Schema.Array(Schema.String),
 });
 /** Placement shared by text and status contributions. */
@@ -168,10 +97,23 @@ const TextContributionData = Schema.Struct({
   text: Schema.String,
   compactText: Schema.optional(Schema.String),
   tone: Schema.optional(Tone),
+  /** Line label; details entries with a label render as their own labeled line. */
   label: Schema.optional(NonEmpty),
+  /** Valid Pi theme color token; tones warning/error still take precedence. */
   color: Schema.optional(Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS)),
+  /**
+   * Id of another text entry this one decorates: this entry's text is prefixed
+   * onto the target instead of rendering separately. Renders standalone when
+   * the target entry is absent.
+   */
   decorates: Schema.optional(NonEmpty),
 });
+/**
+ * Declares footer placement for a host status entry published through
+ * `ctx.ui.setStatus`. `id` is the host status key; the status text keeps
+ * flowing through the host, so the status still renders without a Cosmic host.
+ * Undeclared status entries fall back to generic defaults.
+ */
 const StatusContributionData = Schema.Struct({
   kind: Schema.Literal("status"),
   ...placementFields,
@@ -186,6 +128,27 @@ const RemoveData = Schema.Struct({
   owner: NonEmpty,
   id: Schema.optional(NonEmpty),
 });
+
+// Producers may update their own values; normalization still detaches and freezes them.
+export type CosmicFooterTextContribution = Types.Mutable<typeof TextContributionData.Type>;
+export type CosmicFooterStatusContribution = Types.Mutable<typeof StatusContributionData.Type>;
+export type CosmicFooterUpsertEvent = Types.DeepMutable<typeof UpsertData.Type>;
+export type CosmicFooterContribution = CosmicFooterUpsertEvent["contribution"];
+export type CosmicFooterRemoveEvent = Types.Mutable<typeof RemoveData.Type>;
+export type CosmicUiHostStateEvent = Types.Mutable<typeof HostStateData.Type>;
+export type CosmicUiHostState = Omit<CosmicUiHostStateEvent, "version">;
+
+const canonicalContributions = new WeakSet<CosmicFooterContribution>();
+
+/** Returns one detached, frozen contribution. Already-normalized values retain their identity. */
+export const detachCosmicFooterContribution = (
+  contribution: CosmicFooterContribution,
+): CosmicFooterContribution => {
+  if (canonicalContributions.has(contribution)) return contribution;
+  const detached = Object.freeze({ ...contribution });
+  canonicalContributions.add(detached);
+  return detached;
+};
 
 const detachHostState = ({ active, ready, hidden }: CosmicUiHostState) => ({
   active,
@@ -239,8 +202,7 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
   return Object.freeze({
     version: event.version,
     owner: event.owner,
-    // SAFETY: Boundary decoding validates the value; optional fields decode as possibly undefined.
-    contribution: detachCosmicFooterContribution(contribution as CosmicFooterContribution),
+    contribution: detachCosmicFooterContribution(contribution),
   });
 }
 

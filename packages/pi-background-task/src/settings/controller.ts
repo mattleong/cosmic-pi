@@ -11,7 +11,10 @@ import {
   synchronousNow,
   type ExtensionSubcommand,
 } from "pi-cosmic-core";
-import { settingsSubcommand } from "pi-cosmic-ui/boundary/host-settings-command";
+import {
+  settingsSubcommand,
+  withInvocationAuthority,
+} from "pi-cosmic-ui/boundary/host-settings-command";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
@@ -31,6 +34,8 @@ export interface TaskManagerActions {
 }
 
 export interface TaskSettingsActions {
+  /** Capture the originating activation when a command is invoked, not when registered. */
+  readonly captureAuthority?: () => () => boolean;
   /** The settings this session started with, once it has started. */
   readonly config: () => BackgroundTaskConfig | undefined;
   /** The values one scope's file sets itself. */
@@ -65,7 +70,9 @@ function openTaskManager(
   ctx: ExtensionCommandContext,
   bridge: BackgroundTaskProjectionBridge,
   actions: TaskManagerActions,
+  isCurrent: () => boolean,
 ): Promise<void> {
+  if (!isCurrent()) return Promise.resolve();
   if (ctx.mode !== "tui") {
     if (ctx.hasUI)
       notifyAtHostBoundary(
@@ -77,7 +84,15 @@ function openTaskManager(
   }
   return openCommandSurface(ctx, {
     placement: "screen",
+    isCurrent,
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
+      // The bridge outlives a replaced session, so its manager closes rather than showing the
+      // replacement's tasks or accepting actions it can no longer perform.
+      const revoked = () => {
+        if (isCurrent()) return false;
+        finish(undefined);
+        return true;
+      };
       const manager = new TaskManagerComponent({
         theme,
         getProjection: bridge.get,
@@ -86,16 +101,22 @@ function openTaskManager(
         ...fullScreenKeybindingOptions(keybindings),
         requestRender: () => tui.requestRender(),
         close: () => finish(undefined),
-        stop: (id) =>
-          void actions
-            .stop(id)
-            .catch((failure) => notifyActionFailure(ctx, "stop the task", failure)),
-        clear: () =>
-          void actions
-            .clear()
-            .catch((failure) => notifyActionFailure(ctx, "clear finished tasks", failure)),
+        stop: (id) => {
+          if (!revoked())
+            void actions.stop(id).catch((failure) => {
+              if (isCurrent()) notifyActionFailure(ctx, "stop the task", failure);
+            });
+        },
+        clear: () => {
+          if (!revoked())
+            void actions.clear().catch((failure) => {
+              if (isCurrent()) notifyActionFailure(ctx, "clear finished tasks", failure);
+            });
+        },
       });
+      // Deactivation clears the bridge, which closes a revoked manager right away.
       const unsubscribe = bridge.subscribe(() => {
+        if (revoked()) return;
         manager.invalidate();
         tui.requestRender();
       });
@@ -128,12 +149,16 @@ export function registerTasksCommand(
     name: "tasks",
     description: "Open the background task manager, or change its settings",
     bare: {
-      handler: (_args, ctx) =>
-        ctx.mode === "tui" && actions.openActivity
+      handler: (_args, ctx) => {
+        const isCurrent = actions.captureAuthority?.() ?? (() => true);
+        return ctx.mode === "tui" && actions.openActivity
           ? actions
               .openActivity(ctx.signal)
-              .then((opened) => (opened ? undefined : openTaskManager(ctx, bridge, actions)))
-          : openTaskManager(ctx, bridge, actions),
+              .then((opened) =>
+                opened ? undefined : openTaskManager(ctx, bridge, actions, isCurrent),
+              )
+          : openTaskManager(ctx, bridge, actions, isCurrent);
+      },
     },
     subcommands: [taskSettingsSubcommand(actions)],
   });
@@ -172,6 +197,15 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
 
 /** `/tasks settings` through the shared settings shell; changes apply after /reload. */
 export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionSubcommand {
+  return withInvocationAuthority(actions.captureAuthority, (isCurrent) =>
+    createTaskSettingsSubcommand(actions, isCurrent),
+  );
+}
+
+function createTaskSettingsSubcommand(
+  actions: TaskSettingsActions,
+  isCurrent: () => boolean,
+): ExtensionSubcommand {
   const descriptor = (id: string) => BACKGROUND_TASK_SETTINGS.find((entry) => entry.id === id);
   // Each scope's own value as last read or written, so an edited row shows what its file holds.
   const known = new Map<string, string>();
@@ -203,6 +237,7 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
     root: "tasks",
     description: "Configure background tasks",
     title: "Background Tasks",
+    isCurrent,
     descriptors: BACKGROUND_TASK_SETTINGS.map((setting) => ({
       id: setting.id,
       description: setting.description,
@@ -274,7 +309,8 @@ export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionS
           },
         );
       return Promise.all(scopes.map(readScope)).then(
-        (files) => session.picker(pickerItems(config, files)),
+        (files) =>
+          isCurrent() ? session.picker(pickerItems(config, files)) : { _tag: "Blocked" as const },
         () => ({ _tag: "Blocked" as const }),
       );
     },

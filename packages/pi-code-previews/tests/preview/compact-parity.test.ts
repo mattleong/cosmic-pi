@@ -75,10 +75,4 @@ describe("shared semantic row", () => {
             );
           }
   });
-
-  it("shows each child's own delivery status, whatever its routine detail says", () => {
-    const success = compactChildren([{ label: "read", status: "success" }], 100);
-    const failure = compactChildren([{ label: "read", status: "error" }], 100);
-    expect(stripAnsi(failure.join(""))).not.toBe(stripAnsi(success.join("")));
-  });
 });

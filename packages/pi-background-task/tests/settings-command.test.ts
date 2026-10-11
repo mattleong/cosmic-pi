@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
+import { deferredPromise, extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { vi } from "vitest";
@@ -42,6 +42,7 @@ const harness = (options: { readonly trusted?: boolean; readonly started?: boole
 const pickerHarness = (
   trusted: boolean,
   read: TaskSettingsActions["read"] = () => Promise.resolve({}),
+  captureAuthority?: TaskSettingsActions["captureAuthority"],
 ) => {
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
@@ -49,6 +50,7 @@ const pickerHarness = (
   const notify = vi.fn();
   const command = taskSettingsSubcommand({
     config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
+    ...(captureAuthority && { captureAuthority }),
     read,
     write,
   });
@@ -61,7 +63,8 @@ const pickerHarness = (
     isProjectTrusted: () => trusted,
     ui: { custom: host.ctx.ui.custom, notify },
   });
-  const opened = Promise.resolve(command.handler("", ctx));
+  const open = () => Promise.resolve(command.handler("", ctx));
+  const opened = open();
   const input = (data: string) => host.editor?.handleInput?.(data);
   const screen = () => host.editor?.render(300).join("\n") ?? "";
   return {
@@ -70,6 +73,7 @@ const pickerHarness = (
     input,
     screen,
     opened,
+    open,
     // Esc reaches the list as its cancel, which closes the picker.
     close: () => input("\u001b"),
     /** Mounts a pending opening, as Pi does after its factory, and reports whether one opened. */
@@ -188,6 +192,59 @@ describe("/tasks settings", () => {
       expect(h.write.mock.calls.map(([location]) => location.scope)).toEqual(["global"]);
       h.close();
       yield* Effect.promise(() => h.opened);
+    }),
+  );
+
+  it.effect("revokes retained picker writes and late notifications, but not new invocations", () =>
+    Effect.gen(function* () {
+      let generation = 1;
+      const pending = deferredPromise();
+      const h = pickerHarness(true, undefined, () => {
+        const token = generation;
+        return () => token === generation;
+      });
+      yield* macrotask;
+      expect(h.isOpen()).toBe(true);
+      h.write.mockImplementationOnce(() => pending.promise);
+      h.input("\r");
+      expect(h.write).toHaveBeenCalledTimes(1);
+      generation++;
+      pending.resolve();
+      yield* macrotask;
+      expect(h.notify).not.toHaveBeenCalled();
+      // A revoked picker closes on its next key rather than showing a change it never saves.
+      h.input("\r");
+      expect(h.write).toHaveBeenCalledTimes(1);
+      expect(h.isOpen()).toBe(false);
+      yield* Effect.promise(() => h.opened);
+      expect(h.notify).not.toHaveBeenCalled();
+
+      const reopened = h.open();
+      yield* macrotask;
+      expect(h.isOpen()).toBe(true);
+      h.input("\r");
+      yield* macrotask;
+      expect(h.write).toHaveBeenCalledTimes(2);
+      expect(h.notify).toHaveBeenCalled();
+      h.close();
+      yield* Effect.promise(() => reopened);
+    }),
+  );
+
+  it.effect("does not open a picker after its originating read is retired", () =>
+    Effect.gen(function* () {
+      let current = true;
+      const pending = deferredPromise<{}>();
+      const h = pickerHarness(
+        true,
+        () => pending.promise,
+        () => () => current,
+      );
+      current = false;
+      pending.resolve({});
+      yield* Effect.promise(() => h.opened);
+      expect(h.isOpen()).toBe(false);
+      expect(h.notify).not.toHaveBeenCalled();
     }),
   );
 

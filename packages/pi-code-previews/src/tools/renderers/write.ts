@@ -29,7 +29,8 @@ import {
 } from "./shared/diff-preview";
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { renderPreviewError } from "./shared/result-prelude";
-import type { PreviewRenderers, RendererState } from "./shared/types";
+import { stateHeading } from "./shared/state-heading";
+import type { PreviewRenderers } from "./shared/types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./shared/write-result";
 import { countLabel, formatBytes } from "pi-cosmic-core";
 import { previewIssuesSlot } from "../../preview/preview-issues";
@@ -57,50 +58,47 @@ export function createWritePreviewTool(cwd: string) {
 export function writePreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
+      // Closures keep only these, never the context: its lastComponent links every prior call.
+      const { state, expanded, invalidate } = renderContext;
       const path = getPathArg(args);
       const content = Predicate.isString(args.content) ? args.content : "";
       const lang = pathPreviewLanguage(path, content);
-      const heading = new Text("", 0, 0);
-      renderContext.state.writeHeaderText = heading;
-      renderContext.state.writeHeader = { content, path, lang };
-      updateWriteHeader(renderContext.state, cwd, theme);
-      // Issues sit directly under the heading, above the content they may describe.
+      const title = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
+      const details = [
+        formatBytes(Buffer.byteLength(content, "utf8")),
+        countLabel(countContentLines(content), "line"),
+        lang ? normalizePreviewLanguageAlias(lang) : undefined,
+      ];
+      const existingHeader = title + metadata(theme, details);
+      const newHeader = title + metadata(theme, ["new file", ...details]);
       const container = new Container();
-      container.addChild(heading);
+      // The result settles whether the file is new after the call is built, before it is drawn.
+      container.addChild(
+        stateHeading(() => (state.writeNewFile === true ? newHeader : existingHeader)),
+      );
+      // Issues sit directly under the heading, above the content they may describe.
       container.addChild(previewIssuesSlot(renderContext));
-      if (!renderContext.expanded && !codePreviewSettings.writeContentPreview) {
-        const hint = hiddenPreviewExpandHintForShell(renderContext.state, theme, "content");
+      if (!expanded && !codePreviewSettings.writeContentPreview) {
+        const hint = hiddenPreviewExpandHintForShell(state, theme, "content");
         if (hint) container.addChild(new Text(hint, 0, 0));
         return container;
       }
       const collapsedLines = codePreviewSettings.writeCollapsedLines;
-      const previewKey = previewCacheKey(
-        "write-call",
-        content,
-        path,
-        renderContext.expanded,
-        theme,
-        collapsedLines,
-      );
+      const previewKey = previewCacheKey([content], path, expanded, theme, collapsedLines);
       const preview = () =>
-        cachedPreview(
-          renderContext.state,
-          "writeCallPreviewKey",
-          "writeCallPreviewComponent",
-          previewKey,
-          () =>
-            renderContentPreview({
-              content,
-              limit: renderContext.expanded ? 0 : collapsedLines,
-              lang,
-              theme,
-              invalidate: renderContext.invalidate,
-              emptyLabel: "Empty content",
-              skipHighlightLabel: "Syntax highlighting skipped for large content",
-            }),
+        cachedPreview(state, "writeCallPreview", previewKey, () =>
+          renderContentPreview({
+            content,
+            limit: expanded ? 0 : collapsedLines,
+            lang,
+            theme,
+            invalidate,
+            emptyLabel: "Empty content",
+            skipHighlightLabel: "Syntax highlighting skipped for large content",
+          }),
         );
       // The proposed content stays until the applied diff replaces it.
-      container.addChild(unlessResultDiffShown(renderContext.state, preview));
+      container.addChild(unlessResultDiffShown(state, preview));
       return container;
     },
 
@@ -109,14 +107,14 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       setResultDiffShown(state, false);
       const firstText = getTextContent(result.content);
       if (renderContext.isError) {
-        setWriteNewFile(state, false, cwd, theme);
+        state.writeNewFile = false;
         return renderPreviewError(theme, expanded, firstText);
       }
 
       const path = getPathArg(renderContext.args);
       const before = writeBeforeSnapshot(state, renderContext.toolCallId, result.details);
       // Only an observed absent file is new; the heading says so once the write is known.
-      setWriteNewFile(state, isKnownNewWrite(before, result.details), cwd, theme);
+      state.writeNewFile = isKnownNewWrite(before, result.details);
       const plan = writeDiffPlan(before, getObjectValue(renderContext.args, "content"));
       if (plan.kind === "skipped")
         return plan.measured
@@ -132,10 +130,8 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       setResultDiffShown(state, !expanded);
       const render = () =>
         renderWriteDiffPreview(previous, content, path, expanded, theme, renderContext.invalidate);
-      const source = `${previous}\0${content}`;
       const previewKey = previewCacheKey(
-        "write-result",
-        source,
+        [previous, content],
         path,
         expanded,
         theme,
@@ -143,10 +139,9 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       );
       return cachedDeferredPreview(
         state,
-        "writeResultPreviewKey",
-        "writeResultPreviewComponent",
+        "writeResultPreview",
         previewKey,
-        source,
+        `${previous}\0${content}`,
         "Rendering write diff…",
         theme,
         render,
@@ -154,27 +149,6 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       );
     },
   };
-}
-
-function setWriteNewFile(state: RendererState, newFile: boolean, cwd: string, theme: Theme): void {
-  state.writeNewFile = newFile;
-  updateWriteHeader(state, cwd, theme);
-}
-
-/** The result renders after the call, so it rewrites the call's heading in place. */
-function updateWriteHeader(state: RendererState, cwd: string, theme: Theme): void {
-  const heading = state.writeHeaderText;
-  const header = state.writeHeader;
-  if (!(heading instanceof Text) || !header) return;
-  const { content, path, lang } = header;
-  let text = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
-  text += metadata(theme, [
-    state.writeNewFile === true ? "new file" : undefined,
-    formatBytes(Buffer.byteLength(content, "utf8")),
-    countLabel(countContentLines(content), "line"),
-    lang ? normalizePreviewLanguageAlias(lang) : undefined,
-  ]);
-  heading.setText(text);
 }
 
 function renderWriteDiffPreview(

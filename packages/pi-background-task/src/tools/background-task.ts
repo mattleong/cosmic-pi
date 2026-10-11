@@ -3,6 +3,7 @@ import {
   defineTool,
   type AgentToolResult,
   type ExtensionAPI,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
@@ -11,10 +12,12 @@ import * as Path from "effect/Path";
 import {
   expandedSection,
   getTextContent,
+  previewIssuesSlot,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
 import {
+  invokeHostCallback,
   stripTerminalControls as sanitizeTerminalText,
   toPiToolOutputSchema,
 } from "pi-cosmic-core";
@@ -67,6 +70,21 @@ const headingSubtitle = (
 
 const resultText = (content: Parameters<typeof getTextContent>[0]): string =>
   sanitizeTerminalText(getTextContent(content));
+
+/** Preserve the submitted values, not normalized task metadata or abbreviated headings. */
+const renderArguments = (args: Partial<BackgroundTaskToolInput>, theme: Theme) =>
+  expandedSection(
+    theme,
+    "Arguments",
+    new Text(
+      theme.fg(
+        "toolOutput",
+        sanitizeTerminalText(invokeHostCallback(() => JSON.stringify(args, null, 2), "")),
+      ),
+      0,
+      0,
+    ),
+  );
 
 /** Native Pi `outputSchema`: the encoded side of the strict version-1 contract codec. */
 const OUTPUT_SCHEMA = toPiToolOutputSchema(BackgroundTaskContractSchema);
@@ -129,7 +147,7 @@ export function registerBackgroundTaskTool(
     },
     renderCall(args, theme, context) {
       // Drawn lazily: the result, rendered after the call, supplies the task's name.
-      return composeToolComponent((width) => {
+      const heading = composeToolComponent((width) => {
         if (!Number.isFinite(width) || width < 1) return [];
         const subtitle = headingSubtitle(args, context.state.backgroundTaskSubject);
         const lines = new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(
@@ -141,6 +159,12 @@ export function registerBackgroundTaskTool(
           context.state.backgroundTaskSubject === undefined;
         return running ? [...lines, toolRunningLine(theme)] : lines;
       });
+      if (!context.expanded) return heading;
+      const body = new Container();
+      body.addChild(heading);
+      body.addChild(previewIssuesSlot(context));
+      body.addChild(renderArguments(args, theme));
+      return body;
     },
     renderResult(result, { isPartial, expanded }, theme, context) {
       // The call body says it is running; a partial result has nothing else to show.
@@ -168,7 +192,7 @@ export function registerBackgroundTaskTool(
     shell(tool, {
       compactSummary: backgroundTaskCompactSummary,
       expandedContent: {
-        renderCall: () => new Container(),
+        renderCall: renderArguments,
         renderResult(result, _options, theme) {
           // Preserve fetched output and cursor text verbatim apart from terminal controls.
           // Task attention is projected from typed details, never parsed from this body.

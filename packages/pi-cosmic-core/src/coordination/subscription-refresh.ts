@@ -3,11 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Ref from "effect/Ref";
 import * as TxReentrantLock from "effect/TxReentrantLock";
-import {
-  makeRefreshCoordinatorWith,
-  mergeRefreshRequest,
-  type RefreshRequest,
-} from "./refresh-coordinator.ts";
+import { makeRefreshCoordinator, type RefreshRequest } from "./refresh-coordinator.ts";
 
 interface SubscriptionRefreshOptions<Key, Value, E, R> {
   readonly currentKey: Effect.Effect<Key, never, R>;
@@ -34,7 +30,7 @@ export const makeSubscriptionRefresh = <Key, Value, E, R>(
   options: SubscriptionRefreshOptions<Key, Value, E, R>,
 ): Effect.Effect<SubscriptionRefresh<E, R>> =>
   Effect.gen(function* () {
-    const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest, E>(mergeRefreshRequest);
+    const coordinator = yield* makeRefreshCoordinator<E>();
     const revisionRef = yield* Ref.make(0);
     const commitGate = yield* TxReentrantLock.make();
     const wakeLatch = yield* Latch.make();

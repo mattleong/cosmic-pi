@@ -58,6 +58,28 @@ const registeredTool = (
   ).tools[0]!;
 };
 
+it.each(["compact", "preview"] as const)("preserves exact expanded input in %s style", (style) => {
+  const args = {
+    action: "start",
+    command: "printf 'original input'",
+    cwd: "./relative",
+    timeoutSeconds: 123.456,
+  };
+  const result = {
+    content: [{ type: "text" as const, text: "Original result and recovery text" }],
+    details: { action: "start", snapshot },
+  };
+  const harness = createToolPresentationHarness(registeredTool("on", style));
+  for (const { expanded, text } of harness.cycle(args, result, {
+    states: [false, true, false, true],
+  })) {
+    if (!expanded) continue;
+    for (const line of JSON.stringify(args, null, 2).split("\n"))
+      expect(text).toContain(line.trim());
+    expect(text).toContain(result.content[0]!.text);
+  }
+});
+
 it("renders the registered management actions and task states without parsing fetched text", () => {
   for (const mode of ["on", "off", "border"] as const)
     for (const style of ["compact", "preview"] as const) {

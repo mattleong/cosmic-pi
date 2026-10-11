@@ -2,15 +2,114 @@
 import * as NodePath from "@effect/platform-node/NodePath";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { vi } from "vitest";
 import { provideBuiltLayer, SafeFile } from "../index.ts";
 import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
-import { capturedTelemetrySnapshot, makeCapturedTracer, temporaryDirectory } from "../testing.ts";
+import {
+  capturedTelemetrySnapshot,
+  deferredPromise,
+  makeCapturedTracer,
+  temporaryDirectory,
+} from "../testing.ts";
 
 const { mkdir, realpath, symlink, writeFile } = nodeFsPromises;
 const { join } = nodePath;
 const fixtureRoot = temporaryDirectory("cosmic-safe-file-").pipe(
   Effect.flatMap((directory) => Effect.promise(() => realpath(directory))),
+);
+
+// Keep real inode/containment checks while controlling the acquired handle's reads.
+const openedFile = (content = "safe") =>
+  Effect.gen(function* () {
+    const root = yield* fixtureRoot;
+    const file = join(root, "input.txt");
+    yield* Effect.promise(() => writeFile(file, content));
+    const handle = yield* Effect.acquireRelease(
+      Effect.promise(() => nodeFsPromises.open(file, "r")),
+      (handle) => Effect.promise(() => handle.close()),
+    );
+    yield* Effect.acquireRelease(
+      Effect.sync(() => vi.spyOn(nodeFsPromises, "open").mockResolvedValue(handle)),
+      (spy) => Effect.sync(() => spy.mockRestore()),
+    );
+    return { root, file, handle };
+  });
+
+for (const content of ["", "safe"])
+  it.live(
+    `reads ${content ? "short reads at the exact limit" : "an empty file at a zero limit"}`,
+    () =>
+      Effect.gen(function* () {
+        const { root, file, handle } = yield* openedFile(content);
+        const read = handle.read.bind(handle);
+        vi.spyOn(handle, "read").mockImplementation((options) =>
+          read({ ...options, length: Math.min(options?.length ?? 1, 2) }),
+        );
+        const safeFile = yield* SafeFile;
+        const result = yield* safeFile.readContainedRegularFile(file, root, content.length);
+        expect(new TextDecoder().decode(result.bytes)).toBe(content);
+        expect(handle.fd).toBe(-1);
+      }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
+  );
+
+for (const change of ["growth", "shrink", "growth after EOF", "read failure"])
+  it.live(`bounds reads and closes the handle on ${change} after inspection`, () =>
+    Effect.gen(function* () {
+      const { root, file, handle } = yield* openedFile();
+      const read = handle.read.bind(handle);
+      let largestBuffer = 0;
+      let transferred = 0;
+      let firstRead = true;
+      vi.spyOn(handle, "read").mockImplementation((options) =>
+        Promise.resolve()
+          .then(() => {
+            largestBuffer = Math.max(largestBuffer, options?.buffer?.byteLength ?? 0);
+            if (!firstRead) return undefined;
+            firstRead = false;
+            if (change === "read failure") throw new Error(`Sensitive failure: ${file}`);
+            if (change === "growth") return writeFile(file, "safe but now oversized");
+            if (change === "shrink") return writeFile(file, "sa");
+            return undefined;
+          })
+          .then(() => read(options))
+          .then((result) => {
+            transferred += result.bytesRead;
+            return change === "growth after EOF" && result.bytesRead === 0
+              ? writeFile(file, "safe but now oversized").then(() => result)
+              : result;
+          }),
+      );
+      const safeFile = yield* SafeFile;
+      const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 4));
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SafeFileError");
+        expect(String(result.failure)).not.toContain(root);
+      }
+      expect(largestBuffer).toBe(4);
+      expect(transferred).toBeLessThanOrEqual(5); // Inspected size plus the fixed EOF probe.
+      expect(handle.fd).toBe(-1);
+    }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
+  );
+
+it.live("closes the handle when an in-flight read is interrupted", () =>
+  Effect.gen(function* () {
+    const { root, file, handle } = yield* openedFile();
+    const started = deferredPromise();
+    const pending = deferredPromise<Awaited<ReturnType<typeof handle.read>>>();
+    vi.spyOn(handle, "read").mockImplementation(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    const safeFile = yield* SafeFile;
+    const fiber = yield* safeFile.readContainedRegularFile(file, root, 4).pipe(Effect.forkChild());
+    yield* Effect.promise(() => started.promise);
+    yield* Fiber.interrupt(fiber);
+    expect(handle.fd).toBe(-1);
+    pending.resolve({ bytesRead: 0, buffer: new Uint8Array(0) });
+  }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
 );
 
 it.live("reads a stable file and captures a path-free resource span", () => {
