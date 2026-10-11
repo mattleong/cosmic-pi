@@ -4,8 +4,9 @@ import { deferCodePreview } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 
-export function shouldRenderDeferred(text: string): boolean {
-  return text.length > codePreviewPerformanceConfig.asyncRenderChars;
+/** Callers pass the size of what they would render, so measuring never builds a copy. */
+export function shouldRenderDeferred(characters: number): boolean {
+  return characters > codePreviewPerformanceConfig.asyncRenderChars;
 }
 
 /**

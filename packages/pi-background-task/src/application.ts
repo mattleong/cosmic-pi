@@ -66,8 +66,6 @@ export function registerBackgroundTaskApplication(
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   /** The settings this session started with; `/tasks settings` changes apply after /reload. */
   let currentConfig: BackgroundTaskConfig | undefined;
-  /** Advances on every activation and deactivation, so revoked command authority stays revoked. */
-  let authorityEpoch = 0;
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTaskSessionActivation,
@@ -101,7 +99,6 @@ export function registerBackgroundTaskApplication(
         };
       }),
     onActivated: ({ ctx, publishesReplay }, token, prepared) => {
-      authorityEpoch++;
       // Only the current-generation activation reaches this hook, and settings are already
       // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
       registerBackgroundTaskTool(
@@ -145,7 +142,6 @@ export function registerBackgroundTaskApplication(
     // Every start and shutdown removes the active runtime synchronously, so revocation runs here
     // before any replacement or disposal work.
     onDeactivated: (input) => {
-      authorityEpoch++;
       MutableRef.set(input.publicationOwner, false);
       currentConfig = undefined;
       openActivity = undefined;
@@ -183,11 +179,7 @@ export function registerBackgroundTaskApplication(
     );
 
   registerTasksCommand(pi, bridge, {
-    captureAuthority: () => {
-      const epoch = authorityEpoch;
-      // Help remains available before startup; any later activation or deactivation revokes it.
-      return () => epoch === authorityEpoch;
-    },
+    captureAuthority: slot.captureAuthority,
     openActivity: (signal) =>
       openActivity ? openActivity(signal) : Promise.reject(new Error(UNAVAILABLE)),
     stop: (id) => stopTask(id),

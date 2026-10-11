@@ -1,8 +1,6 @@
 // Preview-style write and edit rows rendered through Pi's own component, which renders the call
 // before the result on every update.
 import assert from "node:assert/strict";
-import { setFlagsFromString } from "node:v8";
-import { runInNewContext } from "node:vm";
 import {
   generateDiffString,
   initTheme,
@@ -236,9 +234,8 @@ it.effect.each([
   },
 ] as const)("a $name row releases the render contexts of replaced arguments", ({ name, argsAt }) =>
   Effect.gen(function* () {
-    setFlagsFromString("--expose_gc");
-    // SAFETY: --expose_gc makes every new context define `gc` as a function that collects.
-    const collectGarbage = runInNewContext("gc") as () => void;
+    const collectGarbage = globalThis.gc;
+    assert.ok(collectGarbage, "vitest.config.ts starts test workers with --expose-gc");
     let first: RowArguments | undefined = argsAt(1);
     const released = new WeakRef(first);
     const row = liveRow(name, first);

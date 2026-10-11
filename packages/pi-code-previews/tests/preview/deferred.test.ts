@@ -33,7 +33,8 @@ const preview = (
   state: PreviewArgs[0],
   source: string,
   ...rest: [PreviewArgs[6], PreviewArgs[7]]
-) => cachedDeferredPreview(state, "preview", [source], source, "loading", plainTheme, ...rest);
+) =>
+  cachedDeferredPreview(state, "preview", [source], source.length, "loading", plainTheme, ...rest);
 
 test("large previews remain synchronous before session acquisition", () => {
   const state = {};

@@ -33,14 +33,14 @@ export function cachedDeferredPreview(
   state: RendererState,
   slot: string,
   dependencies: readonly unknown[],
-  source: string,
+  sourceCharacters: number,
   loadingLabel: string,
   theme: Theme,
   render: () => Component,
   invalidate: () => void,
 ): Component {
   return cachedPreview(state, slot, dependencies, () =>
-    shouldRenderDeferred(source) && hasCodePreviewSessionCapability()
+    shouldRenderDeferred(sourceCharacters) && hasCodePreviewSessionCapability()
       ? new DeferredPreview(loadingLabel, theme, render, invalidate)
       : render(),
   );

@@ -204,6 +204,45 @@ it.effect("publishes startup values only after activation", () =>
   }),
 );
 
+it.effect("ends captured command authority at the next lifecycle change, never restoring it", () =>
+  Effect.gen(function* () {
+    const startupEntered = yield* Deferred.make<void>();
+    const releaseStartup = yield* Deferred.make<void>();
+    const slot = makePiSessionRuntimeSlot<"ready" | "fail", never, "startup", never>({
+      makeRuntime: () => hostRuntime(Layer.empty),
+      startup: (input) =>
+        input === "fail"
+          ? Effect.fail("startup" as const)
+          : Deferred.succeed(startupEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseStartup)),
+            ),
+    });
+
+    // Help before any session stays available until a session starts.
+    const beforeStart = slot.captureAuthority();
+    expect(beforeStart()).toBe(true);
+    const starting = slot.start("ready");
+    expect(beforeStart()).toBe(false);
+
+    // A command invoked while the session starts keeps working once it activates.
+    yield* Deferred.await(startupEntered);
+    const duringStartup = slot.captureAuthority();
+    yield* Deferred.succeed(releaseStartup, undefined);
+    expect(yield* Effect.promise(() => starting)).toBe(1);
+    expect(duringStartup()).toBe(true);
+
+    // A failed replacement and a shutdown each end it, and nothing captured earlier returns.
+    const active = slot.captureAuthority();
+    expect(yield* Effect.promise(() => slot.start("fail"))).toBeUndefined();
+    expect(active()).toBe(false);
+    const afterFailure = slot.captureAuthority();
+    expect(afterFailure()).toBe(true);
+    yield* Effect.promise(() => slot.shutdown());
+    expect(afterFailure()).toBe(false);
+    expect([beforeStart, duringStartup, active].some((current) => current())).toBe(false);
+  }),
+);
+
 it.effect("rechecks ownership after reentrant activation teardown", () =>
   Effect.gen(function* () {
     let shutdown: Promise<void> | undefined;

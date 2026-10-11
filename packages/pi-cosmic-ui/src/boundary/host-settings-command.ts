@@ -188,13 +188,15 @@ export const openSettingsList = (
 
 /**
  * Builds the subcommand again for each invocation with the authority `capture` returns then,
- * since the shell binds `isCurrent` when it is built.
+ * since the shell binds `isCurrent` when it is built. Only `handler` runs with that authority:
+ * the name, description, and completions come from a build whose authority is already revoked,
+ * so no other callback can act for a session.
  */
 export const withInvocationAuthority = (
   capture: (() => () => boolean) | undefined,
   create: (isCurrent: () => boolean) => ExtensionSubcommand,
 ): ExtensionSubcommand => ({
-  ...create(() => true),
+  ...create(() => false),
   handler: (args, ctx) => create(capture?.() ?? (() => true)).handler(args, ctx),
 });
 

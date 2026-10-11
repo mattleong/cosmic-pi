@@ -91,12 +91,6 @@ export function betterOpenAIWithDependencies(
   const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
   let recordFastInjection: FastInjectionIngress = () => undefined;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
-  let currentPublicationOwner: MutableRef.MutableRef<boolean> | undefined;
-  const captureAuthority = () => {
-    const owner = currentPublicationOwner;
-    return () =>
-      owner === undefined ? currentPublicationOwner === undefined : MutableRef.get(owner);
-  };
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
@@ -207,7 +201,6 @@ export function betterOpenAIWithDependencies(
       { injectionIngress, scheduler },
     ) => {
       currentContext = context;
-      currentPublicationOwner = publicationOwner;
       recordFastInjection = injectionIngress;
       noteImageCwd({ cwd });
       const isCurrent = () => MutableRef.get(publicationOwner) && slot.isCurrent(token);
@@ -228,7 +221,6 @@ export function betterOpenAIWithDependencies(
     onDeactivated: ({ context, publicationOwner }) => {
       // Revocation must precede reset and disposal: admitted durable commits may finish.
       MutableRef.set(publicationOwner, false);
-      if (currentPublicationOwner === publicationOwner) currentPublicationOwner = undefined;
       if (currentContext === context) {
         setStatus(MutableRef.get(context), undefined);
         currentContext = undefined;
@@ -261,7 +253,7 @@ export function betterOpenAIWithDependencies(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
   ) => {
-    const isCurrent = captureAuthority();
+    const isCurrent = slot.captureAuthority();
     return run(
       containCommandFailure(
         effect,
@@ -303,7 +295,7 @@ export function betterOpenAIWithDependencies(
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
-      const isCurrent = captureAuthority();
+      const isCurrent = slot.captureAuthority();
       const signal = safeHostSignal(ctx);
       const update = FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
         Effect.tap(() =>
@@ -338,7 +330,7 @@ export function betterOpenAIWithDependencies(
     formatDebugStatus,
     fastProjection,
     resetFastRoutingTransport: resetProviderTransport,
-    captureAuthority,
+    captureAuthority: slot.captureAuthority,
     run,
   });
 

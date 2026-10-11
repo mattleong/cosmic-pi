@@ -32,6 +32,13 @@ export interface PiSessionRuntimeSlot<Input, R, RuntimeError = unknown> {
   readonly shutdown: () => Promise<void>;
   readonly isActive: () => boolean;
   readonly isCurrent: (token: number) => boolean;
+  /**
+   * A command invocation's authority, captured when it is invoked. It ends at the next start,
+   * shutdown, or runtime removal and never returns, so a command invoked while a session starts
+   * keeps working once that session activates, and nothing from an earlier session acts on a
+   * later one.
+   */
+  readonly captureAuthority: () => () => boolean;
 }
 
 type Active<Input, R, RuntimeError> = {
@@ -58,6 +65,8 @@ export function makePiSessionRuntimeSlot<
   hooks: PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue>,
 ): PiSessionRuntimeSlot<Input, R, RuntimeError> {
   let generation = 0;
+  /** Advances whenever a lifecycle begins or ends; captured authority compares against it. */
+  let authorityEpoch = 0;
   let active: Active<Input, R, RuntimeError> | undefined;
   let transition: Promise<unknown> = Promise.resolve();
 
@@ -70,6 +79,7 @@ export function makePiSessionRuntimeSlot<
     const current = active;
     if (!current || (expected && current !== expected)) return Promise.resolve();
     active = undefined;
+    authorityEpoch++;
     invokeBestEffort(current.removeAbort);
     invokeBestEffort(() => hooks.onDeactivated?.(current.input, current.token));
     current.disposal ??= dispose(current.runtime);
@@ -95,6 +105,7 @@ export function makePiSessionRuntimeSlot<
 
   const start = (input: Input, signal?: AbortSignal): Promise<number | undefined> => {
     const token = ++generation;
+    authorityEpoch++;
     const previousDisposal = removeActive();
     return serialize(() =>
       previousDisposal.then(() => {
@@ -165,6 +176,7 @@ export function makePiSessionRuntimeSlot<
 
   const shutdown = (): Promise<void> => {
     ++generation;
+    authorityEpoch++;
     const removal = removeActive();
     return serialize(() => removal);
   };
@@ -176,5 +188,9 @@ export function makePiSessionRuntimeSlot<
     shutdown,
     isActive: () => active?.activated === true,
     isCurrent: (token) => token === generation && active?.activated === true,
+    captureAuthority: () => {
+      const epoch = authorityEpoch;
+      return () => epoch === authorityEpoch;
+    },
   };
 }

@@ -142,7 +142,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         state,
         "writeResultPreview",
         previewKey,
-        `${previous}\0${content}`,
+        previous.length + content.length,
         "Rendering write diff…",
         theme,
         render,

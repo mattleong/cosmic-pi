@@ -106,22 +106,24 @@ it.each(["comfortable", "compact"] as const)(
   },
 );
 
-it("copies configured orders using the last index and preserves unconfigured metadata", () => {
-  const values: CosmicFooterTextContribution[] = ["location", "branch", "custom"].map((id) => ({
-    kind: "text",
-    id,
-    region: "identity",
-    text: id,
-    ...(id !== "custom" && { order: 200 }),
-  }));
+it("puts configured contributions first, by their last configured position, without mutating inputs", () => {
+  const values: CosmicFooterTextContribution[] = ["custom", "location", "branch", "model"].map(
+    (id) => ({
+      kind: "text",
+      id,
+      region: "identity",
+      text: id,
+      ...(id !== "custom" && { order: 200 }),
+    }),
+  );
   const originals = values.map((value) => ({ ...value }));
   const defaults = makeDefaultResolvedCosmicUiConfig();
   const ordered = orderedContributions(values, {
     ...defaults,
-    footer: { ...defaults.footer, order: ["branch", "branch"] },
+    footer: { ...defaults.footer, order: ["branch", "location", "branch"] },
   });
-  expect(ordered.map((value) => value.order)).toEqual([1, 200, undefined]);
-  expect(ordered.slice(1)).toEqual([values[0], values[2]]);
+  // Ordered, then unordered; a repeated id takes its last position, so location leads branch.
+  expect(ordered.map((value) => value.id)).toEqual(["location", "branch", "model", "custom"]);
   expect(values).toEqual(originals);
 });
 

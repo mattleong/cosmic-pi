@@ -90,8 +90,10 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           state,
           "editCallPreview",
           previewKey,
-          // Only a size input, never identity: preserve the existing deferred threshold.
-          operations.map(({ oldText, newText }) => `${oldText}\0${newText}`).join("\0\0"),
+          operations.reduce(
+            (total, { oldText, newText }) => total + oldText.length + newText.length,
+            0,
+          ),
           "Rendering proposed edit diff…",
           theme,
           render,
@@ -160,7 +162,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
         renderContext.state,
         "editResultPreview",
         previewKey,
-        diff,
+        diff.length,
         "Rendering edit diff…",
         theme,
         render,

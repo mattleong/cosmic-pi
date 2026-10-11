@@ -163,11 +163,6 @@ export function registerCosmicUiApplication(
     if (owner) MutableRef.set(owner, false);
     if (currentPublicationOwner === owner) currentPublicationOwner = undefined;
   };
-  const captureAuthority = () => {
-    const owner = currentPublicationOwner;
-    return () =>
-      owner === undefined ? currentPublicationOwner === undefined : MutableRef.get(owner);
-  };
   const ownsUsageContext = (ctx: ExtensionContext) =>
     invokeHostCallback(
       () =>
@@ -292,7 +287,7 @@ export function registerCosmicUiApplication(
     updateContext,
     update: footerInstallation.update,
     run: slot.run,
-    captureAuthority,
+    captureAuthority: slot.captureAuthority,
   });
 
   /** Retires the current input's publication authority and usage ticker. */
